@@ -63,22 +63,25 @@ def print_summary(
     title: str,
     result: BatchResult,
 ) -> None:
-    """打印批量操作汇总。"""
+    """打印批量操作汇总（列表式：总计单行 + 成功列表 + 失败列表）。"""
     r.rule(title, style="blue")
-    rows = [
-        ("仓库总数", str(result.total), None),
-        ("✔ 成功", str(len(result.succeeded)), "green" if result.succeeded else None),
-        ("⏭ 跳过", str(len(result.skipped)), "dim" if result.skipped else None),
-        ("✖ 失败", str(len(result.failed)), "red" if result.failed else None),
-    ]
-    r.summary("", rows)
+    r.info(
+        f"总计 {result.total} 个"
+        f"（成功 {len(result.succeeded)} / 跳过 {len(result.skipped)} / 失败 {len(result.failed)}）"
+    )
 
-    for item in result.succeeded:
-        r.ok(f"  {item.name}")
-    for item in result.skipped:
-        r.info(f"  ⏭ {item.name}" + (f" — {item.detail}" if item.detail else ""))
-    for item in result.failed:
-        r.err(f"  ✖ {item.name}" + (f" — {item.detail}" if item.detail else ""))
+    if result.succeeded:
+        r.ok("成功项目：")
+        for item in result.succeeded:
+            r.info(f"  • {item.name}")
+
+    if result.failed:
+        r.err("失败项目：")
+        for item in result.failed:
+            line = f"  • {item.name}"
+            if item.detail:
+                line += f" — {item.detail}"
+            r.info(line)
 
 
 def notify_batch_done(folder_name: str, result: BatchResult, *, script_dir: Path) -> None:
@@ -275,13 +278,13 @@ def push_all(
     parser.add_argument("--dry-run", action="store_true", help="仅检查条件并预览仓库列表，不执行 push")
     parsed, extra = parser.parse_known_args(argv[1:] if argv is not None else None)
 
-    run_batch(
+    result = run_batch(
         title=f"push_{target} 批量推送",
         root=Path(".").resolve(),
         operation=_push_one_factory(target, parsed.dry_run, extra),
         confirm=False,
     )
-    return 0
+    return 1 if result.failed else 0
 
 
 def _switch_one_factory(target: str) -> OperationFn:
@@ -363,13 +366,13 @@ def _switch_one_factory(target: str) -> OperationFn:
 
 def switch_branch_all(target: str) -> int:
     """批量切换分支：扫描 GitLab 仓库，切换到指定分支（不存在则从 origin/master 创建）。"""
-    run_batch(
+    result = run_batch(
         title=f"分支切换 → {target}",
         root=Path(".").resolve(),
         operation=_switch_one_factory(target),
         confirm=False,
     )
-    return 0
+    return 1 if result.failed else 0
 
 
 def _sync_one_factory(force: bool) -> OperationFn:
@@ -441,10 +444,10 @@ def _sync_one_factory(force: bool) -> OperationFn:
 
 def sync_master_all(*, force: bool = False) -> int:
     """批量同步 master：将本地 master 硬对齐到 origin/master。"""
-    run_batch(
+    result = run_batch(
         title="同步 master → origin/master",
         root=Path(".").resolve(),
         operation=_sync_one_factory(force),
         confirm=False,
     )
-    return 0
+    return 1 if result.failed else 0

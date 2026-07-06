@@ -87,14 +87,62 @@ class TestPrintRepoList(unittest.TestCase):
 
 
 class TestPrintSummary(unittest.TestCase):
-    def test_renders_all_statuses(self):
+    def _capture(self):
+        """捕获 Reporter 纯文本输出（强制 console=None 走 _eprint 路径）。"""
+        import io
+        from contextlib import redirect_stderr
+
+        buf = io.StringIO()
+        return buf, redirect_stderr(buf)
+
+    def _make_reporter(self):
         r = reporter(stderr=True)
-        r.console = None
+        r.console = None  # 走纯文本路径，输出可字符串断言
+        return r
+
+    def test_renders_all_statuses(self):
+        r = self._make_reporter()
         result = BatchResult(total=3)
         result.succeeded.append(RepoResult("a", "/a", "ok"))
         result.skipped.append(RepoResult("b", "/b", "skip", "已对齐"))
         result.failed.append(RepoResult("c", "/c", "fail", "err"))
-        print_summary(r, "汇总", result)
+        buf, redir = self._capture()
+        with redir:
+            print_summary(r, "汇总", result)
+        out = buf.getvalue()
+        # 总计单行（含跳过数量，不显跳过明细）
+        self.assertIn("总计 3 个（成功 1 / 跳过 1 / 失败 1）", out)
+        # 成功段
+        self.assertIn("成功项目：", out)
+        self.assertIn("• a", out)
+        # 失败段（含 detail）
+        self.assertIn("失败项目：", out)
+        self.assertIn("• c — err", out)
+        # 跳过无明细
+        self.assertNotIn("• b", out)
+
+    def test_empty_sections_omitted(self):
+        r = self._make_reporter()
+        result = BatchResult(total=1)
+        result.succeeded.append(RepoResult("only", "/o", "ok"))
+        buf, redir = self._capture()
+        with redir:
+            print_summary(r, "汇总", result)
+        out = buf.getvalue()
+        self.assertIn("成功项目：", out)
+        self.assertNotIn("失败项目：", out)
+        self.assertIn("总计 1 个（成功 1 / 跳过 0 / 失败 0）", out)
+
+    def test_failed_without_detail(self):
+        r = self._make_reporter()
+        result = BatchResult(total=1)
+        result.failed.append(RepoResult("x", "/x", "fail"))  # detail 默认空
+        buf, redir = self._capture()
+        with redir:
+            print_summary(r, "汇总", result)
+        out = buf.getvalue()
+        self.assertIn("• x", out)
+        self.assertNotIn("—", out)
 
 
 class TestNotifyBatchDone(unittest.TestCase):
@@ -206,6 +254,26 @@ class TestPushAllArgparse(unittest.TestCase):
         with patch("lib.batch_git._push_one_factory", side_effect=spy):
             push_all("canary", argv=["push_canary", "--stay"])
         self.assertIn("--stay", captured["extra"])
+
+    @patch("lib.batch_git.run_batch")
+    def test_exit_code_zero_when_no_failure(self, mock_batch):
+        """全成功/跳过 → 退出码 0。"""
+        from lib.batch_git import BatchResult as _BR
+        ok = _BR(total=1)
+        ok.succeeded.append(RepoResult("a", "/a", "ok"))
+        mock_batch.return_value = ok
+        rc = push_all("canary", argv=["push_canary"])
+        self.assertEqual(rc, 0)
+
+    @patch("lib.batch_git.run_batch")
+    def test_exit_code_one_when_failed(self, mock_batch):
+        """有失败 → 退出码 1（shell && / || 可感知）。"""
+        from lib.batch_git import BatchResult as _BR
+        bad = _BR(total=2)
+        bad.failed.append(RepoResult("x", "/x", "fail", "boom"))
+        mock_batch.return_value = bad
+        rc = push_all("canary", argv=["push_canary"])
+        self.assertEqual(rc, 1)
 
 
 class TestSwitchFactory(unittest.TestCase):
