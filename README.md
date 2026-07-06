@@ -1,5 +1,7 @@
 # scripts
 
+[简体中文](README.md) | [English](README.en.md) | [Français](README.fr.md) | [Español](README.es.md) | [Русский](README.ru.md) | [العربية](README.ar.md)
+
 开发效率工具集 — 各种快捷脚本的集合。Bash/Python 混合薄壳入口, 核心逻辑沉淀在 `lib/`。
 
 ---
