@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.batch_git import (
     BatchResult,
     RepoResult,
+    _extract_error,
     _push_one_factory,
     _switch_one_factory,
     _sync_one_factory,
@@ -220,6 +221,70 @@ class TestPushFactory(unittest.TestCase):
         # 最后一次 _run 调用应是 push_develop
         last_call_args = mock_run.call_args_list[-1][0][0]
         self.assertEqual(last_call_args[0], "push_develop")
+
+    @patch("lib.batch_git._run")
+    @patch("lib.batch_git._get_current_branch", return_value="feat")
+    def test_fail_detail_is_concise(self, _mock_br, mock_run):
+        """失败时 detail 仅单行关键错误，非整段 gitc 日志；全量流式打印到 Reporter。"""
+        full_log = (
+            "Git 自动化工作流\n"
+            "当前分支: feat\n"
+            "任务概览: merge → push\n"
+            "step 1: fetch ok\n"
+            "step 2: merge\n"
+            "Auto-merging foo.go\n"
+            "CONFLICT (content): Merge conflict in foo.go\n"
+            "Automatic merge failed; fix conflicts and then commit the result.\n"
+        )
+        mock_run.side_effect = [
+            _mock_run(returncode=0),   # fetch
+            _mock_run(returncode=1),   # show-ref remote target (不存在) → cond1 通过
+            _mock_run(returncode=1),   # show-ref local target → cond2 不通过
+            _mock_run(returncode=1, stdout=full_log),  # push_canary 失败
+        ]
+        op = _push_one_factory(target="canary", dry_run=False, extra=[])
+        r = MagicMock()
+        status, detail = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "fail")
+        # detail 单行（关键错误），不含 "Git 自动化工作流" 等头部噪音
+        self.assertNotIn("自动化工作流", detail)
+        self.assertEqual(detail.count("\n"), 0)
+        # 末次匹配行 = "Automatic merge failed; fix conflicts..."（conflicts 命中 conflict 关键词）
+        self.assertIn("conflict", detail.lower())
+        # 全量输出流式打印
+        self.assertTrue(any("子进程输出" in str(c) for c in r.warn.call_args_list))
+        self.assertGreaterEqual(r.info.call_count, 1)
+
+
+class TestExtractError(unittest.TestCase):
+    def test_matches_conflict_keyword(self):
+        out = "Git 自动化工作流\nstep: merge\nCONFLICT (content): Merge conflict in foo.go\nend"
+        self.assertEqual(
+            _extract_error(out, 1, "push_canary"),
+            "CONFLICT (content): Merge conflict in foo.go",
+        )
+
+    def test_matches_rejected_keyword(self):
+        out = "push\n! [rejected] HEAD -> canary (non-fast-forward)\ndone"
+        self.assertEqual(
+            _extract_error(out, 1, "push_canary"),
+            "! [rejected] HEAD -> canary (non-fast-forward)",
+        )
+
+    def test_matches_last_when_multiple(self):
+        out = "error: first\nstep\nfatal: real cause"
+        self.assertEqual(_extract_error(out, 1, "push_canary"), "fatal: real cause")
+
+    def test_no_match_returns_last_line(self):
+        out = "line1\n普通输出\nlast line here"
+        self.assertEqual(_extract_error(out, 1, "push_canary"), "last line here")
+
+    def test_empty_output_fallback(self):
+        self.assertEqual(_extract_error("", 1, "push_canary"), "push_canary 失败 (exit 1)")
+
+    def test_truncates_long_line(self):
+        long_line = "CONFLICT " + "x" * 500
+        self.assertLessEqual(len(_extract_error(long_line, 1, "push_canary")), 200)
 
 
 class TestPushAllArgparse(unittest.TestCase):

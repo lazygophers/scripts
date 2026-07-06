@@ -3,6 +3,7 @@
 提供 GitLab 仓库扫描、批量执行、汇总报告等功能。
 """
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -178,6 +179,26 @@ from lib.exec import run as _run
 from lib.git import get_current_branch as _get_current_branch
 
 
+_ERROR_PATTERN = re.compile(
+    r"conflict|rejected|fatal|error:|denied|timeout|unresolved|diverged|non-fast-forward",
+    re.IGNORECASE,
+)
+
+
+def _extract_error(out: str, code: int, label: str) -> str:
+    """从子进程输出提取关键错误行（单行，≤200 字符）。
+
+    优先返回最后一个匹配错误关键词的行；否则最后非空行；否则 fallback。
+    """
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    matched = [ln for ln in lines if _ERROR_PATTERN.search(ln)]
+    if matched:
+        return matched[-1][:200]
+    if lines:
+        return lines[-1][:200]
+    return f"{label} 失败 (exit {code})"
+
+
 def _push_one_factory(target: str, dry_run: bool, extra: list[str]) -> OperationFn:
     """构造 push 单仓库操作（捕获 target/dry_run/extra）。
 
@@ -254,7 +275,13 @@ def _push_one_factory(target: str, dry_run: bool, extra: list[str]) -> Operation
         if p.returncode == 0:
             return "ok", ""
         out = (p.stdout or "") + (p.stderr or "")
-        return "fail", out.strip()[:200]
+        # 失败时流式打印子进程完整输出（info 降级），让用户看 gitc 上下文
+        if out.strip():
+            r.warn(f"push_{target} 子进程输出：")
+            for ln in out.splitlines():
+                if ln.strip():
+                    r.info(f"  {ln}")
+        return "fail", _extract_error(out, p.returncode, f"push_{target}")
 
     return _op
 
