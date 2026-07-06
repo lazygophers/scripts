@@ -31,3 +31,9 @@ T*_*.txt
 
 # Worktrees
 .worktrees/
+
+# Rspress docs site (build artifacts only; package-lock.json IS tracked)
+docs/node_modules/
+docs/doc_build/
+docs/.rspress/
+!docs/package-lock.json
