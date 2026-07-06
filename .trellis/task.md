@@ -5,7 +5,7 @@
 | ID | 名称 | 描述 | 状态 | 阶段 | 进度 | worktree |
 | --- | --- | --- | --- | --- | --- | --- |
 | push-merge-pushc-all | 重命名 push/merge 入口为下划线全称风格并合并 pushc_all | — | 已完成 | 收尾 | 100% | — |
-| readme | 精简 README 为纯使用手册 | — | 进行中 | 规划 | 0% | — |
+| readme | 精简 README 为纯使用手册 | — | 已完成 | 收尾 | 100% | — |
 
 ## Worktree ↔ Task 映射
 
@@ -14,4 +14,4 @@
 
 | worktree | task | 创建源 |
 | --- | --- | --- |
-| /Users/luoxin/persons/scripts/.worktrees/07-06-readme | 07-06-readme | trellisx-start |
+| rspress-docs | 建 Rspress 文档站 docs/ 支持中英多语言 | — | 规划中 | 规划 | 0% | — |
