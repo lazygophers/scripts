@@ -41,6 +41,10 @@ inject is idempotent — re-running won't duplicate entries. Restart your shell 
 - `pushc` / `pushdev` / `pushm` / `pusht` → `push_canary` / `push_develop` / `push_auto` / `push_test`
 - `pushc_all` is merged into `push_*`: running in a non-git dir auto-batches without confirmation; use `--dry-run` to preview.
 
+## Environment Variables
+
+- `BATCH_CONCURRENCY`: max concurrency for batch operations (`push_*` / `switch_branch` / `sync_master`), default `4`. Example: `BATCH_CONCURRENCY=8 push_canary`.
+
 ## Requirements
 
 - **Python 3.10+** (thin entrypoints and core logic)

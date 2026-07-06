@@ -74,13 +74,33 @@ def _eprint(msg: str) -> None:
 class Reporter:
     """统一输出：支持 Rich 美化输出，自动降级纯文本。"""
 
-    def __init__(self, *, stderr: bool = True) -> None:
-        self.console = console(stderr=stderr)
+    def __init__(self, *, stderr: bool = True, console: Optional["Console"] = None,
+                 file: Optional["object"] = None) -> None:
+        if file is not None and HAS_RICH:
+            self.console = Console(file=file, stderr=False)
+        elif console is not None:
+            self.console = console
+        elif file is not None:
+            # 无 Rich：靠 _file 直接写
+            self.console = None
+        else:
+            self.console = console(stderr=stderr) if HAS_RICH else None
         self.stderr = stderr
+        self._file = file  # plain 模式直写对象（StringIO）
+
+    @classmethod
+    def from_buffer(cls, buf: "object") -> "Reporter":
+        """构造写入 StringIO buffer 的 Reporter（线程内重定向用）。
+
+        Rich 可用时 Console(file=buf)；否则用内置 _file 直写（绕过 stderr/stdout）。
+        """
+        return cls(file=buf)
 
     def _print(self, rich_text, plain_text: str) -> None:
         if self.console is not None:
             self.console.print(rich_text)
+        elif self._file is not None:
+            print(plain_text, file=self._file)
         elif self.stderr:
             _eprint(plain_text)
         else:

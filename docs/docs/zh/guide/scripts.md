@@ -41,6 +41,10 @@ inject 幂等：重跑不会重复追加。完成后重启 shell 或 `source ~/.
 - `pushc` / `pushdev` / `pushm` / `pusht` → `push_canary` / `push_develop` / `push_auto` / `push_test`
 - `pushc_all` 已并入 `push_*`：在非 git 目录执行即自动批量，自动执行无确认，`--dry-run` 预览。
 
+## 环境变量
+
+- `BATCH_CONCURRENCY`：批量操作（`push_*` / `switch_branch` / `sync_master`）并行并发上限，默认 `4`。例：`BATCH_CONCURRENCY=8 push_canary`。
+
 ## 环境依赖
 
 - **Python 3.10+**（薄壳与核心逻辑）

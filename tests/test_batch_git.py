@@ -17,6 +17,7 @@ from lib.batch_git import (
     print_repo_list,
     print_summary,
     push_all,
+    run_batch,
     scan_gitlab_repos,
 )
 from lib.ui import reporter
@@ -421,6 +422,117 @@ class TestSyncFactory(unittest.TestCase):
         status, detail = op(Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
         self.assertIn("领先", detail)
+
+
+class TestRunBatchParallel(unittest.TestCase):
+    """run_batch 并行模式：完成序无关、并发上限可调、per-repo 输出不交错、Ctrl-C 取消。"""
+
+    def _op_factory(self, statuses_by_name: dict[str, tuple[str, str]], log_lines: dict[str, list[str]] | None = None):
+        """构造测试用 operation：按 repo name 返 (status, detail)，并往 r 打多行日志。"""
+        log_lines = log_lines or {}
+        def _op(repo: Path, r, _root: Path) -> tuple[str, str]:
+            name = repo.name
+            for line in log_lines.get(name, []):
+                r.info(line)
+            status, detail = statuses_by_name.get(name, ("ok", ""))
+            return status, detail
+        return _op
+
+    @patch("lib.batch_git.notify_batch_done")
+    @patch("lib.batch_git.scan_gitlab_repos")
+    def test_collects_all_repos_order_independent(self, mock_scan, mock_notify):
+        """完成序非提交序，但汇总必须含全部仓库。"""
+        mock_scan.return_value = [Path("/r/a"), Path("/r/b"), Path("/r/c")]
+        op = self._op_factory({"a": ("ok", ""), "b": ("skip", "已对齐"), "c": ("fail", "boom")})
+        with patch("lib.batch_git.sys.stdin.isatty", return_value=False):
+            result = run_batch("t", Path("/r"), op, confirm=False)
+        names_ok = sorted(x.name for x in result.succeeded)
+        names_skip = sorted(x.name for x in result.skipped)
+        names_fail = sorted(x.name for x in result.failed)
+        self.assertEqual(names_ok, ["a"])
+        self.assertEqual(names_skip, ["b"])
+        self.assertEqual(names_fail, ["c"])
+        self.assertEqual(result.total, 3)
+        mock_notify.assert_called_once()
+
+    @patch("lib.batch_git.notify_batch_done")
+    @patch("lib.batch_git.scan_gitlab_repos")
+    def test_concurrency_env_override(self, mock_scan, mock_notify):
+        """BATCH_CONCURRENCY 可调（覆盖默认 4）。"""
+        mock_scan.return_value = [Path("/r/a"), Path("/r/b")]
+        op = self._op_factory({"a": ("ok", ""), "b": ("ok", "")})
+        with patch.dict("os.environ", {"BATCH_CONCURRENCY": "8"}):
+            with patch("lib.batch_git.ThreadPoolExecutor") as mock_pool:
+                mock_pool.return_value.__enter__.return_value = mock_pool.return_value
+                mock_pool.return_value.submit.side_effect = lambda *a, **k: _FakeFuture()
+                try:
+                    run_batch("t", Path("/r"), op, confirm=False)
+                except Exception:
+                    pass
+                _, kwargs = mock_pool.call_args
+                self.assertEqual(kwargs.get("max_workers"), 8)
+
+    @patch("lib.batch_git.notify_batch_done")
+    @patch("lib.batch_git.scan_gitlab_repos")
+    def test_per_repo_log_not_interleaved(self, mock_scan, mock_notify):
+        """每个仓库的多行日志在 buffer 中保持顺序完整。"""
+        mock_scan.return_value = [Path("/r/a"), Path("/r/b")]
+        op = self._op_factory(
+            {"a": ("ok", ""), "b": ("ok", "")},
+            log_lines={"a": ["a-step-1", "a-step-2", "a-step-3"],
+                       "b": ["b-step-1", "b-step-2", "b-step-3"]},
+        )
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            with patch("lib.batch_git.sys.stdin.isatty", return_value=False):
+                run_batch("t", Path("/r"), op, confirm=False)
+        out = buf.getvalue()
+        # 两个仓库的 step 各自连续（不被对方日志插入）
+        for name in ("a", "b"):
+            steps = [f"{name}-step-{i}" for i in (1, 2, 3)]
+            idx = [out.find(s) for s in steps]
+            self.assertTrue(all(i >= 0 for i in idx), f"missing steps for {name}")
+            self.assertEqual(idx, sorted(idx), f"steps out of order for {name}")
+            # 三步之间不应插入对方 step
+            segment = out[idx[0]:idx[-1]]
+            other = "b" if name == "a" else "a"
+            self.assertNotIn(f"{other}-step-", segment)
+
+    @patch("lib.batch_git.notify_batch_done")
+    @patch("lib.batch_git.scan_gitlab_repos")
+    def test_exception_in_op_recorded_as_fail(self, mock_scan, mock_notify):
+        """operation 抛异常 → 记为 fail，detail 含异常信息。"""
+        mock_scan.return_value = [Path("/r/a")]
+        def _boom(repo, r, _root):
+            raise RuntimeError("boom-error")
+        with patch("lib.batch_git.sys.stdin.isatty", return_value=False):
+            result = run_batch("t", Path("/r"), _boom, confirm=False)
+        self.assertEqual(len(result.failed), 1)
+        self.assertIn("boom-error", result.failed[0].detail)
+
+    @patch("lib.batch_git.notify_batch_done")
+    @patch("lib.batch_git.scan_gitlab_repos")
+    def test_keyboard_interrupt_cancels(self, mock_scan, mock_notify):
+        """Ctrl-C 触发 KeyboardInterrupt → cancel_futures + 汇总仅含已完成。"""
+        mock_scan.return_value = [Path("/r/a"), Path("/r/b")]
+        op = self._op_factory({"a": ("ok", ""), "b": ("ok", "")})
+        with patch("lib.batch_git.as_completed", side_effect=KeyboardInterrupt):
+            with patch("lib.batch_git.sys.stdin.isatty", return_value=False):
+                result = run_batch("t", Path("/r"), op, confirm=False)
+        # 中断 → 汇总空（无 fut.result 完成）
+        self.assertEqual(result.total, 2)
+        self.assertEqual(result.succeeded, [])
+        mock_notify.assert_called_once()
+
+
+class _FakeFuture:
+    """最小 Future 桩（仅用于 max_workers 断言路径）。"""
+    def result(self):
+        return (0, "", RepoResult("a", "/r/a", "ok"))
+    def add_done_callback(self, _cb):
+        pass
 
 
 if __name__ == "__main__":
