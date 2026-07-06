@@ -43,15 +43,16 @@ with ThreadPoolExecutor(max_workers=concurrency) as pool:
         r.warn("\n用户中断，停止执行")
 ```
 
-### 2. 线程安全的 Reporter
+### 2. 线程安全的输出（per-repo buffer 方案）
 
-Rich Console 线程安全（有内部 lock），但多个线程同时 `r.rule` / `r.info` 会交错。方案：
-- **方案 A（简单）**：每仓库操作在线程内收集自己的输出，完成后主线程统一打印（operation 不直接打日志，仅 return status/detail）。
-- **方案 B**：用独立 per-thread Console 或加锁。
+调研结论（batch_git.py:202-286,317-391,405-469）：三个 `_one_factory` **重度用 `r` 打实时进度**（step/info/ok/warn/err），用户依赖看仓库逐步执行状态。方案 A（线程内不打印）**不可行** — 闭麦后失败时无法看 gitc 子进程上下文。
 
-**采用 A**（简单 + 不交错）：operation 函数（`_push_one_factory` 等）现用 `r` 打日志 → 改为操作内部不打印逐行进度（仅 return status/detail），run_batch 在每 future 完成时统一打印一行状态。若 operation 需打详细日志，用 capture 或 per-repo buffer。
+**采用 per-repo buffer**：每个仓库操作在线程内用独立 `io.StringIO` + Rich Console（专属），完成后主线程统一 flush 该仓库整段输出。这样：
+- 线程内仍用 `r.step/r.info/...` 打（行为不变，只是 Console 重定向到 buffer）
+- 完成序非提交序，每仓库整段不交错（线程内顺序完整）
+- 失败时 gitc 子进程完整输出仍可见（在 buffer 里）
 
-实际看 `_push_one_factory` 等是否依赖 r 打实时日志——若依赖（如 push 失败原因），方案 A 需保留 per-repo 输出。**调研点**：读 3 个 `_one_factory` 函数确认 r 用法。
+实现：`Reporter` 加 `from_buffer(buf)` 工厂或 `run_batch` 内构造 per-thread `Console(file=buf)` + Reporter。主线程 flush 后追一行状态（✔/✖/⏭ + name）。
 
 ### 3. 并发上限
 
@@ -96,6 +97,6 @@ Rich Console 线程安全（有内部 lock），但多个线程同时 `r.rule` /
 - [x] 进度：完成即打印逐行（MVP，非 Progress bar）。
 - [x] 中断：cancel_futures，汇总已完成。
 
-## 调研点
+## 调研点（已闭合）
 
-- `_push_one_factory`/`_merge_one_factory`/`_sync_one_factory` 对 `r`（Reporter）的依赖程度——决定方案 A（线程内不打印）是否可行，或需 per-repo buffer。
+- `_push_one_factory`/`_merge_one_factory`/`_sync_one_factory` 对 `r`（Reporter）的依赖：**重度依赖**（每步 step/info/ok/warn/err），方案 A 不可行 → 改 per-repo buffer。详见第 2 节。
