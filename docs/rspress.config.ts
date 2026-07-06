@@ -19,5 +19,29 @@ export default defineConfig({
       title: 'Scripts Docs',
       description: 'Development efficiency script utilities',
     },
+    {
+      lang: 'fr',
+      label: 'Français',
+      title: 'Scripts (FR)',
+      description: 'Scripts d\'outils d\'efficacité de développement',
+    },
+    {
+      lang: 'es',
+      label: 'Español',
+      title: 'Scripts (ES)',
+      description: 'Scripts de utilidades de eficiencia de desarrollo',
+    },
+    {
+      lang: 'ru',
+      label: 'Русский',
+      title: 'Scripts (RU)',
+      description: 'Скрипты для повышения эффективности разработки',
+    },
+    {
+      lang: 'ar',
+      label: 'العربية',
+      title: 'Scripts (AR)',
+      description: 'نص برمجي لأدوات كفاءة التطوير',
+    },
   ],
 });

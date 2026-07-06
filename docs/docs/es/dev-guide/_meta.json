@@ -1,0 +1,6 @@
+[
+  { "type": "file", "name": "structure", "label": "structure" },
+  { "type": "file", "name": "add-script", "label": "addScript" },
+  { "type": "file", "name": "testing", "label": "testing" },
+  { "type": "file", "name": "contributing", "label": "contributing" }
+]
