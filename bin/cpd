@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""cpd 薄壳入口 — 深度覆盖复制。"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cpd import copy
+
+raise SystemExit(copy(sys.argv))

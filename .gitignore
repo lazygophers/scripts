@@ -1,0 +1,33 @@
+.DS_Store
+.idea/
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+htmlcov_all/
+coverage.json
+
+# Serena tool
+.serena/
+
+# Temporary scripts
+.claude/
+bandit_report.json
+T*_*.md
+T*_*.txt
+
+# Local tool scripts (not for version control)
+*.db
+*.log
+
+# Worktrees
+.worktrees/

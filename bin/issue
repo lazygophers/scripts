@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""issue 薄壳入口 — 自动创建 Issue（调 claude 生成 title/body）。"""
+import argparse
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.issue_wf import run_issue
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="自动创建 Issue",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="示例:\n  issue \"登录页面样式错位\"\n  issue --dry-run \"发现严重 bug\"\n  issue --labels \"bug\" \"接口响应超时\"",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="预览模式")
+    parser.add_argument("--settings", help="指定 claude settings 文件")
+    parser.add_argument("--labels", help="指定 labels")
+    parser.add_argument("--assignee", help="指定 assignee")
+    parser.add_argument("--milestone", help="指定 milestone")
+    parser.add_argument("title", nargs="?", default=None, help="Issue 标题（可省略，自动推断）")
+    args = parser.parse_args(argv[1:])
+
+    return run_issue(
+        args.title,
+        dry_run=args.dry_run,
+        labels=args.labels,
+        assignee=args.assignee,
+        milestone=args.milestone,
+        settings_file=args.settings,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""find_git_repos 薄壳入口 — 查找目录下所有 Git 仓库。"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.git import find_repos_print
+
+raise SystemExit(find_repos_print())

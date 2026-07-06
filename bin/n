@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""n 薄壳入口 — macOS 语音播报。"""
+import argparse
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.notify import say_content
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="macOS 语音播报工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="示例:\n  n '编译完成'\n  n '构建失败，请检查'",
+    )
+    parser.add_argument("content", help="播报内容")
+    args = parser.parse_args(argv[1:])
+    return say_content(args.content)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

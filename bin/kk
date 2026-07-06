@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""kk 薄壳入口 — 按进程名终止进程。"""
+import argparse
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.process import kill_by_name
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="根据进程名终止进程（默认自动终止，无需确认）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="示例:\n"
+               "  kk nginx        # 终止 nginx 进程\n"
+               "  kk nginx node   # 同时终止 nginx 和 node\n"
+               "  kk --dry-run nginx   # 仅预览，不终止",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="仅预览，不实际终止")
+    parser.add_argument("patterns", nargs="+", help="进程名（支持正则）")
+    args = parser.parse_args(argv[1:])
+
+    return kill_by_name(
+        args.patterns,
+        dry_run=args.dry_run,
+        script_markers={pathlib.Path(argv[0]).name, "kk.py"},
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

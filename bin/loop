@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""loop 薄壳入口 — 循环执行命令并追踪结果。"""
+import argparse
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.loop import run_loop
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="循环执行命令并追踪结果",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="示例:\n"
+               "  loop 3 echo hello          # 失败则停止\n"
+               "  loop --force 100 make test  # 强制全部执行\n"
+               "  loop 5 --timeout=30 curl url  # 单次超时 30s\n"
+               "  loop curl url               # 无限循环（成功即停止）\n"
+               "  loop -i curl url            # 同上，显式无限模式",
+    )
+    parser.add_argument("--force", action="store_true", help="强制执行全部次数（默认：成功即停止）")
+    parser.add_argument("--timeout", type=int, help="单次命令超时（秒）")
+    parser.add_argument("--infinite", "-i", action="store_true", help="无限循环模式")
+    parser.add_argument("count", nargs="?", default=None, help="循环次数（省略则为无限）")
+    parser.add_argument("cmd", nargs="*", help="要执行的命令")
+    args = parser.parse_args(argv[1:])
+
+    # count 与 cmd 混合位置参数：首 token 若为数字则视为 count
+    positional = []
+    if args.count:
+        positional.append(args.count)
+    if args.cmd:
+        positional.extend(args.cmd)
+
+    count = None
+    cmd: list[str] = []
+    if positional:
+        if positional[0].lstrip("-").isdigit():
+            count = int(positional[0])
+            cmd = positional[1:]
+        else:
+            cmd = positional
+
+    if not cmd:
+        parser.error("必须指定要执行的命令")
+
+    return run_loop(
+        cmd,
+        count=count,
+        force=args.force,
+        timeout=args.timeout,
+        infinite=args.infinite,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

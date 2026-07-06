@@ -1,0 +1,114 @@
+"""prc 工作流：检测 provider → 拼 prompt → 调 claude 创建 PR/MR。"""
+from lib.ai_workflow import (
+    ProviderInfo,
+    current_branch,
+    detect_provider,
+    detect_self_assignee,
+    fmt_opt,
+    remote_default_branch,
+    run_claude,
+)
+from lib.exec import run
+from lib.ui import reporter
+
+
+def run_prc(
+    base: str | None = None,
+    *,
+    dry_run: bool = False,
+    draft: bool = True,
+    reviews: str | None = None,
+    labels: str | None = None,
+    assignee: str | None = None,
+    settings_file: str | None = None,
+) -> int:
+    """自动创建 PR/MR。"""
+    r = reporter(stderr=True)
+    info = detect_provider()
+    if info is None:
+        r.err("错误: 没有 git remote 或无法解析")
+        return 1
+
+    branch = current_branch()
+
+    r.rule("环境", style="blue")
+    r.kv("检测", {
+        "Provider": info.provider,
+        "仓库": info.repo,
+        "分支": branch,
+    })
+
+    # 默认 assignee 为自己
+    if not assignee:
+        me = detect_self_assignee(info)
+        if me:
+            assignee = me
+            r.info(f"默认 assignee: {me}")
+
+    # 检测 base
+    if not base:
+        base = remote_default_branch(info.remote)
+    r.info(f"目标分支: {base}")
+
+    if dry_run:
+        r.rule("演练", style="yellow")
+        r.kv("dry-run", {
+            "分支": f"{branch} → {base}",
+            "draft": "yes" if draft else "no",
+        })
+        return 0
+
+    prompt = _build_prompt(
+        info, branch=branch, base=base, draft=draft,
+        reviews=reviews, labels=labels, assignee=assignee,
+    )
+    return run_claude(
+        prompt,
+        system_prompt="你是 PR/MR 创建助手，根据用户输入直接执行 gh/glab 命令创建 PR/MR，不要解释。",
+        settings_file=settings_file,
+    )
+
+
+def _build_prompt(
+    info: ProviderInfo,
+    *,
+    branch: str,
+    base: str,
+    draft: bool,
+    reviews: str | None,
+    labels: str | None,
+    assignee: str | None,
+) -> str:
+    draft_flag = "--draft" if draft else ""
+    rev = fmt_opt("--reviewer", reviews)
+    lbl = fmt_opt("--label", labels)
+    asn = fmt_opt("--assignee", assignee)
+    # 收集非空片段再 join, 避免残留双空格
+    extra = " ".join(p for p in (draft_flag, rev, lbl, asn) if p)
+
+    if info.provider == "gh":
+        cmd = f'gh pr create --base {base} --title "<title>" --body "<body>" {extra}'.strip()
+    else:
+        cmd = f'glab mr create --target-branch {base} --title "<title>" --description "<body>" {extra}'.strip()
+
+    return f"""为分支 '{branch}' 在 '{info.repo}' 创建 {info.provider} PR/MR。
+
+Provider 已检测为 '{info.provider}'，host '{info.host}'，repo path '{info.repo}'。
+
+步骤：
+1. git fetch {info.remote} {base}
+2. git log {info.remote}/{base}..HEAD --oneline
+3. git diff --stat {info.remote}/{base}
+4. 直接执行 {info.provider} 创建命令
+
+{info.provider} 创建命令（直接执行，不要只返回文本）：
+- {cmd}
+
+规范：
+- title：中文，不超 72 字，不加句号
+- body：## Summary / ## Changes / ## Why / ## Test plan（checkbox）/ ## Notes（可选）
+- draft：{'yes' if draft else 'no'}
+- assignee：{assignee or '不指定'}
+- reviewers：{reviews or '不指定'}
+
+直接执行命令，不要只输出文本。如遇 network error 自动重试一次。"""

@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""unsleep 薄壳入口 — macOS 防休眠。"""
+import argparse
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.system import prevent_sleep
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="防止 macOS 系统休眠，支持跟随命令或指定时长运行",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  unsleep                # 防止系统休眠（无限制，直到手动 Ctrl-C）
+  unsleep -t 3600        # 防止系统休眠 1 小时
+  unsleep make build     # 防止系统休眠直到命令完成
+  unsleep -t 1800 npm run test
+        """,
+    )
+    parser.add_argument("-t", "--time", type=int, default=None, help="防休眠时长（秒），不指定则无限制运行")
+    parser.add_argument("command", nargs=argparse.REMAINDER, help="要运行的命令（可选）")
+    args = parser.parse_args(argv[1:])
+    return prevent_sleep(duration=args.time, command=args.command or None)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

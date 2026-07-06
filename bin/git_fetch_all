@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""git_fetch_all 薄壳入口 — 一键拉取所有仓库远程更新。"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.git import fetch_all
+
+raise SystemExit(fetch_all())

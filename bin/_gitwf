@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""merge*/push* 系列薄壳的统一入口。
+
+通过 argv[0] 的 basename 推断 action 与 target 分支:
+  mergec/mergedev/mergem/merget  → merge_to(canary|develop|auto|test)
+  pushc/pushdev/pushm/pusht      → push_to(canary|develop|auto|test)
+
+新增分支只需新增 symlink: ln -s _gitwf bin/pushstaging
+"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+_NAME_MAP = {
+    "mergec": ("merge", "canary"),
+    "mergedev": ("merge", "develop"),
+    "mergem": ("merge", "auto"),
+    "merget": ("merge", "test"),
+    "pushc": ("push", "canary"),
+    "pushdev": ("push", "develop"),
+    "pushm": ("push", "auto"),
+    "pusht": ("push", "test"),
+}
+
+
+def main() -> int:
+    name = pathlib.Path(sys.argv[0]).name
+    if name not in _NAME_MAP:
+        sys.stderr.write(f"_gitwf: 未知入口名 '{name}'\n")
+        sys.stderr.write(f"已知: {sorted(_NAME_MAP)}\n")
+        return 2
+    action, target = _NAME_MAP[name]
+    # 让 run_workflow 显示用户输入的入口名而非 _gitwf
+    sys.argv[0] = name
+    if action == "merge":
+        from lib.git_workflow import merge_to
+        return merge_to(target, sys.argv)
+    from lib.git_workflow import push_to
+    return push_to(target, sys.argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

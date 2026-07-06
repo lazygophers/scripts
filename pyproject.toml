@@ -1,0 +1,30 @@
+[project]
+name = "scripts"
+version = "0.1.0"
+description = "脚本工具集：版本控制、构建检查、进程管理、系统通知"
+requires-python = ">=3.9"
+# 运行时仅依赖 stdlib; Rich 由 lib/ui.py 在缺失时回退到纯 stderr
+dependencies = []
+
+[project.optional-dependencies]
+rich = ["rich>=13.0"]
+dev = ["rich>=13.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["lib"]
+
+[tool.setuptools.package-dir]
+lib = "lib"
+
+# scripts 入口由 bin/ 下的可执行文件提供, 不走 console_scripts (保留 shebang 直执行模式)
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501"]  # 行长由 line-length 控制, 不强制断行

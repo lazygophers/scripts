@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""kkp 薄壳入口 — 根据端口号终止占用进程。"""
+import argparse
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.process import kill_by_port
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="根据端口号终止占用该端口的进程（默认自动终止，无需确认）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="示例:\n"
+               "  kkp 8080      # 终止占用 8080 端口的进程\n"
+               "  kkp --dry-run 3000   # 仅预览端口占用情况",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="仅预览，不实际终止")
+    parser.add_argument("port", help="端口号")
+    args = parser.parse_args(argv[1:])
+
+    return kill_by_port(
+        args.port,
+        dry_run=args.dry_run,
+        script_markers={os.path.basename(argv[0]), "kkp.py"},
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

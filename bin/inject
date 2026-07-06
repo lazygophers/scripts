@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""inject - 把当前仓库的 bin/ 注入 shell PATH。
+
+生成独立文件 ~/.config/lazygophers/scripts/scripts.sh:
+    export PATH="/abs/path/to/bin:$PATH"
+
+并把 `source ~/.config/lazygophers/scripts/scripts.sh` 加到所有存在的 rc 文件:
+    ~/.bashrc / ~/.zshrc / ~/.profile / ~/.bash_profile
+
+幂等: rc 中已有 source 行则跳过。
+
+用法:
+    inject              # 写入 rc
+    inject --show       # 仅打印将生成的内容, 不写盘
+    inject --uninstall  # 从 rc 移除 source 行, 删除 scripts.sh
+"""
+import argparse
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.ui import reporter
+
+# ponytail: 固定 rc 候选清单, 不读 $SHELL (多机拷贝/换 shell 时 rc 已存在即写)
+_RC_CANDIDATES = (
+    ".bashrc",
+    ".zshrc",
+    ".profile",
+    ".bash_profile",
+)
+
+# 生成文件位于 XDG 风格目录, 不污染 HOME
+_SCRIPTS_DIR = pathlib.Path.home() / ".config" / "lazygophers" / "scripts"
+_SCRIPTS_SH_NAME = "scripts.sh"
+_SCRIPTS_SH = _SCRIPTS_DIR / _SCRIPTS_SH_NAME
+_SOURCE_LINE_TMPL = '[ -f "$HOME/.config/lazygophers/scripts/scripts.sh" ] && source "$HOME/.config/lazygophers/scripts/scripts.sh"'
+_MARKER_BEGIN = "# >>> scripts bin inject >>>"
+_MARKER_END = "# <<< scripts bin inject <<<"
+
+
+def _bin_dir() -> pathlib.Path:
+    return pathlib.Path(__file__).resolve().parent
+
+
+def _build_scripts_sh(bin_dir: pathlib.Path) -> str:
+    return f'export PATH="{bin_dir}:$PATH"\n'
+
+
+def _build_rc_block() -> str:
+    return f"{_MARKER_BEGIN}\n{_SOURCE_LINE_TMPL}\n{_MARKER_END}\n"
+
+
+def _write_scripts_sh(r) -> None:
+    content = _build_scripts_sh(_bin_dir())
+    # 幂等: 内容相同则跳过
+    if _SCRIPTS_SH.exists() and _SCRIPTS_SH.read_text(encoding="utf-8") == content:
+        r.step(f"{_SCRIPTS_SH} 已是最新, 跳过")
+        return
+    _SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    _SCRIPTS_SH.write_text(content, encoding="utf-8")
+    r.ok(f"写入 {_SCRIPTS_SH}")
+
+
+def _inject_rc(rc: pathlib.Path, block: str, r) -> str:
+    """返回: 'wrote' / 'skipped' / 'missing'。"""
+    if not rc.exists():
+        return "missing"
+    text = rc.read_text(encoding="utf-8")
+    if _MARKER_BEGIN in text:
+        # 已有块, 检查内容是否一致
+        existing = _extract_block(text)
+        if existing == block:
+            return "skipped"
+        # 替换旧块
+        new_text = _strip_block(text) + block
+        rc.write_text(new_text, encoding="utf-8")
+        r.step(f"{rc.name}: 更新 source 块")
+        return "wrote"
+    new_text = text.rstrip("\n") + "\n\n" + block
+    rc.write_text(new_text, encoding="utf-8")
+    r.step(f"{rc.name}: 追加 source 块")
+    return "wrote"
+
+
+def _extract_block(text: str) -> str:
+    begin = text.find(_MARKER_BEGIN)
+    end = text.find(_MARKER_END)
+    if begin == -1 or end == -1:
+        return ""
+    return text[begin : end + len(_MARKER_END) + 1]
+
+
+def _strip_block(text: str) -> str:
+    begin = text.find(_MARKER_BEGIN)
+    end = text.find(_MARKER_END)
+    if begin == -1 or end == -1:
+        return text
+    return text[:begin] + text[end + len(_MARKER_END) + 1 :]
+
+
+def _uninstall(r) -> int:
+    block = _build_rc_block()
+    for name in _RC_CANDIDATES:
+        rc = pathlib.Path.home() / name
+        if not rc.exists():
+            continue
+        text = rc.read_text(encoding="utf-8")
+        if _MARKER_BEGIN not in text:
+            continue
+        rc.write_text(_strip_block(text), encoding="utf-8")
+        r.step(f"{rc.name}: 移除 source 块")
+    sh = _SCRIPTS_SH
+    if sh.exists():
+        sh.unlink()
+        r.ok(f"删除 {sh}")
+    r.kv("卸载完成", {"下一步": "重启 shell 或 `source` 你的 rc"})
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="把当前仓库 bin/ 注入 shell PATH",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="示例:\n"
+               "  inject             # 写入 rc\n"
+               "  inject --show      # 仅预览\n"
+               "  inject --uninstall # 卸载",
+    )
+    parser.add_argument("--show", action="store_true", help="仅打印将生成的内容, 不写盘")
+    parser.add_argument("--uninstall", action="store_true", help="从 rc 移除 source 行并删除 scripts.sh")
+    parsed = parser.parse_args(argv[1:])
+
+    r = reporter(stderr=True)
+
+    if parsed.uninstall:
+        return _uninstall(r)
+
+    bin_dir = _bin_dir()
+    scripts_sh = _build_scripts_sh(bin_dir)
+    block = _build_rc_block()
+
+    if parsed.show:
+        print(f"{_SCRIPTS_SH} 内容:")
+        print(scripts_sh)
+        print("rc 文件将追加的块:")
+        print(block)
+        print("目标 rc 候选:")
+        for name in _RC_CANDIDATES:
+            rc = pathlib.Path.home() / name
+            print(f"  ~/{name} {'(存在)' if rc.exists() else '(不存在, 跳过)'}")
+        return 0
+
+    r.rule("inject bin/ → PATH", style="blue")
+    r.kv("bin 目录", {"路径": str(bin_dir)})
+    _write_scripts_sh(r)
+
+    results = {"wrote": [], "skipped": [], "missing": []}
+    for name in _RC_CANDIDATES:
+        rc = pathlib.Path.home() / name
+        status = _inject_rc(rc, block, r)
+        results[status].append(name)
+
+    r.rule("结果", style="green")
+    r.summary(
+        "inject 完成",
+        [
+            ("写入", ", ".join(results["wrote"]) or "—", "green"),
+            ("跳过(已存在)", ", ".join(results["skipped"]) or "—", "cyan"),
+            ("不存在", ", ".join(results["missing"]) or "—", "yellow"),
+        ],
+    )
+    r.step("下一步: 重启 shell 或手动 `source ~/.zshrc`")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

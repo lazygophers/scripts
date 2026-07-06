@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""pushc_all 薄壳入口 — 批量 pushc。"""
+import argparse
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.batch_git import pushc_all
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="批量 pushc：扫描 GitLab 仓库，逐个执行 pushc",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--dry-run", action="store_true", help="仅检查条件，不执行 pushc")
+    parsed, extra = parser.parse_known_args(argv[1:])
+    return pushc_all(dry_run=parsed.dry_run, extra=extra)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

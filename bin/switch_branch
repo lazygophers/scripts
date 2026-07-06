@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""switch_branch 薄壳入口 — 批量切换分支。"""
+import argparse
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.batch_git import switch_branch_all
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="批量切换分支：扫描 GitLab 仓库，切换到指定分支",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("branch", help="目标分支名")
+    args = parser.parse_args(argv[1:])
+    return switch_branch_all(args.branch)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
