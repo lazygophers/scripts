@@ -1,0 +1,10 @@
+{
+  "guide": { "zh": "使用手册", "en": "Guide" },
+  "devGuide": { "zh": "开发指南", "en": "Dev Guide" },
+  "introduction": { "zh": "简介", "en": "Introduction" },
+  "scripts": { "zh": "脚本功能", "en": "Scripts" },
+  "structure": { "zh": "目录结构", "en": "Structure" },
+  "addScript": { "zh": "加新脚本", "en": "Add Script" },
+  "testing": { "zh": "测试", "en": "Testing" },
+  "contributing": { "zh": "参与贡献", "en": "Contributing" }
+}
