@@ -2,9 +2,11 @@
 
 提供 GitLab 仓库扫描、批量执行、汇总报告等功能。
 """
+import io
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -111,9 +113,10 @@ def run_batch(
     script_dir: Path | None = None,
     confirm: bool = True,
 ) -> BatchResult:
-    """批量仓库操作公共流程。
+    """批量仓库操作公共流程（并行）。
 
-    扫描仓库 → 确认 → 逐个执行 → 汇总 → 通知。
+    扫描仓库 → 确认 → ThreadPoolExecutor 并行执行（per-repo buffer，
+    完成即 flush，避免多线程 Rich 输出交错）→ 汇总 → 通知。
 
     Args:
         title: 规则标题
@@ -131,7 +134,8 @@ def run_batch(
 
     r.rule(title, style="blue")
     repos = scan_gitlab_repos(root)
-    r.info(f"共 {len(repos)} 个仓库")
+    concurrency = max(1, int(os.environ.get("BATCH_CONCURRENCY", "4")))
+    r.info(f"共 {len(repos)} 个仓库，并发 {concurrency}")
     for repo in repos:
         r.info(f"  •  {repo.relative_to(root)}")
 
@@ -145,27 +149,44 @@ def run_batch(
             raise SystemExit(0)
 
     result = BatchResult(total=len(repos))
-    for i, repo in enumerate(repos, 1):
+
+    def _run_one(idx: int, repo: Path) -> tuple[int, str, RepoResult]:
+        """单仓库在线程内执行：写 per-repo buffer，返回 (idx, buf, RepoResult)。"""
         rel = repo.relative_to(root)
+        buf = io.StringIO()
+        rr_per_repo = Reporter.from_buffer(buf)
         try:
-            r.rule(f"[{i}/{len(repos)}] {rel}")
-            status, detail = operation(repo, r, root)
+            status, detail = operation(repo, rr_per_repo, root)
             rr = RepoResult(name=str(rel), path=str(repo), status=status, detail=detail)
-            if status == "ok":
-                r.ok(f"同步成功{(' — ' + detail) if detail else ''}")
-                result.succeeded.append(rr)
-            elif status == "skip":
-                r.warn(f"跳过{(' — ' + detail) if detail else ''}")
-                result.skipped.append(rr)
-            else:
-                r.err(f"失败{(' — ' + detail) if detail else ''}")
-                result.failed.append(rr)
-        except KeyboardInterrupt:
-            r.warn("用户中断，停止执行")
-            break
         except Exception as e:
-            r.err(f"异常: {e}")
-            result.failed.append(RepoResult(name=str(rel), path=str(repo), status="fail", detail=str(e)))
+            rr_per_repo.err(f"异常: {e}")
+            rr = RepoResult(name=str(rel), path=str(repo), status="fail", detail=str(e))
+        return idx, buf.getvalue(), rr
+
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = {
+            pool.submit(_run_one, idx, repo): (idx, repo)
+            for idx, repo in enumerate(repos)
+        }
+        try:
+            for fut in as_completed(futures):
+                idx, buf_text, rr = fut.result()
+                # 先 flush 该仓库整段日志（顺序完整不交错），再追状态行
+                if buf_text:
+                    sys.stderr.write(buf_text)
+                name = rr.name
+                if rr.status == "ok":
+                    r.ok(f"✔ {name}{(' — ' + rr.detail) if rr.detail else ''}")
+                    result.succeeded.append(rr)
+                elif rr.status == "skip":
+                    r.warn(f"⏭ {name}{(' — ' + rr.detail) if rr.detail else ''}")
+                    result.skipped.append(rr)
+                else:
+                    r.err(f"✖ {name}{(' — ' + rr.detail) if rr.detail else ''}")
+                    result.failed.append(rr)
+        except KeyboardInterrupt:
+            pool.shutdown(wait=False, cancel_futures=True)
+            r.warn("\n用户中断，停止执行")
 
     print_summary(r, "执行汇总", result)
     notify_batch_done(folder_name, result, script_dir=script_dir)
