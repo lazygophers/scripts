@@ -9,7 +9,7 @@
 | rspress-docs | 建 Rspress 文档站 docs/ 支持中英多语言 | — | 已完成 | 收尾 | 100% | — |
 | push | push_* 批量结束输出成功失败跳过汇总 | — | 已完成 | 收尾 | 100% | — |
 | rich-beautify | rich 美化批量脚本输出 | — | 已完成 | 收尾 | 100% | — |
-| parallel-batch | 批量操作并行异步化 | — | 规划中 | 规划 | 0% | — |
+| parallel-batch | 批量操作并行异步化 | — | 已完成 | 收尾 | 100% | — |
 | batch-error-detail | 修复批量失败 detail 提取关键错误行 | — | 已完成 | 收尾 | 100% | — |
 
 ## Worktree ↔ Task 映射
