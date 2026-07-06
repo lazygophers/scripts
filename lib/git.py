@@ -238,7 +238,7 @@ def fetch_all(root: Path = Path(".")) -> int:
     if failures:
         r.warn(f"失败 {len(failures)}/{len(repos)}")
         for name, _ in failures:
-            r.err(f"  ✗ {name}")
+            r.err(name)
         r.ok(f"成功 {len(repos) - len(failures)}/{len(repos)}")
     else:
         r.ok(f"全部成功 ({len(repos)} 个仓库)")

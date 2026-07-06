@@ -152,19 +152,19 @@ def run_batch(
             status, detail = operation(repo, r, root)
             rr = RepoResult(name=str(rel), path=str(repo), status=status, detail=detail)
             if status == "ok":
-                r.ok(f"✔ 同步成功")
+                r.ok(f"同步成功{(' — ' + detail) if detail else ''}")
                 result.succeeded.append(rr)
             elif status == "skip":
-                r.info(f"⏭ 跳过" + (f" — {detail}" if detail else ""))
+                r.warn(f"跳过{(' — ' + detail) if detail else ''}")
                 result.skipped.append(rr)
             else:
-                r.err(f"✖ 失败" + (f" — {detail}" if detail else ""))
+                r.err(f"失败{(' — ' + detail) if detail else ''}")
                 result.failed.append(rr)
         except KeyboardInterrupt:
-            r.warn("\n用户中断，停止执行")
+            r.warn("用户中断，停止执行")
             break
         except Exception as e:
-            r.err(f"✖ 异常: {e}")
+            r.err(f"异常: {e}")
             result.failed.append(RepoResult(name=str(rel), path=str(repo), status="fail", detail=str(e)))
 
     print_summary(r, "执行汇总", result)

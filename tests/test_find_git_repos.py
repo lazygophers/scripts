@@ -126,6 +126,21 @@ class TestFindReposPrint(unittest.TestCase):
         mock_walk.return_value = []
         self.assertEqual(find_repos_print(), 0)
 
+    @patch("lib.git._walk_repos")
+    def test_output_lists_repo_names(self, mock_walk):
+        """Reporter 路径（TTY）或 markdown 路径（非 TTY）都应输出仓库名。"""
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        mock_walk.return_value = [("alpha_repo", "/abs/alpha_repo")]
+        err_buf, out_buf = io.StringIO(), io.StringIO()
+        with redirect_stderr(err_buf), redirect_stdout(out_buf):
+            find_repos_print()
+        combined = err_buf.getvalue() + out_buf.getvalue()
+        self.assertIn("alpha_repo", combined)
+        # Reporter 摘要行（纯文本降级路径也应含“仓库”字样）
+        self.assertIn("仓库", combined)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -137,6 +137,26 @@ class TestFetchAll(unittest.TestCase):
         ]
         self.assertEqual(fetch_all(), 1)
 
+    @patch("lib.git.retry_command")
+    @patch("lib.git._list_top_repos")
+    def test_output_shows_repo_status(self, mock_list, mock_retry):
+        """逐仓库 fetch 状态行走 Reporter，输出含仓库名与状态。"""
+        import io
+        from contextlib import redirect_stderr
+
+        repo = Path("/test/alpha_repo")
+        mock_list.return_value = [repo]
+        mock_retry.return_value = MagicMock(ok=False, last_output="net error")
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            rc = fetch_all()
+        out = buf.getvalue()
+        self.assertEqual(rc, 1)
+        self.assertIn("alpha_repo", out)
+        # 失败汇总段（rule 标题）+ 失败计数
+        self.assertIn("执行结果", out)
+        self.assertIn("失败", out)
+
 
 if __name__ == "__main__":
     unittest.main()
