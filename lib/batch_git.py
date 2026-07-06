@@ -175,8 +175,11 @@ from lib.exec import run as _run
 from lib.git import get_current_branch as _get_current_branch
 
 
-def _pushc_one_factory(dry_run: bool, extra: list[str]) -> OperationFn:
-    """构造 pushc 单仓库操作（捕获 dry_run/extra）。"""
+def _push_one_factory(target: str, dry_run: bool, extra: list[str]) -> OperationFn:
+    """构造 push 单仓库操作（捕获 target/dry_run/extra）。
+
+    单仓执行调新名 symlink `push_{target}`（需在 PATH 中可见）。
+    """
     def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
         # fetch
         r.step("fetch origin …")
@@ -185,24 +188,24 @@ def _pushc_one_factory(dry_run: bool, extra: list[str]) -> OperationFn:
             r.warn(f"fetch 失败: {(p.stdout or '') + (p.stderr or '')}".strip())
 
         ref_check = _run(
-            ["git", "show-ref", "--verify", "--quiet", "refs/remotes/origin/canary"],
+            ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{target}"],
             cwd=str(repo), check=False, capture_output=True,
         )
-        remote_canary_exists = ref_check.returncode == 0
+        remote_target_exists = ref_check.returncode == 0
 
         current_branch = _get_current_branch(cwd=str(repo))
         if not current_branch:
             return "skip", "无法获取当前分支（detached HEAD）"
         r.info(f"当前分支: {current_branch}")
 
-        # 条件1：当前分支相对远端 canary 有新 commit
+        # 条件1：当前分支相对远端 target 有新 commit
         cond1 = False
-        if not remote_canary_exists:
-            r.ok("条件1 通过 — 远端 canary 不存在，视为有差异")
+        if not remote_target_exists:
+            r.ok(f"条件1 通过 — 远端 {target} 不存在，视为有差异")
             cond1 = True
         else:
             log_p = _run(
-                ["git", "log", "origin/canary..HEAD", "--oneline"],
+                ["git", "log", f"origin/{target}..HEAD", "--oneline"],
                 cwd=str(repo), check=False, capture_output=True,
             )
             commits = (log_p.stdout or "").strip()
@@ -213,26 +216,26 @@ def _pushc_one_factory(dry_run: bool, extra: list[str]) -> OperationFn:
                     r.info(f"       {line}")
                 cond1 = True
             else:
-                r.info("条件1 不满足 — 当前分支相对 origin/canary 无新 commit")
+                r.info(f"条件1 不满足 — 当前分支相对 origin/{target} 无新 commit")
 
-        # 条件2：本地 canary 相对远端 canary 有差异
+        # 条件2：本地 target 相对远端 target 有差异
         cond2 = False
-        local_canary = _run(
-            ["git", "show-ref", "--verify", "--quiet", "refs/heads/canary"],
+        local_target = _run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{target}"],
             cwd=str(repo), check=False, capture_output=True,
         )
-        if not remote_canary_exists and local_canary.returncode == 0:
-            r.ok("条件2 通过 — 远端 canary 不存在但本地 canary 存在")
+        if not remote_target_exists and local_target.returncode == 0:
+            r.ok(f"条件2 通过 — 远端 {target} 不存在但本地 {target} 存在")
             cond2 = True
-        elif local_canary.returncode == 0:
+        elif local_target.returncode == 0:
             diff_p = _run(
-                ["git", "log", "origin/canary..canary", "--oneline"],
+                ["git", "log", f"origin/{target}..{target}", "--oneline"],
                 cwd=str(repo), check=False, capture_output=True,
             )
             diff_commits = (diff_p.stdout or "").strip()
             if diff_commits:
                 count = len(diff_commits.splitlines())
-                r.ok(f"条件2 通过 — 本地 canary 领先远端 {count} 个 commit")
+                r.ok(f"条件2 通过 — 本地 {target} 领先远端 {count} 个 commit")
                 for line in diff_commits.splitlines():
                     r.info(f"       {line}")
                 cond2 = True
@@ -241,10 +244,10 @@ def _pushc_one_factory(dry_run: bool, extra: list[str]) -> OperationFn:
             return "skip", "两个条件均不满足"
 
         if dry_run:
-            return "ok", "条件满足（dry-run 模式，不执行 pushc）"
+            return "ok", f"条件满足（dry-run 模式，不执行 push_{target}）"
 
-        r.step("执行 pushc …")
-        p = _run(["pushc", *extra], cwd=str(repo), check=False, capture_output=True)
+        r.step(f"执行 push_{target} …")
+        p = _run([f"push_{target}", *extra], cwd=str(repo), check=False, capture_output=True)
         if p.returncode == 0:
             return "ok", ""
         out = (p.stdout or "") + (p.stderr or "")
@@ -253,12 +256,29 @@ def _pushc_one_factory(dry_run: bool, extra: list[str]) -> OperationFn:
     return _op
 
 
-def pushc_all(*, dry_run: bool = False, extra: list[str] | None = None) -> int:
-    """批量 pushc：扫描 GitLab 仓库，逐个执行 pushc。"""
+def push_all(
+    target: str,
+    argv: list[str] | None = None,
+) -> int:
+    """批量 push 到 target：扫描 GitLab 仓库，逐个执行 push_{target}。
+
+    解析 --dry-run；其余参数透传给单仓 push_{target}。
+    批量模式自动执行，无确认门（confirm=False）。
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog=f"push_{target}",
+        description=f"批量 push 到 {target}：扫描 GitLab 仓库，逐个执行 push_{target}",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--dry-run", action="store_true", help="仅检查条件并预览仓库列表，不执行 push")
+    parsed, extra = parser.parse_known_args(argv[1:] if argv is not None else None)
+
     run_batch(
-        title="pushc 批量推送",
+        title=f"push_{target} 批量推送",
         root=Path(".").resolve(),
-        operation=_pushc_one_factory(dry_run, extra or []),
+        operation=_push_one_factory(target, parsed.dry_run, extra),
         confirm=False,
     )
     return 0

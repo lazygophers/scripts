@@ -230,7 +230,7 @@ def run_workflow(
 
 
 def merge_to(target: str, argv: list[str] | None = None) -> int:
-    """合并当前分支 → target, 留在 target。供薄壳 (bin/mergec 等) 直接调用。"""
+    """合并当前分支 → target, 留在 target。供薄壳 (bin/merge_canary 等) 直接调用。"""
     if argv is None:
         argv = sys.argv
     script_name = os.environ.get("_SCRIPT_NAME", f"merge-{target}")
@@ -241,7 +241,7 @@ def merge_to(target: str, argv: list[str] | None = None) -> int:
 def push_to(target: str, argv: list[str] | None = None) -> int:
     """合并当前分支 → target 并推送, 完成后切回原分支 (除非 --stay)。
 
-    供薄壳 (bin/pushc 等) 直接调用。
+    供薄壳 (bin/push_canary 等) 直接调用。
     """
     if argv is None:
         argv = sys.argv

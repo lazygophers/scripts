@@ -30,3 +30,7 @@
 # Python cache
 **/__pycache__/
 **/*.pyc
+
+# trellis-taskmd backup
+.task.md.bak
+*.bak

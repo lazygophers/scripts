@@ -12,7 +12,7 @@ import lib.git_workflow as gw
 class TestMergeTo(unittest.TestCase):
     @patch.object(gw, "run_workflow", return_value=0)
     def test_forwards_args(self, mock_wf):
-        rc = gw.merge_to("canary", argv=["mergec", "--dry-run"])
+        rc = gw.merge_to("canary", argv=["merge_canary", "--dry-run"])
         self.assertEqual(rc, 0)
         mock_wf.assert_called_once()
         args, kwargs = mock_wf.call_args
@@ -43,19 +43,19 @@ class TestMergeTo(unittest.TestCase):
 class TestPushTo(unittest.TestCase):
     @patch.object(gw, "run_workflow", return_value=0)
     def test_forwards_stay_false_default(self, mock_wf):
-        gw.push_to("canary", argv=["pushc"])
+        gw.push_to("canary", argv=["push_canary"])
         kwargs = mock_wf.call_args[1]
         self.assertFalse(kwargs["stay_on_target"])
 
     @patch.object(gw, "run_workflow", return_value=0)
     def test_stay_flag_detected(self, mock_wf):
-        gw.push_to("canary", argv=["pushc", "--stay"])
+        gw.push_to("canary", argv=["push_canary", "--stay"])
         kwargs = mock_wf.call_args[1]
         self.assertTrue(kwargs["stay_on_target"])
 
     @patch.object(gw, "run_workflow", return_value=0)
     def test_passthrough_includes_extra(self, mock_wf):
-        gw.push_to("dev", argv=["pushdev", "--dry-run"])
+        gw.push_to("dev", argv=["push_develop", "--dry-run"])
         passthrough = mock_wf.call_args[0][2]
         self.assertEqual(passthrough, ["dev", "--dry-run"])
 

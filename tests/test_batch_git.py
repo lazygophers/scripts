@@ -9,12 +9,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.batch_git import (
     BatchResult,
     RepoResult,
-    _pushc_one_factory,
+    _push_one_factory,
     _switch_one_factory,
     _sync_one_factory,
     notify_batch_done,
     print_repo_list,
     print_summary,
+    push_all,
     scan_gitlab_repos,
 )
 from lib.ui import reporter
@@ -121,22 +122,22 @@ class TestNotifyBatchDone(unittest.TestCase):
         mock_n.assert_called_once()
 
 
-class TestPushcFactory(unittest.TestCase):
+class TestPushFactory(unittest.TestCase):
     def test_returns_callable(self):
-        op = _pushc_one_factory(dry_run=True, extra=[])
+        op = _push_one_factory(target="canary", dry_run=True, extra=[])
         self.assertTrue(callable(op))
 
     @patch("lib.batch_git._run")
     @patch("lib.batch_git._get_current_branch", return_value="feat")
     def test_dry_run_returns_ok(self, _mock_br, mock_run):
-        # fetch ok, remote canary 不存在 (cond1 通过), local canary 不存在 (cond2 不通过)
+        # fetch ok, remote target 不存在 (cond1 通过), local target 不存在 (cond2 不通过)
         # cond1 || cond2 → 满足 → dry_run 返 ok
         mock_run.side_effect = [
             _mock_run(returncode=0),   # fetch
-            _mock_run(returncode=1),   # show-ref remote canary (不存在)
-            _mock_run(returncode=1),   # show-ref local canary (不存在)
+            _mock_run(returncode=1),   # show-ref remote target (不存在)
+            _mock_run(returncode=1),   # show-ref local target (不存在)
         ]
-        op = _pushc_one_factory(dry_run=True, extra=[])
+        op = _push_one_factory(target="canary", dry_run=True, extra=[])
         r = MagicMock()
         status, _ = op(Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "ok")
@@ -146,13 +147,65 @@ class TestPushcFactory(unittest.TestCase):
         with patch("lib.batch_git._get_current_branch", return_value=""):
             mock_run.side_effect = [
                 _mock_run(returncode=0),   # fetch
-                _mock_run(returncode=1),   # show-ref remote canary
+                _mock_run(returncode=1),   # show-ref remote target
             ]
-            op = _pushc_one_factory(dry_run=False, extra=[])
+            op = _push_one_factory(target="canary", dry_run=False, extra=[])
             r = MagicMock()
             status, detail = op(Path("/repo"), r, Path("/root"))
             self.assertEqual(status, "skip")
             self.assertIn("detached", detail)
+
+    @patch("lib.batch_git._run")
+    @patch("lib.batch_git._get_current_branch", return_value="feat")
+    def test_calls_new_push_target_symlink(self, _mock_br, mock_run):
+        """非 dry-run 路径调新名 symlink `push_{target}`（验证 target 参数化）。"""
+        mock_run.side_effect = [
+            _mock_run(returncode=0),   # fetch
+            _mock_run(returncode=1),   # show-ref remote target (不存在) → cond1 通过
+            _mock_run(returncode=1),   # show-ref local target (不存在) → cond2 不通过
+            _mock_run(returncode=0),   # 执行 push_develop
+        ]
+        op = _push_one_factory(target="develop", dry_run=False, extra=[])
+        r = MagicMock()
+        status, _ = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "ok")
+        # 最后一次 _run 调用应是 push_develop
+        last_call_args = mock_run.call_args_list[-1][0][0]
+        self.assertEqual(last_call_args[0], "push_develop")
+
+
+class TestPushAllArgparse(unittest.TestCase):
+    """push_all(target, argv) 参数解析。"""
+
+    @patch("lib.batch_git.run_batch")
+    def test_parses_dry_run(self, mock_batch):
+        push_all("canary", argv=["push_canary", "--dry-run"])
+        _, kwargs = mock_batch.call_args
+        self.assertFalse(kwargs["confirm"])
+        op = kwargs["operation"]
+        self.assertTrue(callable(op))
+
+    @patch("lib.batch_git.run_batch")
+    def test_confirm_always_false(self, mock_batch):
+        """批量模式自动执行，无确认门（confirm=False）。"""
+        push_all("develop", argv=["push_develop"])
+        self.assertFalse(mock_batch.call_args[1]["confirm"])
+
+    @patch("lib.batch_git.run_batch")
+    def test_extra_passthrough(self, mock_batch):
+        """--stay 等非批量参数透传给 factory 的 extra。"""
+        push_all("canary", argv=["push_canary", "--stay"])
+        # 通过直接调 factory 验证 extra 透传（factory 内部捕获 extra）
+        captured = {}
+        original = _push_one_factory
+
+        def spy(target, dry_run, extra):
+            captured["extra"] = extra
+            return original(target, dry_run, extra)
+
+        with patch("lib.batch_git._push_one_factory", side_effect=spy):
+            push_all("canary", argv=["push_canary", "--stay"])
+        self.assertIn("--stay", captured["extra"])
 
 
 class TestSwitchFactory(unittest.TestCase):

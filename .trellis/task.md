@@ -4,6 +4,7 @@
 
 | ID | 名称 | 描述 | 状态 | 阶段 | 进度 | worktree |
 | --- | --- | --- | --- | --- | --- | --- |
+| push-merge-pushc-all | 重命名 push/merge 入口为下划线全称风格并合并 pushc_all | — | 进行中 | 规划 | 0% | — |
 
 ## Worktree ↔ Task 映射
 
@@ -12,3 +13,4 @@
 
 | worktree | task | 创建源 |
 | --- | --- | --- |
+| /Users/luoxin/persons/scripts/.worktrees/07-06-push-merge-pushc-all | 07-06-push-merge-pushc-all | trellisx-start |

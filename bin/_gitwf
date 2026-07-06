@@ -2,10 +2,15 @@
 """merge*/push* 系列薄壳的统一入口。
 
 通过 argv[0] 的 basename 推断 action 与 target 分支:
-  mergec/mergedev/mergem/merget  → merge_to(canary|develop|auto|test)
-  pushc/pushdev/pushm/pusht      → push_to(canary|develop|auto|test)
+  merge_canary/merge_develop/merge_auto/merge_test  → merge_to(...)
+  push_canary/push_develop/push_auto/push_test      → push_to(...) 或批量
 
-新增分支只需新增 symlink: ln -s _gitwf bin/pushstaging
+自动识别单仓/批量:
+  - 当前目录是 git 仓库（有 .git）→ 单仓: push_to / merge_to
+  - 非 git 目录 → push_* 进批量扫描; merge_* 报错退出
+  - --help / -h 在任何环境下直接转发到下游 argparse
+
+新增分支只需新增 symlink: ln -s _gitwf bin/push_staging
 """
 import pathlib
 import sys
@@ -13,14 +18,14 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 _NAME_MAP = {
-    "mergec": ("merge", "canary"),
-    "mergedev": ("merge", "develop"),
-    "mergem": ("merge", "auto"),
-    "merget": ("merge", "test"),
-    "pushc": ("push", "canary"),
-    "pushdev": ("push", "develop"),
-    "pushm": ("push", "auto"),
-    "pusht": ("push", "test"),
+    "merge_canary": ("merge", "canary"),
+    "merge_develop": ("merge", "develop"),
+    "merge_auto": ("merge", "auto"),
+    "merge_test": ("merge", "test"),
+    "push_canary": ("push", "canary"),
+    "push_develop": ("push", "develop"),
+    "push_auto": ("push", "auto"),
+    "push_test": ("push", "test"),
 }
 
 
@@ -33,11 +38,25 @@ def main() -> int:
     action, target = _NAME_MAP[name]
     # 让 run_workflow 显示用户输入的入口名而非 _gitwf
     sys.argv[0] = name
+
+    # --help / -h 在任何环境下都直接转发到下游 argparse（标准约定 + 单仓/批量均通）
+    wants_help = any(a in ("--help", "-h") for a in sys.argv[1:])
+
+    in_git_repo = wants_help or (pathlib.Path.cwd() / ".git").exists()
+
     if action == "merge":
+        if not in_git_repo:
+            sys.stderr.write("merge_* 需在 git 仓库内执行\n")
+            return 2
         from lib.git_workflow import merge_to
         return merge_to(target, sys.argv)
-    from lib.git_workflow import push_to
-    return push_to(target, sys.argv)
+
+    # push 系列：git 仓库 → 单仓；否则进批量
+    if in_git_repo:
+        from lib.git_workflow import push_to
+        return push_to(target, sys.argv)
+    from lib.batch_git import push_all
+    return push_all(target, sys.argv)
 
 
 if __name__ == "__main__":
