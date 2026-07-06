@@ -84,7 +84,7 @@ class Reporter:
             # 无 Rich：靠 _file 直接写
             self.console = None
         else:
-            self.console = console(stderr=stderr) if HAS_RICH else None
+            self.console = Console(stderr=stderr) if HAS_RICH else None
         self.stderr = stderr
         self._file = file  # plain 模式直写对象（StringIO）
 
