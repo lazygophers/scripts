@@ -1,6 +1,6 @@
 """批量 Git 仓库操作公共库。
 
-提供 GitLab 仓库扫描、批量执行、汇总报告等功能。
+提供 Git 仓库扫描、批量执行、汇总报告等功能。
 """
 import io
 import os
@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from lib.exec import run
 from lib.ui import Reporter, reporter
 
 
@@ -33,10 +32,10 @@ class BatchResult:
     failed: list[RepoResult] = field(default_factory=list)
 
 
-def scan_gitlab_repos(root: Path, *, max_depth: int = 3) -> list[Path]:
-    """扫描目录下所有 GitLab 仓库（通过 remote URL 匹配）。"""
+def scan_repos(root: Path, *, max_depth: int = 3) -> list[Path]:
+    """扫描目录下所有 Git 仓库（含 .git 的目录，不限 remote 提供商）。"""
     repos: list[Path] = []
-    for dirpath, dirnames, _filenames in os.walk(root, topdown=True):
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
         # relative_to(root) 在 root 本身为 '.', 子目录为 'a', 'a/b'...
         # 路径组件数 = sep 数 + 1; max_depth 按组件数计 (root 下第 N 层 = N 个组件)
         rel = Path(dirpath).relative_to(root)
@@ -44,15 +43,18 @@ def scan_gitlab_repos(root: Path, *, max_depth: int = 3) -> list[Path]:
         if depth >= max_depth:
             dirnames.clear()
             continue
+        # .git 可能是目录（普通仓库）或文件（submodule / worktree 的 gitdir 指针）
+        if ".git" in dirnames or ".git" in filenames:
+            repos.append(Path(dirpath))
         if ".git" in dirnames:
-            repo_dir = Path(dirpath)
-            # 检查 remote 是否包含 gitlab
-            p = run(["git", "remote", "-v"], cwd=str(repo_dir), check=False, capture_output=True)
-            if "gitlab" in (p.stdout or "").lower() or "gitlab" in (p.stderr or "").lower():
-                repos.append(repo_dir)
+            # 避免 os.walk 误入 .git 目录内部
             dirnames.remove(".git")
     repos.sort(key=lambda p: str(p.relative_to(root)))
     return repos
+
+
+# 旧名保留，向后兼容（历史名 scan_gitlab_repos，现已不限 GitLab）
+scan_gitlab_repos = scan_repos
 
 
 def print_repo_list(r: Reporter, repos: list[Path], root: Path) -> None:
@@ -133,13 +135,13 @@ def run_batch(
         script_dir = Path(__file__).resolve().parent.parent
 
     r.rule(title, style="blue")
-    repos = scan_gitlab_repos(root)
+    repos = scan_repos(root)
     concurrency = max(1, int(os.environ.get("BATCH_CONCURRENCY", "4")))
     r.info(f"共 {len(repos)} 个仓库，并发 {concurrency}")
     for repo in repos:
         r.info(f"  •  {repo.relative_to(root)}")
 
-    if confirm and sys.stdin.isatty():
+    if confirm and sys.stdin.isatty() and os.environ.get("BATCH_NO_CONFIRM") != "1":
         try:
             answer = input("\n确认执行？(y/N) ").strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -196,8 +198,8 @@ def run_batch(
 # ── 三个具体批量操作的薄壳入口 ─────────────────────────────────────────
 # 用 closure 捕获参数，替代旧实现的模块级 _TARGET/_FORCE/_DRY_RUN/_EXTRA 全局态。
 
-from lib.exec import run as _run
-from lib.git import get_current_branch as _get_current_branch
+from lib.exec import run as _run  # noqa: E402, I001
+from lib.git import get_current_branch as _get_current_branch  # noqa: E402
 
 
 _ERROR_PATTERN = re.compile(
@@ -311,7 +313,7 @@ def push_all(
     target: str,
     argv: list[str] | None = None,
 ) -> int:
-    """批量 push 到 target：扫描 GitLab 仓库，逐个执行 push_{target}。
+    """批量 push 到 target：扫描 Git 仓库，逐个执行 push_{target}。
 
     解析 --dry-run；其余参数透传给单仓 push_{target}。
     批量模式自动执行，无确认门（confirm=False）。
@@ -320,7 +322,7 @@ def push_all(
 
     parser = argparse.ArgumentParser(
         prog=f"push_{target}",
-        description=f"批量 push 到 {target}：扫描 GitLab 仓库，逐个执行 push_{target}",
+        description=f"批量 push 到 {target}：扫描 Git 仓库，逐个执行 push_{target}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--dry-run", action="store_true", help="仅检查条件并预览仓库列表，不执行 push")
@@ -413,7 +415,7 @@ def _switch_one_factory(target: str) -> OperationFn:
 
 
 def switch_branch_all(target: str) -> int:
-    """批量切换分支：扫描 GitLab 仓库，切换到指定分支（不存在则从 origin/master 创建）。"""
+    """批量切换分支：扫描 Git 仓库，切换到指定分支（不存在则从 origin/master 创建）。"""
     result = run_batch(
         title=f"分支切换 → {target}",
         root=Path(".").resolve(),
@@ -522,3 +524,84 @@ def sync_branch_all(branch: Optional[str] = None, *, force: bool = False) -> int
 def sync_master_all(*, force: bool = False) -> int:
     """批量同步 master：将本地 master 硬对齐到 origin/master。"""
     return sync_branch_all("master", force=force)
+
+
+def _delete_branch_one_factory(target: str, force: bool) -> OperationFn:
+    """构造删除本地分支单仓库操作。
+
+    -D (force) 强删未合并；-d 仅删已合并。
+    当前分支 == target → skip；本地无该分支 → skip。
+    """
+    def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
+        current = _get_current_branch(cwd=str(repo))
+        if current == target:
+            return "skip", f"当前分支即 {target}（先 switch 再删）"
+
+        exists = _run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{target}"],
+            cwd=str(repo), check=False, capture_output=True,
+        )
+        if exists.returncode != 0:
+            return "skip", f"无本地分支 {target}"
+
+        flag = "-D" if force else "-d"
+        p = _run(["git", "branch", flag, target],
+                 cwd=str(repo), check=False, capture_output=True)
+        if p.returncode != 0:
+            err = _extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "删除失败")
+            if not force and "not fully merged" in (p.stderr or ""):
+                return "skip", f"{target} 未合并（--force 强删）"
+            return "fail", err
+        return "ok", f"已删本地 {target}"
+
+    return _op
+
+
+def delete_branch_all(target: str, *, force: bool = False) -> int:
+    """批量删除本地分支。删前确认。"""
+    result = run_batch(
+        title=f"删除本地分支 {target}" + ("（强删）" if force else ""),
+        root=Path(".").resolve(),
+        operation=_delete_branch_one_factory(target, force),
+        confirm=True,
+    )
+    return 1 if result.failed else 0
+
+
+def _delete_branch_remote_one_factory(target: str, remote: str) -> OperationFn:
+    """构造删除远端分支单仓库操作。
+
+    git push <remote> --delete <target>。删后 fetch --prune 清 tracking ref。
+    无 origin/<target> → skip。
+    """
+    def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
+        ref_check = _run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/{remote}/{target}"],
+            cwd=str(repo), check=False, capture_output=True,
+        )
+        if ref_check.returncode != 0:
+            return "skip", f"无 {remote}/{target}"
+
+        p = _run(["git", "push", remote, "--delete", target],
+                 cwd=str(repo), check=False, capture_output=True)
+        if p.returncode != 0:
+            err = _extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "删除失败")
+            return "fail", err
+
+        # 清理本地 tracking ref
+        _run(["git", "fetch", "--prune", remote],
+             cwd=str(repo), check=False, capture_output=True)
+        return "ok", f"已删 {remote}/{target}"
+
+    return _op
+
+
+def delete_branch_remote_all(target: str, *, remote: str = "origin") -> int:
+    """批量删除远端分支。删前确认。"""
+    result = run_batch(
+        title=f"删除远端分支 {remote}/{target}",
+        root=Path(".").resolve(),
+        operation=_delete_branch_remote_one_factory(target, remote),
+        confirm=True,
+    )
+    return 1 if result.failed else 0

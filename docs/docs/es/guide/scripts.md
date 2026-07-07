@@ -26,10 +26,12 @@ inject es idempotente : reejecutar no añadirá duplicados. Después de reinicia
 | `merge_test`     | Fusionar rama actual → test, quedarse en test                               | `merge_test`                   |
 | `push_canary`    | Fusionar rama actual → canary, empujar luego volver a rama original                      | `push_canary [--stay]`         |
 | `push_develop` / `push_auto` / `push_test` | Ídem, objetivos develop / remoto por defecto / test respectivamente      |                               |
-| `push_*` (lotes)  | Al ejecutar push_* en directorio no-git, automáticamente por lotes : escanear repositorios GitLab en subdirectorios y empujar uno por uno | `push_canary [--dry-run]` |
+| `push_*` (lotes)  | Al ejecutar push_* en directorio no-git, automáticamente por lotes : escanear repositorios Git en subdirectorios y empujar uno por uno | `push_canary [--dry-run]` |
 | `switch_branch`  | Cambiar ramas por lotes (crea desde origin/master si inexistente)                 | `switch_branch <branch>`      |
 | `sync_master`    | Sincronizar master por lotes                                              | `sync_master`                 |
 | `sync_branch`    | Sincronizar por lotes rama actual (o dada) a origin/<branch>                             | `sync_branch [branch] [--force]` |
+| `delete_branch` | Eliminar rama local (único/lote) | `delete_branch <name> [--force] [-y]` |
+| `delete_branch_remote` | Eliminar rama remota (único/lote) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | Recuperar por lotes todos los repositorios Git                                     | `fetch_all`               |
 | `unsleep`        | Evitar suspensión macOS caffeinate                                      | `unsleep -t 3600`             |
 | `reindex`        | Reindexar proyecto (local-only, .gitignore)                        | `reindex`                     |
@@ -48,7 +50,7 @@ inject es idempotente : reejecutar no añadirá duplicados. Después de reinicia
 ## Dependencias de entorno
 
 - **Python 3.10+** (entrada ligera y lógica principal)
-- **Git** (merge_* / push_* / switch_branch / sync_master / fetch_all)
+- **Git** (merge_* / push_* / switch_branch / sync_master / fetch_all / delete_branch)
 - **macOS** (`n` usa `say`, `unsleep` usa `caffeinate`)
 - **rich** (embellecimiento de salida, `pip install rich`)
 - **pgrep / ps / lsof / kill** (kk / kkp)

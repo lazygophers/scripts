@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.batch_git import (
     BatchResult,
     RepoResult,
+    _delete_branch_one_factory,
+    _delete_branch_remote_one_factory,
     _extract_error,
     _push_one_factory,
     _switch_one_factory,
@@ -19,6 +21,7 @@ from lib.batch_git import (
     push_all,
     run_batch,
     scan_gitlab_repos,
+    scan_repos,
 )
 from lib.ui import reporter
 
@@ -40,44 +43,56 @@ class TestDataclasses(unittest.TestCase):
         self.assertEqual(b.failed, [])
 
 
-class TestScanGitlabRepos(unittest.TestCase):
-    @patch("lib.batch_git.run")
+class TestScanRepos(unittest.TestCase):
     @patch("lib.batch_git.os.walk")
-    def test_finds_gitlab_repos(self, mock_walk, mock_run):
+    def test_finds_any_git_repo(self, mock_walk):
+        """不限 remote 提供商：任何含 .git 的目录都收录。"""
         mock_walk.return_value = [
-            ("/root", ["repo1"], []),
+            ("/root", ["repo1", "repo2"], []),
             ("/root/repo1", [".git"], []),
+            ("/root/repo2", [".git"], []),
         ]
-        mock_run.return_value = _mock_run(stdout="origin git@gitlab.com:g/p.git\n")
-        repos = scan_gitlab_repos(Path("/root"))
-        self.assertEqual(len(repos), 1)
+        repos = scan_repos(Path("/root"))
+        self.assertEqual(len(repos), 2)
 
-    @patch("lib.batch_git.run")
     @patch("lib.batch_git.os.walk")
-    def test_skips_non_gitlab(self, mock_walk, mock_run):
+    def test_includes_github_and_bare(self, mock_walk):
+        """GitHub / 裸 git 仓库（旧版会被 gitlab 过滤掉）都应收录。"""
         mock_walk.return_value = [
-            ("/root", ["repo1"], []),
-            ("/root/repo1", [".git"], []),
+            ("/root", ["gh", "bare"], []),
+            ("/root/gh", [".git"], []),
+            ("/root/bare", [".git"], []),
         ]
-        mock_run.return_value = _mock_run(stdout="origin git@github.com:o/r.git\n")
-        repos = scan_gitlab_repos(Path("/root"))
-        self.assertEqual(repos, [])
+        repos = scan_repos(Path("/root"))
+        self.assertEqual(len(repos), 2)
 
-    @patch("lib.batch_git.run")
     @patch("lib.batch_git.os.walk")
-    def test_max_depth_no_crash(self, mock_walk, _mock_run):
+    def test_max_depth_no_crash(self, mock_walk):
         # os.walk mock 无法复现 dirnames.clear() 语义, 仅验证不崩
         mock_walk.return_value = [("/root/a/b", [], [])]
-        with patch("lib.batch_git.run", return_value=_mock_run(stdout="gitlab")):
-            scan_gitlab_repos(Path("/root"), max_depth=1)
+        scan_repos(Path("/root"), max_depth=1)
 
-    @patch("lib.batch_git.run")
     @patch("lib.batch_git.os.walk")
-    def test_removes_git_from_dirnames(self, mock_walk, _mock_run):
+    def test_removes_git_from_dirnames(self, mock_walk):
         # 同上, mock os.walk 无法验证 dirnames.remove; 仅验证入口不崩
         mock_walk.return_value = [("/root/repo", [], [])]
-        with patch("lib.batch_git.run", return_value=_mock_run(stdout="gitlab")):
-            scan_gitlab_repos(Path("/root"))
+        scan_repos(Path("/root"))
+
+    @patch("lib.batch_git.os.walk")
+    def test_finds_submodule_git_file(self, mock_walk):
+        """`.git` 作为文件（submodule / worktree）出现在 filenames 时也应识别。"""
+        mock_walk.return_value = [
+            ("/root", ["sub"], []),
+            ("/root/sub", [], [".git"]),  # submodule: .git 是文件
+        ]
+        repos = scan_repos(Path("/root"))
+        self.assertEqual(len(repos), 1)
+        self.assertEqual(repos[0], Path("/root/sub"))
+
+    def test_gitlab_alias_backward_compat(self):
+        """旧名 scan_gitlab_repos 应仍可调用（向后兼容别名）。"""
+        self.assertTrue(callable(scan_gitlab_repos))
+        self.assertIs(scan_gitlab_repos, scan_repos)
 
 
 class TestPrintRepoList(unittest.TestCase):
@@ -477,6 +492,110 @@ class TestSyncFactory(unittest.TestCase):
         self.assertIn("丢弃 3", detail)
 
 
+class TestDeleteBranchFactory(unittest.TestCase):
+    @patch("lib.batch_git._get_current_branch", return_value="master")
+    @patch("lib.batch_git._run")
+    def test_current_branch_skips(self, mock_run, _mock_br):
+        """当前分支 == 目标 → skip。"""
+        op = _delete_branch_one_factory("master", force=False)
+        r = MagicMock()
+        status, detail = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "skip")
+        self.assertIn("先 switch", detail)
+        mock_run.assert_not_called()
+
+    @patch("lib.batch_git._get_current_branch", return_value="master")
+    @patch("lib.batch_git._run")
+    def test_no_local_branch_skips(self, mock_run, _mock_br):
+        """本地无该分支 → skip。"""
+        mock_run.return_value = _mock_run(returncode=1)  # show-ref 失败
+        op = _delete_branch_one_factory("feat", force=False)
+        r = MagicMock()
+        status, detail = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "skip")
+
+    @patch("lib.batch_git._get_current_branch", return_value="master")
+    @patch("lib.batch_git._run")
+    def test_delete_ok(self, mock_run, _mock_br):
+        """正常删除 → ok。"""
+        mock_run.side_effect = [
+            _mock_run(returncode=0),   # show-ref 存在
+            _mock_run(returncode=0),   # git branch -d
+        ]
+        op = _delete_branch_one_factory("feat", force=False)
+        r = MagicMock()
+        status, detail = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "ok")
+        self.assertIn("已删本地 feat", detail)
+        # 验证用了 -d 而非 -D
+        self.assertEqual(mock_run.call_args_list[1].args[0], ["git", "branch", "-d", "feat"])
+
+    @patch("lib.batch_git._get_current_branch", return_value="master")
+    @patch("lib.batch_git._run")
+    def test_force_uses_capital_d(self, mock_run, _mock_br):
+        """force=True → 用 -D。"""
+        mock_run.side_effect = [
+            _mock_run(returncode=0),   # show-ref
+            _mock_run(returncode=0),   # git branch -D
+        ]
+        op = _delete_branch_one_factory("feat", force=True)
+        r = MagicMock()
+        status, _ = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "ok")
+        self.assertEqual(mock_run.call_args_list[1].args[0], ["git", "branch", "-D", "feat"])
+
+    @patch("lib.batch_git._get_current_branch", return_value="master")
+    @patch("lib.batch_git._run")
+    def test_unmerged_without_force_skips(self, mock_run, _mock_br):
+        """未合并 + 无 force → skip（提示 --force）。"""
+        mock_run.side_effect = [
+            _mock_run(returncode=0),   # show-ref
+            _mock_run(returncode=1, stderr="error: The branch 'feat' is not fully merged."),
+        ]
+        op = _delete_branch_one_factory("feat", force=False)
+        r = MagicMock()
+        status, detail = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "skip")
+        self.assertIn("未合并", detail)
+
+
+class TestDeleteBranchRemoteFactory(unittest.TestCase):
+    @patch("lib.batch_git._run")
+    def test_no_remote_ref_skips(self, mock_run):
+        mock_run.return_value = _mock_run(returncode=1)  # show-ref 失败
+        op = _delete_branch_remote_one_factory("feat", "origin")
+        r = MagicMock()
+        status, detail = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "skip")
+
+    @patch("lib.batch_git._run")
+    def test_delete_ok_and_prune(self, mock_run):
+        """删除成功后 fetch --prune 清 tracking ref。"""
+        mock_run.side_effect = [
+            _mock_run(returncode=0),   # show-ref 存在
+            _mock_run(returncode=0),   # push --delete
+            _mock_run(returncode=0),   # fetch --prune
+        ]
+        op = _delete_branch_remote_one_factory("feat", "origin")
+        r = MagicMock()
+        status, detail = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "ok")
+        self.assertIn("已删 origin/feat", detail)
+        self.assertEqual(mock_run.call_args_list[1].args[0],
+                         ["git", "push", "origin", "--delete", "feat"])
+
+    @patch("lib.batch_git._run")
+    def test_push_fail_returns_fail(self, mock_run):
+        mock_run.side_effect = [
+            _mock_run(returncode=0),   # show-ref
+            _mock_run(returncode=1, stderr="remote: permission denied"),
+        ]
+        op = _delete_branch_remote_one_factory("feat", "origin")
+        r = MagicMock()
+        status, detail = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "fail")
+
+
 class TestRunBatchParallel(unittest.TestCase):
     """run_batch 并行模式：完成序无关、并发上限可调、per-repo 输出不交错、Ctrl-C 取消。"""
 
@@ -492,7 +611,7 @@ class TestRunBatchParallel(unittest.TestCase):
         return _op
 
     @patch("lib.batch_git.notify_batch_done")
-    @patch("lib.batch_git.scan_gitlab_repos")
+    @patch("lib.batch_git.scan_repos")
     def test_collects_all_repos_order_independent(self, mock_scan, mock_notify):
         """完成序非提交序，但汇总必须含全部仓库。"""
         mock_scan.return_value = [Path("/r/a"), Path("/r/b"), Path("/r/c")]
@@ -509,7 +628,7 @@ class TestRunBatchParallel(unittest.TestCase):
         mock_notify.assert_called_once()
 
     @patch("lib.batch_git.notify_batch_done")
-    @patch("lib.batch_git.scan_gitlab_repos")
+    @patch("lib.batch_git.scan_repos")
     def test_concurrency_env_override(self, mock_scan, mock_notify):
         """BATCH_CONCURRENCY 可调（覆盖默认 4）。"""
         mock_scan.return_value = [Path("/r/a"), Path("/r/b")]
@@ -526,7 +645,7 @@ class TestRunBatchParallel(unittest.TestCase):
                 self.assertEqual(kwargs.get("max_workers"), 8)
 
     @patch("lib.batch_git.notify_batch_done")
-    @patch("lib.batch_git.scan_gitlab_repos")
+    @patch("lib.batch_git.scan_repos")
     def test_per_repo_log_not_interleaved(self, mock_scan, mock_notify):
         """每个仓库的多行日志在 buffer 中保持顺序完整。"""
         mock_scan.return_value = [Path("/r/a"), Path("/r/b")]
@@ -554,7 +673,7 @@ class TestRunBatchParallel(unittest.TestCase):
             self.assertNotIn(f"{other}-step-", segment)
 
     @patch("lib.batch_git.notify_batch_done")
-    @patch("lib.batch_git.scan_gitlab_repos")
+    @patch("lib.batch_git.scan_repos")
     def test_exception_in_op_recorded_as_fail(self, mock_scan, mock_notify):
         """operation 抛异常 → 记为 fail，detail 含异常信息。"""
         mock_scan.return_value = [Path("/r/a")]
@@ -566,7 +685,7 @@ class TestRunBatchParallel(unittest.TestCase):
         self.assertIn("boom-error", result.failed[0].detail)
 
     @patch("lib.batch_git.notify_batch_done")
-    @patch("lib.batch_git.scan_gitlab_repos")
+    @patch("lib.batch_git.scan_repos")
     def test_keyboard_interrupt_cancels(self, mock_scan, mock_notify):
         """Ctrl-C 触发 KeyboardInterrupt → cancel_futures + 汇总仅含已完成。"""
         mock_scan.return_value = [Path("/r/a"), Path("/r/b")]

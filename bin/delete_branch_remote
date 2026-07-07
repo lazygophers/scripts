@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""delete_branch_remote 薄壳入口 — 删除远端分支。
+
+单仓（当前在 git 仓库）→ 删当前仓库远端分支；非 git 目录 → 批量扫描所有 Git 仓库。
+"""
+import argparse
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.exec import run
+from lib.ui import reporter
+
+
+def _delete_remote_single(target: str, remote: str) -> int:
+    """单仓删除远端分支。"""
+    r = reporter(stderr=True)
+    ref = run(["git", "show-ref", "--verify", "--quiet", f"refs/remotes/{remote}/{target}"],
+              check=False, capture_output=True)
+    if ref.returncode != 0:
+        r.warn(f"无 {remote}/{target}")
+        return 1
+
+    r.step(f"git push {remote} --delete {target}")
+    p = run(["git", "push", remote, "--delete", target], check=False, capture_output=True)
+    if p.returncode != 0:
+        r.err(f"删除失败: {((p.stderr or '') + (p.stdout or '')).strip()}")
+        return 1
+    run(["git", "fetch", "--prune", remote], check=False, capture_output=True)
+    r.ok(f"已删 {remote}/{target}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="删除远端分支：当前在 git 仓库删单仓，非 git 目录批量扫描 Git 仓库",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("branch", help="要删除的分支名")
+    parser.add_argument("--remote", default="origin", help="远端名（默认 origin）")
+    parser.add_argument("-y", "--yes", action="store_true", help="批量模式跳过确认")
+    args = parser.parse_args(argv[1:])
+
+    in_git = (pathlib.Path.cwd() / ".git").exists()
+    if in_git:
+        return _delete_remote_single(args.branch, args.remote)
+
+    from lib.batch_git import delete_branch_remote_all
+    if args.yes:
+        os.environ["BATCH_NO_CONFIRM"] = "1"
+    return delete_branch_remote_all(args.branch, remote=args.remote)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

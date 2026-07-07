@@ -26,10 +26,12 @@ inject est idempotent : réexécuter n'ajoutera pas de doublons. Après redémar
 | `merge_test`     | Fusionner la branche actuelle → test, rester sur test                               | `merge_test`                   |
 | `push_canary`    | Fusionner la branche actuelle → canary, pousser puis revenir à la branche d'origine                      | `push_canary [--stay]`         |
 | `push_develop` / `push_auto` / `push_test` | Idem, cibles develop / distant par défaut / test respectivement      |                               |
-| `push_*` (batch)  | Lors de l'exécution de push_* dans un répertoire non-git, automatiquement par lots : scanner les dépôts GitLab des sous-répertoires et pousser un par un | `push_canary [--dry-run]` |
+| `push_*` (batch)  | Lors de l'exécution de push_* dans un répertoire non-git, automatiquement par lots : scanner les dépôts Git des sous-répertoires et pousser un par un | `push_canary [--dry-run]` |
 | `switch_branch`  | Basculer des branches par lots (crée depuis origin/master si inexistant)                 | `switch_branch <branch>`      |
 | `sync_master`    | Synchroniser master par lots                                              | `sync_master`                 |
 | `sync_branch`    | Synchroniser par lots branche courante (ou donnée) vers origin/<branch>                             | `sync_branch [branch] [--force]` |
+| `delete_branch` | Supprimer branche locale (unique/lot) | `delete_branch <name> [--force] [-y]` |
+| `delete_branch_remote` | Supprimer branche distante (unique/lot) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | Récupérer par lots tous les dépôts Git                                     | `fetch_all`               |
 | `unsleep`        | Empêcher la mise en veille macOS caffeinate                                      | `unsleep -t 3600`             |
 | `reindex`        | Réindexer le projet (local-only, .gitignore)                        | `reindex`                     |
@@ -48,7 +50,7 @@ inject est idempotent : réexécuter n'ajoutera pas de doublons. Après redémar
 ## Dépendances d'environnement
 
 - **Python 3.10+** (entrée légère et logique principale)
-- **Git** (merge_* / push_* / switch_branch / sync_master / fetch_all)
+- **Git** (merge_* / push_* / switch_branch / sync_master / fetch_all / delete_branch)
 - **macOS** (`n` utilise `say`, `unsleep` utilise `caffeinate`)
 - **rich** (embellissement de sortie, `pip install rich`)
 - **pgrep / ps / lsof / kill** (kk / kkp)

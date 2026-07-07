@@ -26,10 +26,12 @@ inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف 
 | `merge_test`     | دمج الفرع الحالي → test، البقاء في test                               | `merge_test`                   |
 | `push_canary`    | دمج الفرع الحالي → canary، دفع ثم العودة إلى الفرع الأصلي                      | `push_canary [--stay]`         |
 | `push_develop` / `push_auto` / `push_test` | نفس الشيء، الأهداف develop / البعيد الافتراضي / test على التوالي      |                               |
-| `push_*` (دفعات)  | عند تنفيذ push_* خارج دليل git، تلقائيًا بالدفعات : مسح مستودعات GitLab في الدلائل الفرعية والدفع واحدة تلو الأخرى | `push_canary [--dry-run]` |
+| `push_*` (دفعات)  | عند تنفيذ push_* خارج دليل git، تلقائيًا بالدفعات : مسح مستودعات Git في الدلائل الفرعية والدفع واحدة تلو الأخرى | `push_canary [--dry-run]` |
 | `switch_branch`  | تبديل الفروع بالدفعات (إنشاؤها من origin/master إذا لم تكن موجودة)                 | `switch_branch <branch>`      |
 | `sync_master`    | مزامنة master بالدفعات                                              | `sync_master`                 |
 | `sync_branch`    | مزامنة بالدفعات الفرع الحالية (أو المحددة) إلى origin/<branch>                             | `sync_branch [branch] [--force]` |
+| `delete_branch` | حذف فرع محلي (مفرد/دفعة) | `delete_branch <name> [--force] [-y]` |
+| `delete_branch_remote` | حذف فرع بعيد (مفرد/دفعة) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | جلب بالدفعات جميع مستودعات Git                                     | `fetch_all`               |
 | `unsleep`        | منع السكون macOS caffeinate                                      | `unsleep -t 3600`             |
 | `reindex`        | إعادة فهرسة المشروع (local-only، .gitignore)                        | `reindex`                     |
@@ -48,7 +50,7 @@ inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف 
 ## تبعيات البيئة
 
 - **Python 3.10+** (المدخلات الخفيفة والمنطق الرئيسي)
-- **Git** (merge_* / push_* / switch_branch / sync_master / fetch_all)
+- **Git** (merge_* / push_* / switch_branch / sync_master / fetch_all / delete_branch)
 - **macOS** (`n` يستخدم `say`، `unsleep` يستخدم `caffeinate`)
 - **rich** (تزيين الإخراج، `pip install rich`)
 - **pgrep / ps / lsof / kill** (kk / kkp)

@@ -10,7 +10,7 @@ from lib.batch_git import switch_branch_all
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="批量切换分支：扫描 GitLab 仓库，切换到指定分支",
+        description="批量切换分支：扫描 Git 仓库，切换到指定分支",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("branch", help="目标分支名")

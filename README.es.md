@@ -34,10 +34,12 @@ inject es idempotente : reejecutar no duplicará. Después de completar, reinici
 | `merge_test`     | Fusionar rama actual → test, quedarse en test                               | `merge_test`                   |
 | `push_canary`    | Fusionar rama actual → canary, empujar luego volver                      | `push_canary [--stay]`         |
 | `push_develop` / `push_auto` / `push_test` | Ídem, objetivos develop / remoto por defecto / test respectivamente      |                               |
-| `push_*` (lotes)  | Al ejecutar push_* en directorio no-git, automáticamente por lotes : escanear repositorios GitLab en subdirectorios y empujar uno por uno | `push_canary [--dry-run]` |
+| `push_*` (lotes)  | Al ejecutar push_* en directorio no-git, automáticamente por lotes : escanear repositorios Git en subdirectorios y empujar uno por uno | `push_canary [--dry-run]` |
 | `switch_branch`  | Cambiar ramas por lotes (crea desde origin/master si inexistente)                 | `switch_branch <branch>`      |
 | `sync_master`    | Sincronizar master por lotes = `sync_branch master`                                              | `sync_master`                 |
 | `sync_branch`    | Sincronizar por lotes rama actual (o dada) a origin/<branch> | `sync_branch [branch] [--force]` |
+| `delete_branch` | Eliminar rama local (repo único; lote si no en dir git) | `delete_branch <name> [--force] [-y]` |
+| `delete_branch_remote` | Eliminar rama remota (repo único; lote si no en dir git) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | Recuperar por lotes todos los repositorios Git                                     | `fetch_all`               |
 | `unsleep`        | Evitar suspensión macOS caffeinate                                      | `unsleep -t 3600`             |
 | `reindex`        | Reindexar proyecto (local-only, .gitignore)                        | `reindex`                     |

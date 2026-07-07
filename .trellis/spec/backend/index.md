@@ -19,6 +19,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
+| [Batch Git Operations](./batch-git.md) | 命令式契约：仓库扫描 / 删除类操作 / 命名规约（`lib/batch_git.py` + `bin/*`） | Active |
 
 ---
 

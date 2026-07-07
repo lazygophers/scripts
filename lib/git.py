@@ -1,6 +1,6 @@
 """Git 状态检查与分支管理。"""
-import re
-from pathlib import Path
+import re  # noqa: I001
+from pathlib import Path  # noqa: I001
 from typing import Optional
 
 from lib.exec import run, retry_command
@@ -132,10 +132,10 @@ def fetch_and_check_branch(
     return remote_branch_exists(branch, remote=remote, cwd=cwd)
 
 
-# ── git_fetch_all 薄壳入口 ────────────────────────────
+# ── fetch_all 薄壳入口 ────────────────────────────
 
-import os
-from lib.ui import progress, reporter
+import os  # noqa: E402, I001
+from lib.ui import progress, reporter  # noqa: E402, I001
 
 
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")

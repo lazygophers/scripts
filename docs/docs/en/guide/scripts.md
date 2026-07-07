@@ -26,10 +26,12 @@ inject is idempotent — re-running won't duplicate entries. Restart your shell 
 | `merge_test`     | Merge current branch → test, stay on test                    | `merge_test`                  |
 | `push_canary`    | Merge current branch → canary, push, switch back             | `push_canary [--stay]`        |
 | `push_develop` / `push_auto` / `push_test` | Same as above, target = develop / remote default / test |                |
-| `push_*` (batch) | Running push_* in a non-git dir auto-batches: scans subdirs for GitLab repos and pushes each | `push_canary [--dry-run]` |
+| `push_*` (batch) | Running push_* in a non-git dir auto-batches: scans subdirs for Git repos and pushes each | `push_canary [--dry-run]` |
 | `switch_branch`  | Batch switch branch (create from origin/master if missing)   | `switch_branch <branch>`      |
 | `sync_master`    | Batch sync master                                            | `sync_master`                 |
 | `sync_branch`    | Batch sync current (or given) branch to origin/<branch>                             | `sync_branch [branch] [--force]` |
+| `delete_branch` | Delete local branch (single/batch) | `delete_branch <name> [--force] [-y]` |
+| `delete_branch_remote` | Delete remote branch (single/batch) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | Batch fetch all Git repos                                    | `fetch_all`               |
 | `unsleep`        | macOS caffeinate anti-idle                                   | `unsleep -t 3600`             |
 | `reindex`        | Reindex project (local-only, .gitignore)                     | `reindex`                     |
@@ -48,7 +50,7 @@ inject is idempotent — re-running won't duplicate entries. Restart your shell 
 ## Requirements
 
 - **Python 3.10+** (thin entrypoints and core logic)
-- **Git** (merge_* / push_* / switch_branch / sync_master / fetch_all)
+- **Git** (merge_* / push_* / switch_branch / sync_master / fetch_all / delete_branch)
 - **macOS** (`n` uses `say`, `unsleep` uses `caffeinate`)
 - **rich** (output formatting, `pip install rich`)
 - **pgrep / ps / lsof / kill** (kk / kkp)

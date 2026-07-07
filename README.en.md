@@ -34,10 +34,12 @@ inject is idempotent: rerunning won't duplicate. After completion, restart shell
 | `merge_test`     | Merge current branch → test, stay on test                               | `merge_test`                   |
 | `push_canary`    | Merge current branch → canary, push then switch back                      | `push_canary [--stay]`         |
 | `push_develop` / `push_auto` / `push_test` | Same, targets are develop / remote default / test respectively      |                               |
-| `push_*` (batch)  | When executing push_* in non-git directory, automatically batch: scan subdirectory GitLab repos and push one by one | `push_canary [--dry-run]` |
+| `push_*` (batch)  | When executing push_* in non-git directory, automatically batch: scan subdirectory Git repos and push one by one | `push_canary [--dry-run]` |
 | `switch_branch`  | Batch switch branches (create from origin/master if not exists)                 | `switch_branch <branch>`      |
 | `sync_master`    | Batch sync master = `sync_branch master`                                              | `sync_master`                 |
 | `sync_branch`    | Batch sync current (or given) branch to origin/<branch>      | `sync_branch [branch] [--force]` |
+| `delete_branch` | Delete local branch (single-repo; batch if not in git dir) | `delete_branch <name> [--force] [-y]` |
+| `delete_branch_remote` | Delete remote branch (single-repo; batch if not in git dir) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | Batch fetch all Git repositories                                     | `fetch_all`               |
 | `unsleep`        | macOS caffeinate anti-idle                                      | `unsleep -t 3600`             |
 | `reindex`        | Project re-index (local-only, .gitignore)                        | `reindex`                     |

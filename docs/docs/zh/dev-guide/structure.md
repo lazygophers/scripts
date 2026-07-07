@@ -6,7 +6,7 @@ scripts/
 │   ├── checkwork, cpd, kk, kkp, n, ...
 │   ├── merge_canary, merge_develop, merge_auto, merge_test   # 调 lib git_workflow.merge_to(target)
 │   ├── push_canary, push_develop, push_auto, push_test       # 单仓 push_to / 非 git 目录自动批量
-│   ├── switch_branch, sync_master, sync_branch, fetch_all
+│   ├── switch_branch, sync_master, sync_branch, fetch_all, delete_branch, delete_branch_remote
 │   ├── loop, unsleep, reindex
 │   └── inject                    # 把 bin/ 注入 shell PATH
 ├── lib/

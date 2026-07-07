@@ -34,10 +34,12 @@ inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف 
 | `merge_test`     | دمج الفرع الحالي → test، البقاء في test                               | `merge_test`                   |
 | `push_canary`    | دمج الفرع الحالي → canary، دفع ثم العودة                      | `push_canary [--stay]`         |
 | `push_develop` / `push_auto` / `push_test` | نفس الشيء، الأهداف develop / البعيد الافتراضي / test على التوالي      |                               |
-| `push_*` (دفعات)  | عند تنفيذ push_* خارج دليل git، تلقائيًا بالدفعات : مسح مستودعات GitLab في الدلائل الفرعية والدفع واحدة تلو الأخرى | `push_canary [--dry-run]` |
+| `push_*` (دفعات)  | عند تنفيذ push_* خارج دليل git، تلقائيًا بالدفعات : مسح مستودعات Git في الدلائل الفرعية والدفع واحدة تلو الأخرى | `push_canary [--dry-run]` |
 | `switch_branch`  | تبديل الفروع بالدفعات (إنشاؤها من origin/master إذا لم تكن موجودة)                 | `switch_branch <branch>`      |
 | `sync_master`    | مزامنة master بالدفعات = `sync_branch master`                                              | `sync_master`                 |
 | `sync_branch`    | مزامنة بالدفعات الفرع الحالية (أو المحددة) إلى origin/<branch> | `sync_branch [branch] [--force]` |
+| `delete_branch` | حذف فرع محلي (مستودع واحد; دفعة إن لم في dir git) | `delete_branch <name> [--force] [-y]` |
+| `delete_branch_remote` | حذف فرع بعيد (مستودع واحد; دفعة إن لم في dir git) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | جلب بالدفعات جميع مستودعات Git                                     | `fetch_all`               |
 | `unsleep`        | منع السكون macOS caffeinate                                      | `unsleep -t 3600`             |
 | `reindex`        | إعادة فهرسة المشروع (local-only، .gitignore)                        | `reindex`                     |

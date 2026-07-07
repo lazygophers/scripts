@@ -26,10 +26,12 @@ inject 幂等：重跑不会重复追加。完成后重启 shell 或 `source ~/.
 | `merge_test`     | 合并当前分支 → test, 留在 test                               | `merge_test`                   |
 | `push_canary`    | 合并当前分支 → canary, 推送后切回原分支                      | `push_canary [--stay]`         |
 | `push_develop` / `push_auto` / `push_test` | 同上, 目标分别为 develop / 远端默认 / test      |                               |
-| `push_*` (批量)  | 在非 git 目录执行 push_* 时自动批量: 扫描子目录 GitLab 仓库逐个推送 | `push_canary [--dry-run]` |
+| `push_*` (批量)  | 在非 git 目录执行 push_* 时自动批量: 扫描子目录 Git 仓库逐个推送 | `push_canary [--dry-run]` |
 | `switch_branch`  | 批量切换分支 (不存在则从 origin/master 创建)                 | `switch_branch <branch>`      |
 | `sync_master`    | 批量同步 master                                              | `sync_master`                 |
 | `sync_branch`    | 批量同步当前分支 (或指定分支) 到 origin/<branch>                             | `sync_branch [branch] [--force]` |
+| `delete_branch` | 删除本地分支 (单仓/批量) | `delete_branch <name> [--force] [-y]` |
+| `delete_branch_remote` | 删除远端分支 (单仓/批量) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | 批量 fetch 所有 Git 仓库                                     | `fetch_all`               |
 | `unsleep`        | macOS caffeinate 防休眠                                      | `unsleep -t 3600`             |
 | `reindex`        | 项目重新索引 (local-only, .gitignore)                        | `reindex`                     |
@@ -48,7 +50,7 @@ inject 幂等：重跑不会重复追加。完成后重启 shell 或 `source ~/.
 ## 环境依赖
 
 - **Python 3.10+**（薄壳与核心逻辑）
-- **Git**（merge_* / push_* / switch_branch / sync_master / fetch_all）
+- **Git**（merge_* / push_* / switch_branch / sync_master / fetch_all / delete_branch）
 - **macOS**（`n` 用 `say`，`unsleep` 用 `caffeinate`）
 - **rich**（输出美化，`pip install rich`）
 - **pgrep / ps / lsof / kill**（kk / kkp）
