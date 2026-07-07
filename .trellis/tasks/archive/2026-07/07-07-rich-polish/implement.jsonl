@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/batch-git.md", "reason": "print_summary 改动需保持 run_batch 汇总语义不变（status ok/skip/fail 分类）"}
+{"file": "lib/ui.py", "reason": "Reporter 现有能力基线，新增方法需遵循降级模式（HAS_RICH 双路径）"}
