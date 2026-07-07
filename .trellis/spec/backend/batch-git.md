@@ -7,18 +7,21 @@
 - 严禁按 remote 提供商过滤。旧名 `scan_gitlab_repos` 已退化为 `scan_repos` 的别名（`lib/batch_git.py:57`），仅保留向后兼容，禁新增任何"仅 GitLab / 仅 GitHub"的判定逻辑。验收：`tests/test_batch_git.py::TestScanRepos::test_includes_github_and_bare` 必须通过
 - MUST 同时识别 `.git` 作为目录（普通仓库）和 `.git` 作为文件（submodule / git worktree 的 gitdir 指针）。`lib/batch_git.py:47` 用 `".git" in dirnames or ".git" in filenames` 双判定，禁退回仅查 `dirnames`。验收：`tests/test_batch_git.py::TestScanRepos::test_finds_submodule_git_file` 必须通过
 - MUST 在命中 `.git` 目录后 `dirnames.remove(".git")`（`lib/batch_git.py:49-51`），禁 `os.walk` 误入 `.git` 内部
+- `fetch_all` 的 `_list_top_repos`（`lib/git.py:144-153`）MUST 用 `(p / ".git").exists()` 识别仓库，禁用 `is_dir()` 漏掉 `.git` 作为文件的仓库（submodule / worktree）。`fetch_all` 与 `sync_*` / `push_*` / `delete_*`（走 `scan_repos`）的仓库集 MUST 一致，禁出现 fetch_all 静默跳过而批量写操作却处理的仓库。验收：`tests/test_fetch_all.py::TestListTopRepos::test_includes_git_file_worktree` 必须通过
 - 测试规约：`scan_repos` 的单测 MUST 用 `unittest.mock.patch("lib.batch_git.os.walk")` 注入 `(dirpath, dirnames, filenames)` 三元组；禁在 mock 场景调用 `Path.exists()`（mock 不实现文件系统，会破坏断言）。参见 `tests/test_batch_git.py:47-90`
 
 ## 删除类批量操作（delete_branch / delete_branch_remote）
 
 - 删除类操作 MUST 默认 `confirm=True`（`lib/batch_git.py:560-568`、`599-607` 的 `run_batch(..., confirm=True)`）。`-y` / `BATCH_NO_CONFIRM=1` 是唯一显式跳过通道（`bin/delete_branch`、`bin/delete_branch_remote` 在 `args.yes` 时 set `BATCH_NO_CONFIRM=1`）
+- `confirm=True` 的确认门 MUST fail-closed：非 TTY（cron / 管道 / CI，`sys.stdin.isatty()=False`）且未设 `BATCH_NO_CONFIRM=1` 时 MUST `raise SystemExit(1)` 拒绝执行，禁静默放行（`lib/batch_git.py:144-148`）。删除类操作禁 fail-open（无输入即执行）。验收：`echo x | delete_branch <branch>` 在非 git 目录批量模式下 exit 1 且不执行任何 `git branch -D` / `git push --delete`
 - MUST 安全 skip，禁对以下场景执行删除：
   - 本地当前分支 == target → skip（`lib/batch_git.py:536-538`，禁删自己）
   - 本地无 `refs/heads/<target>` → skip（`lib/batch_git.py:540-545`）
   - 未合并且未传 `--force` → skip 并提示 `--force`（`lib/batch_git.py:547-553`，用 `-d` 而非 `-D`）
   - 远端无 `refs/remotes/<remote>/<target>` → skip（`lib/batch_git.py:578-583`）
 - 删远端成功后 MUST 立即 `git fetch --prune <remote>` 清本地 tracking ref（`lib/batch_git.py:591-593`），禁遗留 stale remote-tracking 引用
-- 单仓入口（当前 cwd 在 git 仓库内）走 `bin/delete_branch::_delete_local_single` / `bin/delete_branch_remote::_delete_remote_single`，与批量入口共享同一组 skip / prune 规则；两路径行为 MUST 一致，禁单仓路径绕过上述安全 skip
+- 单仓入口（当前 cwd 在 git 仓库内）MUST 委托 `lib/batch_git` 的工厂闭包（`bin/delete_branch` 调 `_delete_branch_one_factory`、`bin/delete_branch_remote` 调 `_delete_branch_remote_one_factory`，传 `repo=Path.cwd()`），禁在 `bin/` 重新实现 skip / prune 逻辑。两路径行为 MUST 一致，禁单仓路径绕过上述安全 skip
+- 单仓入口 MUST 用统一 `_STATUS_EXIT` 映射（`ok→0`、`skip→0`、`fail→1`），禁单仓路径对 skip 返回 exit 1 而批量路径返回 exit 0（不对称会让 CI / IDE 调用方误判）。验收：单仓与批量对同一 skip 条件（当前分支 == target / 无分支 / 未合并无 --force）返回相同退出码
 
 ## 命名一致性（批量脚本组）
 
