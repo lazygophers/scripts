@@ -4,7 +4,6 @@ import re
 from lib.exec import run, run_logged
 from lib.ui import reporter
 
-
 _DANGEROUS_RE = re.compile(r"[;|&$`']")
 
 
@@ -16,7 +15,7 @@ def project_done_message(suffix: str) -> str:
 
 def notify(msg: str, *, say_cmd: str = "say") -> None:
     """直接调用 say 播报。"""
-    print(msg)
+    reporter(stderr=True).info(msg)
     run([say_cmd, msg], check=False, capture_output=True)
 
 

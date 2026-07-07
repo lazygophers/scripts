@@ -175,5 +175,59 @@ class TestConsoleProgress(unittest.TestCase):
         self.assertIsNone(ui_mod.progress(None))
 
 
+class TestStatusMethods(unittest.TestCase):
+    """status / status_table / status_footer（纯文本降级路径）。"""
+
+    def test_status_picks_icon_per_status(self):
+        r = _plain_reporter()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            r.status("ok", "done")
+            r.status("skip", "later")
+            r.status("fail", "boom")
+        out = buf.getvalue()
+        self.assertIn(ui_mod.ICON_SUCCESS, out)  # ✓
+        self.assertIn(ui_mod.ICON_SKIP, out)      # •
+        self.assertIn(ui_mod.ICON_ERROR, out)     # ✗
+        self.assertIn("done", out)
+        self.assertIn("boom", out)
+
+    def test_status_table_renders_labels_and_details(self):
+        r = _plain_reporter()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            r.status_table("执行结果", [
+                ("repoA", "ok", ""),
+                ("repoB", "skip", "已对齐"),
+                ("repoC", "fail", "fetch 失败"),
+            ])
+        out = buf.getvalue()
+        self.assertIn("执行结果", out)
+        self.assertIn("repoA", out)
+        self.assertIn("repoB", out)
+        self.assertIn("repoC", out)
+        self.assertIn("成功", out)
+        self.assertIn("跳过", out)
+        self.assertIn("失败", out)
+        self.assertIn("fetch 失败", out)
+
+    def test_status_footer_joins_with_dot(self):
+        r = _plain_reporter()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            r.status_footer([("失败 1/3", "red"), ("成功 1/3", "green")])
+        out = buf.getvalue()
+        self.assertIn("失败 1/3", out)
+        self.assertIn("成功 1/3", out)
+        self.assertIn("·", out)
+
+    def test_status_footer_empty_noop(self):
+        r = _plain_reporter()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            r.status_footer([])
+        self.assertEqual(buf.getvalue(), "")
+
+
 if __name__ == "__main__":
     unittest.main()

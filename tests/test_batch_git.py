@@ -127,16 +127,20 @@ class TestPrintSummary(unittest.TestCase):
         with redir:
             print_summary(r, "汇总", result)
         out = buf.getvalue()
-        # 总计单行（含跳过数量，不显跳过明细）
-        self.assertIn("总计 3 个（成功 1 / 跳过 1 / 失败 1）", out)
-        # 成功段
-        self.assertIn("成功项目：", out)
-        self.assertIn("• a", out)
-        # 失败段（含 detail）
-        self.assertIn("失败项目：", out)
-        self.assertIn("• c — err", out)
-        # 跳过无明细
-        self.assertNotIn("• b", out)
+        # status_table 标题
+        self.assertIn("汇总", out)
+        # 三仓都在表内
+        self.assertIn("a", out)
+        self.assertIn("b", out)
+        self.assertIn("c", out)
+        # 状态标签
+        self.assertIn("成功", out)
+        self.assertIn("跳过", out)
+        self.assertIn("失败", out)
+        # 失败详情
+        self.assertIn("err", out)
+        # footer 单行统计（含分母）
+        self.assertIn("1/3", out)
 
     def test_empty_sections_omitted(self):
         r = self._make_reporter()
@@ -146,9 +150,11 @@ class TestPrintSummary(unittest.TestCase):
         with redir:
             print_summary(r, "汇总", result)
         out = buf.getvalue()
-        self.assertIn("成功项目：", out)
-        self.assertNotIn("失败项目：", out)
-        self.assertIn("总计 1 个（成功 1 / 跳过 0 / 失败 0）", out)
+        self.assertIn("成功", out)
+        # 无失败/跳过 → footer 不含对应段
+        self.assertNotIn("失败", out)
+        self.assertNotIn("跳过", out)
+        self.assertIn("1/1", out)
 
     def test_failed_without_detail(self):
         r = self._make_reporter()
@@ -158,8 +164,8 @@ class TestPrintSummary(unittest.TestCase):
         with redir:
             print_summary(r, "汇总", result)
         out = buf.getvalue()
-        self.assertIn("• x", out)
-        self.assertNotIn("—", out)
+        self.assertIn("x", out)
+        self.assertIn("失败", out)
 
 
 class TestNotifyBatchDone(unittest.TestCase):
