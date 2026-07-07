@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from lib.ui import Reporter, reporter
+from lib.ui import Reporter, print_ansi, progress, reporter
 
 
 @dataclass
@@ -58,7 +58,7 @@ scan_gitlab_repos = scan_repos
 
 
 def print_repo_list(r: Reporter, repos: list[Path], root: Path) -> None:
-    """打印仓库列表。"""
+    """打印仓库列表（保留向后兼容；run_batch 现已改用单行扫描摘要，不再调用）。"""
     for repo in repos:
         r.info(f"  •  {repo.relative_to(root)}")
 
@@ -68,25 +68,24 @@ def print_summary(
     title: str,
     result: BatchResult,
 ) -> None:
-    """打印批量操作汇总（列表式：总计单行 + 成功列表 + 失败列表）。"""
-    r.rule(title, style="blue")
-    r.info(
-        f"总计 {result.total} 个"
-        f"（成功 {len(result.succeeded)} / 跳过 {len(result.skipped)} / 失败 {len(result.failed)}）"
+    """打印批量操作汇总（紧凑 Table：仓库/状态/详情 + 单行 footer 统计）。"""
+    items: list[tuple[str, str, str]] = (
+        [(x.name, "ok", x.detail) for x in result.succeeded]
+        + [(x.name, "skip", x.detail) for x in result.skipped]
+        + [(x.name, "fail", x.detail) for x in result.failed]
     )
-
-    if result.succeeded:
-        r.ok("成功项目：")
-        for item in result.succeeded:
-            r.info(f"  • {item.name}")
-
+    r.status_table(title, items)
+    # 单行 footer：失败(红) · 成功(绿) · 跳过(黄)，各数字按状态色
+    parts: list[tuple[str, str]] = []
     if result.failed:
-        r.err("失败项目：")
-        for item in result.failed:
-            line = f"  • {item.name}"
-            if item.detail:
-                line += f" — {item.detail}"
-            r.info(line)
+        parts.append((f"失败 {len(result.failed)}/{result.total}", "red"))
+    if result.succeeded:
+        parts.append((f"成功 {len(result.succeeded)}/{result.total}", "green"))
+    if result.skipped:
+        parts.append((f"跳过 {len(result.skipped)}/{result.total}", "yellow"))
+    if not parts:
+        parts.append((f"共 {result.total} 个", "cyan"))
+    r.status_footer(parts)
 
 
 def notify_batch_done(folder_name: str, result: BatchResult, *, script_dir: Path) -> None:
@@ -137,9 +136,8 @@ def run_batch(
     r.rule(title, style="blue")
     repos = scan_repos(root)
     concurrency = max(1, int(os.environ.get("BATCH_CONCURRENCY", "4")))
-    r.info(f"共 {len(repos)} 个仓库，并发 {concurrency}")
-    for repo in repos:
-        r.info(f"  •  {repo.relative_to(root)}")
+    # 单行扫描摘要（禁逐行列仓库，避免与汇总段重复）
+    r.info(f"扫描 {len(repos)} 个仓库（并发 {concurrency}）")
 
     if confirm and os.environ.get("BATCH_NO_CONFIRM") != "1":
         # 非 TTY（cron/管道/CI）下无法交互确认 → fail-closed：要求显式 -y / BATCH_NO_CONFIRM=1
@@ -169,6 +167,14 @@ def run_batch(
             rr = RepoResult(name=str(rel), path=str(repo), status="fail", detail=str(e))
         return idx, buf.getvalue(), rr
 
+    # Progress 进度条：best-effort（无 rich 退回裸 stderr flush）。
+    # per-repo buffer 防交错优先于进度条视觉；进度条与日志共存靠 Live 重定向。
+    prog = progress(r.console)
+    prog_task = None
+    if prog is not None:
+        prog_task = prog.add_task("处理中", total=len(repos))
+        prog.start()
+
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = {
             pool.submit(_run_one, idx, repo): (idx, repo)
@@ -177,24 +183,35 @@ def run_batch(
         try:
             for fut in as_completed(futures):
                 idx, buf_text, rr = fut.result()
+                if prog is not None and prog_task is not None:
+                    prog.advance(prog_task)
+                    prog.update(prog_task, description=f"处理中 {rr.name}")
                 # 先 flush 该仓库整段日志（顺序完整不交错），再追状态行
                 if buf_text:
-                    sys.stderr.write(buf_text)
+                    if prog is not None:
+                        # Live 激活时走 console.print，让 Rich 在进度条上方渲染
+                        if not print_ansi(prog.console, buf_text):
+                            sys.stderr.write(buf_text)
+                    else:
+                        sys.stderr.write(buf_text)
+                # 单图标状态行（去双图标：✓/•/✗ 单 icon + 仓库名 + 详情）
                 name = rr.name
+                line = f"{name}{(' — ' + rr.detail) if rr.detail else ''}"
+                r.status(rr.status, line)
                 if rr.status == "ok":
-                    r.ok(f"✔ {name}{(' — ' + rr.detail) if rr.detail else ''}")
                     result.succeeded.append(rr)
                 elif rr.status == "skip":
-                    r.warn(f"⏭ {name}{(' — ' + rr.detail) if rr.detail else ''}")
                     result.skipped.append(rr)
                 else:
-                    r.err(f"✖ {name}{(' — ' + rr.detail) if rr.detail else ''}")
                     result.failed.append(rr)
         except KeyboardInterrupt:
             pool.shutdown(wait=False, cancel_futures=True)
             r.warn("\n用户中断，停止执行")
+        finally:
+            if prog is not None:
+                prog.stop()
 
-    print_summary(r, "执行汇总", result)
+    print_summary(r, "执行结果", result)
     notify_batch_done(folder_name, result, script_dir=script_dir)
     return result
 

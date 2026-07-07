@@ -161,7 +161,8 @@ def fetch_all(root: Path = Path(".")) -> int:
 
     r = reporter(stderr=True)
     r.rule("Git Fetch All", style="blue")
-    r.kv("扫描结果", {"扫描路径": str(root), "仓库数量": str(len(repos))})
+    # 单行扫描摘要（禁逐行列仓库，避免与汇总段重复）
+    r.info(f"扫描 {len(repos)} 个仓库（{root}）")
 
     prog = progress(r.console)
     if prog is not None:
@@ -170,27 +171,40 @@ def fetch_all(root: Path = Path(".")) -> int:
             for repo in repos:
                 prog.update(task_id, description=f"fetch {repo.name}")
                 res = retry_command(["git", "fetch", "--all"], cwd=str(repo), max_retries=3)
-                if not res.ok:
+                if res.ok:
+                    r.status("ok", repo.name)
+                else:
                     failures.append((repo.name, res.last_output.strip()))
-                    r.err(f"{repo.name}: fetch 失败")
+                    detail = "fetch 失败"
                     if res.last_output.strip():
-                        r.output(res.last_output)
+                        # 失败时附关键错误行（首条非空），便于定位
+                        first = next((ln.strip() for ln in res.last_output.splitlines() if ln.strip()), "")
+                        if first:
+                            detail = f"fetch 失败 — {first[:120]}"
+                    r.status("fail", f"{repo.name} {detail}")
                 prog.advance(task_id)
     else:
         for repo in repos:
             r.step(f"fetch {repo.name}")
             res = retry_command(["git", "fetch", "--all"], cwd=str(repo), max_retries=3)
-            if not res.ok:
+            if res.ok:
+                r.status("ok", repo.name)
+            else:
                 failures.append((repo.name, res.last_output.strip()))
-                r.err(f"{repo.name}: 失败")
+                r.status("fail", f"{repo.name} 失败")
 
-    r.rule("执行结果", style="green" if not failures else "yellow")
+    # 汇总：紧凑 Table（status_table 自带标题），无第二个 rule
+    failed_names = {name for name, _ in failures}
+    items: list[tuple[str, str, str]] = (
+        [(repo.name, "ok", "") for repo in repos if repo.name not in failed_names]
+        + [(name, "fail", detail.strip()[:120]) for name, detail in failures]
+    )
     if failures:
-        r.warn(f"失败 {len(failures)}/{len(repos)}")
-        for name, _ in failures:
-            r.err(name)
-        r.ok(f"成功 {len(repos) - len(failures)}/{len(repos)}")
+        r.status_table("执行结果", items)
+        r.status_footer([(f"失败 {len(failures)}/{len(repos)}", "red")])
+    elif repos:
+        r.ok(f"全部成功（{len(repos)} 个仓库）")
     else:
-        r.ok(f"全部成功 ({len(repos)} 个仓库)")
+        r.info("无仓库可处理")
 
     return 1 if failures else 0

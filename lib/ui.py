@@ -1,6 +1,7 @@
 """Rich 统一输出（自动降级纯文本）。"""
 import sys
-from typing import Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Optional
 
 try:
     from rich.console import Console
@@ -45,6 +46,15 @@ ICON_WARNING = "⚠"
 ICON_INFO = "ℹ"
 ICON_STEP = "→"
 ICON_ARROW = "▸"
+ICON_SKIP = "•"
+
+# 状态 → (图标, 色)；批量汇总 / 执行段共用
+STATUS_STYLE = {
+    "ok": (ICON_SUCCESS, "green"),
+    "skip": (ICON_SKIP, "yellow"),
+    "fail": (ICON_ERROR, "red"),
+}
+STATUS_LABEL = {"ok": "成功", "skip": "跳过", "fail": "失败"}
 
 
 def console(stderr: bool = False) -> Optional["Console"]:
@@ -65,6 +75,14 @@ def progress(console_obj: Optional["Console"]) -> Optional["Progress"]:
         console=console_obj,
         transient=False,
     )
+
+
+def print_ansi(console_obj: Optional["Console"], text: str) -> bool:
+    """把含 ANSI / Rich 标记的文本原样转写到 console。无 rich 返回 False 由调用方降级。"""
+    if console_obj is None or Text is None:
+        return False
+    console_obj.print(Text.from_ansi(text))
+    return True
 
 
 def _eprint(msg: str) -> None:
@@ -111,10 +129,59 @@ class Reporter:
             text = Text()
             text.append(icon, style=f"bold {color}")
             text.append(" ")
-            text.append(msg)
+            # 消息文本随 icon 同色（PRD 颜色规范）
+            text.append(msg, style=color)
             self.console.print(text)
         else:
             self._print("", f"{icon} {msg}")
+
+    def status(self, status: str, msg: str) -> None:
+        """按状态选图标 + 色（ok=✓绿 / skip=•黄 / fail=✗红）。"""
+        icon, color = STATUS_STYLE.get(status, (ICON_INFO, "cyan"))
+        self._icon_msg(icon, msg, color)
+
+    def status_table(
+        self,
+        title: str,
+        items: Sequence[tuple[str, str, str]],
+        *,
+        columns: Sequence[str] = ("仓库", "状态", "详情"),
+    ) -> None:
+        """状态汇总表：items 为 (name, status, detail) 三元组列表，状态列按状态着色。"""
+        if self.console is not None and Table is not None:
+            table = Table(title=title, show_header=True, box=None, border_style="blue",
+                          title_style="bold", header_style="dim")
+            table.add_column(columns[0], style="bold")
+            table.add_column(columns[1])
+            table.add_column(columns[2])
+            for name, status, detail in items:
+                color = STATUS_STYLE.get(status, ("", "white"))[1]
+                label = STATUS_LABEL.get(status, status)
+                table.add_row(name, f"[{color}]{label}[/{color}]", detail)
+            self.console.print(table)
+            return
+        # 降级纯文本：name + 状态标签 + 详情，单行
+        self.rule(title)
+        for name, status, detail in items:
+            label = STATUS_LABEL.get(status, status)
+            line = f"  {name}  {label}"
+            if detail:
+                line += f"  {detail}"
+            self._print("", line)
+
+    def status_footer(self, parts: Sequence[tuple[str, str]]) -> None:
+        """单行统计 footer：parts 为 (text, color) 列表，用 · 连接，各段按其色。"""
+        if not parts:
+            return
+        if self.console is not None and Text is not None:
+            text = Text()
+            for i, (s, color) in enumerate(parts):
+                if i > 0:
+                    text.append(" · ", style="dim")
+                text.append(s, style=color)
+            self.console.print(text)
+        else:
+            self._print("", " · ".join(s for s, _ in parts))
 
     def rule(self, title: str, *, style: str = "blue") -> None:
         if self.console is not None and Rule is not None:
@@ -202,7 +269,7 @@ class Reporter:
             if truncated:
                 self._print("", f"{prefix}... (+更多)")
 
-    def summary(self, title: str, items: list[Tuple[str, str, Optional[str]]]) -> None:
+    def summary(self, title: str, items: list[tuple[str, str, Optional[str]]]) -> None:
         if self.console is not None and Table is not None:
             table = Table(title=title, show_header=False, box=None)
             table.add_column("Label", style="bold")
