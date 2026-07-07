@@ -13,14 +13,16 @@ class TestListTopRepos(unittest.TestCase):
     @patch("lib.git.os.listdir")
     def test_single(self, mock_listdir):
         mock_listdir.return_value = ["repo1"]
-        with patch.object(Path, "is_dir", return_value=True):
+        with patch.object(Path, "exists", return_value=True), \
+             patch.object(Path, "is_dir", return_value=True):
             repos = _list_top_repos(Path("/test"))
         self.assertEqual(len(repos), 1)
 
     @patch("lib.git.os.listdir")
     def test_multiple(self, mock_listdir):
         mock_listdir.return_value = ["repo1", "repo2", "repo3"]
-        with patch.object(Path, "is_dir", return_value=True):
+        with patch.object(Path, "exists", return_value=True), \
+             patch.object(Path, "is_dir", return_value=True):
             repos = _list_top_repos(Path("/test"))
         self.assertEqual(len(repos), 3)
 
@@ -31,7 +33,8 @@ class TestListTopRepos(unittest.TestCase):
         def git_only(self):
             return str(self).endswith("repo1/.git")
 
-        with patch.object(Path, "is_dir", git_only):
+        with patch.object(Path, "exists", git_only), \
+             patch.object(Path, "is_dir", return_value=True):
             repos = _list_top_repos(Path("/test"))
         self.assertTrue(all(not r.name.startswith(".") for r in repos))
 
@@ -42,7 +45,8 @@ class TestListTopRepos(unittest.TestCase):
         def git_only(self):
             return str(self).endswith("/.git")
 
-        with patch.object(Path, "is_dir", git_only):
+        with patch.object(Path, "exists", git_only), \
+             patch.object(Path, "is_dir", return_value=True):
             repos = _list_top_repos(Path("/test"))
         for repo in repos:
             self.assertNotIn(";", repo.name)
@@ -55,13 +59,28 @@ class TestListTopRepos(unittest.TestCase):
         self.assertEqual(len(repos), 0)
 
     @patch("lib.git.os.listdir")
+    def test_includes_git_file_worktree(self, mock_listdir):
+        """`.git` 作为文件（worktree/submodule gitdir 指针）也应被识别，与 scan_repos 对齐。"""
+        mock_listdir.return_value = ["wt-repo"]
+
+        def git_only(self):
+            return str(self).endswith("wt-repo/.git")
+
+        with patch.object(Path, "exists", git_only), \
+             patch.object(Path, "is_dir", return_value=True):
+            repos = _list_top_repos(Path("/test"))
+        self.assertEqual(len(repos), 1)
+        self.assertEqual(repos[0].name, "wt-repo")
+
+    @patch("lib.git.os.listdir")
     def test_sorted(self, mock_listdir):
         mock_listdir.return_value = ["z-repo", "a-repo", "m-repo"]
 
         def git_only(self):
             return str(self).endswith("/.git")
 
-        with patch.object(Path, "is_dir", git_only):
+        with patch.object(Path, "exists", git_only), \
+             patch.object(Path, "is_dir", return_value=True):
             repos = _list_top_repos(Path("/test"))
         names = [r.name for r in repos]
         self.assertEqual(names, sorted(names))

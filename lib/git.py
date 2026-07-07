@@ -148,7 +148,7 @@ def _list_top_repos(root: Path) -> list[Path]:
         if name.startswith(".") or not _SAFE_NAME_RE.match(name):
             continue
         p = root / name
-        if p.is_dir() and (p / ".git").is_dir():
+        if p.is_dir() and (p / ".git").exists():
             repos.append(p)
     return repos
 

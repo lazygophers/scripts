@@ -2,6 +2,7 @@
 """delete_branch_remote 薄壳入口 — 删除远端分支。
 
 单仓（当前在 git 仓库）→ 删当前仓库远端分支；非 git 目录 → 批量扫描所有 Git 仓库。
+单仓路径复用 lib 工厂闭包，确保 skip/prune 规则与批量一致（spec batch-git.md）。
 """
 import argparse
 import os
@@ -9,27 +10,10 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.exec import run
+from lib.batch_git import _delete_branch_remote_one_factory
 from lib.ui import reporter
 
-
-def _delete_remote_single(target: str, remote: str) -> int:
-    """单仓删除远端分支。"""
-    r = reporter(stderr=True)
-    ref = run(["git", "show-ref", "--verify", "--quiet", f"refs/remotes/{remote}/{target}"],
-              check=False, capture_output=True)
-    if ref.returncode != 0:
-        r.warn(f"无 {remote}/{target}")
-        return 1
-
-    r.step(f"git push {remote} --delete {target}")
-    p = run(["git", "push", remote, "--delete", target], check=False, capture_output=True)
-    if p.returncode != 0:
-        r.err(f"删除失败: {((p.stderr or '') + (p.stdout or '')).strip()}")
-        return 1
-    run(["git", "fetch", "--prune", remote], check=False, capture_output=True)
-    r.ok(f"已删 {remote}/{target}")
-    return 0
+_STATUS_EXIT = {"ok": 0, "skip": 0, "fail": 1}
 
 
 def main(argv: list[str]) -> int:
@@ -44,7 +28,12 @@ def main(argv: list[str]) -> int:
 
     in_git = (pathlib.Path.cwd() / ".git").exists()
     if in_git:
-        return _delete_remote_single(args.branch, args.remote)
+        r = reporter(stderr=True)
+        op = _delete_branch_remote_one_factory(args.branch, remote=args.remote)
+        status, detail = op(pathlib.Path.cwd(), r, pathlib.Path.cwd())
+        if detail:
+            (r.ok if status == "ok" else r.warn if status == "skip" else r.err)(detail)
+        return _STATUS_EXIT.get(status, 1)
 
     from lib.batch_git import delete_branch_remote_all
     if args.yes:

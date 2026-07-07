@@ -141,7 +141,11 @@ def run_batch(
     for repo in repos:
         r.info(f"  •  {repo.relative_to(root)}")
 
-    if confirm and sys.stdin.isatty() and os.environ.get("BATCH_NO_CONFIRM") != "1":
+    if confirm and os.environ.get("BATCH_NO_CONFIRM") != "1":
+        # 非 TTY（cron/管道/CI）下无法交互确认 → fail-closed：要求显式 -y / BATCH_NO_CONFIRM=1
+        if not sys.stdin.isatty():
+            r.err("批量删除需交互确认，但当前非 TTY。加 -y 或 BATCH_NO_CONFIRM=1 显式放行。")
+            raise SystemExit(1)
         try:
             answer = input("\n确认执行？(y/N) ").strip().lower()
         except (EOFError, KeyboardInterrupt):
