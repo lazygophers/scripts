@@ -14,6 +14,7 @@
 | i18n-un-languages | README+docs 多语言支持(UN 6 官方语言) | — | 已完成 | 收尾 | 100% | — |
 | sync-branch-fetch-all | sync_branch + fetch_all 命名统一 | — | 已完成 | 收尾 | 100% | — |
 | delete-branch-delete-branch-remote | delete_branch + delete_branch_remote 删分支脚本 | — | 已完成 | 收尾 | 100% | — |
+| rich-polish | rich 输出美化升级 + 收编裸 print | — | 已完成 | 收尾 | 100% | — |
 
 ## Worktree ↔ Task 映射
 
