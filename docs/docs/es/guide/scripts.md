@@ -29,8 +29,8 @@ inject es idempotente : reejecutar no añadirá duplicados. Después de reinicia
 | `push_*` (lotes)  | Al ejecutar push_* en directorio no-git, automáticamente por lotes : escanear repositorios GitLab en subdirectorios y empujar uno por uno | `push_canary [--dry-run]` |
 | `switch_branch`  | Cambiar ramas por lotes (crea desde origin/master si inexistente)                 | `switch_branch <branch>`      |
 | `sync_master`    | Sincronizar master por lotes                                              | `sync_master`                 |
-| `find_git_repos` | Listar todos los repositorios Git bajo el directorio                                      | `find_git_repos`              |
-| `git_fetch_all`  | Recuperar por lotes todos los repositorios Git                                     | `git_fetch_all`               |
+| `sync_branch`    | Sincronizar por lotes rama actual (o dada) a origin/<branch>                             | `sync_branch [branch] [--force]` |
+| `fetch_all`  | Recuperar por lotes todos los repositorios Git                                     | `fetch_all`               |
 | `unsleep`        | Evitar suspensión macOS caffeinate                                      | `unsleep -t 3600`             |
 | `reindex`        | Reindexar proyecto (local-only, .gitignore)                        | `reindex`                     |
 | `inject`         | Inyectar bin/ en PATH shell                                      | `inject`                      |
@@ -43,12 +43,12 @@ inject es idempotente : reejecutar no añadirá duplicados. Después de reinicia
 
 ## Variables de entorno
 
-- `BATCH_CONCURRENCY` : límite superior de paralelismo para operaciones por lotes (`push_*` / `switch_branch` / `sync_master`), por defecto `4`. Ejemplo : `BATCH_CONCURRENCY=8 push_canary`.
+- `BATCH_CONCURRENCY` : límite superior de paralelismo para operaciones por lotes (`push_*` / `switch_branch` / `sync_branch` / `sync_master`), por defecto `4`. Ejemplo : `BATCH_CONCURRENCY=8 push_canary`.
 
 ## Dependencias de entorno
 
 - **Python 3.10+** (entrada ligera y lógica principal)
-- **Git** (merge_* / push_* / switch_branch / sync_master / git_fetch_all / find_git_repos)
+- **Git** (merge_* / push_* / switch_branch / sync_master / fetch_all)
 - **macOS** (`n` usa `say`, `unsleep` usa `caffeinate`)
 - **rich** (embellecimiento de salida, `pip install rich`)
 - **pgrep / ps / lsof / kill** (kk / kkp)

@@ -36,16 +36,16 @@ inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.z
 | `push_develop` / `push_auto` / `push_test` | 同上, 目标分别为 develop / 远端默认 / test      |                               |
 | `push_*` (批量)  | 在非 git 目录执行 push_* 时自动批量: 扫描子目录 GitLab 仓库逐个推送 | `push_canary [--dry-run]` |
 | `switch_branch`  | 批量切换分支 (不存在则从 origin/master 创建)                 | `switch_branch <branch>`      |
-| `sync_master`    | 批量同步 master                                              | `sync_master`                 |
-| `find_git_repos` | 列出目录下所有 Git 仓库                                      | `find_git_repos`              |
-| `git_fetch_all`  | 批量 fetch 所有 Git 仓库                                     | `git_fetch_all`               |
+| `sync_branch`    | 批量同步当前分支 (或指定分支) 到 origin/<branch>             | `sync_branch [branch] [--force]` |
+| `sync_master`    | 批量同步 master (= `sync_branch master`)                     | `sync_master`                 |
+| `fetch_all`      | 批量 fetch 所有 Git 仓库                                     | `fetch_all`                   |
 | `unsleep`        | macOS caffeinate 防休眠                                      | `unsleep -t 3600`             |
 | `reindex`        | 项目重新索引 (local-only, .gitignore)                        | `reindex`                     |
 | `inject`         | 把 bin/ 注入 shell PATH                                      | `inject`                      |
 
 > **迁移说明（旧名已移除）**：原 `mergec/mergedev/mergem/merget` → `merge_canary/merge_develop/merge_auto/merge_test`；`pushc/pushdev/pushm/pusht` → `push_canary/push_develop/push_auto/push_test`；`pushc_all` 已并入 `push_*`（在非 git 目录执行即自动批量，自动执行无确认，`--dry-run` 预览）。
 
-> **环境变量**：`BATCH_CONCURRENCY` 控制批量操作（`push_*` / `switch_branch` / `sync_master`）并行并发上限，默认 `4`。例：`BATCH_CONCURRENCY=8 push_canary`。
+> **环境变量**：`BATCH_CONCURRENCY` 控制批量操作（`push_*` / `switch_branch` / `sync_branch` / `sync_master`）并行并发上限，默认 `4`。例：`BATCH_CONCURRENCY=8 push_canary`。
 
 ---
 

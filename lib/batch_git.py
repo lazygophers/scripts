@@ -423,23 +423,37 @@ def switch_branch_all(target: str) -> int:
     return 1 if result.failed else 0
 
 
-def _sync_one_factory(force: bool) -> OperationFn:
-    """构造 sync_master 单仓库操作（捕获 force）。"""
+def _sync_one_factory(branch: Optional[str], force: bool) -> OperationFn:
+    """构造单仓库同步操作。
+
+    branch=None → 同步该仓库当前分支；branch=<name> → 同步指定分支（不还原原 checkout）。
+    硬对齐到 origin/<branch>：本地领先默认 skip，--force 才 reset 丢弃。
+    """
     def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
         p = _run(["git", "fetch", "--prune", "-q", "origin"],
                  cwd=str(repo), check=False, capture_output=True)
         if p.returncode != 0:
             return "fail", "fetch 失败"
 
-        local = _run(["git", "rev-parse", "--verify", "-q", "master"],
+        if branch is None:
+            cur_p = _run(["git", "branch", "--show-current"],
+                         cwd=str(repo), check=False, capture_output=True)
+            target = (cur_p.stdout or "").strip()
+            if not target:
+                return "skip", "处于 detached HEAD"
+        else:
+            target = branch
+
+        local = _run(["git", "rev-parse", "--verify", "-q", target],
                      cwd=str(repo), check=False, capture_output=True)
         if local.returncode != 0:
-            return "skip", "无 master 分支"
+            return "skip", f"无 {target} 分支"
 
-        remote = _run(["git", "rev-parse", "--verify", "-q", "origin/master"],
+        remote_ref = f"origin/{target}"
+        remote = _run(["git", "rev-parse", "--verify", "-q", remote_ref],
                       cwd=str(repo), check=False, capture_output=True)
         if remote.returncode != 0:
-            return "skip", "无 origin/master"
+            return "skip", f"无 {remote_ref}"
 
         dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
                      cwd=str(repo), check=False, capture_output=True)
@@ -447,7 +461,7 @@ def _sync_one_factory(force: bool) -> OperationFn:
             return "skip", "工作区有未提交改动"
 
         counts_p = _run(
-            ["git", "rev-list", "--left-right", "--count", "master...origin/master"],
+            ["git", "rev-list", "--left-right", "--count", f"{target}...{remote_ref}"],
             cwd=str(repo), check=False, capture_output=True,
         )
         parts = (counts_p.stdout or "0\t0").strip().split()
@@ -456,46 +470,55 @@ def _sync_one_factory(force: bool) -> OperationFn:
 
         if ahead > 0 and not force:
             log_p = _run(
-                ["git", "log", "--oneline", "origin/master..master"],
+                ["git", "log", "--oneline", f"{remote_ref}..{target}"],
                 cwd=str(repo), check=False, capture_output=True,
             )
             commits = (log_p.stdout or "").strip()
-            detail = f"本地 master 领先 {ahead} 个 commit"
+            detail = f"本地 {target} 领先 {ahead} 个 commit"
             if commits:
                 detail += "\n" + "\n".join(f"    {line}" for line in commits.splitlines()[:5])
             return "skip", detail
 
         cur_p = _run(["git", "branch", "--show-current"],
                      cwd=str(repo), check=False, capture_output=True)
-        if (cur_p.stdout or "").strip() != "master":
-            co = _run(["git", "checkout", "-q", "master"],
+        if (cur_p.stdout or "").strip() != target:
+            co = _run(["git", "checkout", "-q", target],
                       cwd=str(repo), check=False, capture_output=True)
             if co.returncode != 0:
-                return "fail", "checkout master 失败"
+                return "fail", f"checkout {target} 失败"
 
-        _run(["git", "reset", "--hard", "-q", "origin/master"],
+        _run(["git", "reset", "--hard", "-q", remote_ref],
              cwd=str(repo), check=False, capture_output=True)
 
-        sha_p = _run(["git", "rev-parse", "--short", "origin/master"],
+        sha_p = _run(["git", "rev-parse", "--short", remote_ref],
                      cwd=str(repo), check=False, capture_output=True)
         sha = (sha_p.stdout or "").strip()
 
         if ahead > 0:
-            return "ok", f"强制对齐 origin/master ({sha})，丢弃 {ahead} 本地 commit"
+            return "ok", f"强制对齐 {remote_ref} ({sha})，丢弃 {ahead} 本地 commit"
         elif behind > 0:
-            return "ok", f"快进 {behind} → origin/master ({sha})"
+            return "ok", f"快进 {behind} → {remote_ref} ({sha})"
         else:
-            return "ok", f"已在最新 origin/master ({sha})"
+            return "ok", f"已在最新 {remote_ref} ({sha})"
 
     return _op
 
 
-def sync_master_all(*, force: bool = False) -> int:
-    """批量同步 master：将本地 master 硬对齐到 origin/master。"""
+def sync_branch_all(branch: Optional[str] = None, *, force: bool = False) -> int:
+    """批量同步分支：硬对齐到 origin/<branch>（branch=None 同步各仓库当前分支）。"""
+    if branch is None:
+        title = "同步当前分支 → origin/<当前分支>"
+    else:
+        title = f"同步 {branch} → origin/{branch}"
     result = run_batch(
-        title="同步 master → origin/master",
+        title=title,
         root=Path(".").resolve(),
-        operation=_sync_one_factory(force),
+        operation=_sync_one_factory(branch, force),
         confirm=False,
     )
     return 1 if result.failed else 0
+
+
+def sync_master_all(*, force: bool = False) -> int:
+    """批量同步 master：将本地 master 硬对齐到 origin/master。"""
+    return sync_branch_all("master", force=force)

@@ -36,16 +36,16 @@ inject es idempotente : reejecutar no duplicará. Después de completar, reinici
 | `push_develop` / `push_auto` / `push_test` | Ídem, objetivos develop / remoto por defecto / test respectivamente      |                               |
 | `push_*` (lotes)  | Al ejecutar push_* en directorio no-git, automáticamente por lotes : escanear repositorios GitLab en subdirectorios y empujar uno por uno | `push_canary [--dry-run]` |
 | `switch_branch`  | Cambiar ramas por lotes (crea desde origin/master si inexistente)                 | `switch_branch <branch>`      |
-| `sync_master`    | Sincronizar master por lotes                                              | `sync_master`                 |
-| `find_git_repos` | Listar todos los repositorios Git bajo directorio                                      | `find_git_repos`              |
-| `git_fetch_all`  | Recuperar por lotes todos los repositorios Git                                     | `git_fetch_all`               |
+| `sync_master`    | Sincronizar master por lotes = `sync_branch master`                                              | `sync_master`                 |
+| `sync_branch`    | Sincronizar por lotes rama actual (o dada) a origin/<branch> | `sync_branch [branch] [--force]` |
+| `fetch_all`  | Recuperar por lotes todos los repositorios Git                                     | `fetch_all`               |
 | `unsleep`        | Evitar suspensión macOS caffeinate                                      | `unsleep -t 3600`             |
 | `reindex`        | Reindexar proyecto (local-only, .gitignore)                        | `reindex`                     |
 | `inject`         | Inyectar bin/ en PATH shell                                      | `inject`                      |
 
 > **Notas de migración (nombres antiguos eliminados)** : `mergec`/`mergedev`/`mergem`/`merget` → `merge_canary`/`merge_develop`/`merge_auto`/`merge_test` ; `pushc`/`pushdev`/`pushm`/`pusht` → `push_canary`/`push_develop`/`push_auto`/`push_test` ; `pushc_all` se fusionó en `push_*` (ejecutar en directorio no-git para auto batch, ejecución auto sin confirmación, `--dry-run` previsualizar).
 
-> **Variables de entorno** : `BATCH_CONCURRENCY` controla la operación por lotes (`push_*` / `switch_branch` / `sync_master`) límite de concurrencia paralela, por defecto `4`. Ejemplo : `BATCH_CONCURRENCY=8 push_canary`.
+> **Variables de entorno** : `BATCH_CONCURRENCY` controla la operación por lotes (`push_*` / `switch_branch` / `sync_branch` / `sync_master`) límite de concurrencia paralela, por defecto `4`. Ejemplo : `BATCH_CONCURRENCY=8 push_canary`.
 
 ---
 

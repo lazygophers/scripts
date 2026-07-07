@@ -29,8 +29,8 @@ inject is idempotent — re-running won't duplicate entries. Restart your shell 
 | `push_*` (batch) | Running push_* in a non-git dir auto-batches: scans subdirs for GitLab repos and pushes each | `push_canary [--dry-run]` |
 | `switch_branch`  | Batch switch branch (create from origin/master if missing)   | `switch_branch <branch>`      |
 | `sync_master`    | Batch sync master                                            | `sync_master`                 |
-| `find_git_repos` | List all Git repos under a directory                         | `find_git_repos`              |
-| `git_fetch_all`  | Batch fetch all Git repos                                    | `git_fetch_all`               |
+| `sync_branch`    | Batch sync current (or given) branch to origin/<branch>                             | `sync_branch [branch] [--force]` |
+| `fetch_all`  | Batch fetch all Git repos                                    | `fetch_all`               |
 | `unsleep`        | macOS caffeinate anti-idle                                   | `unsleep -t 3600`             |
 | `reindex`        | Reindex project (local-only, .gitignore)                     | `reindex`                     |
 | `inject`         | Inject bin/ into shell PATH                                  | `inject`                      |
@@ -43,12 +43,12 @@ inject is idempotent — re-running won't duplicate entries. Restart your shell 
 
 ## Environment Variables
 
-- `BATCH_CONCURRENCY`: max concurrency for batch operations (`push_*` / `switch_branch` / `sync_master`), default `4`. Example: `BATCH_CONCURRENCY=8 push_canary`.
+- `BATCH_CONCURRENCY`: max concurrency for batch operations (`push_*` / `switch_branch` / `sync_branch` / `sync_master`), default `4`. Example: `BATCH_CONCURRENCY=8 push_canary`.
 
 ## Requirements
 
 - **Python 3.10+** (thin entrypoints and core logic)
-- **Git** (merge_* / push_* / switch_branch / sync_master / git_fetch_all / find_git_repos)
+- **Git** (merge_* / push_* / switch_branch / sync_master / fetch_all)
 - **macOS** (`n` uses `say`, `unsleep` uses `caffeinate`)
 - **rich** (output formatting, `pip install rich`)
 - **pgrep / ps / lsof / kill** (kk / kkp)

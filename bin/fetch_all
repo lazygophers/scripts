@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""git_fetch_all 薄壳入口 — 一键拉取所有仓库远程更新。"""
+"""fetch_all 薄壳入口 — 一键拉取所有仓库远程更新。"""
 import pathlib
 import sys
 

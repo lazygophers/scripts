@@ -6,7 +6,7 @@ scripts/
 │   ├── checkwork, cpd, kk, kkp, n, ...
 │   ├── merge_canary, merge_develop, merge_auto, merge_test   # вызывает lib git_workflow.merge_to(target)
 │   ├── push_canary, push_develop, push_auto, push_test       # push_to одиночный репо / автоматическое пакетно вне git
-│   ├── switch_branch, sync_master, find_git_repos, git_fetch_all
+│   ├── switch_branch, sync_master, sync_branch, fetch_all
 │   ├── loop, unsleep, reindex
 │   └── inject                    # внедрить bin/ в PATH оболочки
 ├── lib/

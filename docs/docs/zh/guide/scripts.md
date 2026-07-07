@@ -29,8 +29,8 @@ inject 幂等：重跑不会重复追加。完成后重启 shell 或 `source ~/.
 | `push_*` (批量)  | 在非 git 目录执行 push_* 时自动批量: 扫描子目录 GitLab 仓库逐个推送 | `push_canary [--dry-run]` |
 | `switch_branch`  | 批量切换分支 (不存在则从 origin/master 创建)                 | `switch_branch <branch>`      |
 | `sync_master`    | 批量同步 master                                              | `sync_master`                 |
-| `find_git_repos` | 列出目录下所有 Git 仓库                                      | `find_git_repos`              |
-| `git_fetch_all`  | 批量 fetch 所有 Git 仓库                                     | `git_fetch_all`               |
+| `sync_branch`    | 批量同步当前分支 (或指定分支) 到 origin/<branch>                             | `sync_branch [branch] [--force]` |
+| `fetch_all`  | 批量 fetch 所有 Git 仓库                                     | `fetch_all`               |
 | `unsleep`        | macOS caffeinate 防休眠                                      | `unsleep -t 3600`             |
 | `reindex`        | 项目重新索引 (local-only, .gitignore)                        | `reindex`                     |
 | `inject`         | 把 bin/ 注入 shell PATH                                      | `inject`                      |
@@ -43,12 +43,12 @@ inject 幂等：重跑不会重复追加。完成后重启 shell 或 `source ~/.
 
 ## 环境变量
 
-- `BATCH_CONCURRENCY`：批量操作（`push_*` / `switch_branch` / `sync_master`）并行并发上限，默认 `4`。例：`BATCH_CONCURRENCY=8 push_canary`。
+- `BATCH_CONCURRENCY`：批量操作（`push_*` / `switch_branch` / `sync_branch` / `sync_master`）并行并发上限，默认 `4`。例：`BATCH_CONCURRENCY=8 push_canary`。
 
 ## 环境依赖
 
 - **Python 3.10+**（薄壳与核心逻辑）
-- **Git**（merge_* / push_* / switch_branch / sync_master / git_fetch_all / find_git_repos）
+- **Git**（merge_* / push_* / switch_branch / sync_master / fetch_all）
 - **macOS**（`n` 用 `say`，`unsleep` 用 `caffeinate`）
 - **rich**（输出美化，`pip install rich`）
 - **pgrep / ps / lsof / kill**（kk / kkp）

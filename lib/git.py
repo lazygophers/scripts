@@ -1,8 +1,7 @@
 """Git 状态检查与分支管理。"""
 import re
-import sys
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 from lib.exec import run, retry_command
 from lib.ui import Reporter
@@ -133,59 +132,10 @@ def fetch_and_check_branch(
     return remote_branch_exists(branch, remote=remote, cwd=cwd)
 
 
-# ── find_git_repos / git_fetch_all 薄壳入口 ────────────────────────────
+# ── git_fetch_all 薄壳入口 ────────────────────────────
 
 import os
-from lib.ui import Table, console, progress, reporter
-
-
-def _is_suspicious(rel_path: str) -> bool:
-    return ("../" in rel_path) or ("$" in rel_path) or ("`" in rel_path)
-
-
-def _walk_repos(root: Path) -> list[tuple[str, str]]:
-    """os.walk 扫描所有 .git 仓库，返回 (rel, abs) 列表。"""
-    out: list[tuple[str, str]] = []
-    for dirpath, dirnames, _ in os.walk(root, topdown=True):
-        if ".git" in dirnames:
-            repo_path = Path(dirpath)
-            rel = os.path.relpath(repo_path, root)
-            if _is_suspicious(rel):
-                continue
-            try:
-                abs_path = str(repo_path.resolve())
-            except Exception:
-                continue
-            out.append((rel, abs_path))
-            dirnames[:] = [d for d in dirnames if d != ".git"]
-    out.sort(key=lambda x: x[0])
-    return out
-
-
-def find_repos_print(root: Path = Path(".")) -> int:
-    """扫描并打印目录下所有 Git 仓库。"""
-    root = root.resolve()
-    r = reporter(stderr=True)
-    r.step(f"扫描目录: {root}")
-    repos = _walk_repos(root)
-    r.ok(f"发现 {len(repos)} 个 git 仓库")
-
-    c = console(stderr=False)
-    if c is not None and Table is not None and sys.stdout.isatty():
-        table = Table(title="Git Repos")
-        table.add_column("Relative Path")
-        table.add_column("Absolute Path")
-        for rel, abs_path in repos:
-            table.add_row(rel, abs_path)
-        c.print(table)
-        return 0
-
-    r.info("stdout 非 TTY：输出 Markdown 表格（便于复制/管道）")
-    print("| Relative Path | Absolute Path |")
-    print("|---|---|")
-    for rel, abs_path in repos:
-        print(f"| {rel} | {abs_path} |")
-    return 0
+from lib.ui import progress, reporter
 
 
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")

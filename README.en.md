@@ -36,16 +36,16 @@ inject is idempotent: rerunning won't duplicate. After completion, restart shell
 | `push_develop` / `push_auto` / `push_test` | Same, targets are develop / remote default / test respectively      |                               |
 | `push_*` (batch)  | When executing push_* in non-git directory, automatically batch: scan subdirectory GitLab repos and push one by one | `push_canary [--dry-run]` |
 | `switch_branch`  | Batch switch branches (create from origin/master if not exists)                 | `switch_branch <branch>`      |
-| `sync_master`    | Batch sync master                                              | `sync_master`                 |
-| `find_git_repos` | List all Git repositories under directory                                      | `find_git_repos`              |
-| `git_fetch_all`  | Batch fetch all Git repositories                                     | `git_fetch_all`               |
+| `sync_master`    | Batch sync master = `sync_branch master`                                              | `sync_master`                 |
+| `sync_branch`    | Batch sync current (or given) branch to origin/<branch>      | `sync_branch [branch] [--force]` |
+| `fetch_all`  | Batch fetch all Git repositories                                     | `fetch_all`               |
 | `unsleep`        | macOS caffeinate anti-idle                                      | `unsleep -t 3600`             |
 | `reindex`        | Project re-index (local-only, .gitignore)                        | `reindex`                     |
 | `inject`         | Inject bin/ into shell PATH                                      | `inject`                      |
 
 > **Migration Notes (old names removed)**: `mergec`/`mergedev`/`mergem`/`merget` → `merge_canary`/`merge_develop`/`merge_auto`/`merge_test`; `pushc`/`pushdev`/`pushm`/`pusht` → `push_canary`/`push_develop`/`push_auto`/`push_test`; `pushc_all` merged into `push_*` (execute in non-git directory for auto batch, auto execute without confirmation, `--dry-run` preview).
 
-> **Environment Variables**: `BATCH_CONCURRENCY` controls batch operation (`push_*` / `switch_branch` / `sync_master`) parallel concurrency limit, defaults to `4`. Example: `BATCH_CONCURRENCY=8 push_canary`.
+> **Environment Variables**: `BATCH_CONCURRENCY` controls batch operation (`push_*` / `switch_branch` / `sync_branch` / `sync_master`) parallel concurrency limit, defaults to `4`. Example: `BATCH_CONCURRENCY=8 push_canary`.
 
 ---
 

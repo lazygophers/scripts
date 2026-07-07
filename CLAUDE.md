@@ -15,7 +15,6 @@ This repository contains individual executable Shell scripts:
 - **Core library**: `work_lib.py`, `py_common.py` - Shared Python utilities
 - **Build automation**: `checkwork` - Automated build checking with voice notifications (Bash wrapper -> Python)
 - **Git workflow**: `gitc` - Automated Git workflow for merging to canary branch
-- **Git utilities**: `git_fetch_all`, `find_git_repos` - Repository discovery and batch operations
 - **Process management**: `kk` (kill by process name), `kkp` (kill by port)
 - **Loop execution**: `loop` - Loop commands with success/failure tracking (Python only, no Bash wrapper tracked)
 - **Notifications**: `n` - Voice notifications using macOS `say` command
@@ -77,7 +76,7 @@ Since this is a Shell script collection, there are no traditional build/lint/tes
 
 ```bash
 # Grant execute permissions to all scripts
-chmod +x checkwork cpd find_git_repos git_fetch_all gitc kk kkp n
+chmod +x checkwork cpd fetch_all gitc kk kkp n
 
 # Core development workflow scripts
 ./checkwork                    # Run automated build checks with notifications
@@ -87,8 +86,7 @@ chmod +x checkwork cpd find_git_repos git_fetch_all gitc kk kkp n
 # Utility scripts
 ./kk <process_name>           # Kill processes by name (with safety checks)
 ./kkp <port_number>           # Kill processes by port (with safety checks)
-./git_fetch_all               # Batch fetch all Git repositories in directory tree
-./find_git_repos              # List all Git repositories in directory tree
+./fetch_all               # Batch fetch all Git repositories in directory tree
 ```
 
 ### Important Usage Notes
@@ -129,7 +127,6 @@ For `cpd`, print the copy plan (sources/dest) and per-entry execution status dur
 ### Required Tools
 
 - **Shell**: Bash environment (v4.0+) required for all scripts
-- **Git**: Required for `gitc`, `git_fetch_all`, `find_git_repos`
 - **Custom Git wrapper**: `bit` command must be available (appears to be a Git alias/wrapper)
 - **Process tools**: `pgrep`, `ps`, `kill`, `lsof` for process management scripts
 - **File utilities**: Standard Unix tools (`find`, `grep`, `basename`, `dirname`)

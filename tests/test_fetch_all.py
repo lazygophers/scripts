@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for lib.git (git_fetch_all 命令核心)."""
+"""Tests for lib.git (fetch_all 命令核心)."""
 import sys
 import unittest
 from pathlib import Path

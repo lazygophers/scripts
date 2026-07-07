@@ -6,7 +6,7 @@ scripts/
 │   ├── checkwork, cpd, kk, kkp, n, ...
 │   ├── merge_canary, merge_develop, merge_auto, merge_test   # llama lib git_workflow.merge_to(target)
 │   ├── push_canary, push_develop, push_auto, push_test       # push_to repo único / automático por lotes fuera git
-│   ├── switch_branch, sync_master, find_git_repos, git_fetch_all
+│   ├── switch_branch, sync_master, sync_branch, fetch_all
 │   ├── loop, unsleep, reindex
 │   └── inject                    # inyectar bin/ en PATH shell
 ├── lib/

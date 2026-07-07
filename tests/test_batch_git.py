@@ -358,12 +358,12 @@ class TestSwitchFactory(unittest.TestCase):
 
 class TestSyncFactory(unittest.TestCase):
     def test_returns_callable(self):
-        self.assertTrue(callable(_sync_one_factory(force=False)))
+        self.assertTrue(callable(_sync_one_factory("master", force=False)))
 
     @patch("lib.batch_git._run")
     def test_fetch_fail(self, mock_run):
         mock_run.return_value = _mock_run(returncode=1)
-        op = _sync_one_factory(force=False)
+        op = _sync_one_factory("master", force=False)
         r = MagicMock()
         status, detail = op(Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "fail")
@@ -375,7 +375,7 @@ class TestSyncFactory(unittest.TestCase):
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=1),   # rev-parse master (不存在)
         ]
-        op = _sync_one_factory(force=False)
+        op = _sync_one_factory("master", force=False)
         r = MagicMock()
         status, detail = op(Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
@@ -387,7 +387,7 @@ class TestSyncFactory(unittest.TestCase):
             _mock_run(returncode=0),   # local master exists
             _mock_run(returncode=1),   # remote master 不存在
         ]
-        op = _sync_one_factory(force=False)
+        op = _sync_one_factory("master", force=False)
         r = MagicMock()
         status, detail = op(Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
@@ -401,7 +401,7 @@ class TestSyncFactory(unittest.TestCase):
             _mock_run(returncode=0),   # remote master
             _mock_run(returncode=1),   # diff-index (脏)
         ]
-        op = _sync_one_factory(force=False)
+        op = _sync_one_factory("master", force=False)
         r = MagicMock()
         status, detail = op(Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
@@ -417,11 +417,64 @@ class TestSyncFactory(unittest.TestCase):
             _mock_run(stdout="1\t0\n"),  # rev-list: ahead 1, behind 0
             _mock_run(stdout="abc123 fix\n"),  # log
         ]
-        op = _sync_one_factory(force=False)
+        op = _sync_one_factory("master", force=False)
         r = MagicMock()
         status, detail = op(Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
         self.assertIn("领先", detail)
+
+    @patch("lib.batch_git._run")
+    def test_current_branch_mode_uses_show_current(self, mock_run):
+        """branch=None → 用 git branch --show-current 取当前分支并对其同步。"""
+        mock_run.side_effect = [
+            _mock_run(returncode=0),        # fetch
+            _mock_run(stdout="feat\n"),     # branch --show-current → feat
+            _mock_run(returncode=0),        # rev-parse feat
+            _mock_run(returncode=0),        # rev-parse origin/feat
+            _mock_run(returncode=0),        # dirty ok
+            _mock_run(stdout="0\t2\n"),     # rev-list: ahead 0, behind 2
+            _mock_run(stdout="feat\n"),     # branch --show-current (已在该分支)
+            _mock_run(returncode=0),        # reset --hard
+            _mock_run(stdout="abc1234\n"),  # rev-parse --short origin/feat
+        ]
+        op = _sync_one_factory(None, force=False)
+        r = MagicMock()
+        status, detail = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "ok")
+        self.assertIn("快进 2", detail)
+
+    @patch("lib.batch_git._run")
+    def test_current_branch_detached_skips(self, mock_run):
+        """branch=None 且 detached HEAD → skip。"""
+        mock_run.side_effect = [
+            _mock_run(returncode=0),        # fetch
+            _mock_run(stdout=""),           # branch --show-current → 空
+        ]
+        op = _sync_one_factory(None, force=False)
+        r = MagicMock()
+        status, detail = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "skip")
+        self.assertIn("detached", detail)
+
+    @patch("lib.batch_git._run")
+    def test_force_resets_when_ahead(self, mock_run):
+        """force=True 且本地领先 → 硬 reset 丢弃。"""
+        mock_run.side_effect = [
+            _mock_run(returncode=0),        # fetch
+            _mock_run(returncode=0),        # local master
+            _mock_run(returncode=0),        # remote master
+            _mock_run(returncode=0),        # dirty ok
+            _mock_run(stdout="3\t0\n"),     # rev-list: ahead 3
+            _mock_run(stdout="master\n"),   # branch --show-current
+            _mock_run(returncode=0),        # reset --hard
+            _mock_run(stdout="abc1234\n"),  # rev-parse --short
+        ]
+        op = _sync_one_factory("master", force=True)
+        r = MagicMock()
+        status, detail = op(Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "ok")
+        self.assertIn("强制对齐", detail)
+        self.assertIn("丢弃 3", detail)
 
 
 class TestRunBatchParallel(unittest.TestCase):
