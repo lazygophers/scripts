@@ -13,7 +13,7 @@
 | batch-error-detail | 修复批量失败 detail 提取关键错误行 | — | 已完成 | 收尾 | 100% | — |
 | i18n-un-languages | README+docs 多语言支持(UN 6 官方语言) | — | 已完成 | 收尾 | 100% | — |
 | sync-branch-fetch-all | sync_branch + fetch_all 命名统一 | — | 已完成 | 收尾 | 100% | — |
-| delete-branch-delete-branch-remote | delete_branch + delete_branch_remote 删分支脚本 | — | 进行中 | 规划 | 0% | — |
+| delete-branch-delete-branch-remote | delete_branch + delete_branch_remote 删分支脚本 | — | 已完成 | 收尾 | 100% | — |
 
 ## Worktree ↔ Task 映射
 
@@ -22,4 +22,3 @@
 
 | worktree | task | 创建源 |
 | --- | --- | --- |
-| /Users/luoxin/persons/scripts/.worktrees/07-07-delete-branch-delete-branch-remote | 07-07-delete-branch-delete-branch-remote | trellisx-start |
