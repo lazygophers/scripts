@@ -262,16 +262,30 @@ def run_squash_pr(
     state.original_branch = orig
 
     # FR2 — fetch + 校验
-    r.step(f"fetch {remote} {source} {target}")
-    fres = retry_command(["git", "fetch", remote, source, target],
+    # target 必须成功 fetch（冲突预演 / merge-base 需要 origin/<target>）
+    r.step(f"fetch {remote} {target}")
+    fres = retry_command(["git", "fetch", remote, target],
                          cwd=cwd, max_retries=3)
     if not fres.ok:
-        return _fail(f"fetch 失败: {fres.last_output}".rstrip(), state, r=r, cwd=cwd,
+        return _fail(f"fetch {target} 失败: {fres.last_output}".rstrip(), state, r=r, cwd=cwd,
                      notify_msg="fetch 失败")
     if fres.last_output.strip():
         r.output(fres.last_output)
 
-    # source 落后 origin/<source>？
+    # source 远端可能不存在（新分支未推），单独 fetch 容错：失败仅提示，不阻断
+    src_remote_exists = remote_branch_exists(source, remote=remote, cwd=cwd)
+    if src_remote_exists:
+        r.step(f"fetch {remote} {source}")
+        sres = retry_command(["git", "fetch", remote, source],
+                             cwd=cwd, max_retries=3)
+        if not sres.ok:
+            r.warn(f"fetch {source} 失败（忽略，远端比较将跳过）: {sres.last_output}".rstrip())
+        elif sres.last_output.strip():
+            r.output(sres.last_output)
+    else:
+        r.info(f"{source} 无远端分支，将仅用本地状态（push 时创建 <source>_pr）")
+
+    # source 落后 origin/<source>？（远端不存在则跳过）
     ahead_behind = run(
         ["git", "rev-list", "--left-right", "--count", f"{source}...{remote}/{source}"],
         cwd=cwd, check=False, capture_output=True,
