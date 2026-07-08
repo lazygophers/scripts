@@ -1,4 +1,7 @@
 """循环执行命令并追踪结果。"""
+
+from __future__ import annotations
+
 from pathlib import Path
 
 from lib.exec import run, shell_join

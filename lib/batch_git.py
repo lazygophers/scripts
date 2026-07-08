@@ -2,6 +2,9 @@
 
 提供 Git 仓库扫描、批量执行、汇总报告等功能。
 """
+
+from __future__ import annotations
+
 import io
 import os
 import re

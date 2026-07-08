@@ -2,6 +2,8 @@
 
 commit / prc / issue 三个脚本的公共逻辑。
 """
+from __future__ import annotations
+
 import re
 import shlex
 from dataclasses import dataclass

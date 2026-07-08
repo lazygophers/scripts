@@ -1,4 +1,7 @@
 """Rich 统一输出（自动降级纯文本）。"""
+
+from __future__ import annotations
+
 import sys
 from collections.abc import Sequence
 from typing import Optional

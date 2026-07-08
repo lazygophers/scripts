@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import glob
 import os
 import shutil
@@ -6,8 +9,6 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import List, NoReturn, Optional, Tuple
-
-from .ui import Table, console as rich_console
 
 from .cpd_core import (
     RunCtx,
@@ -19,6 +20,8 @@ from .cpd_core import (
     ensure_dir,
     fmt_size,
 )
+from .ui import Table
+from .ui import console as rich_console
 
 
 def _eprint(*args: object) -> None:

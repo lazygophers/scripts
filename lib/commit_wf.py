@@ -1,4 +1,7 @@
 """commit 工作流：检测变更 → 拼 prompt → 调 claude bit commit。"""
+
+from __future__ import annotations
+
 from lib.ai_workflow import current_branch, run_claude
 from lib.exec import run
 from lib.ui import reporter

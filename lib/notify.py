@@ -1,4 +1,7 @@
 """语音通知（macOS say）。"""
+
+from __future__ import annotations
+
 import re
 
 from lib.exec import run, run_logged

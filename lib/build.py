@@ -1,4 +1,7 @@
 """项目编译检测（Go / Node.js）。"""
+
+from __future__ import annotations
+
 import os
 import re
 from pathlib import Path

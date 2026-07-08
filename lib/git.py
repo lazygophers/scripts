@@ -1,9 +1,12 @@
 """Git 状态检查与分支管理。"""
+
+from __future__ import annotations
+
 import re  # noqa: I001
 from pathlib import Path  # noqa: I001
 from typing import Optional
 
-from lib.exec import run, retry_command
+from lib.exec import retry_command, run
 from lib.ui import Reporter
 
 _DIRTY_RE = re.compile(r"^\?\?|^[ MARCUD]", re.MULTILINE)

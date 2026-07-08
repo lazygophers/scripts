@@ -1,4 +1,7 @@
 """进程管理（ps/kill）。"""
+
+from __future__ import annotations
+
 import os
 import re
 import signal
@@ -6,7 +9,6 @@ from typing import Optional, Tuple
 
 from lib.exec import run
 from lib.ui import Reporter, Table, reporter
-
 
 _NAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 

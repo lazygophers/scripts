@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 """cpd 核心复制引擎模块
 
 提供文件/目录复制、校验、同步等核心功能。

@@ -1,4 +1,7 @@
 """prc 工作流：检测 provider → 拼 prompt → 调 claude 创建 PR/MR。"""
+
+from __future__ import annotations
+
 from lib.ai_workflow import (
     ProviderInfo,
     current_branch,
