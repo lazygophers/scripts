@@ -27,7 +27,7 @@ def check_bit_clean(*, bit_cmd: str = "git") -> None:
         raise GitError("存在未提交的更改或未解决的冲突，请先处理！")
 
 
-def get_current_branch(bit_cmd: str = "git", cwd: str | None = None) -> str:
+def get_current_branch(bit_cmd: str = "git", cwd: Optional[str] = None) -> str:
     """获取当前分支名。"""
     p = run([bit_cmd, "branch", "--show-current"], check=False, capture_output=True, cwd=cwd)
     return (p.stdout or "").strip()
@@ -112,7 +112,7 @@ def ensure_tool_exists(cmd: str) -> None:
         raise GitError(f"缺少依赖命令: {cmd}")
 
 
-def remote_branch_exists(branch: str, *, remote: str = "origin", cwd: str | None = None) -> bool:
+def remote_branch_exists(branch: str, *, remote: str = "origin", cwd: Optional[str] = None) -> bool:
     """检查远端分支是否存在。"""
     p = run(
         ["git", "ls-remote", "--exit-code", "--heads", remote, branch],
@@ -125,7 +125,7 @@ def fetch_and_check_branch(
     branch: str,
     *,
     remote: str = "origin",
-    cwd: str | None = None,
+    cwd: Optional[str] = None,
 ) -> bool:
     """fetch origin 并检查分支是否存在。返回 True 表示分支存在。"""
     run(["git", "fetch", remote], check=False, capture_output=True, cwd=cwd)
