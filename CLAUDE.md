@@ -12,19 +12,22 @@ This repository contains individual executable Shell scripts:
 
 ### Core Shell Scripts
 
-- **Core library**: `work_lib.py`, `py_common.py` - Shared Python utilities
+- **Core library**: `lib/*.py` - Shared Python modules (`git`, `exec`, `ui`, `notify`, `batch_git`, `build`, `process`, `system`, `git_workflow`, `ai_workflow`, `commit_wf`, `issue_wf`, `prc_wf`, `squash_pr_wf`, `loop`, `cpd`, ...)
 - **Build automation**: `checkwork` - Automated build checking with voice notifications (Bash wrapper -> Python)
-- **Git workflow**: `gitc` - Automated Git workflow for merging to canary branch
+- **Git workflow**: `merge_*` / `push_*` - Branch merge/push workflows (symlinks to `_gitwf`; targets: canary / develop / test / auto / branch); `push_branch` batch-pushes the current branch to remote
+- **AI-assisted workflow**: `commit` (auto-commit, calls `claude` for message), `issue` (auto-create Issue), `prc` (auto-create PR/MR, default draft), `squash_pr` (squash source into single commit, feeds into `prc`)
+- **Batch git ops**: `switch_branch`, `sync_branch`, `sync_master`, `delete_branch`, `delete_branch_remote`, `fetch_all`
 - **Process management**: `kk` (kill by process name), `kkp` (kill by port)
 - **Loop execution**: `loop` - Loop commands with success/failure tracking (Python only, no Bash wrapper tracked)
 - **Notifications**: `n` - Voice notifications using macOS `say` command
-- **Local-only tools** (in `.gitignore`, not tracked): `reindex` (project re-indexing), `unsleep` (macOS caffeinate wrapper), `commit` (auto-commit with AI-generated message)
+- **Power / setup**: `unsleep` (macOS caffeinate wrapper, tracked), `inject` (inject `bin/` into shell PATH)
+- **Local-only tools** (not in `bin/`, not tracked): `reindex` (project re-indexing)
 
 ## Key Architecture Patterns
 
 ### Function Library Pattern
 
-The Python libraries `work_lib.py` + `py_common.py` provide:
+The Python modules under `lib/` provide:
 
 - Core functions: `check_bit_clean()`, `check_build()`, `update_branch()`, `retry_command()`
 - Smart build detection for Go projects with `app/` subdirectories
@@ -34,15 +37,15 @@ The Python libraries `work_lib.py` + `py_common.py` provide:
 - Error handling and notification integration
 - Network retry mechanisms for unreliable connections
 
-Scripts keep Bash wrappers thin and delegate logic to Python (`*.py`).
+Scripts keep Bash wrappers thin and delegate logic to Python (`lib/*.py`).
 
 ### Git Workflow Architecture
 
-The `gitc` script implements a sophisticated Git workflow that:
+The `merge_*` / `push_*` scripts (all symlinks to `bin/_gitwf`, dispatched by target name) implement a sophisticated Git workflow that:
 
 - Uses standard `git` only (no interactive prompts)
 - Checks working directory cleanliness before dangerous operations
-- Default target branch is `canary` (can pass `gitc <target-branch>`)
+- Default target branch depends on the invocation: `merge_canary` / `push_canary` target `canary`; `_canary`/`_develop`/`_test` map to those branches; `merge_auto` / `push_auto` resolve the remote default branch; other names target the given branch
 - If the target branch does not exist on the remote, it is auto-created from `origin/HEAD` and pushed
 - If the current branch has no remote ref yet, it is auto-pushed with `git push -u` before any pull
 - Handles automated branch switching and merging to the target branch
@@ -76,24 +79,25 @@ Since this is a Shell script collection, there are no traditional build/lint/tes
 
 ```bash
 # Grant execute permissions to all scripts
-chmod +x checkwork cpd fetch_all gitc kk kkp n
+chmod +x bin/*
 
 # Core development workflow scripts
-./checkwork                    # Run automated build checks with notifications
-./gitc                        # Execute automated Git workflow (merge to canary)
-./n "message"                 # Send voice notification (system say)
+./bin/checkwork                # Run automated build checks with notifications
+./bin/merge_canary             # Merge current branch to canary (workflow script)
+./bin/push_canary              # Merge to canary, push, switch back
+./bin/n "message"              # Send voice notification (system say)
 
 # Utility scripts
-./kk <process_name>           # Kill processes by name (with safety checks)
-./kkp <port_number>           # Kill processes by port (with safety checks)
-./fetch_all               # Batch fetch all Git repositories in directory tree
+./bin/kk <process_name>        # Kill processes by name (with safety checks)
+./bin/kkp <port_number>        # Kill processes by port (with safety checks)
+./bin/fetch_all                # Batch fetch all Git repositories in directory tree
 ```
 
 ### Important Usage Notes
 
 - **Dependencies**: Scripts with dependencies must be run from the repository root directory
 - **Git Commands**: Scripts use standard `git`
-- **Safety First**: `gitc` cannot be run directly on `canary` branch (safety mechanism)
+- **Safety First**: `merge_*` / `push_*` cannot be run directly on the target branch (safety mechanism)
 - **Voice Notifications**: Use `n` for system voice notifications
  - **Output**: All Python scripts prefer Rich `Reporter` output (fallback to plain stderr)
 
@@ -127,7 +131,6 @@ For `cpd`, print the copy plan (sources/dest) and per-entry execution status dur
 ### Required Tools
 
 - **Shell**: Bash environment (v4.0+) required for all scripts
-- **Custom Git wrapper**: `bit` command must be available (appears to be a Git alias/wrapper)
 - **Process tools**: `pgrep`, `ps`, `kill`, `lsof` for process management scripts
 - **File utilities**: Standard Unix tools (`find`, `grep`, `basename`, `dirname`)
 
@@ -142,7 +145,7 @@ For `cpd`, print the copy plan (sources/dest) and per-entry execution status dur
 
 - Comprehensive working directory cleanliness checks before any dangerous operations
 - Automatic rollback mechanisms on merge conflicts or failures
-- Branch protection: prevents running `gitc` directly on `canary` branch
+- Branch protection: prevents running `merge_*` / `push_*` directly on the target branch
 - Network retry logic with exponential backoff for unreliable connections
 - Original branch restoration on any failure
 
@@ -164,26 +167,32 @@ For `cpd`, print the copy plan (sources/dest) and per-entry execution status dur
 ### Dependency Graph
 
 ```bash
-work_lib.py / py_common.py (core libraries)
-├── checkwork (bash wrapper -> Python)
-├── gitc (bash wrapper -> Python)
-├── cpd (bash wrapper -> Python)
-├── loop (Python, no tracked wrapper)
-├── reindex (local-only, Python)
-├── unsleep (local-only, Python)
-└── other scripts (bash wrapper -> Python)
+lib/*.py (core modules: git, exec, ui, notify, batch_git, build, process,
+          system, git_workflow, ai_workflow, commit_wf, issue_wf,
+          prc_wf, squash_pr_wf, loop, cpd)
+├── checkwork (bash wrapper -> lib/build, lib/notify)
+├── merge_* / push_* (symlinks -> bin/_gitwf -> lib/git_workflow, lib/batch_git)
+├── push_branch (bash wrapper -> lib/batch_git)
+├── commit / issue / prc / squash_pr (bash wrapper -> lib/{commit,issue,prc,squash_pr}_wf + lib/ai_workflow)
+├── switch_branch / sync_branch / sync_master / delete_branch / delete_branch_remote / fetch_all
+│   (bash wrapper -> lib/batch_git)
+├── cpd (bash wrapper -> lib/cpd, lib/cpd_core)
+├── kk / kkp (bash wrapper -> lib/process)
+├── loop (bash wrapper -> lib/loop)
+├── n (bash wrapper -> lib/notify)
+└── unsleep (bash wrapper -> lib/system)
 
 Notification system:
 └── n (system say notifications)
     └── checkwork (uses n for notifications)
 
-Local-only tools (not tracked):
-└── commit (bash, calls claude CLI for AI-generated commit messages)
+Local-only tools (not in bin/, not tracked):
+└── reindex (project re-indexing)
 ```
 
 ### Function Library Implementation Details
 
-The `work_lib.py` library provides these key functions:
+The `lib/` modules provide these key functions:
 
 #### `check_bit_clean()` - Git Status Validation
 

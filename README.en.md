@@ -34,7 +34,12 @@ inject is idempotent: rerunning won't duplicate. After completion, restart shell
 | `merge_test`     | Merge current branch → test, stay on test                               | `merge_test`                   |
 | `push_canary`    | Merge current branch → canary, push then switch back                      | `push_canary [--stay]`         |
 | `push_develop` / `push_auto` / `push_test` | Same, targets are develop / remote default / test respectively      |                               |
+| `push_branch`    | Batch push current branch to remote                                | `push_branch`                  |
 | `push_*` (batch)  | When executing push_* in non-git directory, automatically batch: scan subdirectory Git repos and push one by one | `push_canary [--dry-run]` |
+| `commit`         | Auto-commit changes (calls claude for message)                     | `commit`                       |
+| `issue`          | Auto-create Issue (calls claude for title/body)                    | `issue`                        |
+| `prc`            | Auto-create PR/MR (calls claude for title/body, default draft)     | `prc [base]`                   |
+| `squash_pr`      | Squash source into single commit → feeds into prc                  | `squash_pr [source] <target>`  |
 | `switch_branch`  | Batch switch branches (create from origin/master if not exists)                 | `switch_branch <branch>`      |
 | `sync_master`    | Batch sync master = `sync_branch master`                                              | `sync_master`                 |
 | `sync_branch`    | Batch sync current (or given) branch to origin/<branch>      | `sync_branch [branch] [--force]` |
@@ -42,7 +47,6 @@ inject is idempotent: rerunning won't duplicate. After completion, restart shell
 | `delete_branch_remote` | Delete remote branch (single-repo; batch if not in git dir) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | Batch fetch all Git repositories                                     | `fetch_all`               |
 | `unsleep`        | macOS caffeinate anti-idle                                      | `unsleep -t 3600`             |
-| `reindex`        | Project re-index (local-only, .gitignore)                        | `reindex`                     |
 | `inject`         | Inject bin/ into shell PATH                                      | `inject`                      |
 
 > **Migration Notes (old names removed)**: `mergec`/`mergedev`/`mergem`/`merget` → `merge_canary`/`merge_develop`/`merge_auto`/`merge_test`; `pushc`/`pushdev`/`pushm`/`pusht` → `push_canary`/`push_develop`/`push_auto`/`push_test`; `pushc_all` merged into `push_*` (execute in non-git directory for auto batch, auto execute without confirmation, `--dry-run` preview).

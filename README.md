@@ -34,7 +34,12 @@ inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.z
 | `merge_test`     | 合并当前分支 → test, 留在 test                               | `merge_test`                   |
 | `push_canary`    | 合并当前分支 → canary, 推送后切回原分支                      | `push_canary [--stay]`         |
 | `push_develop` / `push_auto` / `push_test` | 同上, 目标分别为 develop / 远端默认 / test      |                               |
+| `push_branch`    | 批量推送当前分支到远端                                       | `push_branch`                  |
 | `push_*` (批量)  | 在非 git 目录执行 push_* 时自动批量: 扫描子目录 Git 仓库逐个推送 | `push_canary [--dry-run]` |
+| `commit`         | 自动提交变更 (调 claude 生成 message)                        | `commit`                       |
+| `issue`          | 自动创建 Issue (调 claude 生成 title/body)                   | `issue`                        |
+| `prc`            | 自动创建 PR/MR (调 claude 生成 title/body, 默认 draft)       | `prc [base]`                   |
+| `squash_pr`      | 压缩 source 为单 commit → 对接 prc 开 PR                     | `squash_pr [source] <target>`  |
 | `switch_branch`  | 批量切换分支 (不存在则从 origin/master 创建)                 | `switch_branch <branch>`      |
 | `sync_branch`    | 批量同步当前分支 (或指定分支) 到 origin/<branch>             | `sync_branch [branch] [--force]` |
 | `delete_branch` | 删本地分支 (单仓;非 git 目录批量) | `delete_branch <name> [--force] [-y]` |
@@ -42,7 +47,6 @@ inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.z
 | `sync_master`    | 批量同步 master (= `sync_branch master`)                     | `sync_master`                 |
 | `fetch_all`      | 批量 fetch 所有 Git 仓库                                     | `fetch_all`                   |
 | `unsleep`        | macOS caffeinate 防休眠                                      | `unsleep -t 3600`             |
-| `reindex`        | 项目重新索引 (local-only, .gitignore)                        | `reindex`                     |
 | `inject`         | 把 bin/ 注入 shell PATH                                      | `inject`                      |
 
 > **迁移说明（旧名已移除）**：原 `mergec/mergedev/mergem/merget` → `merge_canary/merge_develop/merge_auto/merge_test`；`pushc/pushdev/pushm/pusht` → `push_canary/push_develop/push_auto/push_test`；`pushc_all` 已并入 `push_*`（在非 git 目录执行即自动批量，自动执行无确认，`--dry-run` 预览）。

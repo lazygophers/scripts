@@ -17,7 +17,8 @@
 | rich-polish | rich 输出美化升级 + 收编裸 print | — | 已完成 | 收尾 | 100% | — |
 | rich-deps-color | rich 依赖缺失修复 + 全脚本颜色深度验证 | — | 规划中 | 规划 | 0% | — |
 | push-branch-pull-ff-only-push | push_branch: 批量推送当前分支到远端（先 pull --ff-only 再 push） | — | 已完成 | 收尾 | 100% | — |
-| spr-squash-pr | spr squash PR 脚本 | — | 已完成 | 收尾 | 100 | — |
+| spr-squash-pr | squash_pr squash PR 脚本 | 建 <source>_pr 分支压单 commit 对接 prc 开 PR | 已完成 | 收尾 | 100% | — |
+| bin-readme-claude | 同步 bin 脚本到文档(README+CLAUDE) | 补 commit/issue/prc/squash_pr + 删 gitc/work_lib/bit 过时引用 | 进行中 | 实施 | 0% | — |
 
 ## Worktree ↔ Task 映射
 
@@ -26,9 +27,4 @@
 
 | worktree | task | 创建源 |
 | --- | --- | --- |
-
-## ⚠ 待人工修正 (无法自动归类的行)
-
-> 下列行 lint 不合规且无法机械归类 (列数异常且非主表/映射行形态), 已停泊于此防丢失;
-> 请人工核对后改回主表或映射区, 或删除。修正后本块应清空。
-
+| /Users/luoxin/persons/scripts/.worktrees/07-08-bin-readme-claude | 07-08-bin-readme-claude | trellisx-start |
