@@ -3,17 +3,15 @@
 流程（见 prd FR1-FR10）：
   护栏(flat clean) → fetch → 冲突预演#1 → 建 <source>_pr 分支
   → reset --soft merge-base → 聚合 message → 单 commit → 冲突预演#2
-  → push → (可选) subprocess 调 prc <target>
+  → push → (可选) lib 源码调 prc_wf.run_prc(target)
 任一步失败：回滚（回起始分支 + 删半成品 <source>_pr 本地/远端）+ 语音报错。
 """
 from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from lib.exec import retry_command, run, run_logged
 from lib.git import GitError, check_bit_clean, get_current_branch, remote_branch_exists
@@ -439,12 +437,9 @@ def run_squash_pr(
 
 
 def _call_prc(target: str) -> int:
-    """subprocess 调 bin/prc <target>。"""
-    script_dir = Path(__file__).resolve().parent.parent
-    prc_bin = script_dir / "bin" / "prc"
-    if not prc_bin.exists():
-        return 1
+    """lib 源码调 prc_wf.run_prc(target)。"""
+    from lib.prc_wf import run_prc
     try:
-        return subprocess.run([str(prc_bin), target], check=False)
+        return run_prc(target)
     except Exception:
         return 1
