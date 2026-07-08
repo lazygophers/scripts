@@ -18,7 +18,7 @@
 | rich-deps-color | rich 依赖缺失修复 + 全脚本颜色深度验证 | — | 规划中 | 规划 | 0% | — |
 | push-branch-pull-ff-only-push | push_branch: 批量推送当前分支到远端（先 pull --ff-only 再 push） | — | 已完成 | 收尾 | 100% | — |
 | spr-squash-pr | squash_pr squash PR 脚本 | 建 <source>_pr 分支压单 commit 对接 prc 开 PR | 已完成 | 收尾 | 100% | — |
-| bin-readme-claude | 同步 bin 脚本到文档(README+CLAUDE) | 补 commit/issue/prc/squash_pr + 删 gitc/work_lib/bit 过时引用 | 进行中 | 实施 | 0% | — |
+| bin-readme-claude | 同步 bin 脚本到文档(README+CLAUDE) | — | 已完成 | 收尾 | 100% | — |
 
 ## Worktree ↔ Task 映射
 
@@ -27,4 +27,3 @@
 
 | worktree | task | 创建源 |
 | --- | --- | --- |
-| /Users/luoxin/persons/scripts/.worktrees/07-08-bin-readme-claude | 07-08-bin-readme-claude | trellisx-start |
