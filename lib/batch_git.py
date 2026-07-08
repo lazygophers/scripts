@@ -547,6 +547,110 @@ def sync_master_all(*, force: bool = False) -> int:
     return sync_branch_all("master", force=force)
 
 
+def _push_branch_one_factory(branch: Optional[str], force: bool) -> OperationFn:
+    """构造单仓库推送操作（本地 → 远端同名分支）。
+
+    branch=None → 推送该仓库当前分支；branch=<name> → 推送指定分支。
+    流程：fetch → pull --ff-only（同步远端到本地）→ push。
+    分叉/冲突/dirty → skip（不中断批量）；--force 用 --force-with-lease。
+    """
+    def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
+        p = _run(["git", "fetch", "--prune", "-q", "origin"],
+                 cwd=str(repo), check=False, capture_output=True)
+        if p.returncode != 0:
+            return "fail", "fetch 失败"
+
+        if branch is None:
+            cur_p = _run(["git", "branch", "--show-current"],
+                         cwd=str(repo), check=False, capture_output=True)
+            target = (cur_p.stdout or "").strip()
+            if not target:
+                return "skip", "处于 detached HEAD"
+        else:
+            target = branch
+
+        local = _run(["git", "rev-parse", "--verify", "-q", target],
+                     cwd=str(repo), check=False, capture_output=True)
+        if local.returncode != 0:
+            return "skip", f"无 {target} 分支"
+
+        remote_ref = f"origin/{target}"
+        remote = _run(["git", "rev-parse", "--verify", "-q", remote_ref],
+                      cwd=str(repo), check=False, capture_output=True)
+        remote_exists = remote.returncode == 0
+
+        dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
+                     cwd=str(repo), check=False, capture_output=True)
+        if dirty.returncode != 0:
+            return "skip", "工作区有未提交改动"
+
+        # 先同步远端到本地（pull --ff-only）
+        if remote_exists:
+            r.step(f"pull --ff-only {remote_ref} …")
+            pull = _run(["git", "pull", "--ff-only", "-q", "origin", target],
+                        cwd=str(repo), check=False, capture_output=True)
+            if pull.returncode != 0:
+                err = _extract_error(
+                    (pull.stderr or "") + (pull.stdout or ""),
+                    pull.returncode, "pull --ff-only",
+                )
+                return "skip", f"远端有分叉/冲突 — {err}"
+
+        # 再推本地到远端
+        push_args = ["git", "push"]
+        if not remote_exists:
+            push_args += ["-u"]
+        if force:
+            push_args += ["--force-with-lease"]
+        push_args += ["origin", target]
+
+        # push 前统计要推送的区间（push 会更新本地 remote-tracking ref，之后无法再数）
+        ahead_n = 0
+        if remote_exists:
+            ahead_n = int((_run(
+                ["git", "rev-list", "--count", f"{remote_ref}..HEAD"],
+                cwd=str(repo), check=False, capture_output=True,
+            ).stdout or "0").strip() or "0")
+
+        r.step(f"push {target} → origin/{target} …")
+        push = _run(push_args, cwd=str(repo), check=False, capture_output=True)
+        if push.returncode != 0:
+            err = _extract_error(
+                (push.stderr or "") + (push.stdout or ""),
+                push.returncode, "push",
+            )
+            return "fail", err
+
+        sha_p = _run(["git", "rev-parse", "--short", "HEAD"],
+                     cwd=str(repo), check=False, capture_output=True)
+        sha = (sha_p.stdout or "").strip()
+        if not remote_exists:
+            return "ok", f"新建远端分支 origin/{target} ({sha})"
+        if ahead_n > 0:
+            return "ok", f"推送 {ahead_n} 个 commit → origin/{target} ({sha})"
+        return "ok", f"无变化（已在最新 origin/{target}, {sha}）"
+
+    return _op
+
+
+def push_branch_all(branch: Optional[str] = None, *, force: bool = False) -> int:
+    """批量推送分支到远端同名分支（先 pull --ff-only 再 push）。
+
+    branch=None 推送各仓库当前分支。
+    """
+    if branch is None:
+        title = "推送当前分支 → origin/<当前分支>"
+    else:
+        title = f"推送 {branch} → origin/{branch}"
+    result = run_batch(
+        title=title,
+        root=Path(".").resolve(),
+        operation=_push_branch_one_factory(branch, force),
+        confirm=False,
+    )
+    return 1 if result.failed else 0
+
+
 def _delete_branch_one_factory(target: str, force: bool) -> OperationFn:
     """构造删除本地分支单仓库操作。
 
