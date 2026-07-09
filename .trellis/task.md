@@ -20,6 +20,9 @@
 | spr-squash-pr | squash_pr squash PR 脚本 | 建 <source>_pr 分支压单 commit 对接 prc 开 PR | 已完成 | 收尾 | 100% | — |
 | bin-readme-claude | 同步 bin 脚本到文档(README+CLAUDE) | — | 已完成 | 收尾 | 100% | — |
 | checkwork-verbose | checkwork 增强多语言框架检测与 verbose 进度 | — | 已完成 | 收尾 | 100% | — |
+| ruff-lint-102 | 修复全仓 ruff lint (102 项) | — | 已完成 | 收尾 | 100% | — |
+| exec-run-timeout | exec.run 加默认 timeout 防命令挂起 | — | 已完成 | 收尾 | 100% | — |
+| batch-git | batch_git 失败时输出具体错误原因 | — | 已完成 | 收尾 | 100% | — |
 
 ## Worktree ↔ Task 映射
 
@@ -28,7 +31,3 @@
 
 | worktree | task | 创建源 |
 | --- | --- | --- |
-| ruff-lint-102 | 修复全仓 ruff lint (102 项) | — | 已完成 | 收尾 | 100% | — |
-| exec-run-timeout | exec.run 加默认 timeout 防命令挂起 | — | 已完成 | 收尾 | 100% | — |
-| batch-git | batch_git 失败时输出具体错误原因 | — | 进行中 | 规划 | 0% | — |
-| /Users/luoxin/persons/scripts/.worktrees/07-09-batch-git | 07-09-batch-git | trellisx-start |
