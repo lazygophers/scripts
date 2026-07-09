@@ -384,6 +384,7 @@ def _switch_one_factory(target: str) -> OperationFn:
             stashed = True
 
         switched = False
+        fail_err = ""
         local_check = _run(
             ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{target}"],
             cwd=str(repo), check=False, capture_output=True,
@@ -395,7 +396,8 @@ def _switch_one_factory(target: str) -> OperationFn:
                 r.ok(f"切换到 {target}")
                 switched = True
             else:
-                r.err("切换失败")
+                fail_err = _extract_error((sw.stderr or "") + (sw.stdout or ""), sw.returncode, "切换失败")
+                r.err(f"切换失败: {fail_err}")
         else:
             remote_check = _run(
                 ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{target}"],
@@ -409,7 +411,8 @@ def _switch_one_factory(target: str) -> OperationFn:
                     r.ok(f"追踪并切换到 {target}")
                     switched = True
                 else:
-                    r.err("切换失败")
+                    fail_err = _extract_error((sw.stderr or "") + (sw.stdout or ""), sw.returncode, "切换失败")
+                    r.err(f"切换失败: {fail_err}")
             else:
                 r.step("分支不存在 → 从 origin/master 创建")
                 sw = _run(["git", "switch", "-c", target, "origin/master"],
@@ -418,12 +421,13 @@ def _switch_one_factory(target: str) -> OperationFn:
                     r.ok(f"从 origin/master 创建并切换到 {target}")
                     switched = True
                 else:
-                    r.err("创建失败")
+                    fail_err = _extract_error((sw.stderr or "") + (sw.stdout or ""), sw.returncode, "创建失败")
+                    r.err(f"创建失败: {fail_err}")
 
         if not switched:
             if stashed:
                 _run(["git", "stash", "pop"], cwd=str(repo), check=False, capture_output=True)
-            return "fail", "切换/创建失败"
+            return "fail", fail_err or "切换/创建失败"
 
         if stashed:
             r.step("恢复 stash …")
@@ -459,7 +463,7 @@ def _sync_one_factory(branch: str | None, force: bool) -> OperationFn:
         p = _run(["git", "fetch", "--prune", "-q", "origin"],
                  cwd=str(repo), check=False, capture_output=True)
         if p.returncode != 0:
-            return "fail", "fetch 失败"
+            return "fail", _extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "fetch 失败")
 
         if branch is None:
             cur_p = _run(["git", "branch", "--show-current"],
@@ -511,7 +515,7 @@ def _sync_one_factory(branch: str | None, force: bool) -> OperationFn:
             co = _run(["git", "checkout", "-q", target],
                       cwd=str(repo), check=False, capture_output=True)
             if co.returncode != 0:
-                return "fail", f"checkout {target} 失败"
+                return "fail", _extract_error((co.stderr or "") + (co.stdout or ""), co.returncode, f"checkout {target} 失败")
 
         _run(["git", "reset", "--hard", "-q", remote_ref],
              cwd=str(repo), check=False, capture_output=True)
@@ -562,7 +566,7 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
         p = _run(["git", "fetch", "--prune", "-q", "origin"],
                  cwd=str(repo), check=False, capture_output=True)
         if p.returncode != 0:
-            return "fail", "fetch 失败"
+            return "fail", _extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "fetch 失败")
 
         if branch is None:
             cur_p = _run(["git", "branch", "--show-current"],
