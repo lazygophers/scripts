@@ -191,7 +191,7 @@ def _ask_delete_pr_branch(pr_branch: str, *, r: Reporter) -> bool:
     """询问用户是否删除已存在的 <source>_pr 分支。
 
     非 TTY（CI/管道）→ fail-closed：要求显式 SQUASH_PR_FORCE_DELETE=1。
-    返回 True 表示用户同意删除。
+    交互默认 Y（回车=删除重建），输入 n 才中止。
     """
     if os.environ.get("SQUASH_PR_FORCE_DELETE") == "1":
         return True
@@ -200,10 +200,10 @@ def _ask_delete_pr_branch(pr_branch: str, *, r: Reporter) -> bool:
               f"设 SQUASH_PR_FORCE_DELETE=1 显式放行删除并重建。")
         return False
     try:
-        ans = input(f"\n分支 {pr_branch} 已存在，删除并重建？(y/N) ").strip().lower()
+        ans = input(f"\n分支 {pr_branch} 已存在，删除并重建？(Y/n) ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         ans = "n"
-    return ans in ("y", "yes")
+    return ans not in ("n", "no")
 
 
 def _rollback(state: _RollbackState, *, r: Reporter, remote: str = REMOTE,

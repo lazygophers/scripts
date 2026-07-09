@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from lib.ai_workflow import (
     ProviderInfo,
     current_branch,
@@ -11,7 +13,45 @@ from lib.ai_workflow import (
     remote_default_branch,
     run_claude,
 )
+from lib.exec import run
 from lib.ui import reporter
+
+
+def _find_existing_pr(info: ProviderInfo, *, branch: str, base: str) -> str | None:
+    """查 head→base 的 open PR/MR。存在返回 URL，无则 None。
+
+    gh: gh pr list --head <branch> --base <base> --state open --json url
+    glab: glab mr list --source-branch <branch> --target-branch <base> --state opened
+    查询失败（工具未装/无权限）静默返回 None，不阻断创建。
+    """
+    if info.provider == "gh":
+        p = run(
+            ["gh", "pr", "list", "--head", branch, "--base", base,
+             "--state", "open", "--json", "url", "--limit", "1"],
+            check=False, capture_output=True,
+        )
+    else:
+        p = run(
+            ["glab", "mr", "list", "--source-branch", branch,
+             "--target-branch", base, "--state", "opened"],
+            check=False, capture_output=True,
+        )
+    if p.returncode != 0:
+        return None
+    if info.provider == "gh":
+        try:
+            rows = json.loads(p.stdout or "")
+            if rows:
+                return rows[0].get("url")
+        except (ValueError, TypeError):
+            return None
+        return None
+    # glab: 输出为表格文本，行中含 !<iid> + URL；取首个 http(s) 链接
+    for line in (p.stdout or "").splitlines():
+        for tok in line.split():
+            if tok.startswith("http://") or tok.startswith("https://"):
+                return tok
+    return None
 
 
 def run_prc(
@@ -58,6 +98,12 @@ def run_prc(
             "分支": f"{branch} → {base}",
             "draft": "yes" if draft else "no",
         })
+        return 0
+
+    # 查重：head→base 已有 open PR 则跳过，不重复创建
+    existing = _find_existing_pr(info, branch=branch, base=base)
+    if existing:
+        r.ok(f"已存在 open PR，跳过创建：{existing}")
         return 0
 
     prompt = _build_prompt(

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.squash_pr_wf import (
+    _ask_delete_pr_branch,
     _parse_merge_tree_output,
     aggregate_message,
     detect_conflict,
@@ -25,6 +26,44 @@ class TestPrBranchName(unittest.TestCase):
 
     def test_with_slash(self):
         self.assertEqual(pr_branch_name("user/feat"), "user/feat_pr")
+
+
+class TestAskDeletePrBranch(unittest.TestCase):
+    """默认 Y：回车/空/任意非 n → 重建；显式 n/no → 中止。"""
+
+    def _run_with_input(self, user_input: str) -> bool:
+        with patch("lib.squash_pr_wf.sys.stdin") as mock_stdin, \
+             patch("builtins.input", return_value=user_input), \
+             patch.dict("os.environ", {}, clear=False):
+            mock_stdin.isatty.return_value = True
+            os.environ.pop("SQUASH_PR_FORCE_DELETE", None)
+            return _ask_delete_pr_branch("source_pr", r=MagicMock())
+
+    def test_force_delete_env(self):
+        with patch.dict("os.environ", {"SQUASH_PR_FORCE_DELETE": "1"}):
+            self.assertTrue(_ask_delete_pr_branch("source_pr", r=MagicMock()))
+
+    def test_non_tty_aborts_without_force(self):
+        with patch("lib.squash_pr_wf.sys.stdin") as mock_stdin, \
+             patch.dict("os.environ", {}, clear=False):
+            mock_stdin.isatty.return_value = False
+            os.environ.pop("SQUASH_PR_FORCE_DELETE", None)
+            self.assertFalse(_ask_delete_pr_branch("source_pr", r=MagicMock()))
+
+    def test_enter_defaults_yes(self):
+        self.assertTrue(self._run_with_input(""))
+
+    def test_yes_confirms(self):
+        self.assertTrue(self._run_with_input("y"))
+
+    def test_no_aborts(self):
+        self.assertFalse(self._run_with_input("n"))
+
+    def test_explicit_no_aborts(self):
+        self.assertFalse(self._run_with_input("no"))
+
+    def test_arbitrary_not_n_confirms(self):
+        self.assertTrue(self._run_with_input("x"))
 
 
 class TestFallbackMessage(unittest.TestCase):
