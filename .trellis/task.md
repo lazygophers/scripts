@@ -19,6 +19,7 @@
 | push-branch-pull-ff-only-push | push_branch: 批量推送当前分支到远端（先 pull --ff-only 再 push） | — | 已完成 | 收尾 | 100% | — |
 | spr-squash-pr | squash_pr squash PR 脚本 | 建 <source>_pr 分支压单 commit 对接 prc 开 PR | 已完成 | 收尾 | 100% | — |
 | bin-readme-claude | 同步 bin 脚本到文档(README+CLAUDE) | — | 已完成 | 收尾 | 100% | — |
+| checkwork-verbose | checkwork 增强多语言框架检测与 verbose 进度 | — | 已完成 | 收尾 | 100% | — |
 
 ## Worktree ↔ Task 映射
 
@@ -27,4 +28,3 @@
 
 | worktree | task | 创建源 |
 | --- | --- | --- |
-| checkwork-verbose | checkwork 增强多语言框架检测与 verbose 进度 | — | 已完成 | 收尾 | 100% | — |
