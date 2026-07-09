@@ -12,7 +12,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 from lib.ui import Reporter, print_ansi, progress, reporter
 
@@ -449,7 +449,7 @@ def switch_branch_all(target: str) -> int:
     return 1 if result.failed else 0
 
 
-def _sync_one_factory(branch: Optional[str], force: bool) -> OperationFn:
+def _sync_one_factory(branch: str | None, force: bool) -> OperationFn:
     """构造单仓库同步操作。
 
     branch=None → 同步该仓库当前分支；branch=<name> → 同步指定分支（不还原原 checkout）。
@@ -530,7 +530,7 @@ def _sync_one_factory(branch: Optional[str], force: bool) -> OperationFn:
     return _op
 
 
-def sync_branch_all(branch: Optional[str] = None, *, force: bool = False) -> int:
+def sync_branch_all(branch: str | None = None, *, force: bool = False) -> int:
     """批量同步分支：硬对齐到 origin/<branch>（branch=None 同步各仓库当前分支）。"""
     if branch is None:
         title = "同步当前分支 → origin/<当前分支>"
@@ -550,7 +550,7 @@ def sync_master_all(*, force: bool = False) -> int:
     return sync_branch_all("master", force=force)
 
 
-def _push_branch_one_factory(branch: Optional[str], force: bool, single: bool = False) -> OperationFn:
+def _push_branch_one_factory(branch: str | None, force: bool, single: bool = False) -> OperationFn:
     """构造单仓库推送操作（本地 → 远端同名分支）。
 
     branch=None → 推送该仓库当前分支；branch=<name> → 推送指定分支。
@@ -653,7 +653,7 @@ def _push_branch_one_factory(branch: Optional[str], force: bool, single: bool = 
     return _op
 
 
-def push_branch_all(branch: Optional[str] = None, *, force: bool = False) -> int:
+def push_branch_all(branch: str | None = None, *, force: bool = False) -> int:
     """批量推送分支到远端同名分支（先 pull --ff-only 再 push）。
 
     branch=None 推送各仓库当前分支。

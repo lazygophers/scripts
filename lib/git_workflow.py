@@ -6,12 +6,11 @@ import os
 import sys
 from pathlib import Path
 
+from .build import check_build
 from .exec import retry_command, run_logged
 from .git import GitError, check_bit_clean, update_branch
 from .notify import notify_via_n, project_done_message
 from .ui import reporter
-from .build import check_build
-
 
 _STEP_COUNTER = 0
 
@@ -142,7 +141,7 @@ def run_workflow(
             ("推送", f"git push origin {target_branch}"),
         ]
         if not stay_on_target:
-            steps.append(("创建/更新目标分支", f"git branch -f / git push -u (if needed)"))
+            steps.append(("创建/更新目标分支", "git branch -f / git push -u (if needed)"))
             steps.append(("切回", f"git checkout {current_branch}"))
         for i, (name, detail) in enumerate(steps, 1):
             r.step(f"[{i}] {name}: {detail}")

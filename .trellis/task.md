@@ -28,3 +28,5 @@
 
 | worktree | task | 创建源 |
 | --- | --- | --- |
+| ruff-lint-102 | 修复全仓 ruff lint (102 项) | — | 进行中 | 规划 | 0% | — |
+| /Users/luoxin/persons/scripts/.worktrees/07-09-ruff-lint-102 | 07-09-ruff-lint-102 | trellisx-start |

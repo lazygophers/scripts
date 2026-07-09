@@ -4,7 +4,6 @@ import hashlib
 import os
 import tempfile
 import unittest
-from pathlib import Path
 
 from lib.cpd_core import (
     RunCtx,
@@ -212,7 +211,7 @@ class TestCpdCore(unittest.TestCase):
 
         copy_file(src, dst, ctx)
         self.assertTrue(os.path.exists(dst))
-        with open(dst, "r") as f:
+        with open(dst) as f:
             self.assertEqual(f.read(), content)
         self.assertEqual(ctx.stats.copied_files, 1)
 
@@ -248,9 +247,9 @@ class TestCpdCore(unittest.TestCase):
         self.assertTrue(os.path.isdir(os.path.join(dst_dir, "subdir")))
         self.assertTrue(os.path.isfile(os.path.join(dst_dir, "subdir", "file2.txt")))
 
-        with open(os.path.join(dst_dir, "file1.txt"), "r") as f:
+        with open(os.path.join(dst_dir, "file1.txt")) as f:
             self.assertEqual(f.read(), "file1")
-        with open(os.path.join(dst_dir, "subdir", "file2.txt"), "r") as f:
+        with open(os.path.join(dst_dir, "subdir", "file2.txt")) as f:
             self.assertEqual(f.read(), "file2")
 
         # 验证统计信息

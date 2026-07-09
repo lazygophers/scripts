@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Tests for lib.project."""
-import os
 import sys
 import unittest
 from pathlib import Path

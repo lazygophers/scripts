@@ -3,8 +3,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Dict, List, Optional
-
+from typing import Optional
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 CPD = SCRIPT_DIR / "bin" / "cpd"
@@ -19,7 +18,7 @@ def _read(path: Path) -> bytes:
     return path.read_bytes()
 
 
-def _run_cpd(args: List[str], env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
+def _run_cpd(args: list[str], env: Optional[dict[str, str]] = None) -> subprocess.CompletedProcess:
     e = os.environ.copy()
     if env:
         e.update(env)

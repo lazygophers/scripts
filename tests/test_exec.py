@@ -23,7 +23,6 @@ class TestShellJoin(unittest.TestCase):
         # shlex.join 抛异常时回退 " ".join; 回退仍需 str 元素
         # 构造让 shlex.join 失败但 join 可工作的场景难以直接构造,
         # 此处验证回退分支可被触发: 用 monkeypatch
-        original = exec_mod.shlex.join
         with patch.object(exec_mod.shlex, "join", side_effect=ValueError("x")):
             self.assertEqual(exec_mod.shell_join(["a", "b"]), "a b")
 

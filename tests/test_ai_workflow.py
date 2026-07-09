@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.ai_workflow import (
     ProviderInfo,
+    _normalize_host,
     current_branch,
     detect_provider,
     detect_self_assignee,
@@ -15,7 +16,6 @@ from lib.ai_workflow import (
     parse_remote_url,
     primary_remote,
     remote_default_branch,
-    _normalize_host,
 )
 
 

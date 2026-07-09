@@ -8,7 +8,7 @@ import shutil
 import sys
 import time
 from dataclasses import dataclass
-from typing import List, NoReturn, Optional, Tuple
+from typing import NoReturn
 
 from .cpd_core import (
     RunCtx,
@@ -156,7 +156,7 @@ class _PlainProgress:
 
 @dataclass(frozen=True)
 class CopyPlan:
-    sources: List[Tuple[str, bool]]
+    sources: list[tuple[str, bool]]
     dest: str
     dest_force_dir: bool
     force: bool
@@ -168,7 +168,7 @@ def _strip_trailing_sep(p: str) -> str:
     return p.rstrip(os.sep)
 
 
-def _glob_with_hidden(pattern: str) -> List[str]:
+def _glob_with_hidden(pattern: str) -> list[str]:
     matches = glob.glob(pattern)
     dirpart, base = os.path.split(pattern)
     if base and not base.startswith(".") and glob.has_magic(base) and base != "**":
@@ -180,8 +180,8 @@ def _glob_with_hidden(pattern: str) -> List[str]:
     ]
 
 
-def _resolve_sources(raw_sources: List[str]) -> List[Tuple[str, bool]]:
-    out: List[Tuple[str, bool]] = []
+def _resolve_sources(raw_sources: list[str]) -> list[tuple[str, bool]]:
+    out: list[tuple[str, bool]] = []
     include_hidden = _env_flag("CPD_INCLUDE_HIDDEN")
     for raw in raw_sources:
         copy_contents = raw.endswith(os.sep)
@@ -204,7 +204,7 @@ def _resolve_sources(raw_sources: List[str]) -> List[Tuple[str, bool]]:
     return out
 
 
-def _augment_hidden_entries(sources: List[Tuple[str, bool]]) -> None:
+def _augment_hidden_entries(sources: list[tuple[str, bool]]) -> None:
     """补齐 shell * 展开遗漏的隐藏条目"""
     parents = {os.path.dirname(os.path.normpath(s)) for s, _ in sources}
     if len(parents) != 1:
@@ -227,7 +227,7 @@ def _augment_hidden_entries(sources: List[Tuple[str, bool]]) -> None:
             sources.append((full, False))
 
 
-def _resolve_plan(raw_sources: List[str], raw_dst: str, *, force: bool) -> CopyPlan:
+def _resolve_plan(raw_sources: list[str], raw_dst: str, *, force: bool) -> CopyPlan:
     dst = _expand_path(raw_dst)
     sources = _resolve_sources(raw_sources)
     dest_force_dir = raw_dst.endswith(os.sep)
@@ -240,7 +240,7 @@ def _resolve_plan(raw_sources: List[str], raw_dst: str, *, force: bool) -> CopyP
     return CopyPlan(sources=sources, dest=dst, dest_force_dir=dest_force_dir, force=force)
 
 
-def _parse_cli(argv: list[str]) -> Tuple[bool, List[str], str]:
+def _parse_cli(argv: list[str]) -> tuple[bool, list[str], str]:
     args = argv[1:]
     if not args or args[0] in {"-h", "--help"}:
         _usage()
@@ -285,7 +285,7 @@ def _entries_set(dir_path: str, *, include_hidden: bool) -> set[str]:
     return out
 
 
-def _validate_force_multi_sources(*, sources: List[Tuple[str, bool]], include_hidden: bool) -> str:
+def _validate_force_multi_sources(*, sources: list[tuple[str, bool]], include_hidden: bool) -> str:
     if not sources:
         _die("-f 模式下未提供源路径")
 
@@ -344,7 +344,7 @@ def _estimate_total_ops(plan: CopyPlan) -> int:
     return max(total, 1)
 
 
-def _validate_force_mode(plan: CopyPlan, raw_dst: str) -> Optional[str]:
+def _validate_force_mode(plan: CopyPlan, raw_dst: str) -> str | None:
     """验证并返回 -f 模式下的多源根目录（如有）"""
     if not plan.force:
         return None
@@ -369,9 +369,9 @@ def _prepare_context(plan: CopyPlan) -> RunCtx:
 
     tty = _is_tty()
     console = rich_console(stderr=True) if tty else None
-    progress: Optional[object] = None
-    task_id: Optional[int] = None
-    plain_progress: Optional[_PlainProgress] = None
+    progress: object | None = None
+    task_id: int | None = None
+    plain_progress: _PlainProgress | None = None
 
     dest_is_dir_root = plan.dest_force_dir or len(plan.sources) > 1 or os.path.isdir(plan.dest)
     if not dest_is_dir_root and len(plan.sources) == 1:
@@ -418,7 +418,8 @@ def _prepare_context(plan: CopyPlan) -> RunCtx:
 def _print_copy_plan(plan: CopyPlan, ctx: RunCtx) -> None:
     """打印复制计划和源清单"""
     log_labels = {"all": "全量", "changes": "仅变更", "quiet": "安静"}
-    on_off = lambda v: "开启" if v else "关闭"
+    def on_off(v):
+        return "开启" if v else "关闭"
     rows = [
         ("目标", str(plan.dest)),
         ("源数量", str(len(plan.sources))),
@@ -452,7 +453,7 @@ def _print_copy_plan(plan: CopyPlan, ctx: RunCtx) -> None:
 def _execute_multi_source_copy(
     plan: CopyPlan,
     raw_dst: str,
-    force_multi_src_root: Optional[str],
+    force_multi_src_root: str | None,
     ctx: RunCtx,
 ) -> None:
     """执行多源复制"""
@@ -504,7 +505,7 @@ def _execute_single_source_copy(plan: CopyPlan, ctx: RunCtx) -> None:
 def _execute_copy(
     plan: CopyPlan,
     raw_dst: str,
-    force_multi_src_root: Optional[str],
+    force_multi_src_root: str | None,
     ctx: RunCtx,
 ) -> None:
     """执行复制操作"""

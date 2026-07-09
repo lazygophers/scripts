@@ -11,7 +11,6 @@ from lib.ai_workflow import (
     remote_default_branch,
     run_claude,
 )
-from lib.exec import run
 from lib.ui import reporter
 
 

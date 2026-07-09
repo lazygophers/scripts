@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re  # noqa: I001
 from pathlib import Path  # noqa: I001
-from typing import Optional
 
 from lib.exec import retry_command, run
 from lib.ui import Reporter
@@ -30,7 +29,7 @@ def check_bit_clean(*, bit_cmd: str = "git") -> None:
         raise GitError("存在未提交的更改或未解决的冲突，请先处理！")
 
 
-def get_current_branch(bit_cmd: str = "git", cwd: Optional[str] = None) -> str:
+def get_current_branch(bit_cmd: str = "git", cwd: str | None = None) -> str:
     """获取当前分支名。"""
     p = run([bit_cmd, "branch", "--show-current"], check=False, capture_output=True, cwd=cwd)
     return (p.stdout or "").strip()
@@ -52,7 +51,7 @@ def _switch_to_branch(branch: str, bit_cmd: str, remote: str, original_branch: s
             raise GitError(f"切换分支失败，请确认分支 '{branch}' 是否存在！")
 
 
-def _report(r: Optional[Reporter], method: str, *args, **kwargs) -> None:
+def _report(r: Reporter | None, method: str, *args, **kwargs) -> None:
     if r is not None and hasattr(r, method):
         try:
             getattr(r, method)(*args, **kwargs)
@@ -66,7 +65,7 @@ def _rollback_to_branch(original_branch: str, bit_cmd: str) -> None:
 
 
 def _run_git_retry(
-    cmd: list, *, bit_cmd: str, original_branch: str, r: Optional[Reporter], error_msg: str, title: str
+    cmd: list, *, bit_cmd: str, original_branch: str, r: Reporter | None, error_msg: str, title: str
 ) -> None:
     result = retry_command(cmd, max_retries=3)
     if not result.ok:
@@ -77,7 +76,7 @@ def _run_git_retry(
         _report(r, "output", result.last_output)
 
 
-def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", r: Optional[Reporter] = None) -> None:
+def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", r: Reporter | None = None) -> None:
     """更新分支：切换到目标分支，同步远程更新，推送本地更改。
 
     Raises:
@@ -115,7 +114,7 @@ def ensure_tool_exists(cmd: str) -> None:
         raise GitError(f"缺少依赖命令: {cmd}")
 
 
-def remote_branch_exists(branch: str, *, remote: str = "origin", cwd: Optional[str] = None) -> bool:
+def remote_branch_exists(branch: str, *, remote: str = "origin", cwd: str | None = None) -> bool:
     """检查远端分支是否存在。"""
     p = run(
         ["git", "ls-remote", "--exit-code", "--heads", remote, branch],
@@ -128,7 +127,7 @@ def fetch_and_check_branch(
     branch: str,
     *,
     remote: str = "origin",
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
 ) -> bool:
     """fetch origin 并检查分支是否存在。返回 True 表示分支存在。"""
     run(["git", "fetch", remote], check=False, capture_output=True, cwd=cwd)

@@ -5,9 +5,8 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
-import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional, Sequence
 
 
 def shell_join(cmd: Sequence[str]) -> str:
@@ -20,7 +19,7 @@ def shell_join(cmd: Sequence[str]) -> str:
 def run(
     cmd: Sequence[str],
     *,
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
     check: bool = False,
     capture_output: bool = True,
 ) -> subprocess.CompletedProcess:
@@ -38,7 +37,7 @@ def run(
         raise KeyboardInterrupt(f"命令被用户中断: {shell_join(cmd)}") from None
 
 
-def run_no_capture(cmd: Sequence[str], *, cwd: Optional[str] = None) -> int:
+def run_no_capture(cmd: Sequence[str], *, cwd: str | None = None) -> int:
     """执行 shell 命令（不捕获输出），支持 Ctrl+C 中断。"""
     try:
         proc = subprocess.Popen(list(cmd), cwd=cwd, start_new_session=True)
@@ -52,15 +51,14 @@ def run_no_capture(cmd: Sequence[str], *, cwd: Optional[str] = None) -> int:
 def run_logged(
     cmd: Sequence[str],
     *,
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
     check: bool = False,
     capture_output: bool = True,
-    r: Optional[object] = None,
+    r: object | None = None,
     title: str = "",
     show_output_on_success: bool = False,
 ) -> subprocess.CompletedProcess:
     """执行命令并输出日志（需传入 Reporter 实例）。"""
-    from lib.ui import Reporter  # 延迟避免循环
 
     if r is not None:
         _log_before_run(r, cmd, cwd, title)
@@ -72,7 +70,7 @@ def run_logged(
     return p
 
 
-def _log_before_run(r, cmd: Sequence[str], cwd: Optional[str], title: str) -> None:
+def _log_before_run(r, cmd: Sequence[str], cwd: str | None, title: str) -> None:
     cmd_s = shell_join(cmd)
     where = f" (cwd={cwd})" if cwd else ""
     head = f"{title}: {cmd_s}{where}" if title else f"{cmd_s}{where}"
@@ -83,7 +81,7 @@ def _log_after_run(
     r,
     cmd: Sequence[str],
     p: subprocess.CompletedProcess,
-    cwd: Optional[str],
+    cwd: str | None,
     title: str,
     show_output_on_success: bool,
 ) -> None:
@@ -114,7 +112,7 @@ class RetryResult:
 def retry_command(
     cmd: Sequence[str],
     *,
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
     max_retries: int = 3,
     sleep_seconds: float = 2.0,
 ) -> RetryResult:

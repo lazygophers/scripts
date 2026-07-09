@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-
-from __future__ import annotations
-
 """cpd 核心复制引擎模块
 
 提供文件/目录复制、校验、同步等核心功能。
 """
+from __future__ import annotations
+
 import hashlib
 import os
 import shutil
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -42,10 +40,10 @@ class RunCtx:
     log: str
     display_base: str
     stats: Stats
-    console: Optional[object]
-    progress: Optional[object]
-    task_id: Optional[int]
-    plain_progress: Optional[object]
+    console: object | None
+    progress: object | None
+    task_id: int | None
+    plain_progress: object | None
 
     def _rich_enabled(self) -> bool:
         return self.console is not None or self.progress is not None
@@ -72,7 +70,7 @@ class RunCtx:
         if self.plain_progress is not None:
             self.plain_progress.render(force=True)  # type: ignore[attr-defined]
 
-    def report(self, status: str, kind: str, dst: str, *, size_bytes: Optional[int] = None, extra: str = "") -> None:
+    def report(self, status: str, kind: str, dst: str, *, size_bytes: int | None = None, extra: str = "") -> None:
         if not self._should_log(status):
             return
 
@@ -119,7 +117,7 @@ class RunCtx:
             self.plain_progress.advance(path=path)  # type: ignore[attr-defined]
 
 
-def fmt_size(num_bytes: Optional[int]) -> str:
+def fmt_size(num_bytes: int | None) -> str:
     """格式化字节大小为人类可读格式"""
     if num_bytes is None or num_bytes < 0:
         return "0B"
@@ -256,7 +254,7 @@ def _handle_symlink(src: str, dst: str, ctx: RunCtx) -> None:
     ctx.advance(ctx._dst_rel(dst))
 
 
-def ensure_dir_for_copy(dst_dir: str, *, src_dir: Optional[str], ctx: RunCtx) -> bool:
+def ensure_dir_for_copy(dst_dir: str, *, src_dir: str | None, ctx: RunCtx) -> bool:
     """确保目标目录存在，并记录统计信息"""
     already_exists = os.path.isdir(dst_dir) and not os.path.islink(dst_dir)
     if not already_exists:

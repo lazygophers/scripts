@@ -16,7 +16,7 @@ class TestMergeTo(unittest.TestCase):
         self.assertEqual(rc, 0)
         mock_wf.assert_called_once()
         args, kwargs = mock_wf.call_args
-        script_name = args[0]
+        args[0]
         target = args[1]
         passthrough = args[2]
         self.assertEqual(target, "canary")

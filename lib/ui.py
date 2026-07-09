@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Sequence
-from typing import Optional
 
 try:
     from rich.console import Console
@@ -60,13 +59,13 @@ STATUS_STYLE = {
 STATUS_LABEL = {"ok": "成功", "skip": "跳过", "fail": "失败"}
 
 
-def console(stderr: bool = False) -> Optional["Console"]:
+def console(stderr: bool = False) -> Console | None:
     if not HAS_RICH:
         return None
     return Console(stderr=stderr)
 
 
-def progress(console_obj: Optional["Console"]) -> Optional["Progress"]:
+def progress(console_obj: Console | None) -> Progress | None:
     if not HAS_RICH or console_obj is None:
         return None
     return Progress(
@@ -80,7 +79,7 @@ def progress(console_obj: Optional["Console"]) -> Optional["Progress"]:
     )
 
 
-def print_ansi(console_obj: Optional["Console"], text: str) -> bool:
+def print_ansi(console_obj: Console | None, text: str) -> bool:
     """把含 ANSI / Rich 标记的文本原样转写到 console。无 rich 返回 False 由调用方降级。"""
     if console_obj is None or Text is None:
         return False
@@ -95,8 +94,8 @@ def _eprint(msg: str) -> None:
 class Reporter:
     """统一输出：支持 Rich 美化输出，自动降级纯文本。"""
 
-    def __init__(self, *, stderr: bool = True, console: Optional["Console"] = None,
-                 file: Optional["object"] = None) -> None:
+    def __init__(self, *, stderr: bool = True, console: Console | None = None,
+                 file: object | None = None) -> None:
         if file is not None and HAS_RICH:
             self.console = Console(file=file, stderr=False)
         elif console is not None:
@@ -110,7 +109,7 @@ class Reporter:
         self._file = file  # plain 模式直写对象（StringIO）
 
     @classmethod
-    def from_buffer(cls, buf: "object") -> "Reporter":
+    def from_buffer(cls, buf: object) -> Reporter:
         """构造写入 StringIO buffer 的 Reporter（线程内重定向用）。
 
         Rich 可用时 Console(file=buf)；否则用内置 _file 直写（绕过 stderr/stdout）。
@@ -233,8 +232,8 @@ class Reporter:
         self,
         cmd: Sequence[str],
         *,
-        cwd: Optional[str] = None,
-        returncode: Optional[int] = None,
+        cwd: str | None = None,
+        returncode: int | None = None,
         output: str = "",
         show_output: bool = False,
         title: str = "",
@@ -272,7 +271,7 @@ class Reporter:
             if truncated:
                 self._print("", f"{prefix}... (+更多)")
 
-    def summary(self, title: str, items: list[tuple[str, str, Optional[str]]]) -> None:
+    def summary(self, title: str, items: list[tuple[str, str, str | None]]) -> None:
         if self.console is not None and Table is not None:
             table = Table(title=title, show_header=False, box=None)
             table.add_column("Label", style="bold")

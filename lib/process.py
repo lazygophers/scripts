@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import re
 import signal
-from typing import Optional, Tuple
 
 from lib.exec import run
 from lib.ui import Reporter, Table, reporter
@@ -28,7 +27,7 @@ def kill_by_name(
     patterns: list[str],
     *,
     dry_run: bool = False,
-    script_markers: Optional[set[str]] = None,
+    script_markers: set[str] | None = None,
 ) -> int:
     """根据进程名批量终止进程。
 
@@ -84,7 +83,7 @@ def kill_by_name(
     return 1 if fail else 0
 
 
-def ps_info(pids: list[int], *, include_ppid: bool = False) -> dict[int, Tuple[str, ...]]:
+def ps_info(pids: list[int], *, include_ppid: bool = False) -> dict[int, tuple[str, ...]]:
     """查询进程详情。"""
     if not pids:
         return {}
@@ -92,7 +91,7 @@ def ps_info(pids: list[int], *, include_ppid: bool = False) -> dict[int, Tuple[s
     fmt = "pid=,user=,comm=,args=,ppid=" if include_ppid else "pid=,user=,comm=,args="
     p = run(["ps", "-p", pid_arg, "-o", fmt], check=False, capture_output=True)
     out = (p.stdout or "").strip()
-    info: dict[int, Tuple[str, ...]] = {}
+    info: dict[int, tuple[str, ...]] = {}
     for line in out.splitlines():
         parts = line.strip().split(None, 4 if include_ppid else 3)
         expected = 5 if include_ppid else 4
@@ -109,8 +108,8 @@ def ps_info(pids: list[int], *, include_ppid: bool = False) -> dict[int, Tuple[s
 def kill_pids(
     pids: list[int],
     *,
-    r: Optional[Reporter] = None,
-) -> Tuple[int, int]:
+    r: Reporter | None = None,
+) -> tuple[int, int]:
     """统一 kill 逻辑，返回 (成功数, 失败数)。"""
     success = 0
     fail = 0
@@ -130,7 +129,7 @@ def kill_pids(
 
 def make_process_table(
     pids: list[int],
-    info: dict[int, Tuple[str, ...]],
+    info: dict[int, tuple[str, ...]],
     title: str,
     r: Reporter,
     *,

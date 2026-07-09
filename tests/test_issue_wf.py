@@ -3,13 +3,11 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from lib.ai_workflow import ProviderInfo
+from lib.ai_workflow import ProviderInfo, fmt_opt
 from lib.issue_wf import _build_prompt, run_issue
-from lib.ai_workflow import fmt_opt
-
 
 _INFO = ProviderInfo(provider="gh", host="github.com", repo="o/r",
                      remote="origin", remote_url="git@github.com:o/r.git")
