@@ -550,12 +550,13 @@ def sync_master_all(*, force: bool = False) -> int:
     return sync_branch_all("master", force=force)
 
 
-def _push_branch_one_factory(branch: Optional[str], force: bool) -> OperationFn:
+def _push_branch_one_factory(branch: Optional[str], force: bool, single: bool = False) -> OperationFn:
     """构造单仓库推送操作（本地 → 远端同名分支）。
 
     branch=None → 推送该仓库当前分支；branch=<name> → 推送指定分支。
     流程：fetch → pull --ff-only（同步远端到本地）→ push。
-    分叉/冲突/dirty → skip（不中断批量）；--force 用 --force-with-lease。
+    分叉：单仓(single=True)自动 pull --no-rebase 合并（merge commit）；批量仍 skip。
+    dirty → skip；--force 用 --force-with-lease。
     """
     def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
         p = _run(["git", "fetch", "--prune", "-q", "origin"],
@@ -597,7 +598,23 @@ def _push_branch_one_factory(branch: Optional[str], force: bool) -> OperationFn:
                     (pull.stderr or "") + (pull.stdout or ""),
                     pull.returncode, "pull --ff-only",
                 )
-                return "skip", f"远端有分叉/冲突 — {err}"
+                # 批量场景：skip 不中断；单仓场景：自动 merge 合并分叉
+                if not single:
+                    return "skip", f"远端有分叉/冲突 — {err}"
+                # 单仓：ff-only 失败（分叉）→ 自动 pull --no-rebase 产生 merge commit
+                r.step(f"pull --no-rebase（合并分叉）{remote_ref} …")
+                pull_merge = _run(
+                    ["git", "pull", "--no-rebase", "--no-edit", "origin", target],
+                    cwd=str(repo), check=False, capture_output=True,
+                )
+                if pull_merge.returncode != 0:
+                    merr = _extract_error(
+                        (pull_merge.stderr or "") + (pull_merge.stdout or ""),
+                        pull_merge.returncode, "pull --no-rebase",
+                    )
+                    return "skip", f"自动 merge 失败（需手动解决冲突）— {merr}"
+                if (pull_merge.stdout or "").strip():
+                    r.output(pull_merge.stdout)
 
         # 再推本地到远端
         push_args = ["git", "push"]
@@ -640,15 +657,18 @@ def push_branch_all(branch: Optional[str] = None, *, force: bool = False) -> int
     """批量推送分支到远端同名分支（先 pull --ff-only 再 push）。
 
     branch=None 推送各仓库当前分支。
+    单仓时 pull 分叉/冲突暂停等用户解决；多仓批量仍 skip。
     """
     if branch is None:
         title = "推送当前分支 → origin/<当前分支>"
     else:
         title = f"推送 {branch} → origin/{branch}"
+    root = Path(".").resolve()
+    single = len(scan_repos(root)) == 1
     result = run_batch(
         title=title,
-        root=Path(".").resolve(),
-        operation=_push_branch_one_factory(branch, force),
+        root=root,
+        operation=_push_branch_one_factory(branch, force, single=single),
         confirm=False,
     )
     return 1 if result.failed else 0
