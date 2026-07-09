@@ -27,3 +27,4 @@
 
 | worktree | task | 创建源 |
 | --- | --- | --- |
+| checkwork-verbose | checkwork 增强多语言框架检测与 verbose 进度 | — | 已完成 | 收尾 | 100% | — |

@@ -200,16 +200,18 @@ The `lib/` modules provide these key functions:
 - Automatically sends voice notification on failure with project context
 - Provides clear visual feedback with color-coded output
 
-#### `check_build()` - Smart Project Compilation
+#### `check_build()` - Multi-Language Build Check (CI/CD Pre-check)
 
-- **Go Projects**: Recursive compilation with `cmd/` and `app/` subdirectory support
-  - Checks `cmd/` directory first for Go applications (common Go project structure)
-  - Also checks `app/` directory for legacy submodule structure
-  - Excludes specific projects (`pay-core`, `*dao-*`)
-  - Handles multi-module Go projects with individual subdirectory builds
-- **Node.js Projects**: Skips compilation (only checks `package.json` presence)
-- **Other Projects**: No compilation attempted
-- Provides detailed progress feedback and error context
+CI/CD build 前置拦截器：防止 push 后 CI 连 build 都过不去。支持多语言混合项目，verbose 实时输出，零产物（check-only / build 到 `/dev/null`）。
+
+- **Go**: `go build -v -o /dev/null`，编译 `cmd/`/`app/` 子目录 main 包 + 根目录，排除 `pay-core`/`*dao-*`
+- **Rust**: `cargo check --verbose`（不生成二进制）
+- **Python**: `py_compile` 语法编译（致命），`mypy`/`ruff` warn-only（仅警告不中止）
+- **Java**: gradle `compileJava` / maven `mvn compile`（产物留项目自管 build/target）
+- **C/C++**: `make -n` dry-run（不产生产物）/ cmake 构建到 `$TMPDIR` 后清理
+- **Node.js**: 按 lockfile 优先级（bun > yarn > pnpm > npm）选包管理器，跑 `build` script（失败致命）+ `typecheck` script（warn-only）；兜底 `tsc --noEmit`
+
+环境变量：`CHECKWORK_PARALLEL=1` 开启多语言检查点并行（默认串行）。
 
 #### `update_branch(branch_name)` - Safe Branch Management
 
