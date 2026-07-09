@@ -31,3 +31,5 @@
 
 | worktree | task | 创建源 |
 | --- | --- | --- |
+| batch-git-fail-skip-stash | batch_git 脏仓库 fail 而非 skip/stash | — | 进行中 | 规划 | 0% | — |
+| /Users/luoxin/persons/scripts/.worktrees/07-09-batch-git-fail-skip-stash | 07-09-batch-git-fail-skip-stash | trellisx-start |

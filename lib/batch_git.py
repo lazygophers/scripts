@@ -246,6 +246,20 @@ def _extract_error(out: str, code: int, label: str) -> str:
     return f"{label} 失败 (exit {code})"
 
 
+def _dirty_detail(repo: Path) -> str:
+    """构造「工作区有未提交改动」detail，附前若干个脏文件名（≤200 字符）。"""
+    p = _run(["git", "status", "--porcelain"], cwd=str(repo), check=False, capture_output=True)
+    lines = [ln.strip() for ln in (p.stdout or "").splitlines() if ln.strip()]
+    n = len(lines)
+    sample = ", ".join(ln.split(maxsplit=1)[-1] for ln in lines[:3])
+    detail = f"工作区有未提交改动（{n} 项）"
+    if sample:
+        detail += f": {sample}"
+        if n > 3:
+            detail += f" …(+{n - 3})"
+    return detail[:200]
+
+
 def _push_one_factory(target: str, dry_run: bool, extra: list[str]) -> OperationFn:
     """构造 push 单仓库操作（捕获 target/dry_run/extra）。
 
@@ -374,14 +388,12 @@ def _switch_one_factory(target: str) -> OperationFn:
             r.ok(f"已在 {target} → 跳过")
             return "skip", "已在目标分支"
 
-        # 脏工作树
-        stashed = False
+        # 脏工作树 → fail（不自动 stash，防丢失上下文）
         diff_p = _run(["git", "diff", "--quiet", "HEAD"], cwd=str(repo), check=False, capture_output=True)
         if diff_p.returncode != 0:
-            r.step("工作树有未提交改动 → stash …")
-            _run(["git", "stash", "push", "-m", f"switch_branch_auto_{target}"],
-                 cwd=str(repo), check=False, capture_output=True)
-            stashed = True
+            err = _dirty_detail(repo)
+            r.err(f"未提交变更 → 跳过: {err}")
+            return "fail", err
 
         switched = False
         fail_err = ""
@@ -425,17 +437,7 @@ def _switch_one_factory(target: str) -> OperationFn:
                     r.err(f"创建失败: {fail_err}")
 
         if not switched:
-            if stashed:
-                _run(["git", "stash", "pop"], cwd=str(repo), check=False, capture_output=True)
             return "fail", fail_err or "切换/创建失败"
-
-        if stashed:
-            r.step("恢复 stash …")
-            sp = _run(["git", "stash", "pop"], cwd=str(repo), check=False, capture_output=True)
-            if sp.returncode == 0:
-                r.ok("stash 已恢复")
-            else:
-                r.warn("stash 恢复有冲突，请手动解决")
 
         return "ok", ""
 
@@ -457,7 +459,7 @@ def _sync_one_factory(branch: str | None, force: bool) -> OperationFn:
     """构造单仓库同步操作。
 
     branch=None → 同步该仓库当前分支；branch=<name> → 同步指定分支（不还原原 checkout）。
-    硬对齐到 origin/<branch>：本地领先默认 skip，--force 才 reset 丢弃。
+    硬对齐到 origin/<branch>：本地领先默认 skip，--force 才 reset 丢弃。dirty → fail。
     """
     def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
         p = _run(["git", "fetch", "--prune", "-q", "origin"],
@@ -488,7 +490,7 @@ def _sync_one_factory(branch: str | None, force: bool) -> OperationFn:
         dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
                      cwd=str(repo), check=False, capture_output=True)
         if dirty.returncode != 0:
-            return "skip", "工作区有未提交改动"
+            return "fail", _dirty_detail(repo)
 
         counts_p = _run(
             ["git", "rev-list", "--left-right", "--count", f"{target}...{remote_ref}"],
@@ -560,7 +562,7 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
     branch=None → 推送该仓库当前分支；branch=<name> → 推送指定分支。
     流程：fetch → pull --ff-only（同步远端到本地）→ push。
     分叉：单仓(single=True)自动 pull --no-rebase 合并（merge commit）；批量仍 skip。
-    dirty → skip；--force 用 --force-with-lease。
+    dirty → fail；--force 用 --force-with-lease。
     """
     def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
         p = _run(["git", "fetch", "--prune", "-q", "origin"],
@@ -590,7 +592,7 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
         dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
                      cwd=str(repo), check=False, capture_output=True)
         if dirty.returncode != 0:
-            return "skip", "工作区有未提交改动"
+            return "fail", _dirty_detail(repo)
 
         # 先同步远端到本地（pull --ff-only）
         if remote_exists:

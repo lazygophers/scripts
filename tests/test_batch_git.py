@@ -415,17 +415,18 @@ class TestSyncFactory(unittest.TestCase):
         self.assertIn("origin/master", detail)
 
     @patch("lib.batch_git._run")
-    def test_dirty_tree_skips(self, mock_run):
+    def test_dirty_tree_fails(self, mock_run):
         mock_run.side_effect = [
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=0),   # local master
             _mock_run(returncode=0),   # remote master
             _mock_run(returncode=1),   # diff-index (脏)
+            _mock_run(stdout="M file.py\n"),  # git status --porcelain (_dirty_detail)
         ]
         op = _sync_one_factory("master", force=False)
         r = MagicMock()
         status, detail = op(Path("/repo"), r, Path("/root"))
-        self.assertEqual(status, "skip")
+        self.assertEqual(status, "fail")
         self.assertIn("未提交", detail)
 
     @patch("lib.batch_git._run")
