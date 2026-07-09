@@ -24,6 +24,9 @@ lib = "lib"
 [tool.ruff]
 line-length = 120
 target-version = "py39"
+# .trellis / .codex 是外部工具链(trellis 框架 / codex hooks), 非本仓 scripts 项目代码,
+# 各自有不同编码规范, 不纳入本仓 ruff 扫描 (checkwork / 日常 lint 均受益)
+extend-exclude = [".trellis", ".codex"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]

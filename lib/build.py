@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from lib.exec import run_no_capture
+from lib.exec import run, run_no_capture
 from lib.ui import reporter
 
 
@@ -37,6 +37,22 @@ def _have(cmd: str) -> bool:
     """命令是否在 PATH 中可用。"""
     from shutil import which
     return which(cmd) is not None
+
+
+def _count_issue_lines(output: str) -> int:
+    """从 ruff/mypy concise 输出统计告警条数（非空、非统计行）。"""
+    n = 0
+    for line in (output or "").splitlines():
+        s = line.strip()
+        if not s or s.startswith("Found"):
+            continue
+        n += 1
+    return n
+
+
+def _count_type_errors(output: str) -> int:
+    """从 tsc/类型检查输出统计错误条数（含 'error' 的行）。"""
+    return sum(1 for line in (output or "").splitlines() if "error" in line.lower())
 
 
 def _run_verbose(cmd: Sequence[str], *, cwd: str | None = None,
@@ -151,19 +167,28 @@ def _check_python_project(project_dir: Path, *,
         else:
             results.append(CheckResult("py_compile", "ok"))
 
-    # mypy warn-only
+    # mypy warn-only（静默: capture 输出, 只报条数, 不刷屏）
     if _have("mypy") and py_files:
-        rc = _run_verbose(["mypy", "--pretty"], cwd=str(project_dir), log=log)
-        results.append(CheckResult(
-            "mypy", "ok" if rc == 0 else "warn",
-            "" if rc == 0 else f"类型检查告警 exit={rc}（仅警告，不中止）"))
+        if log is not None:
+            log("mypy 类型检查（warn-only）")
+        p = run(["mypy", "--no-error-summary"], cwd=str(project_dir), check=False, capture_output=True)
+        if p.returncode == 0:
+            results.append(CheckResult("mypy", "ok"))
+        else:
+            n = _count_issue_lines((p.stdout or "") + (p.stderr or ""))
+            results.append(CheckResult("mypy", "warn", f"{n} 项类型告警（仅警告，不中止）"))
 
-    # ruff warn-only
+    # ruff warn-only（静默: capture 输出, 只报条数, 不刷屏）
     if _have("ruff"):
-        rc = _run_verbose(["ruff", "check", "."], cwd=str(project_dir), log=log)
-        results.append(CheckResult(
-            "ruff", "ok" if rc == 0 else "warn",
-            "" if rc == 0 else f"lint 告警 exit={rc}（仅警告，不中止）"))
+        if log is not None:
+            log("ruff lint 检查（warn-only）")
+        p = run(["ruff", "check", ".", "--output-format=concise"],
+                cwd=str(project_dir), check=False, capture_output=True)
+        if p.returncode == 0:
+            results.append(CheckResult("ruff", "ok"))
+        else:
+            n = _count_issue_lines((p.stdout or "") + (p.stderr or ""))
+            results.append(CheckResult("ruff", "warn", f"{n} 项 lint 告警（仅警告，不中止）"))
 
     return results
 
@@ -284,20 +309,30 @@ def _check_node_project(project_dir: Path, *,
         results.append(CheckResult(f"{pm} build", "ok" if rc == 0 else "fail",
                                    "" if rc == 0 else f"exit={rc}"))
 
-    # typecheck script（warn-only — 类型错误不中止 checkwork）
+    # typecheck script（warn-only, 静默: 类型错误不中止, 不刷屏）
     if "typecheck" in scripts:
-        rc = _run_verbose([pm, "run", "typecheck"], cwd=str(project_dir), log=log)
-        results.append(CheckResult(
-            f"{pm} typecheck", "ok" if rc == 0 else "warn",
-            "" if rc == 0 else f"类型检查告警 exit={rc}（仅警告，不中止）"))
+        if log is not None:
+            log(f"{pm} typecheck（warn-only）")
+        p = run([pm, "run", "typecheck"], cwd=str(project_dir), check=False, capture_output=True)
+        if p.returncode == 0:
+            results.append(CheckResult(f"{pm} typecheck", "ok"))
+        else:
+            n = _count_type_errors((p.stdout or "") + (p.stderr or ""))
+            results.append(CheckResult(f"{pm} typecheck", "warn",
+                                       f"{n} 项类型告警（仅警告，不中止）"))
 
-    # tsc --noEmit 兜底（有 tsconfig.json 且无 typecheck script）
+    # tsc --noEmit 兜底（有 tsconfig.json 且无 typecheck script, warn-only 静默）
     tsconfig = project_dir / "tsconfig.json"
     if tsconfig.exists() and "typecheck" not in scripts and _have("tsc"):
-        rc = _run_verbose(["tsc", "--noEmit"], cwd=str(project_dir), log=log)
-        results.append(CheckResult(
-            "tsc --noEmit", "ok" if rc == 0 else "warn",
-            "" if rc == 0 else f"类型检查告警 exit={rc}（仅警告，不中止）"))
+        if log is not None:
+            log("tsc --noEmit（warn-only）")
+        p = run(["tsc", "--noEmit"], cwd=str(project_dir), check=False, capture_output=True)
+        if p.returncode == 0:
+            results.append(CheckResult("tsc --noEmit", "ok"))
+        else:
+            n = _count_type_errors((p.stdout or "") + (p.stderr or ""))
+            results.append(CheckResult("tsc --noEmit", "warn",
+                                       f"{n} 项类型告警（仅警告，不中止）"))
 
     return results
 
