@@ -5,7 +5,7 @@ from __future__ import annotations
 import re  # noqa: I001
 from pathlib import Path  # noqa: I001
 
-from lib.exec import retry_command, run
+from lib.exec import NET_TIMEOUT, retry_command, run
 from lib.ui import Reporter
 
 _DIRTY_RE = re.compile(r"^\?\?|^[ MARCUD]", re.MULTILINE)
@@ -67,7 +67,7 @@ def _rollback_to_branch(original_branch: str, bit_cmd: str) -> None:
 def _run_git_retry(
     cmd: list, *, bit_cmd: str, original_branch: str, r: Reporter | None, error_msg: str, title: str
 ) -> None:
-    result = retry_command(cmd, max_retries=3)
+    result = retry_command(cmd, max_retries=3, timeout=NET_TIMEOUT)
     if not result.ok:
         _report(r, "cmd_result", cmd, returncode=1, output=result.last_output, show_output=True, title=title)
         _rollback_to_branch(original_branch, bit_cmd)
@@ -88,7 +88,7 @@ def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", 
     if original_branch != branch:
         _switch_to_branch(branch, bit_cmd, remote, original_branch)
 
-    remote_ref = run([bit_cmd, "ls-remote", "--exit-code", "--heads", remote, branch], check=False, capture_output=True)
+    remote_ref = run([bit_cmd, "ls-remote", "--exit-code", "--heads", remote, branch], check=False, capture_output=True, timeout=NET_TIMEOUT)
     if remote_ref.returncode != 0:
         _report(r, "warn", f"远端不存在 {remote}/{branch}，将先 push -u 创建该分支")
         _run_git_retry(
@@ -118,7 +118,7 @@ def remote_branch_exists(branch: str, *, remote: str = "origin", cwd: str | None
     """检查远端分支是否存在。"""
     p = run(
         ["git", "ls-remote", "--exit-code", "--heads", remote, branch],
-        check=False, capture_output=True, cwd=cwd,
+        check=False, capture_output=True, cwd=cwd, timeout=NET_TIMEOUT,
     )
     return p.returncode == 0
 
@@ -130,7 +130,7 @@ def fetch_and_check_branch(
     cwd: str | None = None,
 ) -> bool:
     """fetch origin 并检查分支是否存在。返回 True 表示分支存在。"""
-    run(["git", "fetch", remote], check=False, capture_output=True, cwd=cwd)
+    run(["git", "fetch", remote], check=False, capture_output=True, cwd=cwd, timeout=NET_TIMEOUT)
     return remote_branch_exists(branch, remote=remote, cwd=cwd)
 
 
@@ -172,7 +172,7 @@ def fetch_all(root: Path = Path(".")) -> int:
             task_id = prog.add_task("fetch", total=len(repos))
             for repo in repos:
                 prog.update(task_id, description=f"fetch {repo.name}")
-                res = retry_command(["git", "fetch", "--all"], cwd=str(repo), max_retries=3)
+                res = retry_command(["git", "fetch", "--all"], cwd=str(repo), max_retries=3, timeout=NET_TIMEOUT)
                 if res.ok:
                     r.status("ok", repo.name)
                 else:
@@ -188,7 +188,7 @@ def fetch_all(root: Path = Path(".")) -> int:
     else:
         for repo in repos:
             r.step(f"fetch {repo.name}")
-            res = retry_command(["git", "fetch", "--all"], cwd=str(repo), max_retries=3)
+            res = retry_command(["git", "fetch", "--all"], cwd=str(repo), max_retries=3, timeout=NET_TIMEOUT)
             if res.ok:
                 r.status("ok", repo.name)
             else:

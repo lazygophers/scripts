@@ -52,6 +52,20 @@ class TestRun(unittest.TestCase):
         p = exec_mod.run(["echo", "x"])
         self.assertEqual(p.stdout.strip(), "x")
 
+    def test_timeout_raises(self):
+        with self.assertRaises(exec_mod.CommandTimeout):
+            exec_mod.run(["sleep", "5"], timeout=1)
+
+    def test_timeout_kills_proc_group(self):
+        """超时后子进程不留残留。"""
+        import subprocess
+        try:
+            exec_mod.run(["sleep", "10"], timeout=1)
+        except exec_mod.CommandTimeout:
+            pass
+        r = subprocess.run(["pgrep", "-f", "sleep 10"], capture_output=True)
+        self.assertEqual(r.stdout.strip(), b"", "sleep 子进程未被清理")
+
 
 class TestRunNoCapture(unittest.TestCase):
     def test_success(self):
@@ -130,6 +144,15 @@ class TestRetryCommand(unittest.TestCase):
             res = exec_mod.retry_command(["git", "fetch"], max_retries=2)
         self.assertFalse(res.ok)
         self.assertEqual(res.attempts, 3)  # 1 initial + 2 retries
+
+    @patch("lib.exec.run")
+    def test_timeout_treated_as_retryable(self, mock_run):
+        """超时视为网络错误，触发重试。"""
+        mock_run.side_effect = exec_mod.CommandTimeout("timeout")
+        with patch("time.sleep"):
+            res = exec_mod.retry_command(["git", "push"], max_retries=2)
+        self.assertFalse(res.ok)
+        self.assertEqual(res.attempts, 3)
 
 
 class TestRetryResultDataclass(unittest.TestCase):

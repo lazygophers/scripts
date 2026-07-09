@@ -28,5 +28,6 @@
 
 | worktree | task | 创建源 |
 | --- | --- | --- |
-| ruff-lint-102 | 修复全仓 ruff lint (102 项) | — | 进行中 | 规划 | 0% | — |
-| /Users/luoxin/persons/scripts/.worktrees/07-09-ruff-lint-102 | 07-09-ruff-lint-102 | trellisx-start |
+| ruff-lint-102 | 修复全仓 ruff lint (102 项) | — | 已完成 | 收尾 | 100% | — |
+| exec-run-timeout | exec.run 加默认 timeout 防命令挂起 | — | 进行中 | 规划 | 0% | — |
+| /Users/luoxin/persons/scripts/.worktrees/07-09-exec-run-timeout | 07-09-exec-run-timeout | trellisx-start |

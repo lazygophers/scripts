@@ -135,7 +135,7 @@ class TestFetchAll(unittest.TestCase):
         mock_retry.return_value = MagicMock(ok=True, last_output="")
         fetch_all()
         mock_retry.assert_called_once_with(
-            ["git", "fetch", "--all"], cwd=str(repo), max_retries=3
+            ["git", "fetch", "--all"], cwd=str(repo), max_retries=3, timeout=120
         )
 
     @patch("lib.git.retry_command")

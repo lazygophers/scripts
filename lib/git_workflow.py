@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from .build import check_build
-from .exec import retry_command, run_logged
+from .exec import DEFAULT_TIMEOUT, NET_TIMEOUT, retry_command, run_logged
 from .git import GitError, check_bit_clean, update_branch
 from .notify import notify_via_n, project_done_message
 from .ui import reporter
@@ -21,12 +21,12 @@ def _step(msg: str, r) -> None:
     r.step(f"[{_STEP_COUNTER}] {msg}")
 
 
-def _git(args: list[str], *, r=None, title: str = "", show_ok: bool = False):
-    return run_logged(["git", *args], check=False, capture_output=True, r=r, title=title, show_output_on_success=show_ok)
+def _git(args: list[str], *, r=None, title: str = "", show_ok: bool = False, timeout: float | None = None):
+    return run_logged(["git", *args], check=False, capture_output=True, r=r, title=title, show_output_on_success=show_ok, timeout=timeout)
 
 
 def _remote_branch_exists(branch: str, *, remote: str = "origin") -> bool:
-    p = _git(["ls-remote", "--exit-code", "--heads", remote, branch])
+    p = _git(["ls-remote", "--exit-code", "--heads", remote, branch], timeout=NET_TIMEOUT)
     return p.returncode == 0
 
 
@@ -159,7 +159,7 @@ def run_workflow(
         update_branch(target_branch, r=r)
 
         _step(f"合并 {current_branch} → {target_branch}", r)
-        merge = _git(["merge", "--no-edit", current_branch], r=r, title="执行合并", show_ok=True)
+        merge = _git(["merge", "--no-edit", current_branch], r=r, title="执行合并", show_ok=True, timeout=DEFAULT_TIMEOUT)
         if merge.returncode != 0:
             if sys.stdin.isatty():
                 r.warn("检测到合并冲突：请手动解决后按回车继续")
@@ -180,7 +180,7 @@ def run_workflow(
         check_build(project_dir=Path("."), log=r.step)
 
         _step(f"推送 {target_branch} 到远端", r)
-        sync = retry_command(["git", "push", "origin", target_branch], max_retries=3)
+        sync = retry_command(["git", "push", "origin", target_branch], max_retries=3, timeout=NET_TIMEOUT)
         if not sync.ok:
             r.err("推送失败！请检查网络或权限。")
             r.cmd_result(
