@@ -34,6 +34,14 @@ def pr_branch_name(source: str) -> str:
     return f"{source}_pr"
 
 
+def _strip_remote_prefix(branch: str, remote: str) -> str:
+    """剥 <remote>/ 前缀（用户可能传 origin/staging，统一成 staging）。"""
+    prefix = f"{remote}/"
+    if branch.startswith(prefix):
+        return branch[len(prefix):]
+    return branch
+
+
 def fallback_message(source: str, target: str) -> str:
     """聚合为空时的兜底 commit message。"""
     return f"squash: {source} → {target}"
@@ -238,6 +246,9 @@ def run_squash_pr(
     """执行 squash_pr 主流程。返回 SquashResult（returncode 0 = 成功）。"""
     if r is None:
         r = reporter(stderr=True)
+    # 规范化：剥 <remote>/ 前缀（用户可能传 origin/staging 等）
+    source = _strip_remote_prefix(source, remote)
+    target = _strip_remote_prefix(target, remote)
     pr_branch = pr_branch_name(source)
     state = _RollbackState(pr_branch=pr_branch)
 
