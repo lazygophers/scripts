@@ -1,7 +1,11 @@
 """项目编译检测（CI/CD build 前置拦截）。
 
 支持 Go / Rust / Python / Java / C/C++ / Node.js，按 lockfile 自动选包管理器。
-检查命令带 verbose 标志，透传输出让用户实时看到进度。零产物：check-only 或 build 到 /dev/null。
+
+安全原则（硬规）: 所有 check 必须是 check-only — 只验证能编译打包成功,
+零副作用（不写临时文件、不起常驻进程、不交互、不连网/DB）。编译缓存（build/
+target/dist/.rustc）可接受。做不到 check-only 的语言（如 Makefile）直接跳过 + 提示,
+绝不执行不确定的命令。只有白名单确认可信的命令才跑。
 """
 
 from __future__ import annotations
@@ -223,34 +227,23 @@ def _check_java_project(project_dir: Path, *,
 
 def _check_cc_project(project_dir: Path, *,
                       log: Callable[[str], None] | None = None) -> list[CheckResult]:
-    """make: dry-run（-n，不真正 build）; cmake: 构建到 $TMPDIR 后清理。"""
-    makefile = project_dir / "Makefile"
+    """cmake configure only（只 -B 配置，不 build，不产生二进制）。
+
+    Makefile 不支持 check（build 规则任意、产物不可控），命中直接跳过。
+    """
     cmakelists = project_dir / "CMakeLists.txt"
 
-    if makefile.exists():
-        if log is not None:
-            log("make dry-run (-n, 不产生产物)")
-        rc = _run_verbose(["make", "-n"], cwd=str(project_dir), log=log)
-        return [CheckResult("make -n", "ok" if rc == 0 else "fail",
-                            "" if rc == 0 else f"exit={rc}")]
-
     if cmakelists.exists():
-        import shutil
         import tempfile
         tmpdir = Path(tempfile.mkdtemp(prefix="checkwork_cmake_"))
         try:
-            rc1 = _run_verbose(["cmake", "-S", str(project_dir), "-B", str(tmpdir)],
+            rc = _run_verbose(["cmake", "-S", str(project_dir), "-B", str(tmpdir)],
                                log=log)
-            if rc1 != 0:
-                return [CheckResult("cmake configure", "fail", f"exit={rc1}")]
-            rc2 = _run_verbose(["cmake", "--build", str(tmpdir), "--verbose"],
-                               log=log)
-            return [CheckResult("cmake build", "ok" if rc2 == 0 else "fail",
-                                "" if rc2 == 0 else f"exit={rc2}")]
+            return [CheckResult("cmake configure", "ok" if rc == 0 else "fail",
+                                "" if rc == 0 else f"exit={rc}")]
         finally:
+            import shutil
             shutil.rmtree(tmpdir, ignore_errors=True)
-            if log is not None:
-                log(f"已清理临时构建目录: {tmpdir}")
 
     return []
 
@@ -287,6 +280,64 @@ def _read_package_scripts(project_dir: Path) -> dict:
         return {}
 
 
+# Node.js build script 白名单（纯编译器, 产 dist 但不起常驻进程）。
+# 单命令即编译的工具; 需 build 子命令的工具（vite/webpack/next/nuxt/rspack/rslib/rsbuild）。
+_NODE_BUILD_SINGLE = ("tsc", "esbuild", "swc", "rollup")
+_NODE_BUILD_NEEDS_BUILD = (
+    "vite", "webpack", "next", "nuxt", "remix", "rspack", "rslib", "rsbuild",
+)
+# 黑名单关键词（命中 = 疑似常驻/交互, 跳过）。
+_NODE_BUILD_BLOCKED = (
+    "watch", "serve", "dev", "nodemon", "ts-node",
+    "pm2", "start", "--hot", "--inspect",
+)
+
+
+def _classify_node_build_script(cmd: str) -> str:
+    """判定 Node.js build script 是否可安全执行。
+
+    返回 "run"（白名单纯编译）/ "blocked"（含常驻/交互关键词）/ "unknown"（无法识别）。
+    设环境变量 CHECKWORK_NODE_BUILD=1 时一律 "run"（用户显式放行）。
+    """
+    if os.environ.get("CHECKWORK_NODE_BUILD", "") == "1":
+        return "run"
+
+    s = (cmd or "").strip()
+    if not s:
+        return "unknown"
+
+    # 黑名单优先（即使含 tsc, 但有 watch 也跳过）
+    low = s.lower()
+    if any(kw in low for kw in _NODE_BUILD_BLOCKED):
+        return "blocked"
+
+    import shlex
+
+    def _token_safe(tokens: list[str]) -> bool:
+        """单个子命令是否白名单安全。"""
+        if not tokens:
+            return True
+        head = tokens[0]
+        # 无害前置命令 (rm -rf dist / mkdir / cp ...)
+        if head in ("rm", "mkdir", "cp", "mv", "echo", "node", "tsx"):
+            return True
+        joined = " ".join(tokens).lower()
+        # 单命令编译工具 (tsc / esbuild ...)
+        if head in _NODE_BUILD_SINGLE:
+            return True
+        # 需 build 子命令的工具 (vite build / next build ...)
+        if head in _NODE_BUILD_NEEDS_BUILD:
+            return "build" in tokens[1:]
+        return False
+
+    # 逐子命令判定 (按 && ; | 分隔), 全部安全才 run
+    for part in re.split(r"&&|;|\|", s):
+        tokens = shlex.split(part.strip(), posix=True)
+        if tokens and not _token_safe(tokens):
+            return "unknown"
+    return "run"
+
+
 def _check_node_project(project_dir: Path, *,
                         log: Callable[[str], None] | None = None) -> list[CheckResult]:
     """按 lockfile 选包管理器跑 build/typecheck script；tsc 类型错误只警告不中止。"""
@@ -304,10 +355,25 @@ def _check_node_project(project_dir: Path, *,
         log(f"Node.js 项目: 包管理器 {pm}")
 
     # build script（致命 — build 失败 = CI 会挂）
+    # 安全策略: build script 内容任意, 可能起 watch/dev server/常驻进程挂住 checkwork。
+    # 只跑白名单识别为"纯编译"的命令; 含 watch/serve/dev 等关键词或无法识别 → 跳过 + warn。
     if "build" in scripts:
-        rc = _run_verbose([pm, "run", "build"], cwd=str(project_dir), log=log)
-        results.append(CheckResult(f"{pm} build", "ok" if rc == 0 else "fail",
-                                   "" if rc == 0 else f"exit={rc}"))
+        build_cmd = scripts["build"]
+        verdict = _classify_node_build_script(build_cmd)
+        if verdict == "run":
+            rc = _run_verbose([pm, "run", "build"], cwd=str(project_dir), log=log)
+            results.append(CheckResult(f"{pm} build", "ok" if rc == 0 else "fail",
+                                       "" if rc == 0 else f"exit={rc}"))
+        elif verdict == "blocked":
+            if log is not None:
+                log(f"build script 含 watch/serve/dev 等关键词, 跳过: {build_cmd}")
+            results.append(CheckResult(f"{pm} build", "warn",
+                                       "build script 疑似常驻/交互进程, 已跳过"))
+        else:  # unknown
+            if log is not None:
+                log(f"build script 无法识别为纯编译, 跳过: {build_cmd}")
+            results.append(CheckResult(f"{pm} build", "warn",
+                                       "build script 非已知纯编译命令, 已跳过（设 CHECKWORK_NODE_BUILD=1 强制执行）"))
 
     # typecheck script（warn-only, 静默: 类型错误不中止, 不刷屏）
     if "typecheck" in scripts:
@@ -359,7 +425,7 @@ def _detect_project_types(project_dir: Path) -> list[ProjectType]:
     if any((project_dir / f).exists() for f in
            ("build.gradle", "build.gradle.kts", "pom.xml")):
         types.append(ProjectType("Java", _check_java_project))
-    if any((project_dir / f).exists() for f in ("Makefile", "CMakeLists.txt")):
+    if (project_dir / "CMakeLists.txt").exists():
         types.append(ProjectType("C/C++", _check_cc_project))
     if (project_dir / "package.json").exists():
         types.append(ProjectType("Node.js", _check_node_project))

@@ -208,8 +208,8 @@ CI/CD build 前置拦截器：防止 push 后 CI 连 build 都过不去。支持
 - **Rust**: `cargo check --verbose`（不生成二进制）
 - **Python**: `py_compile` 语法编译（致命），`mypy`/`ruff` warn-only（仅警告不中止）
 - **Java**: gradle `compileJava` / maven `mvn compile`（产物留项目自管 build/target）
-- **C/C++**: `make -n` dry-run（不产生产物）/ cmake 构建到 `$TMPDIR` 后清理
-- **Node.js**: 按 lockfile 优先级（bun > yarn > pnpm > npm）选包管理器，跑 `build` script（失败致命）+ `typecheck` script（warn-only）；兜底 `tsc --noEmit`
+- **C/C++**: cmake configure only（只 `-B` 配置不 build，不产二进制）；Makefile 不支持 check（规则任意、产物不可控），直接跳过
+- **Node.js**: 按 lockfile 优先级（bun > yarn > pnpm > npm）选包管理器；`build` script 经白名单识别（仅 tsc/vite build/webpack build/next build 等纯编译命令）才跑，含 watch/serve/dev 或无法识别则跳过 + warn（`CHECKWORK_NODE_BUILD=1` 强制执行）；`typecheck` script warn-only；兜底 `tsc --noEmit`
 
 环境变量：`CHECKWORK_PARALLEL=1` 开启多语言检查点并行（默认串行）。
 
