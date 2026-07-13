@@ -208,8 +208,13 @@ def run_batch(
                 else:
                     result.failed.append(rr)
         except KeyboardInterrupt:
-            pool.shutdown(wait=False, cancel_futures=True)
+            # ponytail: os._exit 跳过 with 的 shutdown(wait=True) + 解释器 _python_exit join。
+            # worker 不可中断（git 子进程在跑），cancel_futures 只取消未启动 future；
+            # 不强退会死等 worker 跑完整 fetch/push，表现为"中断后卡住"。
             r.warn("\n用户中断，停止执行")
+            if prog is not None:
+                prog.stop()
+            os._exit(130)
         finally:
             if prog is not None:
                 prog.stop()
