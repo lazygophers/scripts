@@ -66,11 +66,13 @@ def _build_prompt(msg: str | None, status_lines: list[str]) -> str:
     stat_block = (stat.stdout or "").strip() or "（暂存区空）"
     return f"""提交当前变更。上下文已预收集（勿重复跑 git）。
 
+<<<DATA>>>
 暂存文件（git status --short）：
 {files_block}
 
 diff --stat：
 {stat_block}
+<<<END DATA>>>
 
 规范：
 - message：type[(scope)]: description（中文，命令式，不超 50 字，不加句号）
