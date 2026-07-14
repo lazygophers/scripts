@@ -1,6 +1,6 @@
 """AI workflow 共享工具：git remote/provider 检测 + claude CLI 调用。
 
-commit / prc / issue 三个脚本的公共逻辑。
+commit / mr / issue 三个脚本的公共逻辑。
 """
 from __future__ import annotations
 
@@ -139,7 +139,10 @@ def remote_default_branch(remote: str, *, cwd: str | None = None) -> str:
     return "main"
 
 
+# Haiku 别名：模型升级自动跟随，不 pin 版本号避免下线失效
+# claude 命令执行 + 写 title/body，Haiku 档位足够，快且省
 _CLAUDE_BASE_ARGS = [
+    "--model", "haiku",
     "--strict-mcp-config",
     "--disable-slash-commands",
     "--setting-sources", "",

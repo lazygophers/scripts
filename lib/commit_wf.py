@@ -51,7 +51,7 @@ def run_commit(
         r.step("bit add .")
         run(["bit", "add", "."], check=False)
 
-    prompt = _build_prompt(msg)
+    prompt = _build_prompt(msg, status_lines)
     return run_claude(
         prompt,
         system_prompt="你是 git commit 助手，根据用户输入直接执行 bit commit 命令，不要解释。",
@@ -59,27 +59,25 @@ def run_commit(
     )
 
 
-def _build_prompt(msg: str | None) -> str:
-    return f"""提交当前变更。
+def _build_prompt(msg: str | None, status_lines: list[str]) -> str:
+    # 预注入文件清单 + diff stat，claude 不必自己跑 git
+    files_block = "\n".join(f"  {ln}" for ln in status_lines) or "  （无）"
+    stat = run(["git", "diff", "--cached", "--stat"], check=False, capture_output=True)
+    stat_block = (stat.stdout or "").strip() or "（暂存区空）"
+    return f"""提交当前变更。上下文已预收集（勿重复跑 git）。
 
-步骤：
-1. git diff --cached --name-only 确认暂存文件
-2. git ls-files --others --exclude-standard 确认新文件
-3. 新文件若为本地工具/缓存/编译产物，用 bit reset HEAD <file> 取消暂存
-4. 直接执行 bit commit --no-verify -m \"<message>\"（跳过 hooks）
+暂存文件（git status --short）：
+{files_block}
+
+diff --stat：
+{stat_block}
 
 规范：
 - message：type[(scope)]: description（中文，命令式，不超 50 字，不加句号）
 - type：feat / fix / docs / style / refactor / perf / test / build / ci / chore / revert / deps / config / security
-- 推断规则：
-  · package.json / go.mod 变更 → deps
-  · .github/workflows 变更 → ci
-  · *_test.go / *.spec.ts 变更 → test
-  · README / 注释 变更 → docs
-  · 仅缩进/分号 变更 → style
-  · 其他 → feat / fix / chore
-- 用户输入 '{msg or '无'}'：若符合规范直接用，否则根据变更生成
-- 优先用具体 type，避免 chore
-- breaking change：type 后加 !
+- 推断：package.json/go.mod→deps, .github/workflows→ci, *_test.*→test, README/注释→docs, 仅格式→style, 其他→feat/fix/chore
+- 优先具体 type，避免 chore；breaking → type 后加 !
 
-直接执行 bit commit，不要只输出文本。如遇 index.lock 先 rm -f .git/index.lock 再重试。"""
+用户输入 '{msg or '无'}'：符合规范直接用，否则据变更生成。
+
+直接执行 bit commit --no-verify -m \"<message>\"，不要只输出文本。index.lock 冲突先 rm -f .git/index.lock 再重试。"""

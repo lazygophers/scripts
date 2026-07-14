@@ -8,6 +8,7 @@ from lib.ai_workflow import (
     fmt_opt,
     run_claude,
 )
+from lib.exec import run
 from lib.ui import reporter
 
 
@@ -73,19 +74,22 @@ def _build_prompt(
     else:
         cmd = f'glab issue create --title "<title>" --description "<body>" {extra}'.strip()
 
-    return f"""在 '{info.repo}' 创建 {info.provider} Issue。
+    # 预注入近期 commit log（帮推断 issue 语境）
+    log_p = run(["git", "log", "--oneline", "-5"], check=False, capture_output=True)
+    log_block = (log_p.stdout or "").strip() or "（无）"
+    return f"""在 '{info.repo}' 创建 {info.provider} Issue。上下文已预收集。
 
-Provider 已检测为 '{info.provider}'，host '{info.host}'，repo path '{info.repo}'。
+近期 commit：
+{log_block}
 
-直接执行 {info.provider} 创建命令：
+直接执行创建命令（勿重复跑 git）：
 - {cmd}
 
 规范：
 - title：中文，不超 80 字，不加句号
 - body：## Problem / ## Expected behavior / ## Environment / ## Notes（可选）
-- assignee：{assignee or '不指定'}
 - labels：{labels or '根据内容推断'}
 
-用户输入：{title or '无，需根据描述推断'}
+用户输入：{title or '无，据近期 commit + 用户描述推断'}
 
-直接执行命令，不要只输出文本。如遇 network error 自动重试一次。"""
+直接执行命令，不要只输出文本。network error 自动重试一次。"""
