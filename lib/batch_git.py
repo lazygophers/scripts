@@ -257,6 +257,8 @@ def _dirty_detail(repo: Path) -> str:
     lines = [ln.strip() for ln in (p.stdout or "").splitlines() if ln.strip()]
     n = len(lines)
     sample = ", ".join(ln.split(maxsplit=1)[-1] for ln in lines[:3])
+    if n == 0:
+        return ""
     detail = f"工作区有未提交改动（{n} 项）"
     if sample:
         detail += f": {sample}"
@@ -275,7 +277,9 @@ def _push_one_factory(target: str, dry_run: bool, extra: list[str]) -> Operation
         r.step("fetch origin …")
         p = _run(["git", "fetch", "origin"], cwd=str(repo), check=False, capture_output=True)
         if p.returncode != 0:
-            r.warn(f"fetch 失败: {(p.stdout or '') + (p.stderr or '')}".strip())
+            err = ((p.stdout or '') + (p.stderr or '')).strip()
+            r.err(f"fetch origin 失败: {err[:200]}")
+            return "fail", f"fetch origin 失败: {err[:120]}"
 
         ref_check = _run(
             ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{target}"],
@@ -290,6 +294,7 @@ def _push_one_factory(target: str, dry_run: bool, extra: list[str]) -> Operation
 
         # 条件1：当前分支相对远端 target 有新 commit
         cond1 = False
+        cond1_reason = ""
         if not remote_target_exists:
             r.ok(f"条件1 通过 — 远端 {target} 不存在，视为有差异")
             cond1 = True
@@ -306,10 +311,17 @@ def _push_one_factory(target: str, dry_run: bool, extra: list[str]) -> Operation
                     r.info(f"       {line}")
                 cond1 = True
             else:
-                r.info(f"条件1 不满足 — 当前分支相对 origin/{target} 无新 commit")
+                cond1_reason = f"当前分支相对 origin/{target} 无新 commit"
+                # HEAD 虽追平, 但工作区可能脏（未 commit 改动）—— 探测并附进 reason,
+                # 避免静默 skip 掩盖「仓库不是空的」的真实改动
+                dirty = _dirty_detail(repo)
+                if dirty:
+                    cond1_reason = f"{cond1_reason}（但{dirty}）"
+                r.info(f"条件1 不满足 — {cond1_reason}")
 
         # 条件2：本地 target 相对远端 target 有差异
         cond2 = False
+        cond2_reason = ""
         local_target = _run(
             ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{target}"],
             cwd=str(repo), check=False, capture_output=True,
@@ -329,9 +341,15 @@ def _push_one_factory(target: str, dry_run: bool, extra: list[str]) -> Operation
                 for line in diff_commits.splitlines():
                     r.info(f"       {line}")
                 cond2 = True
+            else:
+                cond2_reason = f"本地 {target} 与远端同步"
+                r.info(f"条件2 不满足 — {cond2_reason}")
 
         if not cond1 and not cond2:
-            return "skip", "两个条件均不满足"
+            if not cond2_reason and local_target.returncode != 0:
+                cond2_reason = f"无本地 {target} 分支"
+            reasons = [r for r in (cond1_reason, cond2_reason) if r]
+            return "skip", "；".join(reasons) or "两个条件均不满足"
 
         if dry_run:
             return "ok", f"条件满足（dry-run 模式，不执行 push_{target}）"
