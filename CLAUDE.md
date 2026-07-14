@@ -12,10 +12,10 @@ This repository contains individual executable Shell scripts:
 
 ### Core Shell Scripts
 
-- **Core library**: `lib/*.py` - Shared Python modules (`git`, `exec`, `ui`, `notify`, `batch_git`, `build`, `process`, `system`, `git_workflow`, `ai_workflow`, `commit_wf`, `issue_wf`, `prc_wf`, `squash_pr_wf`, `loop`, `cpd`, ...)
+- **Core library**: `lib/*.py` - Shared Python modules (`git`, `exec`, `ui`, `notify`, `batch_git`, `build`, `process`, `system`, `git_workflow`, `ai_workflow`, `commit_wf`, `issue_wf`, `mr_wf`, `squash_pr_wf`, `loop`, `cpd`, ...)
 - **Build automation**: `checkwork` - Automated build checking with voice notifications (Bash wrapper -> Python)
 - **Git workflow**: `merge_*` / `push_*` - Branch merge/push workflows (symlinks to `_gitwf`; targets: canary / develop / test / auto / branch); `push_branch` batch-pushes the current branch to remote
-- **AI-assisted workflow**: `commit` (auto-commit, calls `claude` for message), `issue` (auto-create Issue), `prc` (auto-create PR/MR, default draft), `squash_pr` (squash source into single commit, feeds into `prc`)
+- **AI-assisted workflow**: `commit` (auto-commit, calls `claude` for message), `issue` (auto-create Issue), `mr` (auto-create PR/MR, default draft), `squash_pr` (squash source into single commit, feeds into `mr`)
 - **Batch git ops**: `switch_branch`, `sync_branch`, `sync_master`, `delete_branch`, `delete_branch_remote`, `fetch_all`
 - **Process management**: `kk` (kill by process name), `kkp` (kill by port)
 - **Loop execution**: `loop` - Loop commands with success/failure tracking (Python only, no Bash wrapper tracked)
@@ -169,11 +169,11 @@ For `cpd`, print the copy plan (sources/dest) and per-entry execution status dur
 ```bash
 lib/*.py (core modules: git, exec, ui, notify, batch_git, build, process,
           system, git_workflow, ai_workflow, commit_wf, issue_wf,
-          prc_wf, squash_pr_wf, loop, cpd)
+          mr_wf, squash_pr_wf, loop, cpd)
 ├── checkwork (bash wrapper -> lib/build, lib/notify)
 ├── merge_* / push_* (symlinks -> bin/_gitwf -> lib/git_workflow, lib/batch_git)
 ├── push_branch (bash wrapper -> lib/batch_git)
-├── commit / issue / prc / squash_pr (bash wrapper -> lib/{commit,issue,prc,squash_pr}_wf + lib/ai_workflow)
+├── commit / issue / mr / squash_pr (bash wrapper -> lib/{commit,issue,mr,squash_pr}_wf + lib/ai_workflow)
 ├── switch_branch / sync_branch / sync_master / delete_branch / delete_branch_remote / fetch_all
 │   (bash wrapper -> lib/batch_git)
 ├── cpd (bash wrapper -> lib/cpd, lib/cpd_core)

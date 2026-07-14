@@ -38,8 +38,8 @@ inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.z
 | `push_*` (批量)  | 在非 git 目录执行 push_* 时自动批量: 扫描子目录 Git 仓库逐个推送 | `push_canary [--dry-run]` |
 | `commit`         | 自动提交变更 (调 claude 生成 message)                        | `commit`                       |
 | `issue`          | 自动创建 Issue (调 claude 生成 title/body)                   | `issue`                        |
-| `prc`            | 自动创建 PR/MR (调 claude 生成 title/body, 默认 draft)       | `prc [base]`                   |
-| `squash_pr`      | 压缩 source 为单 commit → 对接 prc 开 PR                     | `squash_pr [source] <target>`  |
+| `mr`             | 自动创建 PR/MR (调 claude 生成 title/body, 默认 draft)       | `mr [base]`                   |
+| `squash_pr`      | 压缩 source 为单 commit → 对接 mr 开 PR                     | `squash_pr [source] <target>`  |
 | `switch_branch`  | 批量切换分支 (不存在则从 origin/master 创建)                 | `switch_branch <branch>`      |
 | `sync_branch`    | 批量同步当前分支 (或指定分支) 到 origin/<branch>             | `sync_branch [branch] [--force]` |
 | `delete_branch` | 删本地分支 (单仓;非 git 目录批量) | `delete_branch <name> [--force] [-y]` |

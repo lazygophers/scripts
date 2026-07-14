@@ -1,9 +1,9 @@
-"""squash_pr 工作流：把 source 自分叉以来的改动压成单 commit → 对接 prc 开 PR。
+"""squash_pr 工作流：把 source 自分叉以来的改动压成单 commit → 对接 mr 开 PR。
 
 流程（见 prd FR1-FR10）：
   护栏(flat clean) → fetch → 冲突预演#1 → 建 <source>_pr 分支
   → reset --soft merge-base → 聚合 message → 单 commit → 冲突预演#2
-  → push → (可选) lib 源码调 prc_wf.run_prc(target)
+  → push → (可选) lib 源码调 mr_wf.run_mr(target)
 任一步失败：回滚（回起始分支 + 删半成品 <source>_pr 本地/远端）+ 语音报错。
 """
 from __future__ import annotations
@@ -238,7 +238,7 @@ def run_squash_pr(
     target: str,
     *,
     dry_run: bool = False,
-    no_prc: bool = False,
+    no_mr: bool = False,
     remote: str = REMOTE,
     r: Reporter | None = None,
     cwd: str | None = None,
@@ -392,8 +392,8 @@ def run_squash_pr(
             "commit message": message.splitlines()[0] if message else "",
             "将执行": f"git commit + git push -u {remote} {pr_branch}",
         })
-        if not no_prc:
-            r.info(f"push 后调 prc {target}")
+        if not no_mr:
+            r.info(f"push 后调 mr {target}")
         # 演练也要回滚已建的分支
         _rollback(state, r=r, cwd=cwd)
         return SquashResult(returncode=0, pr_branch=pr_branch, merge_base=merge_base,
@@ -426,9 +426,9 @@ def run_squash_pr(
 
     r.ok(f"已推送 {pr_branch}（单 commit squash）")
 
-    # FR9 — 对接 prc
-    if no_prc:
-        r.info("--no-prc: 跳过 prc 调用")
+    # FR9 — 对接 mr
+    if no_mr:
+        r.info("--no-mr: 跳过 mr 调用")
         r.rule("完成", style="green")
         r.summary("squash_pr 完成", [
             ("PR 分支", pr_branch, "green"),
@@ -438,14 +438,14 @@ def run_squash_pr(
         return SquashResult(returncode=0, pr_branch=pr_branch,
                             merge_base=merge_base, message=message)
 
-    r.step(f"调 prc {target}")
-    rc = _call_prc(target)
+    r.step(f"调 mr {target}")
+    rc = _call_mr(target)
     if rc != 0:
-        # prc 失败：不回滚已 push 分支（已存在远端，删掉反而损失工作）
-        r.err(f"prc 退出码 {rc}（分支 {pr_branch} 已 push，未回滚）")
-        r.warn("可手动重跑 prc 或检查 PR 创建结果")
+        # mr 失败：不回滚已 push 分支（已存在远端，删掉反而损失工作）
+        r.err(f"mr 退出码 {rc}（分支 {pr_branch} 已 push，未回滚）")
+        r.warn("可手动重跑 mr 或检查 PR 创建结果")
         try:
-            notify("squash 已 push，但 prc 创建失败")
+            notify("squash 已 push，但 mr 创建失败")
         except Exception:
             pass
         return SquashResult(returncode=1, pr_branch=pr_branch,
@@ -461,10 +461,10 @@ def run_squash_pr(
                         merge_base=merge_base, message=message)
 
 
-def _call_prc(target: str) -> int:
-    """lib 源码调 prc_wf.run_prc(target)。"""
-    from lib.prc_wf import run_prc
+def _call_mr(target: str) -> int:
+    """lib 源码调 mr_wf.run_mr(target)。"""
+    from lib.mr_wf import run_mr
     try:
-        return run_prc(target)
+        return run_mr(target)
     except Exception:
         return 1

@@ -1,4 +1,4 @@
-"""prc 工作流：检测 provider → 拼 prompt → 调 claude 创建 PR/MR。"""
+"""mr 工作流：检测 provider → 拼 prompt → 调 claude 创建 PR/MR。"""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def _find_existing_pr(info: ProviderInfo, *, branch: str, base: str) -> str | No
     return None
 
 
-def run_prc(
+def run_mr(
     base: str | None = None,
     *,
     dry_run: bool = False,
@@ -139,24 +139,28 @@ def _build_prompt(
     else:
         cmd = f'glab mr create --target-branch {base} --title "<title>" --description "<body>" {extra}'.strip()
 
-    return f"""为分支 '{branch}' 在 '{info.repo}' 创建 {info.provider} PR/MR。
+    # 预注入 commit log + diff stat，claude 不必自己 fetch/log/diff
+    run(["git", "fetch", info.remote, base], check=False, capture_output=True)
+    log_p = run(["git", "log", f"{info.remote}/{base}..HEAD", "--oneline"],
+                check=False, capture_output=True)
+    stat_p = run(["git", "diff", "--stat", f"{info.remote}/{base}..HEAD"],
+                 check=False, capture_output=True)
+    log_block = (log_p.stdout or "").strip() or "（无新 commit）"
+    stat_block = (stat_p.stdout or "").strip() or "（无差异）"
+    return f"""为分支 '{branch}' 在 '{info.repo}' 创建 {info.provider} PR/MR。上下文已预收集（勿重复跑 git）。
 
-Provider 已检测为 '{info.provider}'，host '{info.host}'，repo path '{info.repo}'。
+commit log {info.remote}/{base}..HEAD：
+{log_block}
 
-步骤：
-1. git fetch {info.remote} {base}
-2. git log {info.remote}/{base}..HEAD --oneline
-3. git diff --stat {info.remote}/{base}
-4. 直接执行 {info.provider} 创建命令
+diff --stat：
+{stat_block}
 
-{info.provider} 创建命令（直接执行，不要只返回文本）：
+创建命令（直接执行）：
 - {cmd}
 
 规范：
-- title：中文，不超 72 字，不加句号
+- title：中文，不超 72 字，不加句号（据 commit log 归纳）
 - body：## Summary / ## Changes / ## Why / ## Test plan（checkbox）/ ## Notes（可选）
 - draft：{'yes' if draft else 'no'}
-- assignee：{assignee or '不指定'}
-- reviewers：{reviews or '不指定'}
 
-直接执行命令，不要只输出文本。如遇 network error 自动重试一次。"""
+直接执行命令，不要只输出文本。network error 自动重试一次。"""

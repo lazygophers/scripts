@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""prc 薄壳入口 — 自动创建 PR/MR（调 claude 生成 title/body）。"""
+"""mr 薄壳入口 — 自动创建 PR/MR（调 claude 生成 title/body）。"""
 import argparse
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.prc_wf import run_prc
+from lib.mr_wf import run_mr
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="自动创建 PR/MR",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="示例:\n  prc main\n  prc --base develop\n  prc --dry-run",
+        epilog="示例:\n  mr main\n  mr --base develop\n  mr --dry-run",
     )
     parser.add_argument("--dry-run", action="store_true", help="预览模式，不创建")
     parser.add_argument("--no-draft", action="store_true", help="创建为正式 PR/MR（默认 draft）")
@@ -25,7 +25,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv[1:])
 
     base = args.base or args.base_pos
-    return run_prc(
+    return run_mr(
         base,
         dry_run=args.dry_run,
         draft=not args.no_draft,

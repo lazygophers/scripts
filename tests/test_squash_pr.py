@@ -231,7 +231,7 @@ class TestDetectConflict(unittest.TestCase):
 class TestRunSquashPrEndToEnd(unittest.TestCase):
     """临时仓库端到端：正常路径 + 4 异常路径 + 全量回滚。
 
-    用 --no-prc 隔离掉 prc 的 AI 调用（测到 push 为止）。
+    用 --no-mr 隔离掉 mr 的 AI 调用（测到 push 为止）。
     bare 远端模拟 origin。
     """
 
@@ -305,7 +305,7 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
             self._chdir(work)
             mb = self._build_source_target(work)
             # 当前在 master；source / target 已推
-            res = run_squash_pr("source", "target", no_prc=True,
+            res = run_squash_pr("source", "target", no_mr=True,
                                 r=MagicMock(), cwd=work)
             self.assertEqual(res.returncode, 0, f"应成功，实返回 {res.returncode}")
             self.assertEqual(res.merge_base, mb)
@@ -350,7 +350,7 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
             self._build_source_target(work)
             # 弄脏工作区
             Path(work, "dirty.txt").write_text("dirty")
-            res = run_squash_pr("source", "target", no_prc=True,
+            res = run_squash_pr("source", "target", no_mr=True,
                                 r=MagicMock(), cwd=work)
             self.assertNotEqual(res.returncode, 0)
             # 没产生 source_pr 分支
@@ -369,7 +369,7 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
             self._git(work, "checkout", "source")
             self._git(work, "reset", "--hard", "master")
             self._git(work, "checkout", "master")
-            res = run_squash_pr("source", "target", no_prc=True,
+            res = run_squash_pr("source", "target", no_mr=True,
                                 r=MagicMock(), cwd=work)
             self.assertNotEqual(res.returncode, 0)
 
@@ -397,7 +397,7 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
                 capture_output=True, text=True, check=True,
             ).stdout.strip()
 
-            res = run_squash_pr("source", "target", no_prc=True,
+            res = run_squash_pr("source", "target", no_mr=True,
                                 r=MagicMock(), cwd=work)
             self.assertNotEqual(res.returncode, 0)
             self.assertTrue(res.conflict_files, "应报告冲突文件")
@@ -426,7 +426,7 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
                  patch.dict("os.environ", {}, clear=False):
                 mock_stdin.isatty.return_value = False
                 os.environ.pop("SQUASH_PR_FORCE_DELETE", None)
-                res = run_squash_pr("source", "target", no_prc=True,
+                res = run_squash_pr("source", "target", no_mr=True,
                                     r=MagicMock(), cwd=work)
             self.assertNotEqual(res.returncode, 0)
 
@@ -441,7 +441,7 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
                 cwd=work, capture_output=True, text=True, check=True,
             ).stdout.strip()
             with patch.dict("os.environ", {"SQUASH_PR_FORCE_DELETE": "1"}):
-                res = run_squash_pr("source", "target", no_prc=True,
+                res = run_squash_pr("source", "target", no_mr=True,
                                     r=MagicMock(), cwd=work)
             self.assertEqual(res.returncode, 0)
             self.assertEqual(res.merge_base, mb)
@@ -501,7 +501,7 @@ class TestRunSquashPrCurrentBranchDefault(unittest.TestCase):
                                      cwd=str(work), capture_output=True, text=True,
                                      check=True).stdout.strip()
                 self.assertEqual(cur, "mysource")
-                res = run_squash_pr(cur, "target", no_prc=True, r=MagicMock())
+                res = run_squash_pr(cur, "target", no_mr=True, r=MagicMock())
             finally:
                 _os.chdir(saved)
             self.assertEqual(res.returncode, 0)

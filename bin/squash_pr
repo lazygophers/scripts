@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""squash_pr 薄壳入口 — 把 source 自分叉以来的改动压成单 commit → 对接 prc 开 PR。
+"""squash_pr 薄壳入口 — 把 source 自分叉以来的改动压成单 commit → 对接 mr 开 PR。
 
-产出一个仅含单 commit 的 <source>_pr 分支，push 后调 prc <target> 开 PR。
+产出一个仅含单 commit 的 <source>_pr 分支，push 后调 mr <target> 开 PR。
 源分支与 target 分支本身不动。
 """
 import argparse
@@ -15,17 +15,17 @@ from lib.squash_pr_wf import run_squash_pr
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="squash PR 脚本：source → <source>_pr 单 commit → prc 开 PR",
+        description="squash PR 脚本：source → <source>_pr 单 commit → mr 开 PR",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="示例:\n"
                "  squash_pr main                 # source=当前分支, target=main\n"
                "  squash_pr feat-123 main        # 显式 source=feat-123\n"
-               "  squash_pr feat-123 main --no-prc   # 只 push 不调 prc（测试用）\n"
+               "  squash_pr feat-123 main --no-mr   # 只 push 不调 mr（测试用）\n"
                "  squash_pr feat-123 main --dry-run  # 仅打印计划",
     )
     parser.add_argument("branches", nargs="*", help="target（1 个）或 source target（2 个）；source 省略则用当前分支")
     parser.add_argument("--dry-run", action="store_true", help="仅打印计划，不实际执行")
-    parser.add_argument("--no-prc", action="store_true", help="push 后停手，不调 prc 开 PR")
+    parser.add_argument("--no-mr", action="store_true", help="push 后停手，不调 mr 开 PR")
     args = parser.parse_args(argv[1:])
 
     if len(args.branches) == 1:
@@ -40,7 +40,7 @@ def main(argv: list[str]) -> int:
         parser.error("无法获取当前分支作为 source，请显式传入 source")
 
     res = run_squash_pr(source, target,
-                        dry_run=args.dry_run, no_prc=args.no_prc)
+                        dry_run=args.dry_run, no_mr=args.no_mr)
     return res.returncode
 
 

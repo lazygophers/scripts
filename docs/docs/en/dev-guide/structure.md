@@ -15,7 +15,7 @@ scripts/
 │   │   └── git/merge.py + git/push.py also expose run(target, argv)
 │   └── {domain}.py                     # shared libs (git/exec/ui/notify/build/process/...)
 ├── tests/                        # unittest suite
-├── commit / prc / issue          # bash scripts, pending py rewrite (temporarily at repo root)
+├── commit / mr / issue          # bash scripts, pending py rewrite (temporarily at repo root)
 └── README.md
 ```
 

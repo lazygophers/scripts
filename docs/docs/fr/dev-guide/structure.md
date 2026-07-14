@@ -15,7 +15,7 @@ scripts/
 │   │   └── git/merge.py + git/push.py expose également run(target, argv)
 │   └── {domaine}.py                    # Bibliothèque partagée (git/exec/ui/notify/build/process/...)
 ├── tests/                        # Suite unittest
-├── commit / prc / issue          # Scripts bash, à réécrire en py (gardés temporairement à la racine)
+├── commit / mr / issue          # Scripts bash, à réécrire en py (gardés temporairement à la racine)
 └── README.md
 ```
 

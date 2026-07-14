@@ -15,7 +15,7 @@ scripts/
 │   │   └── git/merge.py + git/push.py 额外暴露 run(target, argv)
 │   └── {域}.py                    # 共享库 (git/exec/ui/notify/build/process/...)
 ├── tests/                        # unittest 套件
-├── commit / prc / issue          # bash 脚本, 待重写为 py (临时留根目录)
+├── commit / mr / issue          # bash 脚本, 待重写为 py (临时留根目录)
 └── README.md
 ```
 

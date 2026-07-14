@@ -38,8 +38,8 @@ inject is idempotent: rerunning won't duplicate. After completion, restart shell
 | `push_*` (batch)  | When executing push_* in non-git directory, automatically batch: scan subdirectory Git repos and push one by one | `push_canary [--dry-run]` |
 | `commit`         | Auto-commit changes (calls claude for message)                     | `commit`                       |
 | `issue`          | Auto-create Issue (calls claude for title/body)                    | `issue`                        |
-| `prc`            | Auto-create PR/MR (calls claude for title/body, default draft)     | `prc [base]`                   |
-| `squash_pr`      | Squash source into single commit → feeds into prc                  | `squash_pr [source] <target>`  |
+| `mr`             | Auto-create PR/MR (calls claude for title/body, default draft)     | `mr [base]`                   |
+| `squash_pr`      | Squash source into single commit → feeds into mr                  | `squash_pr [source] <target>`  |
 | `switch_branch`  | Batch switch branches (create from origin/master if not exists)                 | `switch_branch <branch>`      |
 | `sync_master`    | Batch sync master = `sync_branch master`                                              | `sync_master`                 |
 | `sync_branch`    | Batch sync current (or given) branch to origin/<branch>      | `sync_branch [branch] [--force]` |

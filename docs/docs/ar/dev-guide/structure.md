@@ -15,7 +15,7 @@ scripts/
 │   │   └── git/merge.py + git/push.py يعرض أيضًا run(target, argv)
 │   └── {مجال}.py                    # المكتبة المشتركة (git/exec/ui/notify/build/process/...)
 ├── tests/                        # مجموعة unittest
-├── commit / prc / issue          # نصوص برمجية bash، لإعادة كتابتها في py (مخزنة مؤقتًا في الجذر)
+├── commit / mr / issue          # نصوص برمجية bash، لإعادة كتابتها في py (مخزنة مؤقتًا في الجذر)
 └── README.md
 ```
 

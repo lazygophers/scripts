@@ -15,7 +15,7 @@ scripts/
 │   │   └── git/merge.py + git/push.py также экспортирует run(target, argv)
 │   └── {домен}.py                    # Общая библиотека (git/exec/ui/notify/build/process/...)
 ├── tests/                        # Набор unittest
-├── commit / prc / issue          # Скрипты bash, для переписывания в py (временно хранятся в корне)
+├── commit / mr / issue          # Скрипты bash, для переписывания в py (временно хранятся в корне)
 └── README.md
 ```
 

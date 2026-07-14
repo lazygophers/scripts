@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for lib.prc_wf."""
+"""Tests for lib.mr_wf."""
 import sys
 import unittest
 from pathlib import Path
@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.ai_workflow import ProviderInfo, fmt_opt
-from lib.prc_wf import _build_prompt, run_prc
+from lib.mr_wf import _build_prompt, run_mr
 
 _INFO = ProviderInfo(provider="gh", host="github.com", repo="o/r",
                      remote="origin", remote_url="git@github.com:o/r.git")
@@ -56,65 +56,65 @@ class TestBuildPrompt(unittest.TestCase):
 
 
 class TestRunPrc(unittest.TestCase):
-    @patch("lib.prc_wf.run_claude")
-    @patch("lib.prc_wf.detect_self_assignee", return_value="")
-    @patch("lib.prc_wf.remote_default_branch", return_value="main")
-    @patch("lib.prc_wf.current_branch", return_value="feat")
-    @patch("lib.prc_wf.detect_provider")
+    @patch("lib.mr_wf.run_claude")
+    @patch("lib.mr_wf.detect_self_assignee", return_value="")
+    @patch("lib.mr_wf.remote_default_branch", return_value="main")
+    @patch("lib.mr_wf.current_branch", return_value="feat")
+    @patch("lib.mr_wf.detect_provider")
     def test_success(self, mock_provider, _b, _a, _me, mock_claude):
         mock_provider.return_value = _INFO
         mock_claude.return_value = 0
-        rc = run_prc()
+        rc = run_mr()
         self.assertEqual(rc, 0)
         mock_claude.assert_called_once()
 
-    @patch("lib.prc_wf.detect_provider", return_value=None)
+    @patch("lib.mr_wf.detect_provider", return_value=None)
     def test_no_provider(self, _):
-        self.assertEqual(run_prc(), 1)
+        self.assertEqual(run_mr(), 1)
 
-    @patch("lib.prc_wf.run_claude")
-    @patch("lib.prc_wf.detect_self_assignee", return_value="myuser")
-    @patch("lib.prc_wf.remote_default_branch", return_value="main")
-    @patch("lib.prc_wf.current_branch", return_value="feat")
-    @patch("lib.prc_wf.detect_provider")
+    @patch("lib.mr_wf.run_claude")
+    @patch("lib.mr_wf.detect_self_assignee", return_value="myuser")
+    @patch("lib.mr_wf.remote_default_branch", return_value="main")
+    @patch("lib.mr_wf.current_branch", return_value="feat")
+    @patch("lib.mr_wf.detect_provider")
     def test_default_assignee_self(self, mock_provider, _b, _a, _me, mock_claude):
         mock_provider.return_value = _INFO
         mock_claude.return_value = 0
-        run_prc()
+        run_mr()
         kwargs = mock_claude.call_args[0][0]
         self.assertIn("myuser", kwargs)
 
-    @patch("lib.prc_wf.detect_self_assignee", return_value="")
-    @patch("lib.prc_wf.remote_default_branch", return_value="main")
-    @patch("lib.prc_wf.current_branch", return_value="feat")
-    @patch("lib.prc_wf.detect_provider")
+    @patch("lib.mr_wf.detect_self_assignee", return_value="")
+    @patch("lib.mr_wf.remote_default_branch", return_value="main")
+    @patch("lib.mr_wf.current_branch", return_value="feat")
+    @patch("lib.mr_wf.detect_provider")
     def test_dry_run_no_claude(self, mock_provider, _b, _a, _me):
         mock_provider.return_value = _INFO
-        with patch("lib.prc_wf.run_claude") as mock_claude:
-            rc = run_prc(dry_run=True)
+        with patch("lib.mr_wf.run_claude") as mock_claude:
+            rc = run_mr(dry_run=True)
         self.assertEqual(rc, 0)
         mock_claude.assert_not_called()
 
-    @patch("lib.prc_wf.detect_self_assignee", return_value="")
-    @patch("lib.prc_wf.remote_default_branch", return_value="main")
-    @patch("lib.prc_wf.current_branch", return_value="feat")
-    @patch("lib.prc_wf.detect_provider")
+    @patch("lib.mr_wf.detect_self_assignee", return_value="")
+    @patch("lib.mr_wf.remote_default_branch", return_value="main")
+    @patch("lib.mr_wf.current_branch", return_value="feat")
+    @patch("lib.mr_wf.detect_provider")
     def test_explicit_base_overrides(self, mock_provider, _b, _a, _me):
         mock_provider.return_value = _INFO
-        with patch("lib.prc_wf.run_claude", return_value=0) as mock_claude:
-            run_prc(base="develop")
+        with patch("lib.mr_wf.run_claude", return_value=0) as mock_claude:
+            run_mr(base="develop")
         prompt = mock_claude.call_args[0][0]
         self.assertIn("develop", prompt)
         self.assertNotIn("--base main", prompt)
 
-    @patch("lib.prc_wf.detect_self_assignee", return_value="")
-    @patch("lib.prc_wf.remote_default_branch", return_value="main")
-    @patch("lib.prc_wf.current_branch", return_value="feat")
-    @patch("lib.prc_wf.detect_provider")
+    @patch("lib.mr_wf.detect_self_assignee", return_value="")
+    @patch("lib.mr_wf.remote_default_branch", return_value="main")
+    @patch("lib.mr_wf.current_branch", return_value="feat")
+    @patch("lib.mr_wf.detect_provider")
     def test_no_draft(self, mock_provider, _b, _a, _me):
         mock_provider.return_value = _INFO
-        with patch("lib.prc_wf.run_claude", return_value=0) as mock_claude:
-            run_prc(draft=False)
+        with patch("lib.mr_wf.run_claude", return_value=0) as mock_claude:
+            run_mr(draft=False)
         prompt = mock_claude.call_args[0][0]
         self.assertNotIn("--draft", prompt)
 
