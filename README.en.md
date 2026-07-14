@@ -30,10 +30,10 @@ inject is idempotent: rerunning won't duplicate. After completion, restart shell
 | `loop`           | Loop command execution, track success/failure                                  | `loop 10 curl url`            |
 | `merge_canary`   | Merge current branch → canary, stay on canary                           | `merge_canary [--dry-run]`     |
 | `merge_develop`  | Merge current branch → develop, stay on develop                         | `merge_develop`                |
-| `merge_auto`     | Merge current branch → remote default branch, stay on target                        | `merge_auto`                   |
+| `merge_master`   | Merge current branch → main branch (auto-detect master/main), stay on target        | `merge_master`                   |
 | `merge_test`     | Merge current branch → test, stay on test                               | `merge_test`                   |
 | `push_canary`    | Merge current branch → canary, push then switch back                      | `push_canary [--stay]`         |
-| `push_develop` / `push_auto` / `push_test` | Same, targets are develop / remote default / test respectively      |                               |
+| `push_develop` / `push_master` / `push_test` | Same, targets are develop / main(auto-detect) / test respectively      |                               |
 | `push_branch`    | Batch push current branch to remote                                | `push_branch`                  |
 | `push_*` (batch)  | When executing push_* in non-git directory, automatically batch: scan subdirectory Git repos and push one by one | `push_canary [--dry-run]` |
 | `commit`         | Auto-commit changes (calls claude for message)                     | `commit`                       |
@@ -49,7 +49,7 @@ inject is idempotent: rerunning won't duplicate. After completion, restart shell
 | `unsleep`        | macOS caffeinate anti-idle                                      | `unsleep -t 3600`             |
 | `inject`         | Inject bin/ into shell PATH                                      | `inject`                      |
 
-> **Migration Notes (old names removed)**: `mergec`/`mergedev`/`mergem`/`merget` → `merge_canary`/`merge_develop`/`merge_auto`/`merge_test`; `pushc`/`pushdev`/`pushm`/`pusht` → `push_canary`/`push_develop`/`push_auto`/`push_test`; `pushc_all` merged into `push_*` (execute in non-git directory for auto batch, auto execute without confirmation, `--dry-run` preview).
+> **Migration Notes (old names removed)**: `mergec`/`mergedev`/`mergem`/`merget` → `merge_canary`/`merge_develop`/`merge_master`/`merge_test`; `pushc`/`pushdev`/`pushm`/`pusht` → `push_canary`/`push_develop`/`push_master`/`push_test`; `pushc_all` merged into `push_*` (execute in non-git directory for auto batch, auto execute without confirmation, `--dry-run` preview).
 
 > **Environment Variables**: `BATCH_CONCURRENCY` controls batch operation (`push_*` / `switch_branch` / `sync_branch` / `sync_master`) parallel concurrency limit, defaults to `4`. Example: `BATCH_CONCURRENCY=8 push_canary`.
 

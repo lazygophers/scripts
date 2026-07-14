@@ -2,8 +2,8 @@
 """merge*/push* 系列薄壳的统一入口。
 
 通过 argv[0] 的 basename 推断 action 与 target 分支:
-  merge_canary/merge_develop/merge_auto/merge_test  → merge_to(...)
-  push_canary/push_develop/push_auto/push_test      → push_to(...) 或批量
+  merge_canary/merge_develop/merge_master/merge_test  → merge_to(...)
+  push_canary/push_develop/push_master/push_test      → push_to(...) 或批量
 
 自动识别单仓/批量:
   - 当前目录是 git 仓库（有 .git）→ 单仓: push_to / merge_to
@@ -20,11 +20,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 _NAME_MAP = {
     "merge_canary": ("merge", "canary"),
     "merge_develop": ("merge", "develop"),
-    "merge_auto": ("merge", "auto"),
+    "merge_master": ("merge", "master"),
     "merge_test": ("merge", "test"),
     "push_canary": ("push", "canary"),
     "push_develop": ("push", "develop"),
-    "push_auto": ("push", "auto"),
+    "push_master": ("push", "master"),
     "push_test": ("push", "test"),
 }
 

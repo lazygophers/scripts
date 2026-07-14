@@ -30,10 +30,10 @@ inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.z
 | `loop`           | 循环执行命令, 追踪成功/失败                                  | `loop 10 curl url`            |
 | `merge_canary`   | 合并当前分支 → canary, 留在 canary                           | `merge_canary [--dry-run]`     |
 | `merge_develop`  | 合并当前分支 → develop, 留在 develop                         | `merge_develop`                |
-| `merge_auto`     | 合并当前分支 → 远端默认分支, 留在目标                        | `merge_auto`                   |
+| `merge_master`   | 合并当前分支 → 主分支(master/main 自动识别), 留在目标       | `merge_master`                   |
 | `merge_test`     | 合并当前分支 → test, 留在 test                               | `merge_test`                   |
 | `push_canary`    | 合并当前分支 → canary, 推送后切回原分支                      | `push_canary [--stay]`         |
-| `push_develop` / `push_auto` / `push_test` | 同上, 目标分别为 develop / 远端默认 / test      |                               |
+| `push_develop` / `push_master` / `push_test` | 同上, 目标分别为 develop / 主分支(自动识别) / test      |                               |
 | `push_branch`    | 批量推送当前分支到远端                                       | `push_branch`                  |
 | `push_*` (批量)  | 在非 git 目录执行 push_* 时自动批量: 扫描子目录 Git 仓库逐个推送 | `push_canary [--dry-run]` |
 | `commit`         | 自动提交变更 (调 claude 生成 message)                        | `commit`                       |
@@ -49,7 +49,7 @@ inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.z
 | `unsleep`        | macOS caffeinate 防休眠                                      | `unsleep -t 3600`             |
 | `inject`         | 把 bin/ 注入 shell PATH                                      | `inject`                      |
 
-> **迁移说明（旧名已移除）**：原 `mergec/mergedev/mergem/merget` → `merge_canary/merge_develop/merge_auto/merge_test`；`pushc/pushdev/pushm/pusht` → `push_canary/push_develop/push_auto/push_test`；`pushc_all` 已并入 `push_*`（在非 git 目录执行即自动批量，自动执行无确认，`--dry-run` 预览）。
+> **迁移说明（旧名已移除）**：原 `mergec/mergedev/mergem/merget` → `merge_canary/merge_develop/merge_master/merge_test`；`pushc/pushdev/pushm/pusht` → `push_canary/push_develop/push_master/push_test`；`pushc_all` 已并入 `push_*`（在非 git 目录执行即自动批量，自动执行无确认，`--dry-run` 预览）。
 
 > **环境变量**：`BATCH_CONCURRENCY` 控制批量操作（`push_*` / `switch_branch` / `sync_branch` / `sync_master`）并行并发上限，默认 `4`。例：`BATCH_CONCURRENCY=8 push_canary`。
 

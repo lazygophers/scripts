@@ -107,7 +107,7 @@ def run_workflow(
     global _STEP_COUNTER
     _STEP_COUNTER = 0
 
-    auto_detect = default_branch == "auto"
+    auto_detect = default_branch == "master"  # master 哨兵: 找真实 master/main
 
     parser = argparse.ArgumentParser(
         description=f"自动化 Git 工作流：同步 → 合并 → 推送到 {default_branch if not auto_detect else '远端默认分支'}",
