@@ -56,6 +56,18 @@ def run_issue(
     )
 
 
+
+def _self_author_filter() -> str:
+    """git log --author 过滤值: 取 git config user.email, 失败回退空串(不过滤)。
+
+    注意: 不能用字面值 "me" — git --author 做子串匹配, "me" 会匹配任何 author
+    字段含 "me" 子串的 commit (非当前用户)。主防线仍是 DATA 分隔 + 命令白名单,
+    此处仅辅助收窄注入面。
+    """
+    p = run(["git", "config", "user.email"], check=False, capture_output=True)
+    email = (p.stdout or "").strip()
+    return email
+
 def _build_prompt(
     info,
     *,
@@ -76,8 +88,11 @@ def _build_prompt(
 
     # 预注入近期 commit log（帮推断 issue 语境）
     # 仅取自己 author 的 commit, 避免他人 commit msg 注入 agent
-    log_p = run(["git", "log", "--oneline", "-5", "--author=me"],
-                check=False, capture_output=True)
+    author = _self_author_filter()
+    log_args = ["git", "log", "--oneline", "-5"]
+    if author:
+        log_args += [f"--author={author}"]
+    log_p = run(log_args, check=False, capture_output=True)
     log_block = (log_p.stdout or "").strip() or "（无）"
     return f"""在 '{info.repo}' 创建 {info.provider} Issue。上下文已预收集。
 

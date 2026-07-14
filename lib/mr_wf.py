@@ -117,6 +117,18 @@ def run_mr(
     )
 
 
+
+def _self_author_filter() -> str:
+    """git log --author 过滤值: 取 git config user.email, 失败回退空串(不过滤)。
+
+    注意: 不能用字面值 "me" — git --author 做子串匹配, "me" 会匹配任何 author
+    字段含 "me" 子串的 commit (非当前用户)。主防线仍是 DATA 分隔 + 命令白名单,
+    此处仅辅助收窄注入面。
+    """
+    p = run(["git", "config", "user.email"], check=False, capture_output=True)
+    email = (p.stdout or "").strip()
+    return email
+
 def _build_prompt(
     info: ProviderInfo,
     *,
@@ -141,9 +153,12 @@ def _build_prompt(
 
     # 预注入 commit log + diff stat，claude 不必自己 fetch/log/diff
     run(["git", "fetch", info.remote, base], check=False, capture_output=True)
-    # 仅取自己 author 的 commit, 避免他人 commit msg 注入 agent
-    log_p = run(["git", "log", f"{info.remote}/{base}..HEAD", "--oneline", "--author=me"],
-                check=False, capture_output=True)
+    # 辅助收窄: 仅自己 author 的 commit (主防线仍是 DATA 分隔 + 白名单)
+    author = _self_author_filter()
+    log_args = ["git", "log", f"{info.remote}/{base}..HEAD", "--oneline"]
+    if author:
+        log_args += [f"--author={author}"]
+    log_p = run(log_args, check=False, capture_output=True)
     stat_p = run(["git", "diff", "--stat", f"{info.remote}/{base}..HEAD"],
                  check=False, capture_output=True)
     log_block = (log_p.stdout or "").strip() or "（无新 commit）"
