@@ -478,6 +478,23 @@ def switch_branch_all(target: str) -> int:
     return 1 if result.failed else 0
 
 
+
+# 哨兵: "master" 在 sync_master_all 语境下表示"主分支"语义 (master 或 main),
+# 非字面分支名。_sync_one_factory 遇到此值时逐仓探测真实主分支。
+_MAIN_SENTINEL = "master"
+
+
+def _resolve_main_branch(repo: Path) -> str:
+    """探测仓库真实主分支 (origin/HEAD), 失败回退 master。"""
+    p = _run(["git", "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"],
+             cwd=str(repo), check=False, capture_output=True)
+    if p.returncode == 0:
+        out = (p.stdout or "").strip()
+        if "/" in out:
+            return out.split("/", 1)[1]
+        return out or "master"
+    return "master"
+
 def _sync_one_factory(branch: str | None, force: bool) -> OperationFn:
     """构造单仓库同步操作。
 
@@ -496,6 +513,9 @@ def _sync_one_factory(branch: str | None, force: bool) -> OperationFn:
             target = (cur_p.stdout or "").strip()
             if not target:
                 return "skip", "处于 detached HEAD"
+        elif branch == _MAIN_SENTINEL:
+            # 主分支语义: 逐仓探测真实 master/main (命令层用 master 即可)
+            target = _resolve_main_branch(repo)
         else:
             target = branch
 
@@ -575,8 +595,8 @@ def sync_branch_all(branch: str | None = None, *, force: bool = False) -> int:
 
 
 def sync_master_all(*, force: bool = False) -> int:
-    """批量同步 master：将本地 master 硬对齐到 origin/master。"""
-    return sync_branch_all("master", force=force)
+    """批量同步主分支: 自动识别各仓库 master/main 并硬对齐到 origin/<主分支>。"""
+    return sync_branch_all(_MAIN_SENTINEL, force=force)
 
 
 def _push_branch_one_factory(branch: str | None, force: bool, single: bool = False) -> OperationFn:
@@ -599,6 +619,9 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
             target = (cur_p.stdout or "").strip()
             if not target:
                 return "skip", "处于 detached HEAD"
+        elif branch == _MAIN_SENTINEL:
+            # 主分支语义: 逐仓探测真实 master/main (命令层用 master 即可)
+            target = _resolve_main_branch(repo)
         else:
             target = branch
 

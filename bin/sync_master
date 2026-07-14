@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sync_master 薄壳入口 — 批量同步 master 到 origin/master。"""
+"""sync_master 薄壳入口 — 批量同步主分支 (master/main 自动识别) 到 origin/<主分支>。"""
 import argparse
 import pathlib
 import sys
@@ -10,11 +10,11 @@ from lib.batch_git import sync_master_all
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="批量同步 master：将本地 master 硬对齐到 origin/master",
+        description="批量同步主分支：自动识别 master/main 并硬对齐到 origin/<主分支>",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--force", action="store_true",
-                        help="强制：即便本地领先也硬 reset 到 origin/master")
+                        help="强制：即便本地领先也硬 reset 到 origin/<主分支>")
     args = parser.parse_args(argv[1:])
     return sync_master_all(force=args.force)
 
