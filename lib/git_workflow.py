@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from .build import check_build
+from .build import BuildError, check_build
 from .exec import DEFAULT_TIMEOUT, NET_TIMEOUT, retry_command, run_logged
 from .git import GitError, check_bit_clean, update_branch
 from .notify import notify_via_n, project_done_message
@@ -19,6 +19,22 @@ def _step(msg: str, r) -> None:
     global _STEP_COUNTER
     _STEP_COUNTER += 1
     r.step(f"[{_STEP_COUNTER}] {msg}")
+
+
+def _gate_check_build(r, *, where: str) -> None:
+    """闸门：check_build 必须全绿才放行。
+
+    check_build 只在 Go 路径抛 BuildError；Rust/Python(warn)/Java/C 失败仅返回 status=fail。
+    此处统一兜底：任一 fail 即视为闸门失败，抛 GitError 中断工作流。
+    """
+    try:
+        results = check_build(project_dir=Path("."), log=r.step)
+    except BuildError as e:
+        raise GitError(f"{where}构建检查失败: {e}") from e
+    fails = [x for x in results if x.status == "fail"]
+    if fails:
+        detail = "; ".join(f"{x.name}: {x.detail}" for x in fails if x.detail)
+        raise GitError(f"{where}构建检查失败: {detail}")
 
 
 def _git(args: list[str], *, r=None, title: str = "", show_ok: bool = False, timeout: float | None = None):
@@ -149,6 +165,12 @@ def run_workflow(
         return 0
 
     try:
+        # 闸门1：切目标分支前，当前分支必须 build 通过（防止把会 break 的代码合进目标分支）。
+        # 与 push 前的第二道闸（合并后 check）互补：此处在源分支拦截，彼处在合并结果上拦截。
+        _step(f"预检：当前分支 {current_branch} 构建检查", r)
+        check_bit_clean()
+        _gate_check_build(r, where=f"当前分支 {current_branch} ")
+
         _step(f"同步当前分支 {current_branch}", r)
         update_branch(current_branch, r=r)
 
@@ -177,7 +199,7 @@ def run_workflow(
                 raise GitError("冲突未完全解决，操作已终止！")
 
         check_bit_clean()
-        check_build(project_dir=Path("."), log=r.step)
+        _gate_check_build(r, where=f"合并结果({target_branch}) ")
 
         _step(f"推送 {target_branch} 到远端", r)
         sync = retry_command(["git", "push", "origin", target_branch], max_retries=3, timeout=NET_TIMEOUT)
