@@ -33,7 +33,7 @@ def _gate_check_build(r, *, where: str) -> None:
         raise GitError(f"{where}构建检查失败: {e}") from e
     fails = [x for x in results if x.status == "fail"]
     if fails:
-        detail = "; ".join(f"{x.name}: {x.detail}" for x in fails if x.detail)
+        detail = "; ".join(f"{x.name}: {x.message}" for x in fails if x.message)
         raise GitError(f"{where}构建检查失败: {detail}")
 
 
