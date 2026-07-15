@@ -355,7 +355,9 @@ def _push_one_factory(target: str, dry_run: bool, extra: list[str]) -> Operation
             return "ok", f"条件满足（dry-run 模式，不执行 push_{target}）"
 
         r.step(f"执行 push_{target} …")
-        p = _run([f"push_{target}", *extra], cwd=str(repo), check=False, capture_output=True)
+        # 批量模式：子进程 run_workflow 不单独播报，由本入口收尾统一播报
+        p = _run([f"push_{target}", *extra], cwd=str(repo), check=False, capture_output=True,
+                 env={**os.environ, "_GITWF_BATCH": "1"})
         if p.returncode == 0:
             return "ok", ""
         out = (p.stdout or "") + (p.stderr or "")

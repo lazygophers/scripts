@@ -12,6 +12,14 @@ from .git import GitError, check_bit_clean, update_branch
 from .notify import notify_via_n, project_done_message
 from .ui import reporter
 
+
+def _notify_done(suffix: str, *, script_dir: Path) -> None:
+    """播报完成/失败语音。批量子进程模式（env _GITWF_BATCH=1）静默，由批量入口统一播报。"""
+    if os.environ.get("_GITWF_BATCH") == "1":
+        return
+    notify_via_n(project_done_message(suffix), script_dir=script_dir)
+
+
 _STEP_COUNTER = 0
 
 
@@ -191,11 +199,11 @@ def run_workflow(
             else:
                 r.err("检测到合并冲突：非交互模式下无法继续，请手动解决后重新运行")
                 _git(["checkout", original_branch], r=r, title="回滚分支")
-                notify_via_n(project_done_message("合并冲突未解决"), script_dir=script_dir)
+                _notify_done("合并冲突未解决", script_dir=script_dir)
                 raise GitError("合并冲突未解决")
             if cont.returncode != 0:
                 _git(["checkout", original_branch], r=r, title="回滚分支")
-                notify_via_n(project_done_message("合并冲突未解决"), script_dir=script_dir)
+                _notify_done("合并冲突未解决", script_dir=script_dir)
                 raise GitError("冲突未完全解决，操作已终止！")
 
         check_bit_clean()
@@ -214,7 +222,7 @@ def run_workflow(
             )
             if not stay_on_target:
                 _git(["checkout", original_branch], r=r, title="回到原始分支")
-            notify_via_n(project_done_message("推送失败"), script_dir=script_dir)
+            _notify_done("推送失败", script_dir=script_dir)
             raise GitError("推送失败！请检查网络或权限。")
         if sync.last_output.strip():
             r.output(sync.last_output)
@@ -237,7 +245,7 @@ def run_workflow(
                 ("切回", original_branch, "cyan"),
             ])
 
-        notify_via_n(project_done_message("Git 工作流完成"), script_dir=script_dir)
+        _notify_done("Git 工作流完成", script_dir=script_dir)
         return 0
 
     except GitError as e:

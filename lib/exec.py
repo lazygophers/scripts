@@ -34,10 +34,12 @@ def run(
     check: bool = False,
     capture_output: bool = True,
     timeout: float | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """执行 shell 命令并返回结果，支持 Ctrl+C 中断与超时。
 
     timeout 秒后抛 CommandTimeout 并 kill 整个进程组（防子进程残留）。
+    env=None 继承父进程环境；传 dict 覆盖（批量调子进程时用于传抑制信号）。
     """
     try:
         return subprocess.run(
@@ -48,6 +50,7 @@ def run(
             text=True,
             timeout=timeout,
             start_new_session=True,
+            env=env,
         )
     except subprocess.TimeoutExpired as e:
         raise CommandTimeout(
