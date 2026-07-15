@@ -281,10 +281,10 @@ def _read_package_scripts(project_dir: Path) -> dict:
 
 
 # Node.js build script 白名单（纯编译器, 产 dist 但不起常驻进程）。
-# 单命令即编译的工具; 需 build 子命令的工具（vite/webpack/next/nuxt/rspack/rslib/rsbuild）。
+# 单命令即编译的工具; 需 build 子命令的工具（nuxt/remix/rspack/rslib/rsbuild）。
 _NODE_BUILD_SINGLE = ("tsc", "esbuild", "swc", "rollup")
 _NODE_BUILD_NEEDS_BUILD = (
-    "vite", "webpack", "next", "nuxt", "remix", "rspack", "rslib", "rsbuild",
+    "nuxt", "remix", "rspack", "rslib", "rsbuild",
 )
 # 黑名单关键词（命中 = 疑似常驻/交互, 跳过）。
 _NODE_BUILD_BLOCKED = (
@@ -325,7 +325,7 @@ def _classify_node_build_script(cmd: str) -> str:
         # 单命令编译工具 (tsc / esbuild ...)
         if head in _NODE_BUILD_SINGLE:
             return True
-        # 需 build 子命令的工具 (vite build / next build ...)
+        # 需 build 子命令的工具 (nuxt build / rspack build ...)
         if head in _NODE_BUILD_NEEDS_BUILD:
             return "build" in tokens[1:]
         return False
