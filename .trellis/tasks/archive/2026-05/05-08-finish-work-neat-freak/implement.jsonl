@@ -1,3 +1,0 @@
-{"file": ".trellis/workflow.md", "reason": "finish-work 是 workflow Phase 3 的收尾步骤，需了解整体流程上下文"}
-{"file": ".agents/skills/trellis-finish-work/SKILL.md", "reason": "本次修改的目标文件，需在其中插入 neat-freak 步骤"}
-{"file": ".agents/skills/trellis-meta/SKILL.md", "reason": "trellis skill 开发规范，确保修改符合 skill 文件约定"}
