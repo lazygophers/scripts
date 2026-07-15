@@ -8,20 +8,10 @@ This is a collection of script utilities designed to enhance development product
 
 ## Repository Structure
 
-This repository contains individual executable Shell scripts:
+`bin/*` are thin Bash wrappers (or symlinks) delegating to `lib/*.py`; enumerate with `ls bin/` and `ls lib/`. Conventions not obvious from a file listing:
 
-### Core Shell Scripts
-
-- **Core library**: `lib/*.py` - Shared Python modules (`git`, `exec`, `ui`, `notify`, `batch_git`, `build`, `process`, `system`, `git_workflow`, `ai_workflow`, `commit_wf`, `issue_wf`, `mr_wf`, `squash_pr_wf`, `loop`, `cpd`, ...)
-- **Build automation**: `checkwork` - Automated build checking with voice notifications (Bash wrapper -> Python)
-- **Git workflow**: `merge_*` / `push_*` - Branch merge/push workflows (symlinks to `_gitwf`; targets: canary / develop / test / master(auto-detect master/main) / branch); `push_branch` batch-pushes the current branch to remote
-- **AI-assisted workflow**: `commit` (auto-commit, calls `claude` for message), `issue` (auto-create Issue), `mr` (auto-create PR/MR, default draft), `squash_pr` (squash source into single commit, feeds into `mr`)
-- **Batch git ops**: `switch_branch`, `sync_branch`, `sync_master`, `delete_branch`, `delete_branch_remote`, `fetch_all`
-- **Process management**: `kk` (kill by process name), `kkp` (kill by port)
-- **Loop execution**: `loop` - Loop commands with success/failure tracking (Python only, no Bash wrapper tracked)
-- **Notifications**: `n` - Voice notifications using macOS `say` command
-- **Power / setup**: `unsleep` (macOS caffeinate wrapper, tracked), `inject` (inject `bin/` into shell PATH)
-- **Local-only tools** (not in `bin/`, not tracked): `reindex` (project re-indexing)
+- `merge_*` / `push_*` are symlinks to `bin/_gitwf`, dispatched by target name; `merge_master`/`push_master` auto-detect the remote default branch (master/main).
+- `reindex` is local-only (not in `bin/`, not tracked).
 
 ## Key Architecture Patterns
 
@@ -75,23 +65,7 @@ All scripts follow a consistent error handling pattern:
 
 Since this is a Shell script collection, there are no traditional build/lint/test commands. Instead:
 
-### Script Execution
-
-```bash
-# Grant execute permissions to all scripts
-chmod +x bin/*
-
-# Core development workflow scripts
-./bin/checkwork                # Run automated build checks with notifications
-./bin/merge_canary             # Merge current branch to canary (workflow script)
-./bin/push_canary              # Merge to canary, push, switch back
-./bin/n "message"              # Send voice notification (system say)
-
-# Utility scripts
-./bin/kk <process_name>        # Kill processes by name (with safety checks)
-./bin/kkp <port_number>        # Kill processes by port (with safety checks)
-./bin/fetch_all                # Batch fetch all Git repositories in directory tree
-```
+Run scripts from the repository root (`./bin/<name>`; `chmod +x bin/*` once). Each has `--help`.
 
 ### Important Usage Notes
 
@@ -164,41 +138,9 @@ For `cpd`, print the copy plan (sources/dest) and per-entry execution status dur
 
 ## Script Dependencies and Architecture
 
-### Dependency Graph
-
-```bash
-lib/*.py (core modules: git, exec, ui, notify, batch_git, build, process,
-          system, git_workflow, ai_workflow, commit_wf, issue_wf,
-          mr_wf, squash_pr_wf, loop, cpd)
-├── checkwork (bash wrapper -> lib/build, lib/notify)
-├── merge_* / push_* (symlinks -> bin/_gitwf -> lib/git_workflow, lib/batch_git)
-├── push_branch (bash wrapper -> lib/batch_git)
-├── commit / issue / mr / squash_pr (bash wrapper -> lib/{commit,issue,mr,squash_pr}_wf + lib/ai_workflow)
-├── switch_branch / sync_branch / sync_master / delete_branch / delete_branch_remote / fetch_all
-│   (bash wrapper -> lib/batch_git)
-├── cpd (bash wrapper -> lib/cpd, lib/cpd_core)
-├── kk / kkp (bash wrapper -> lib/process)
-├── loop (bash wrapper -> lib/loop)
-├── n (bash wrapper -> lib/notify)
-└── unsleep (bash wrapper -> lib/system)
-
-Notification system:
-└── n (system say notifications)
-    └── checkwork (uses n for notifications)
-
-Local-only tools (not in bin/, not tracked):
-└── reindex (project re-indexing)
-```
-
 ### Function Library Implementation Details
 
 The `lib/` modules provide these key functions:
-
-#### `check_bit_clean()` - Git Status Validation
-
-- Uses `git status --porcelain` to detect uncommitted changes or conflicts
-- Automatically sends voice notification on failure with project context
-- Provides clear visual feedback with color-coded output
 
 #### `check_build()` - Multi-Language Build Check (CI/CD Pre-check)
 
@@ -212,21 +154,6 @@ CI/CD build 前置拦截器：防止 push 后 CI 连 build 都过不去。支持
 - **Node.js**: 按 lockfile 优先级（bun > yarn > pnpm > npm）选包管理器；`build` script 经白名单识别（仅 tsc/nuxt build/rspack build 等纯编译命令）才跑，含 watch/serve/dev 或无法识别则跳过 + warn（`CHECKWORK_NODE_BUILD=1` 强制执行）；`typecheck` script warn-only；兜底 `tsc --noEmit`
 
 环境变量：`CHECKWORK_PARALLEL=1` 开启多语言检查点并行（默认串行）。
-
-#### `update_branch(branch_name)` - Safe Branch Management
-
-- Stores original branch for automatic restoration on failure
-- Implements network retry logic with exponential backoff
-- Switches branches via `git checkout` (auto-tracks `origin/<branch>` when needed)
-- Syncs via `git pull` + `git push`
-- When a `Reporter` is provided, prints progress early and shows command output on failure
-
-#### `retry_on_network_error(command)` - Network Resilience
-
-- Maximum 3 retry attempts with 2-second delays
-- Pattern-matching for network-specific errors (timeout, connection, etc.)
-- Preserves non-network error exit codes for proper error handling
-- Real-time command output with gray-colored logging
 
 ### Execution Requirements
 
