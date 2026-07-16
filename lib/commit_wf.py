@@ -28,10 +28,10 @@ def _lazygophers_enabled() -> bool:
 
 def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
                               max_tokens: int = 200, timeout: float = 30.0) -> str:
-    """调 LAZYGOPHERS /chat/compate（codex/OpenAI 兼容格式）生成 message。
+    """调 LAZYGOPHERS /chat/compate（Anthropic 风格式）生成 message。
 
-    codex 风请求：POST {BASE_URL}/chat/compate，body {messages, max_tokens, ...}，
-    鉴权 Authorization: Bearer <token>，响应 choices[0].message.content。
+    请求：POST {BASE_URL}/chat/compate，body {model, max_tokens, system, messages}，
+    鉴权 Authorization: Bearer <token>，响应 content[].text（Anthropic 风）。
     默认禁 thinking（commit 生成无需 extended thinking）。
     Returns: 生成文本（strip）。失败返回空串。
     """
@@ -40,12 +40,11 @@ def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
     token = os.environ["LAZYGOPHERS_SCRIPTS_TOKEN"]
     url = f"{base}/chat/compate"
     body = json.dumps({
+        "model": "claude-haiku-4-5",
         "max_tokens": max_tokens,
+        "system": system_prompt,
         "disable_thinking": True,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ],
+        "messages": [{"role": "user", "content": prompt}],
     }).encode()
     req = urllib.request.Request(url, data=body, headers={
         "authorization": f"Bearer {token}",
@@ -54,11 +53,7 @@ def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
-        # OpenAI/codex 风响应：choices[0].message.content
-        choices = data.get("choices") or []
-        if choices:
-            return (choices[0].get("message", {}).get("content") or "").strip()
-        # 兜底：Anthropic 风响应
+        # Anthropic 风响应：content[].text（实测 /chat/compate）
         parts = data.get("content") or []
         return "".join(p.get("text", "") for p in parts
                        if p.get("type") == "text").strip()
