@@ -158,8 +158,6 @@ def run_workflow(
     r = reporter(stderr=True)
     script_dir = Path(__file__).resolve().parent
 
-    r.rule("Git 自动化工作流", style="blue")
-
     resolved_target, default_hint = _resolve_target(
         parsed.target_arg,
         auto_detect=auto_detect,
@@ -178,7 +176,13 @@ def run_workflow(
 
     original_branch = current_branch
 
-    r.kv("任务概览", {"当前分支": current_branch, "目标分支": target_branch, "工作目录": str(Path(".").resolve())})
+    r.panel(
+        f"Git 自动化工作流：{script_name}",
+        f"[cyan]当前分支[/cyan]  {current_branch}\n"
+        f"[cyan]目标分支[/cyan]  {target_branch}\n"
+        f"[cyan]工作目录[/cyan]  {Path('.').resolve()}",
+        style="blue",
+    )
 
     if current_branch == target_branch:
         r.warn(f"当前已是 {target_branch}，跳过操作")
@@ -276,22 +280,22 @@ def run_workflow(
             r.output(sync.last_output)
 
         if stay_on_target:
-            r.rule("执行结果", style="green")
-            r.summary("工作流完成", [
-                ("从", f"{current_branch} → {target_branch}", "yellow"),
-                ("推送", "成功", "green"),
-                ("留在", target_branch, "cyan"),
-            ])
+            r.panel(
+                "工作流完成",
+                f"{current_branch}  →  {target_branch}\n"
+                f"推送成功  ·  留在 {target_branch}",
+                style="green",
+            )
         else:
             _step(f"切回原始分支 {original_branch}", r)
             _git(["checkout", original_branch], r=r, title="切换分支")
 
-            r.rule("执行结果", style="green")
-            r.summary("工作流完成", [
-                ("从", f"{current_branch} → {target_branch}", "yellow"),
-                ("推送", "成功", "green"),
-                ("切回", original_branch, "cyan"),
-            ])
+            r.panel(
+                "工作流完成",
+                f"{current_branch}  →  {target_branch}\n"
+                f"推送成功  ·  切回 {original_branch}",
+                style="green",
+            )
 
         _notify_done("Git 工作流完成", script_dir=script_dir)
         return 0

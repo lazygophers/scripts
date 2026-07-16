@@ -60,16 +60,25 @@ def _build_rc_block() -> str:
 
 def _prompt_ai_config(r) -> tuple[str | None, str | None]:
     """询问用户是否填入 LAZYGOPHERS AI 配置。返回 (base_url, token)，不填则 (None, None)。"""
-    try:
-        enable = input("\n是否配置 LAZYGOPHERS AI（commit 走 /chat/compate 生成 message）? (y/N) ").strip().lower()
-    except EOFError:
-        r.step("非交互模式，跳过 AI 配置（可后续手填 scripts.sh）")
+    from lib.ui import ask_confirm, ask_text
+
+    r.panel(
+        "LAZYGOPHERS AI 配置（可选）",
+        "启用后 bin/commit 自动生成 message 时优先走 /chat/compate API\n"
+        "（比 claude CLI 快，实测 ~3s）。env 缺失则回退 claude CLI。\n"
+        "需提供: 服务 base_url + token。示例: http://127.0.0.1:9894/proxy / free",
+        style="cyan",
+    )
+    enable = ask_confirm("是否现在配置?", default=False)
+    if enable is None or not enable:
+        r.step("跳过 AI 配置（可后续手填 scripts.sh）")
         return None, None
-    if enable not in ("y", "yes"):
+    base_url = ask_text("LAZYGOPHERS_SCRIPTS_BASE_URL")
+    token = ask_text("LAZYGOPHERS_SCRIPTS_TOKEN")
+    if base_url is None or token is None:
+        r.step("输入取消，跳过 AI 配置")
         return None, None
-    base_url = input("LAZYGOPHERS_SCRIPTS_BASE_URL: ").strip()
-    token = input("LAZYGOPHERS_SCRIPTS_TOKEN: ").strip()
-    return (base_url or None), (token or None)
+    return (base_url.strip() or None), (token.strip() or None)
 
 
 def _write_scripts_sh(r, *, ai_base_url: str | None = None,

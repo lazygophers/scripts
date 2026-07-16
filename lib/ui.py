@@ -292,6 +292,39 @@ def reporter(*, stderr: bool = True) -> Reporter:
     return Reporter(stderr=stderr)
 
 
+def ask_confirm(question: str, *, default: bool = False) -> bool | None:
+    """是/否确认。Rich 可用走 Confirm（带色 + 默认值提示）；非交互（EOF）返回 None。"""
+    if HAS_RICH:
+        from rich.prompt import Confirm
+        try:
+            return Confirm.ask(question, default=default, console=Console())
+        except (EOFError, KeyboardInterrupt):
+            return None
+    try:
+        hint = "Y/n" if default else "y/N"
+        raw = input(f"{question} [{hint}] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not raw:
+        return default
+    return raw in ("y", "yes")
+
+
+def ask_text(prompt: str, *, default: str = "") -> str | None:
+    """文本输入。Rich 可用走 Prompt（带色 + 默认值）；非交互（EOF）返回 None。"""
+    if HAS_RICH:
+        from rich.prompt import Prompt
+        try:
+            return Prompt.ask(prompt, default=default, console=Console())
+        except (EOFError, KeyboardInterrupt):
+            return None
+    try:
+        suffix = f" [{default}]" if default else ""
+        return input(f"{prompt}{suffix} ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
 def _format_elapsed(seconds: float) -> str:
     """耗时人话格式：<1s → '823ms'；<60s → '12.3s'；否则 → '1m23s'。"""
     if seconds < 1:

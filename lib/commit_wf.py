@@ -131,7 +131,14 @@ def run_commit(
             # bit commit 不一定打印 hash，从 git log 取
             hash_p = run(["git", "rev-parse", "--short", "HEAD"], check=False, capture_output=True)
             short = (hash_p.stdout or "").strip() or "?"
-            r.ok(f"提交完成：{short}")
+            branch = current_branch() or "detached"
+            r.panel(
+                f"提交完成  {short}",
+                f"hash   {short}\n"
+                f"branch {branch}\n"
+                f"\n—— message ——\n{final_msg}",
+                style="green",
+            )
             return 0
         err = (p.stderr or "") + (p.stdout or "")
         if "index.lock" in err and attempt == 0:
