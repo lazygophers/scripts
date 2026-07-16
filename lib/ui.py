@@ -293,7 +293,10 @@ def reporter(*, stderr: bool = True) -> Reporter:
 
 
 def _format_elapsed(seconds: float) -> str:
-    """耗时人话格式：<1s → '0.8s'；<60s → '12.3s'；否则 → '1m23s'。"""
+    """耗时人话格式：<1s → '823ms'；<60s → '12.3s'；否则 → '1m23s'。"""
+    if seconds < 1:
+        ms = int(seconds * 1000)
+        return f"{ms}ms" if ms > 0 else "<1ms"
     if seconds < 60:
         return f"{seconds:.1f}s"
     m, s = divmod(int(seconds), 60)
@@ -304,22 +307,27 @@ def _format_elapsed(seconds: float) -> str:
 
 
 def print_runtime(start: float, end: float, *, label: str | None = None) -> None:
-    """灰度打印运行时间（开始/结束/耗时）。供各 bin 入口在最外层调用。
+    """灰度打印运行耗时（耗时为核心，起止时间括号附注）。
 
-    Rich 可用时走 dim 样式；否则纯文本（仍到 stderr，与 Reporter 默认一致）。
+    Rich 可用时走 dim 样式（耗时数字微亮）；否则纯文本到 stderr。
+    格式: ⏱ <label> · <耗时> · <起>–<止>
     """
     from datetime import datetime
     fmt = "%H:%M:%S"
     start_s = datetime.fromtimestamp(start).strftime(fmt)
     end_s = datetime.fromtimestamp(end).strftime(fmt)
     elapsed = _format_elapsed(end - start)
-    prefix = f"{label} " if label else ""
-    line = f"{prefix}开始 {start_s} · 结束 {end_s} · 耗时 {elapsed}"
+    head = f"⏱ {label}" if label else "⏱"
     if HAS_RICH:
+        from rich.text import Text
         con = Console(stderr=True)
-        con.print(line, style="dim")
+        t = Text()
+        t.append(f"{head} · ", style="dim")
+        t.append(elapsed, style="dim bold")
+        t.append(f" · {start_s}–{end_s}", style="dim")
+        con.print(t)
     else:
-        print(line, file=sys.stderr)
+        print(f"{head} · {elapsed} · {start_s}–{end_s}", file=sys.stderr)
 
 
 def timed(fn, *, label: str | None = None):
