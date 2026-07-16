@@ -63,14 +63,14 @@ def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
         return ""
 
 
-def _has_changes() -> tuple[bool, list[str]]:
+def _has_changes(*, cwd: str | None = None) -> tuple[bool, list[str]]:
     """返回 (有无变更, status --short 行)。"""
-    staged = run(["git", "diff", "--cached", "--name-only"], check=False, capture_output=True)
-    untracked = run(["git", "ls-files", "--others", "--exclude-standard"], check=False, capture_output=True)
-    workdir = run(["git", "diff", "--name-only"], check=False, capture_output=True)
+    staged = run(["git", "diff", "--cached", "--name-only"], check=False, capture_output=True, cwd=cwd)
+    untracked = run(["git", "ls-files", "--others", "--exclude-standard"], check=False, capture_output=True, cwd=cwd)
+    workdir = run(["git", "diff", "--name-only"], check=False, capture_output=True, cwd=cwd)
     has = bool((staged.stdout or "").strip() or (untracked.stdout or "").strip()
                or (workdir.stdout or "").strip())
-    status = run(["git", "status", "--short"], check=False, capture_output=True)
+    status = run(["git", "status", "--short"], check=False, capture_output=True, cwd=cwd)
     lines = (status.stdout or "").splitlines()
     return has, lines
 
@@ -80,10 +80,11 @@ def run_commit(
     *,
     dry_run: bool = False,
     settings_file: str | None = None,
+    cwd: str | None = None,
 ) -> int:
-    """自动提交变更。"""
+    """自动提交变更。cwd=None 当前目录；批量场景透传各 repo 路径。"""
     r = reporter(stderr=True)
-    has, status_lines = _has_changes()
+    has, status_lines = _has_changes(cwd=cwd)
     if not has:
         r.ok("没有变更")
         return 0
@@ -93,11 +94,11 @@ def run_commit(
         r.info(f"  {line}")
 
     # 检测暂存区是否已有文件
-    staged_p = run(["git", "diff", "--cached", "--name-only"], check=False, capture_output=True)
+    staged_p = run(["git", "diff", "--cached", "--name-only"], check=False, capture_output=True, cwd=cwd)
     staged = (staged_p.stdout or "").strip()
 
     if dry_run:
-        branch = current_branch()
+        branch = current_branch(cwd=cwd)
         r.rule("演练", style="yellow")
         r.kv("dry-run", {"分支": branch, "消息": msg or "（自动生成）"})
         return 0
@@ -105,14 +106,14 @@ def run_commit(
     # 暂存区为空 → bit add .
     if not staged:
         r.step("bit add .")
-        run(["bit", "add", "."], check=False)
+        run(["bit", "add", "."], check=False, cwd=cwd)
 
     # message 已显式给出 → 直接提交（省 AI 往返）
     # message 缺失 → LAZYGOPHERS env 存在走 /chat/compate API；否则回退 claude CLI
     if msg:
         final_msg = msg
     else:
-        prompt = _build_prompt(status_lines)
+        prompt = _build_prompt(status_lines, cwd=cwd)
         if _lazygophers_enabled():
             r.step("LAZYGOPHERS /chat/compate 生成 message（禁 thinking）")
             final_msg = _generate_via_lazygophers(prompt, system_prompt=_COMMIT_SYSTEM)
@@ -126,12 +127,12 @@ def run_commit(
     # index.lock 冲突先清理再重试
     for attempt in range(2):
         p = run(["bit", "commit", "--no-verify", "-m", final_msg],
-                check=False, capture_output=True)
+                check=False, capture_output=True, cwd=cwd)
         if p.returncode == 0:
             # bit commit 不一定打印 hash，从 git log 取
-            hash_p = run(["git", "rev-parse", "--short", "HEAD"], check=False, capture_output=True)
+            hash_p = run(["git", "rev-parse", "--short", "HEAD"], check=False, capture_output=True, cwd=cwd)
             short = (hash_p.stdout or "").strip() or "?"
-            branch = current_branch() or "detached"
+            branch = current_branch(cwd=cwd) or "detached"
             r.panel(
                 f"提交完成  {short}",
                 f"hash   {short}\n"
@@ -142,17 +143,17 @@ def run_commit(
             return 0
         err = (p.stderr or "") + (p.stdout or "")
         if "index.lock" in err and attempt == 0:
-            run(["rm", "-f", ".git/index.lock"], check=False)
+            run(["rm", "-f", ".git/index.lock"], check=False, cwd=cwd)
             continue
         r.err(f"提交失败：{err.strip()[:300]}")
         return 1
     return 1
 
 
-def _build_prompt(status_lines: list[str]) -> str:
+def _build_prompt(status_lines: list[str], *, cwd: str | None = None) -> str:
     # 预注入文件清单 + diff stat，claude 不必自己跑 git
     files_block = "\n".join(f"  {ln}" for ln in status_lines) or "  （无）"
-    stat = run(["git", "diff", "--cached", "--stat"], check=False, capture_output=True)
+    stat = run(["git", "diff", "--cached", "--stat"], check=False, capture_output=True, cwd=cwd)
     stat_block = (stat.stdout or "").strip() or "（暂存区空）"
     return f"""根据变更生成一条 git commit message。上下文已预收集（勿跑 git，只输出 message）。
 
@@ -171,3 +172,44 @@ diff --stat：
 - 优先具体 type，避免 chore；breaking → type 后加 !
 
 直接输出 message（subject + 空行 + body），无引号无解释。"""
+
+
+def commit_all(
+    root,
+    *,
+    msg: str | None = None,
+    dry_run: bool = False,
+    confirm: bool = True,
+) -> int:
+    """批量扫描 root 下所有 git 仓库，逐个自动提交（并行）。
+
+    复用 batch_git.run_batch 框架；每仓 operation 调 run_commit(cwd=repo)。
+    无变更的仓库标记 skip。返回 0（全部成功/跳过）或 1（有失败）。
+    """
+    from pathlib import Path
+    from lib.batch_git import run_batch, BatchResult
+    from lib.ui import reporter
+
+    r = reporter(stderr=True)
+    root = Path(root).resolve()
+
+    def _operation(repo, rr, _root):
+        has, _ = _has_changes(cwd=str(repo))
+        if not has:
+            return "skip", "无变更"
+        rc = run_commit(msg, dry_run=dry_run, cwd=str(repo))
+        if rc == 0:
+            return "ok", "演练" if dry_run else "已提交"
+        return "fail", f"退出码 {rc}"
+
+    result: BatchResult = run_batch(
+        "批量 commit",
+        root,
+        _operation,
+        folder_name=root.name,
+        confirm=confirm,
+    )
+    items = [(rr.name, rr.status, rr.detail)
+             for rr in (result.succeeded + result.skipped + result.failed)]
+    r.status_table(f"批量 commit 结果（{result.total} 仓）", items)
+    return 1 if result.failed else 0

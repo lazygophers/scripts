@@ -1,29 +1,47 @@
 #!/usr/bin/env python3
-"""commit 薄壳入口 — 自动提交变更（调 claude 生成 message）。"""
+"""commit 薄壳入口 — 自动提交变更（调 claude 生成 message）。
+
+单仓（cwd 是 git 仓库）→ run_commit；否则批量扫描子目录所有 git 仓库。
+"""
 import argparse
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.commit_wf import run_commit
+from lib.commit_wf import run_commit, commit_all
 from lib.ui import timed
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="自动提交变更",
+        description="自动提交变更（单仓或批量扫描子目录）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="示例:\n  commit \"fix: 修复登录bug\"\n  commit --dry-run",
+        epilog="示例:\n"
+               "  commit \"fix: 修复登录bug\"\n"
+               "  commit --dry-run\n"
+               "  commit              # 非 git 目录 → 批量扫描子目录",
     )
     parser.add_argument("--dry-run", action="store_true", help="预览模式，不提交")
     parser.add_argument("--settings", help="指定 claude settings 文件")
+    parser.add_argument("-y", "--yes", action="store_true",
+                        help="批量模式跳过确认（非 TTY 必需）")
     parser.add_argument("message", nargs="?", default=None, help="提交信息（可省略，自动生成）")
     args = parser.parse_args(argv[1:])
 
-    return run_commit(
-        args.message,
+    in_git_repo = (pathlib.Path.cwd() / ".git").exists()
+
+    if in_git_repo:
+        return run_commit(
+            args.message,
+            dry_run=args.dry_run,
+            settings_file=args.settings,
+        )
+    # 非 git 目录 → 批量扫描当前目录下所有 git 仓库
+    return commit_all(
+        pathlib.Path.cwd(),
+        msg=args.message,
         dry_run=args.dry_run,
-        settings_file=args.settings,
+        confirm=not args.yes,
     )
 
 
