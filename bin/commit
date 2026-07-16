@@ -23,8 +23,6 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--dry-run", action="store_true", help="预览模式，不提交")
     parser.add_argument("--settings", help="指定 claude settings 文件")
-    parser.add_argument("-y", "--yes", action="store_true",
-                        help="批量模式跳过确认（非 TTY 必需）")
     parser.add_argument("message", nargs="?", default=None, help="提交信息（可省略，自动生成）")
     args = parser.parse_args(argv[1:])
 
@@ -36,12 +34,11 @@ def main(argv: list[str]) -> int:
             dry_run=args.dry_run,
             settings_file=args.settings,
         )
-    # 非 git 目录 → 批量扫描当前目录下所有 git 仓库
+    # 非 git 目录 → 批量扫描当前目录下所有 git 仓库（默认不确认，对齐 push_*）
     return commit_all(
         pathlib.Path.cwd(),
         msg=args.message,
         dry_run=args.dry_run,
-        confirm=not args.yes,
     )
 
 

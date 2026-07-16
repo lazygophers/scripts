@@ -179,12 +179,13 @@ def commit_all(
     *,
     msg: str | None = None,
     dry_run: bool = False,
-    confirm: bool = True,
+    confirm: bool = False,
 ) -> int:
     """批量扫描 root 下所有 git 仓库，逐个自动提交（并行）。
 
     复用 batch_git.run_batch 框架；每仓 operation 调 run_commit(cwd=repo)。
     无变更的仓库标记 skip。返回 0（全部成功/跳过）或 1（有失败）。
+    默认不确认（对齐 push_*）。
     """
     from pathlib import Path
     from lib.batch_git import run_batch, BatchResult
