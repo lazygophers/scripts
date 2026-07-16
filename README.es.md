@@ -30,12 +30,12 @@ inject es idempotente : reejecutar no duplicará. Después de completar, reinici
 | `loop`           | Ejecutar comandos en bucle, seguir éxito/fracaso                                  | `loop 10 curl url`            |
 | `merge_canary`   | Fusionar rama actual → canary, quedarse en canary                           | `merge_canary [--dry-run]`     |
 | `merge_develop`  | Fusionar rama actual → develop, quedarse en develop                         | `merge_develop`                |
-| `merge_auto`     | Fusionar rama actual → rama por defecto remota, quedarse en objetivo                        | `merge_auto`                   |
+| `merge_master`     | Fusionar rama actual → rama principal (auto-detect master/main), quedarse en objetivo                        | `merge_master`                   |
 | `merge_test`     | Fusionar rama actual → test, quedarse en test                               | `merge_test`                   |
 | `push_canary`    | Fusionar rama actual → canary, empujar luego volver                      | `push_canary [--stay]`         |
-| `push_develop` / `push_auto` / `push_test` | Ídem, objetivos develop / remoto por defecto / test respectivamente      |                               |
+| `push_develop` / `push_master` / `push_test` | Ídem, objetivos develop / rama principal (auto-detect) / test respectivamente      |                               |
 | `push_*` (lotes)  | Al ejecutar push_* en directorio no-git, automáticamente por lotes : escanear repositorios Git en subdirectorios y empujar uno por uno | `push_canary [--dry-run]` |
-| `switch_branch`  | Cambiar ramas por lotes (crea desde origin/master si inexistente)                 | `switch_branch <branch>`      |
+| `switch_branch`  | Cambiar ramas por lotes (crea desde rama por defecto (auto-detectada) si inexistente)                 | `switch_branch <branch>`      |
 | `sync_master`    | Sincronizar master por lotes = `sync_branch master`                                              | `sync_master`                 |
 | `sync_branch`    | Sincronizar por lotes rama actual (o dada) a origin/<branch> | `sync_branch [branch] [--force]` |
 | `delete_branch` | Eliminar rama local (repo único; lote si no en dir git) | `delete_branch <name> [--force] [-y]` |
@@ -45,7 +45,7 @@ inject es idempotente : reejecutar no duplicará. Después de completar, reinici
 | `reindex`        | Reindexar proyecto (local-only, .gitignore)                        | `reindex`                     |
 | `inject`         | Inyectar bin/ en PATH shell                                      | `inject`                      |
 
-> **Notas de migración (nombres antiguos eliminados)** : `mergec`/`mergedev`/`mergem`/`merget` → `merge_canary`/`merge_develop`/`merge_auto`/`merge_test` ; `pushc`/`pushdev`/`pushm`/`pusht` → `push_canary`/`push_develop`/`push_auto`/`push_test` ; `pushc_all` se fusionó en `push_*` (ejecutar en directorio no-git para auto batch, ejecución auto sin confirmación, `--dry-run` previsualizar).
+> **Notas de migración (nombres antiguos eliminados)** : `mergec`/`mergedev`/`mergem`/`merget` → `merge_canary`/`merge_develop`/`merge_master`/`merge_test` ; `pushc`/`pushdev`/`pushm`/`pusht` → `push_canary`/`push_develop`/`push_master`/`push_test` ; `pushc_all` se fusionó en `push_*` (ejecutar en directorio no-git para auto batch, ejecución auto sin confirmación, `--dry-run` previsualizar).
 
 > **Variables de entorno** : `BATCH_CONCURRENCY` controla la operación por lotes (`push_*` / `switch_branch` / `sync_branch` / `sync_master`) límite de concurrencia paralela, por defecto `4`. Ejemplo : `BATCH_CONCURRENCY=8 push_canary`.
 

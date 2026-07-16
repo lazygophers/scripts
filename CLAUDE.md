@@ -11,6 +11,7 @@ This is a collection of script utilities designed to enhance development product
 `bin/*` are thin Bash wrappers (or symlinks) delegating to `lib/*.py`; enumerate with `ls bin/` and `ls lib/`. Conventions not obvious from a file listing:
 
 - `merge_*` / `push_*` are symlinks to `bin/_gitwf`, dispatched by target name; `merge_master`/`push_master` auto-detect the remote default branch (master/main).
+- `switch_branch` / `sync_master` resolve the real default branch per repo (`origin/HEAD` → `remote set-head --auto` → enumerate `origin/main`/`origin/master` → fall back to `master`) before creating/tracking; never hardcode `origin/master`.
 - `reindex` is local-only (not in `bin/`, not tracked).
 
 ## Key Architecture Patterns
@@ -39,6 +40,7 @@ The `merge_*` / `push_*` scripts (all symlinks to `bin/_gitwf`, dispatched by ta
 - If the target branch does not exist on the remote, it is auto-created from `origin/HEAD` and pushed
 - If the current branch has no remote ref yet, it is auto-pushed with `git push -u` before any pull
 - Handles automated branch switching and merging to the target branch
+- **Dry-run conflict preview before merge**: `git merge-tree --write-tree` (Git ≥2.38, zero side-effects) probes base↔head; on conflict the merge is aborted and rolled back without executing (old git falls back to `merge --no-commit` + abort)
 - Includes comprehensive conflict detection and automatic rollback mechanisms
 - Implements retry logic for network operations with exponential backoff
 - Prevents execution directly on the target branch (safety mechanism)

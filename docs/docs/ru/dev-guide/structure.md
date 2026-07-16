@@ -4,8 +4,8 @@
 scripts/
 ├── bin/                          # Скрипты лёгкого входа (chmod +x)
 │   ├── checkwork, cpd, kk, kkp, n, ...
-│   ├── merge_canary, merge_develop, merge_auto, merge_test   # вызывает lib git_workflow.merge_to(target)
-│   ├── push_canary, push_develop, push_auto, push_test       # push_to одиночный репо / автоматическое пакетно вне git
+│   ├── merge_canary, merge_develop, merge_master, merge_test   # вызывает lib git_workflow.merge_to(target)
+│   ├── push_canary, push_develop, push_master, push_test       # push_to одиночный репо / автоматическое пакетно вне git
 │   ├── switch_branch, sync_master, sync_branch, fetch_all, delete_branch, delete_branch_remote
 │   ├── loop, unsleep, reindex
 │   └── inject                    # внедрить bin/ в PATH оболочки

@@ -22,12 +22,12 @@ inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف 
 | `loop`           | تنفيذ الأوامر في حلقة، تتبع النجاح/الفشل                                  | `loop 10 curl url`            |
 | `merge_canary`   | دمج الفرع الحالي → canary، البقاء في canary                           | `merge_canary [--dry-run]`     |
 | `merge_develop`  | دمج الفرع الحالي → develop، البقاء في develop                         | `merge_develop`                |
-| `merge_auto`     | دمج الفرع الحالي → الفرع الافتراضي البعيد، البقاء في الهدف                        | `merge_auto`                   |
+| `merge_master`     | دمج الفرع الحالي → الفرع الرئيسي (اكتشاف تلقائي master/main)، البقاء في الهدف                        | `merge_master`                   |
 | `merge_test`     | دمج الفرع الحالي → test، البقاء في test                               | `merge_test`                   |
 | `push_canary`    | دمج الفرع الحالي → canary، دفع ثم العودة إلى الفرع الأصلي                      | `push_canary [--stay]`         |
-| `push_develop` / `push_auto` / `push_test` | نفس الشيء، الأهداف develop / البعيد الافتراضي / test على التوالي      |                               |
+| `push_develop` / `push_master` / `push_test` | نفس الشيء، الأهداف develop / الفرع الرئيسي (اكتشاف تلقائي) / test على التوالي      |                               |
 | `push_*` (دفعات)  | عند تنفيذ push_* خارج دليل git، تلقائيًا بالدفعات : مسح مستودعات Git في الدلائل الفرعية والدفع واحدة تلو الأخرى | `push_canary [--dry-run]` |
-| `switch_branch`  | تبديل الفروع بالدفعات (إنشاؤها من origin/master إذا لم تكن موجودة)                 | `switch_branch <branch>`      |
+| `switch_branch`  | تبديل الفروع بالدفعات (إنشاؤها من الفرع الافتراضي (اكتشاف تلقائي) إذا لم تكن موجودة)                 | `switch_branch <branch>`      |
 | `sync_master`    | مزامنة master بالدفعات                                              | `sync_master`                 |
 | `sync_branch`    | مزامنة بالدفعات الفرع الحالية (أو المحددة) إلى origin/<branch>                             | `sync_branch [branch] [--force]` |
 | `delete_branch` | حذف فرع محلي (مفرد/دفعة) | `delete_branch <name> [--force] [-y]` |
@@ -39,8 +39,8 @@ inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف 
 
 ## ملاحظات الترحيل (الأسماء القديمة محذوفة)
 
-- `mergec` / `mergedev` / `mergem` / `merget` → `merge_canary` / `merge_develop` / `merge_auto` / `merge_test`
-- `pushc` / `pushdev` / `pushm` / `pusht` → `push_canary` / `push_develop` / `push_auto` / `push_test`
+- `mergec` / `mergedev` / `mergem` / `merget` → `merge_canary` / `merge_develop` / `merge_master` / `merge_test`
+- `pushc` / `pushdev` / `pushm` / `pusht` → `push_canary` / `push_develop` / `push_master` / `push_test`
 - `pushc_all` دمج في `push_*` : التنفيذ خارج دليل git يفعّل تلقائيًا وضع الدفعات، التنفيذ التلقائي بدون تأكيد، `--dry-run` للمعاينة.
 
 ## متغيرات البيئة

@@ -22,12 +22,12 @@ inject 幂等：重跑不会重复追加。完成后重启 shell 或 `source ~/.
 | `loop`           | 循环执行命令, 追踪成功/失败                                  | `loop 10 curl url`            |
 | `merge_canary`   | 合并当前分支 → canary, 留在 canary                           | `merge_canary [--dry-run]`     |
 | `merge_develop`  | 合并当前分支 → develop, 留在 develop                         | `merge_develop`                |
-| `merge_auto`     | 合并当前分支 → 远端默认分支, 留在目标                        | `merge_auto`                   |
+| `merge_master`     | 合并当前分支 → 主分支(master/main 自动识别), 留在目标                        | `merge_master`                   |
 | `merge_test`     | 合并当前分支 → test, 留在 test                               | `merge_test`                   |
 | `push_canary`    | 合并当前分支 → canary, 推送后切回原分支                      | `push_canary [--stay]`         |
-| `push_develop` / `push_auto` / `push_test` | 同上, 目标分别为 develop / 远端默认 / test      |                               |
+| `push_develop` / `push_master` / `push_test` | 同上, 目标分别为 develop / 主分支(自动识别) / test      |                               |
 | `push_*` (批量)  | 在非 git 目录执行 push_* 时自动批量: 扫描子目录 Git 仓库逐个推送 | `push_canary [--dry-run]` |
-| `switch_branch`  | 批量切换分支 (不存在则从 origin/master 创建)                 | `switch_branch <branch>`      |
+| `switch_branch`  | 批量切换分支 (不存在则从主分支(自动识别)创建)                 | `switch_branch <branch>`      |
 | `sync_master`    | 批量同步 master                                              | `sync_master`                 |
 | `sync_branch`    | 批量同步当前分支 (或指定分支) 到 origin/<branch>                             | `sync_branch [branch] [--force]` |
 | `delete_branch` | 删除本地分支 (单仓/批量) | `delete_branch <name> [--force] [-y]` |
@@ -39,8 +39,8 @@ inject 幂等：重跑不会重复追加。完成后重启 shell 或 `source ~/.
 
 ## 迁移说明（旧名已移除）
 
-- `mergec` / `mergedev` / `mergem` / `merget` → `merge_canary` / `merge_develop` / `merge_auto` / `merge_test`
-- `pushc` / `pushdev` / `pushm` / `pusht` → `push_canary` / `push_develop` / `push_auto` / `push_test`
+- `mergec` / `mergedev` / `mergem` / `merget` → `merge_canary` / `merge_develop` / `merge_master` / `merge_test`
+- `pushc` / `pushdev` / `pushm` / `pusht` → `push_canary` / `push_develop` / `push_master` / `push_test`
 - `pushc_all` 已并入 `push_*`：在非 git 目录执行即自动批量，自动执行无确认，`--dry-run` 预览。
 
 ## 环境变量

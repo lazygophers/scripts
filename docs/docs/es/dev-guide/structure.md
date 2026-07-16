@@ -4,8 +4,8 @@
 scripts/
 ├── bin/                          # Scripts de entrada ligera (chmod +x)
 │   ├── checkwork, cpd, kk, kkp, n, ...
-│   ├── merge_canary, merge_develop, merge_auto, merge_test   # llama lib git_workflow.merge_to(target)
-│   ├── push_canary, push_develop, push_auto, push_test       # push_to repo único / automático por lotes fuera git
+│   ├── merge_canary, merge_develop, merge_master, merge_test   # llama lib git_workflow.merge_to(target)
+│   ├── push_canary, push_develop, push_master, push_test       # push_to repo único / automático por lotes fuera git
 │   ├── switch_branch, sync_master, sync_branch, fetch_all, delete_branch, delete_branch_remote
 │   ├── loop, unsleep, reindex
 │   └── inject                    # inyectar bin/ en PATH shell
