@@ -34,8 +34,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.commands.{домен}.foo import main
+from lib.ui import timed
 
-raise SystemExit(main(sys.argv))
+raise SystemExit(timed(main, label="{имя}")(sys.argv))
 ```
 
 ```bash
@@ -51,5 +52,6 @@ chmod +x bin/{имя}
 ```python
 # bin/merge_canary
 from lib.commands.git.merge import run
-raise SystemExit(run("canary", sys.argv))
+from lib.ui import timed
+raise SystemExit(timed(run, label="merge_canary")("canary", sys.argv))
 ```

@@ -34,8 +34,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.commands.{domain}.foo import main
+from lib.ui import timed
 
-raise SystemExit(main(sys.argv))
+raise SystemExit(timed(main, label="{name}")(sys.argv))
 ```
 
 ```bash
@@ -44,6 +45,8 @@ chmod +x bin/{name}
 
 Done. **No registry/list to update.**
 
+> The `timed` wrapper is mandatory: every `bin/*` entry wraps its top-level call with it so start/end/elapsed prints to stderr (dim) on exit.
+
 ## Alias Scripts (multiple names, same logic, different args)
 
 See `merge_canary` / `merge_develop` / ...: expose `run(target, argv)` in `lib/commands/git/merge.py`, each thin entrypoint passes a fixed target:
@@ -51,5 +54,6 @@ See `merge_canary` / `merge_develop` / ...: expose `run(target, argv)` in `lib/c
 ```python
 # bin/merge_canary
 from lib.commands.git.merge import run
-raise SystemExit(run("canary", sys.argv))
+from lib.ui import timed
+raise SystemExit(timed(run, label="merge_canary")("canary", sys.argv))
 ```

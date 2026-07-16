@@ -34,8 +34,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.commands.{domaine}.foo import main
+from lib.ui import timed
 
-raise SystemExit(main(sys.argv))
+raise SystemExit(timed(main, label="{nom}")(sys.argv))
 ```
 
 ```bash
@@ -44,6 +45,8 @@ chmod +x bin/{nom}
 
 Terminé. **Aucune inscription dans un dictionnaire ou une liste n'est nécessaire.**
 
+
+> Le wrapper `timed` est obligatoire : chaque entrée `bin/*` enveloppe son appel de plus haut niveau avec lui pour que début/fin/durée s'affiche sur stderr (dim) à la sortie.
 ## Scripts d'alias (plusieurs noms pour la même logique avec différents paramètres)
 
 Référence `merge_canary` / `merge_develop` / ... : dans `lib/commands/git/merge.py` exposez `run(target, argv)`, chaque entrée légère transmet une cible fixe :
@@ -51,5 +54,6 @@ Référence `merge_canary` / `merge_develop` / ... : dans `lib/commands/git/merg
 ```python
 # bin/merge_canary
 from lib.commands.git.merge import run
-raise SystemExit(run("canary", sys.argv))
+from lib.ui import timed
+raise SystemExit(timed(run, label="merge_canary")("canary", sys.argv))
 ```

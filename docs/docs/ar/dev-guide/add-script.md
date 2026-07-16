@@ -34,8 +34,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.commands.{مجال}.foo import main
+from lib.ui import timed
 
-raise SystemExit(main(sys.argv))
+raise SystemExit(timed(main, label="{اسم}")(sys.argv))
 ```
 
 ```bash
@@ -44,6 +45,8 @@ chmod +x bin/{اسم}
 
 تم. **لا حاجة لتسجيل أي قواميس أو قوائم.**
 
+
+> غلاف `timed` إلزامي: كل مدخل `bin/*` يغلّف استدعاء المستوى الأعلى به بحيث يُطبع البداية/النهاية/المدة في stderr (خافت) عند الخروج.
 ## النصوص البرمجية المستعارة (عدة أسماء لنفس المنطق بمعاملات مختلفة)
 
 انظر `merge_canary` / `merge_develop` / ... : في `lib/commands/git/merge.py` اعرض `run(target, argv)`، كل مدخل خفيف ينقل هدف ثابت :
@@ -51,5 +54,6 @@ chmod +x bin/{اسم}
 ```python
 # bin/merge_canary
 from lib.commands.git.merge import run
-raise SystemExit(run("canary", sys.argv))
+from lib.ui import timed
+raise SystemExit(timed(run, label="merge_canary")("canary", sys.argv))
 ```

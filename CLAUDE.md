@@ -12,6 +12,7 @@ This is a collection of script utilities designed to enhance development product
 
 - `merge_*` / `push_*` are symlinks to `bin/_gitwf`, dispatched by target name; `merge_master`/`push_master` auto-detect the remote default branch (master/main).
 - `switch_branch` / `sync_master` resolve the real default branch per repo (`origin/HEAD` → `remote set-head --auto` → enumerate `origin/main`/`origin/master` → fall back to `master`) before creating/tracking; never hardcode `origin/master`.
+- **Every `bin/*` entry must wrap its top-level call in `lib.ui.timed(fn, label="<name>")(...)`** so start/end/elapsed prints to stderr (dim) on exit. This is mandatory: new scripts add it, existing scripts keep it. Pattern: `raise SystemExit(timed(main, label="foo")(sys.argv))`.
 - `reindex` is local-only (not in `bin/`, not tracked).
 
 ## Key Architecture Patterns
