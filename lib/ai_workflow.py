@@ -5,7 +5,6 @@ commit / mr / issue 三个脚本的公共逻辑。
 from __future__ import annotations
 
 import json
-import os
 import re
 import shlex
 from dataclasses import dataclass
@@ -192,23 +191,6 @@ def run_claude(
     return rc
 
 
-def _claude_official_env() -> dict[str, str]:
-    """构造绕过本地代理、直连官方 Anthropic 的 env（走 OAuth Claude Max 额度）。
-
-    本机代理（ANTHROPIC_BASE_URL）把 haiku 映射到 mimo-v2.5-pro 且 CLI streaming 路径
-    极慢（生成一句 message 26-48s）。绕代理直连官方真 haiku，CLI 可 <3s。
-    代价：消耗用户官方 Claude Max 额度，且需已 `/login`（OAuth token 有效）。
-    """
-    env = dict(os.environ)
-    for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
-        env.pop(k, None)
-    # 用官方默认模型别名，不覆盖（代理映射的 *_NAME 会干扰官方端点）
-    for k in list(env):
-        if k.startswith("ANTHROPIC_DEFAULT_") and k.endswith("_NAME"):
-            env.pop(k, None)
-    return env
-
-
 def generate_via_claude(
     prompt: str,
     *,
@@ -218,15 +200,18 @@ def generate_via_claude(
 ) -> str:
     """调 claude -p 纯生成文本（capture stdout），不执行任何工具。
 
-    绕本地代理直连官方（真 haiku，<3s）+ 极简启动（bare 跳 hooks/LSP/plugin/
-    auto-memory/prefetch；strict-mcp 关 MCP 探测省 ~8s；disable-slash-commands 关 skills）。
-    用于只需 LLM 输出文本（如生成 commit message）的场景。
+    --model haiku 走当前环境（经本机代理），叠加极简启动：bare 跳 hooks/LSP/
+    plugin/auto-memory/prefetch，strict-mcp 关 MCP 探测，disable-slash-commands
+    关 skills。用于只需 LLM 输出文本（如生成 commit message）的场景。
 
     Returns:
         claude stdout 文本（已 strip）。失败返回空串。
     """
     r = reporter(stderr=True)
     # bare 纯生成: 无 tools、无 permission flags; 安全规约仍附（约束输出）
+    # 极简启动叠加：strict-mcp 关 MCP 探测（省 ~8s）、disable-slash-commands 关 skills、
+    # no-chrome/no-session-persistence 关 Chrome/会话持久化、exclude-dynamic-system-prompt-sections
+    # 移除 per-machine sections、effort low 降推理深度。实测 30s→10s。
     args = [
         "claude", "-p",
         "--model", "haiku",
@@ -234,21 +219,18 @@ def generate_via_claude(
         "--setting-sources", "",
         "--strict-mcp-config",
         "--disable-slash-commands",
+        "--no-chrome",
+        "--no-session-persistence",
+        "--exclude-dynamic-system-prompt-sections",
+        "--effort", "low",
         "--settings", '{"disableThinking":true}',
         "--append-system-prompt", system_prompt + _SAFETY_SUFFIX,
     ]
     if settings_file:
         args += ["--settings", settings_file]
     args += [prompt]
-    p = run(args, check=False, capture_output=True, timeout=timeout,
-            env=_claude_official_env())
-    out = (p.stdout or "")
-    # 未登录场景给出可执行的解锁提示
-    if "Not logged in" in out or "Please run /login" in out:
-        r.err("claude 未登录官方账号（绕代理路径需 OAuth）")
-        r.err("请在终端执行: ! env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN claude /login")
-        return ""
+    p = run(args, check=False, capture_output=True, timeout=timeout)
     if p.returncode != 0:
         r.err(f"claude 生成失败（退出码 {p.returncode}）: {(p.stderr or '')[:200]}")
         return ""
-    return out.strip()
+    return (p.stdout or "").strip()
