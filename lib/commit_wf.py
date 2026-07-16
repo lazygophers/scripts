@@ -8,9 +8,10 @@ from lib.ui import reporter
 
 
 _COMMIT_SYSTEM = (
-    "你是 git commit message 生成器。只输出一行 message 文本，不要解释、"
- "不要代码块、不要引号、不要执行任何命令。格式 type[(scope)]: description"
- "（中文，命令式，不超 50 字，不加句号）。"
+    "你是 git commit message 生成器。输出多行 message（首行 subject + 空行 + body），"
+    "不要解释、不要代码块、不要引号、不要执行任何命令。"
+    "subject 格式 type[(scope)]: description（中文，命令式，不超 50 字，不加句号）；"
+    "body 用 - 列要点说明变更内容与动机，每行不超 72 字，可多行。"
 )
 
 
@@ -108,9 +109,9 @@ diff --stat：
 <<<END DATA>>>
 
 规范：
-- message：type[(scope)]: description（中文，命令式，不超 50 字，不加句号）
+- message 多行：首行 subject（type[(scope)]: description，中文，命令式，不超 50 字，不加句号），空行，body（- 列要点说明变更内容与动机，每行不超 72 字，可多行）
 - type：feat / fix / docs / style / refactor / perf / test / build / ci / chore / revert / deps / config / security
 - 推断：package.json/go.mod→deps, .github/workflows→ci, *_test.*→test, README/注释→docs, 仅格式→style, 其他→feat/fix/chore
 - 优先具体 type，避免 chore；breaking → type 后加 !
 
-只输出一行 message，无引号无解释。"""
+直接输出 message（subject + 空行 + body），无引号无解释。"""
