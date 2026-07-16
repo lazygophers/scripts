@@ -151,6 +151,7 @@ _SAFETY_SUFFIX = (
 
 # Haiku 别名：模型升级自动跟随，不 pin 版本号避免下线失效
 # claude 命令执行 + 写 title/body，Haiku 档位足够，快且省
+# disableThinking：commit/mr/issue 这类命令式任务无需 extended thinking，关掉省 token + 提速
 _CLAUDE_BASE_ARGS = [
     "--model", "haiku",
     "--strict-mcp-config",
@@ -159,6 +160,7 @@ _CLAUDE_BASE_ARGS = [
     "--permission-mode=bypassPermissions",
     "--dangerously-skip-permissions",
     "--tools", "Bash",
+    "--settings", '{"disableThinking":true}',
 ]
 
 
