@@ -8,8 +8,6 @@ import json
 import os
 import re
 import shlex
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -194,51 +192,21 @@ def run_claude(
     return rc
 
 
-def _haiku_model() -> str:
-    """当前 Haiku 模型名：优先环境变量，兜底硬编码。"""
-    return (os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
-            or "claude-haiku-4-5-20251001")
+def _claude_official_env() -> dict[str, str]:
+    """构造绕过本地代理、直连官方 Anthropic 的 env（走 OAuth Claude Max 额度）。
 
-
-def generate_text(
-    prompt: str,
-    *,
-    system_prompt: str,
-    max_tokens: int = 100,
-    timeout: float = 15.0,
-) -> str:
-    """直调 Anthropic messages API 生成文本（不经 claude CLI）。
-
-    比 generate_via_claude 快 3-6 倍（省 CLI 启动/MCP/permission 层），
-    用于只需纯文本生成（commit message）。需 ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN。
-
-    Returns:
-        生成文本（strip）。失败返回空串。
+    本机代理（ANTHROPIC_BASE_URL）把 haiku 映射到 mimo-v2.5-pro 且 CLI streaming 路径
+    极慢（生成一句 message 26-48s）。绕代理直连官方真 haiku，CLI 可 <3s。
+    代价：消耗用户官方 Claude Max 额度，且需已 `/login`（OAuth token 有效）。
     """
-    base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-    token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY", "")
-    url = f"{base.rstrip('/')}/v1/messages"
-    body = json.dumps({
-        "model": _haiku_model(),
-        "max_tokens": max_tokens,
-        "system": system_prompt,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode()
-    req = urllib.request.Request(url, data=body, headers={
-        "x-api-key": token,
-        "authorization": f"Bearer {token}",
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
-        parts = data.get("content") or []
-        return "".join(p.get("text", "") for p in parts if p.get("type") == "text").strip()
-    except (urllib.error.URLError, urllib.error.HTTPError, ValueError, TimeoutError) as e:
-        r = reporter(stderr=True)
-        r.err(f"API 生成失败: {e}")
-        return ""
+    env = dict(os.environ)
+    for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
+        env.pop(k, None)
+    # 用官方默认模型别名，不覆盖（代理映射的 *_NAME 会干扰官方端点）
+    for k in list(env):
+        if k.startswith("ANTHROPIC_DEFAULT_") and k.endswith("_NAME"):
+            env.pop(k, None)
+    return env
 
 
 def generate_via_claude(
@@ -250,27 +218,37 @@ def generate_via_claude(
 ) -> str:
     """调 claude -p 纯生成文本（capture stdout），不执行任何工具。
 
-    用 --bare 模式（跳 hooks/LSP/plugin/auto-memory/prefetch）+ 不给 tools，
-    省启动开销与工具往返。用于只需 LLM 输出文本（如生成 commit message）的场景。
+    绕本地代理直连官方（真 haiku，<3s）+ 极简启动（bare 跳 hooks/LSP/plugin/
+    auto-memory/prefetch；strict-mcp 关 MCP 探测省 ~8s；disable-slash-commands 关 skills）。
+    用于只需 LLM 输出文本（如生成 commit message）的场景。
 
     Returns:
         claude stdout 文本（已 strip）。失败返回空串。
     """
+    r = reporter(stderr=True)
     # bare 纯生成: 无 tools、无 permission flags; 安全规约仍附（约束输出）
     args = [
         "claude", "-p",
         "--model", "haiku",
         "--bare",
         "--setting-sources", "",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
         "--settings", '{"disableThinking":true}',
         "--append-system-prompt", system_prompt + _SAFETY_SUFFIX,
     ]
     if settings_file:
         args += ["--settings", settings_file]
     args += [prompt]
-    p = run(args, check=False, capture_output=True, timeout=timeout)
+    p = run(args, check=False, capture_output=True, timeout=timeout,
+            env=_claude_official_env())
+    out = (p.stdout or "")
+    # 未登录场景给出可执行的解锁提示
+    if "Not logged in" in out or "Please run /login" in out:
+        r.err("claude 未登录官方账号（绕代理路径需 OAuth）")
+        r.err("请在终端执行: ! env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN claude /login")
+        return ""
     if p.returncode != 0:
-        r = reporter(stderr=True)
         r.err(f"claude 生成失败（退出码 {p.returncode}）: {(p.stderr or '')[:200]}")
         return ""
-    return (p.stdout or "").strip()
+    return out.strip()

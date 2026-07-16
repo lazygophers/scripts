@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lib.ai_workflow import current_branch, generate_text
+from lib.ai_workflow import current_branch, generate_via_claude
 from lib.exec import run
 from lib.ui import reporter
 
@@ -59,15 +59,14 @@ def run_commit(
         run(["bit", "add", "."], check=False)
 
     # message 已显式给出 → 直接提交（省 claude 往返）
-    # message 缺失 → claude --bare 纯生成 message（不执行工具），Python 侧提交
+    # message 缺失 → claude --bare 绕代理直连官方生成 message（<3s），Python 侧提交
     if msg:
         final_msg = msg
     else:
         prompt = _build_prompt(status_lines)
-        final_msg = generate_text(
+        final_msg = generate_via_claude(
             prompt,
             system_prompt=_COMMIT_SYSTEM,
-            max_tokens=80,
         )
         if not final_msg:
             r.err("生成 message 失败，已取消提交")

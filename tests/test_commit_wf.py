@@ -32,7 +32,7 @@ class TestRunCommit(unittest.TestCase):
         mock_has.return_value = (False, [])
         self.assertEqual(run_commit(), 0)
 
-    @patch("lib.commit_wf.generate_text")
+    @patch("lib.commit_wf.generate_via_claude")
     @patch("lib.commit_wf.run")
     @patch("lib.commit_wf._has_changes")
     def test_with_msg_skips_generate(self, mock_has, mock_run, mock_gen):
@@ -42,7 +42,7 @@ class TestRunCommit(unittest.TestCase):
         self.assertEqual(rc, 0)
         mock_gen.assert_not_called()
 
-    @patch("lib.commit_wf.generate_text")
+    @patch("lib.commit_wf.generate_via_claude")
     @patch("lib.commit_wf.run")
     @patch("lib.commit_wf._has_changes")
     def test_no_msg_calls_generate(self, mock_has, mock_run, mock_gen):
@@ -53,7 +53,7 @@ class TestRunCommit(unittest.TestCase):
         self.assertEqual(rc, 0)
         mock_gen.assert_called_once()
 
-    @patch("lib.commit_wf.generate_text")
+    @patch("lib.commit_wf.generate_via_claude")
     @patch("lib.commit_wf.run")
     @patch("lib.commit_wf._has_changes")
     def test_generate_empty_aborts(self, mock_has, mock_run, mock_gen):
@@ -68,7 +68,7 @@ class TestRunCommit(unittest.TestCase):
     def test_empty_staged_calls_bit_add(self, mock_has, mock_run):
         mock_has.return_value = (True, ["?? new.py"])
         mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-        with patch("lib.commit_wf.generate_text") as mock_gen:
+        with patch("lib.commit_wf.generate_via_claude") as mock_gen:
             mock_gen.return_value = "feat: 加文件"
             run_commit()
         calls = [c.args[0] for c in mock_run.call_args_list]
@@ -79,7 +79,7 @@ class TestRunCommit(unittest.TestCase):
     def test_dry_run_no_generate(self, mock_has, mock_run):
         mock_has.return_value = (True, ["M  f"])
         mock_run.return_value = MagicMock(stdout="f\n", stderr="", returncode=0)
-        with patch("lib.commit_wf.generate_text") as mock_gen:
+        with patch("lib.commit_wf.generate_via_claude") as mock_gen:
             rc = run_commit(dry_run=True)
         self.assertEqual(rc, 0)
         mock_gen.assert_not_called()
