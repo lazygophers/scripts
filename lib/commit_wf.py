@@ -40,7 +40,7 @@ def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
     token = os.environ["LAZYGOPHERS_SCRIPTS_TOKEN"]
     url = f"{base}/chat/compate"
     body = json.dumps({
-        "model": "claude-haiku-4-5",
+        "model": "haiku",
         "max_tokens": max_tokens,
         "system": system_prompt,
         "disable_thinking": True,
