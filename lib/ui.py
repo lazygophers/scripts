@@ -290,3 +290,56 @@ class Reporter:
 
 def reporter(*, stderr: bool = True) -> Reporter:
     return Reporter(stderr=stderr)
+
+
+def _format_elapsed(seconds: float) -> str:
+    """耗时人话格式：<1s → '0.8s'；<60s → '12.3s'；否则 → '1m23s'。"""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    m, s = divmod(int(seconds), 60)
+    if m < 60:
+        return f"{m}m{s}s"
+    h, m = divmod(m, 60)
+    return f"{h}h{m}m{s}s"
+
+
+def print_runtime(start: float, end: float, *, label: str | None = None) -> None:
+    """灰度打印运行时间（开始/结束/耗时）。供各 bin 入口在最外层调用。
+
+    Rich 可用时走 dim 样式；否则纯文本（仍到 stderr，与 Reporter 默认一致）。
+    """
+    from datetime import datetime
+    fmt = "%H:%M:%S"
+    start_s = datetime.fromtimestamp(start).strftime(fmt)
+    end_s = datetime.fromtimestamp(end).strftime(fmt)
+    elapsed = _format_elapsed(end - start)
+    prefix = f"{label} " if label else ""
+    line = f"{prefix}开始 {start_s} · 结束 {end_s} · 耗时 {elapsed}"
+    if HAS_RICH:
+        con = Console(stderr=True)
+        con.print(line, style="dim")
+    else:
+        print(line, file=sys.stderr)
+
+
+def timed(fn, *, label: str | None = None):
+    """装饰/包装：包住 fn 全程计时，结束灰度打印运行时间。
+
+    用法（bin 入口）：
+        raise SystemExit(timed(main, label="commit")(sys.argv))
+    返回值/异常原样透传；异常路径也打印耗时（finally）。
+    """
+    import time
+    from functools import wraps
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        start = time.monotonic()
+        start_wall = time.time()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            end_wall = time.time()
+            print_runtime(start_wall, end_wall, label=label)
+
+    return wrapper

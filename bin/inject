@@ -20,7 +20,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.ui import reporter
+from lib.ui import reporter, timed
 
 # ponytail: 固定 rc 候选清单, 不读 $SHELL (多机拷贝/换 shell 时 rc 已存在即写)
 _RC_CANDIDATES = (
@@ -175,4 +175,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    raise SystemExit(timed(main, label="inject")(sys.argv))

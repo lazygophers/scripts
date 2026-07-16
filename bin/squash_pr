@@ -10,6 +10,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.git import get_current_branch
+from lib.ui import timed
 from lib.squash_pr_wf import run_squash_pr
 
 
@@ -45,4 +46,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    raise SystemExit(timed(main, label="squash_pr")(sys.argv))

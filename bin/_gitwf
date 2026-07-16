@@ -60,4 +60,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from lib.ui import timed
+    _name = pathlib.Path(sys.argv[0]).name
+    raise SystemExit(timed(main, label=_name if _name in _NAME_MAP else "gitwf")())

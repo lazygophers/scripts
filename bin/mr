@@ -6,6 +6,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.mr_wf import run_mr
+from lib.ui import timed
 
 
 def main(argv: list[str]) -> int:
@@ -37,4 +38,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    raise SystemExit(timed(main, label="mr")(sys.argv))
