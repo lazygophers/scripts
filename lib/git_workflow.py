@@ -150,6 +150,8 @@ def run_workflow(
                f"  {script_name} --dry-run # 仅预览，不执行",
     )
     parser.add_argument("--dry-run", action="store_true", help="仅预览，不执行实际操作")
+    parser.add_argument("--auto-commit", action="store_true",
+                        help="当前分支有未提交变更时，自动调 commit 提交后再继续工作流")
     parser.add_argument("target_arg", nargs="?", default=default_branch if not auto_detect else None, help=f"目标分支（默认: {default_branch if not auto_detect else '远端默认分支'}）")
     parsed = parser.parse_args(argv[1:])
 
@@ -184,7 +186,10 @@ def run_workflow(
 
     if parsed.dry_run:
         r.rule("演练模式", style="yellow")
-        steps = [
+        steps = []
+        if parsed.auto_commit:
+            steps.append(("自动提交", "若有未提交变更，调 commit（lib）"))
+        steps += [
             ("同步分支", f"git pull + git push ({current_branch})"),
             ("合并", f"git merge {current_branch} → {target_branch}"),
             ("推送", f"git push origin {target_branch}"),
@@ -198,6 +203,16 @@ def run_workflow(
         return 0
 
     try:
+        # --auto-commit：闸门前若有未提交变更，自动调 commit 提交（lib 直调，不经 bin 薄壳）
+        if parsed.auto_commit:
+            from lib.commit_wf import _has_changes, run_commit
+            has, _ = _has_changes()
+            if has:
+                _step(f"检测到未提交变更，--auto-commit 自动提交 {current_branch}", r)
+                rc = run_commit()
+                if rc != 0:
+                    raise GitError(f"自动提交失败（退出码 {rc}），中止工作流")
+
         # 闸门1：切目标分支前，当前分支必须 build 通过（防止把会 break 的代码合进目标分支）。
         # 与 push 前的第二道闸（合并后 check）互补：此处在源分支拦截，彼处在合并结果上拦截。
         _step(f"预检：当前分支 {current_branch} 构建检查", r)
