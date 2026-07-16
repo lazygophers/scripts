@@ -451,11 +451,12 @@ def _switch_one_factory(target: str) -> OperationFn:
                     fail_err = _extract_error((sw.stderr or "") + (sw.stdout or ""), sw.returncode, "切换失败")
                     r.err(f"切换失败: {fail_err}")
             else:
-                r.step("分支不存在 → 从 origin/master 创建")
-                sw = _run(["git", "switch", "-c", target, "origin/master"],
+                base = _resolve_main_branch(repo)
+                r.step(f"分支不存在 → 从 origin/{base} 创建")
+                sw = _run(["git", "switch", "-c", target, f"origin/{base}"],
                           cwd=str(repo), check=False, capture_output=True)
                 if sw.returncode == 0:
-                    r.ok(f"从 origin/master 创建并切换到 {target}")
+                    r.ok(f"从 origin/{base} 创建并切换到 {target}")
                     switched = True
                 else:
                     fail_err = _extract_error((sw.stderr or "") + (sw.stdout or ""), sw.returncode, "创建失败")
@@ -470,7 +471,7 @@ def _switch_one_factory(target: str) -> OperationFn:
 
 
 def switch_branch_all(target: str) -> int:
-    """批量切换分支：扫描 Git 仓库，切换到指定分支（不存在则从 origin/master 创建）。"""
+    """批量切换分支：扫描 Git 仓库，切换到指定分支（不存在则从主分支创建）。"""
     result = run_batch(
         title=f"分支切换 → {target}",
         root=Path(".").resolve(),
@@ -487,14 +488,38 @@ _MAIN_SENTINEL = "master"
 
 
 def _resolve_main_branch(repo: Path) -> str:
-    """探测仓库真实主分支 (origin/HEAD), 失败回退 master。"""
-    p = _run(["git", "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"],
-             cwd=str(repo), check=False, capture_output=True)
-    if p.returncode == 0:
-        out = (p.stdout or "").strip()
-        if "/" in out:
-            return out.split("/", 1)[1]
-        return out or "master"
+    """探测仓库真实主分支。
+
+    优先 origin/HEAD；缺失则尝试 git remote set-head --auto；
+    仍失败枚举 origin/main / origin/master 哪个存在；全失败回退 master。
+    """
+    def _head_ref() -> str | None:
+        p = _run(["git", "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"],
+                 cwd=str(repo), check=False, capture_output=True)
+        if p.returncode == 0:
+            out = (p.stdout or "").strip()
+            if "/" in out:
+                return out.split("/", 1)[1]
+            return out or None
+        return None
+
+    ref = _head_ref()
+    if ref:
+        return ref
+
+    # origin/HEAD 未设 → 让 git 探测一次再读
+    _run(["git", "remote", "set-head", "origin", "--auto"],
+         cwd=str(repo), check=False, capture_output=True)
+    ref = _head_ref()
+    if ref:
+        return ref
+
+    # 兜底: 枚举常见主分支名看远端 ref 是否存在
+    for cand in ("main", "master"):
+        chk = _run(["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{cand}"],
+                   cwd=str(repo), check=False, capture_output=True)
+        if chk.returncode == 0:
+            return cand
     return "master"
 
 def _sync_one_factory(branch: str | None, force: bool) -> OperationFn:

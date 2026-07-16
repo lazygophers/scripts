@@ -70,7 +70,11 @@ def _ensure_remote_branch_exists(branch: str, *, remote: str = "origin", r=None)
 
     base = _remote_head_branch(remote=remote, r=r)
     if not base or not _remote_branch_exists(base, remote=remote):
-        base = "master"
+        # origin/HEAD 缺失或失效 → 枚举常见主分支名探真实存在
+        base = next(
+            (c for c in ("main", "master") if _remote_branch_exists(c, remote=remote)),
+            "master",
+        )
 
     if r is not None:
         r.warn(f"远端不存在 {remote}/{branch}，将自动创建（基于 {remote}/{base}）")
@@ -87,6 +91,27 @@ def _ensure_remote_branch_exists(branch: str, *, remote: str = "origin", r=None)
 
     p2 = _git(["push", "-u", remote, branch], r=r, title="创建远端分支", show_ok=True)
     return p2.returncode == 0
+
+
+def _preview_merge_conflicts(base: str, head: str, *, r=None) -> bool:
+    """无副作用预演: base 合并 head 是否有冲突。
+
+    用 `git merge-tree --write-tree`（Git ≥2.38，只算 tree 不动工作树/索引）。
+    返回 True=有冲突, False=干净。git 过旧不支持 --write-tree 时降级为
+    `git merge --no-commit --no-ff` + abort（有副作用风险，故仅作兜底）。
+    """
+    p = _git(["merge-tree", "--write-tree", "--name-only", base, head],
+             r=r, title=f"预演合并 {head} → {base}")
+    if p.returncode in (0, 1):
+        # merge-tree: 0=干净合并, 1=有冲突
+        return p.returncode == 1
+    # 兜底: 旧 git 不认 --write-tree → 回退到 checkout + merge --no-commit + abort
+    _step(f"git 版本不支持 merge-tree 预演，回退 --no-commit 探测 ({head} → {base})", r)
+    probe = _git(["merge", "--no-commit", "--no-ff", head],
+                 r=r, title="探测合并（将立即回滚）")
+    has_conflict = probe.returncode != 0
+    _git(["merge", "--abort"], r=r, title="回滚探测", show_ok=False)
+    return has_conflict
 
 
 def _resolve_target(
@@ -187,6 +212,14 @@ def run_workflow(
 
         _step(f"同步目标分支 {target_branch}", r)
         update_branch(target_branch, r=r)
+
+        _step(f"预演合并 {current_branch} → {target_branch}（无副作用）", r)
+        if _preview_merge_conflicts(target_branch, current_branch, r=r):
+            r.err(f"预演发现合并冲突，中止操作（未执行实际合并）")
+            r.warn("请先在本地解决冲突后重新运行")
+            _git(["checkout", original_branch], r=r, title="回滚分支")
+            _notify_done("预演发现冲突，未执行", script_dir=script_dir)
+            raise GitError("预演发现合并冲突，操作已中止")
 
         _step(f"合并 {current_branch} → {target_branch}", r)
         merge = _git(["merge", "--no-edit", current_branch], r=r, title="执行合并", show_ok=True, timeout=DEFAULT_TIMEOUT)
