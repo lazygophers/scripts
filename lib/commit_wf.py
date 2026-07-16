@@ -1,6 +1,11 @@
-"""commit 工作流：检测变更 → 拼 prompt → 调 claude 生成 message → bit commit。"""
+"""commit 工作流：检测变更 → 拼 prompt → 调 AI 生成 message → bit commit。"""
 
 from __future__ import annotations
+
+import json
+import os
+import urllib.error
+import urllib.request
 
 from lib.ai_workflow import current_branch, generate_via_claude
 from lib.exec import run
@@ -13,6 +18,54 @@ _COMMIT_SYSTEM = (
     "subject 格式 type[(scope)]: description（中文，命令式，不超 50 字，不加句号）；"
     "body 用 - 列要点说明变更内容与动机，每行不超 72 字，可多行。"
 )
+
+
+def _lazygophers_enabled() -> bool:
+    """LAZYGOPHERS_SCRIPTS_BASE_URL + _TOKEN 均存在时启用 API 路径。"""
+    return bool(os.environ.get("LAZYGOPHERS_SCRIPTS_BASE_URL")
+                and os.environ.get("LAZYGOPHERS_SCRIPTS_TOKEN"))
+
+
+def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
+                              max_tokens: int = 200, timeout: float = 30.0) -> str:
+    """调 LAZYGOPHERS /chat/compate（codex/OpenAI 兼容格式）生成 message。
+
+    codex 风请求：POST {BASE_URL}/chat/compate，body {messages, max_tokens, ...}，
+    鉴权 Authorization: Bearer <token>，响应 choices[0].message.content。
+    默认禁 thinking（commit 生成无需 extended thinking）。
+    Returns: 生成文本（strip）。失败返回空串。
+    """
+    r = reporter(stderr=True)
+    base = os.environ["LAZYGOPHERS_SCRIPTS_BASE_URL"].rstrip("/")
+    token = os.environ["LAZYGOPHERS_SCRIPTS_TOKEN"]
+    url = f"{base}/chat/compate"
+    body = json.dumps({
+        "max_tokens": max_tokens,
+        "disable_thinking": True,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+    }).encode()
+    req = urllib.request.Request(url, data=body, headers={
+        "authorization": f"Bearer {token}",
+        "content-type": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+        # OpenAI/codex 风响应：choices[0].message.content
+        choices = data.get("choices") or []
+        if choices:
+            return (choices[0].get("message", {}).get("content") or "").strip()
+        # 兜底：Anthropic 风响应
+        parts = data.get("content") or []
+        return "".join(p.get("text", "") for p in parts
+                       if p.get("type") == "text").strip()
+    except (urllib.error.URLError, urllib.error.HTTPError,
+            ValueError, TimeoutError, KeyError, IndexError) as e:
+        r.err(f"LAZYGOPHERS API 生成失败: {e}")
+        return ""
 
 
 def _has_changes() -> tuple[bool, list[str]]:
@@ -59,16 +112,17 @@ def run_commit(
         r.step("bit add .")
         run(["bit", "add", "."], check=False)
 
-    # message 已显式给出 → 直接提交（省 claude 往返）
-    # message 缺失 → claude --bare 绕代理直连官方生成 message（<3s），Python 侧提交
+    # message 已显式给出 → 直接提交（省 AI 往返）
+    # message 缺失 → LAZYGOPHERS env 存在走 /chat/compate API；否则回退 claude CLI
     if msg:
         final_msg = msg
     else:
         prompt = _build_prompt(status_lines)
-        final_msg = generate_via_claude(
-            prompt,
-            system_prompt=_COMMIT_SYSTEM,
-        )
+        if _lazygophers_enabled():
+            r.step("LAZYGOPHERS /chat/compate 生成 message（禁 thinking）")
+            final_msg = _generate_via_lazygophers(prompt, system_prompt=_COMMIT_SYSTEM)
+        else:
+            final_msg = generate_via_claude(prompt, system_prompt=_COMMIT_SYSTEM)
         if not final_msg:
             r.err("生成 message 失败，已取消提交")
             return 1
