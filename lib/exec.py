@@ -35,11 +35,13 @@ def run(
     capture_output: bool = True,
     timeout: float | None = None,
     env: dict[str, str] | None = None,
+    stdin: int | None = None,
 ) -> subprocess.CompletedProcess:
     """执行 shell 命令并返回结果，支持 Ctrl+C 中断与超时。
 
     timeout 秒后抛 CommandTimeout 并 kill 整个进程组（防子进程残留）。
     env=None 继承父进程环境；传 dict 覆盖（批量调子进程时用于传抑制信号）。
+    stdin=None 继承父 stdin；传 subprocess.DEVNULL 给 claude 等读 stdin 会阻塞的子进程。
     """
     try:
         return subprocess.run(
@@ -51,6 +53,7 @@ def run(
             timeout=timeout,
             start_new_session=True,
             env=env,
+            stdin=stdin,
         )
     except subprocess.TimeoutExpired as e:
         raise CommandTimeout(
@@ -65,10 +68,14 @@ def run_no_capture(
     *,
     cwd: str | None = None,
     timeout: float | None = None,
+    stdin: int | None = None,
 ) -> int:
-    """执行 shell 命令（不捕获输出），支持 Ctrl+C 中断与超时。"""
+    """执行 shell 命令（不捕获输出），支持 Ctrl+C 中断与超时。
+
+    stdin=None 继承父 stdin；传 subprocess.DEVNULL 给 claude 等读 stdin 会阻塞的子进程。
+    """
     try:
-        proc = subprocess.Popen(list(cmd), cwd=cwd, start_new_session=True)
+        proc = subprocess.Popen(list(cmd), cwd=cwd, start_new_session=True, stdin=stdin)
         return proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_proc_group(proc)

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -185,7 +186,8 @@ def run_claude(
         args += ["--settings", settings_file]
     args += [prompt]
     # 透传 stdio: 不 capture, 直接打到当前终端; run_no_capture 隔离进程组保证 Ctrl-C 只送 claude
-    rc = run_no_capture(args)
+    # stdin=DEVNULL: claude 检测非 tty stdin 会等数据 3s 超时警告，某些环境退码 1，显式关掉
+    rc = run_no_capture(args, stdin=subprocess.DEVNULL)
     if rc != 0:
         r.err(f"claude 退出码 {rc}")
     return rc
@@ -229,7 +231,7 @@ def generate_via_claude(
     if settings_file:
         args += ["--settings", settings_file]
     args += [prompt]
-    p = run(args, check=False, capture_output=True, timeout=timeout)
+    p = run(args, check=False, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
     if p.returncode != 0:
         r.err(f"claude 生成失败（退出码 {p.returncode}）: {(p.stderr or '')[:200]}")
         return ""
