@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """n 薄壳入口 — macOS 语音播报。"""
+from __future__ import annotations
+
 import argparse
 import pathlib
 import sys

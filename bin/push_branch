@@ -3,6 +3,8 @@
 
 与 sync_branch 方向相反：本地 → 远端。先 pull --ff-only 同步远端到本地，再 push。
 """
+from __future__ import annotations
+
 import argparse
 import pathlib
 import sys

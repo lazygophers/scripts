@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """issue 薄壳入口 — 自动创建 Issue（调 claude 生成 title/body）。"""
+from __future__ import annotations
+
 import argparse
 import pathlib
 import sys

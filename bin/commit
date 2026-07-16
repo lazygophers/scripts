@@ -3,6 +3,8 @@
 
 单仓（cwd 是 git 仓库）→ run_commit；否则批量扫描子目录所有 git 仓库。
 """
+from __future__ import annotations
+
 import argparse
 import pathlib
 import sys

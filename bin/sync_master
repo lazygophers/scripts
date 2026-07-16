@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """sync_master 薄壳入口 — 批量同步主分支 (master/main 自动识别) 到 origin/<主分支>。"""
+from __future__ import annotations
+
 import argparse
 import pathlib
 import sys

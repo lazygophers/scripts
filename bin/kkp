@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """kkp 薄壳入口 — 根据端口号终止占用进程。"""
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib

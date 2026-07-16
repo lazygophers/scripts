@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """unsleep 薄壳入口 — macOS 防休眠。"""
+from __future__ import annotations
+
 import argparse
 import pathlib
 import sys

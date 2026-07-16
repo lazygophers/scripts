@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """kk 薄壳入口 — 按进程名终止进程。"""
+from __future__ import annotations
+
 import argparse
 import pathlib
 import sys

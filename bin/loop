@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """loop 薄壳入口 — 循环执行命令并追踪结果。"""
+from __future__ import annotations
+
 import argparse
 import pathlib
 import sys

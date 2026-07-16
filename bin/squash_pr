@@ -4,6 +4,8 @@
 产出一个仅含单 commit 的 <source>_pr 分支，push 后调 mr <target> 开 PR。
 源分支与 target 分支本身不动。
 """
+from __future__ import annotations
+
 import argparse
 import pathlib
 import sys

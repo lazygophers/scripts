@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """switch_branch 薄壳入口 — 批量切换分支。"""
+from __future__ import annotations
+
 import argparse
 import pathlib
 import sys

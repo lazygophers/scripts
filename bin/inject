@@ -14,6 +14,8 @@
     inject --show       # 仅打印将生成的内容, 不写盘
     inject --uninstall  # 从 rc 移除 source 行, 删除 scripts.sh
 """
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib

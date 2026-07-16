@@ -4,6 +4,8 @@
 单仓（当前在 git 仓库）→ 删当前仓库远端分支；非 git 目录 → 批量扫描所有 Git 仓库。
 单仓路径复用 lib 工厂闭包，确保 skip/prune 规则与批量一致（spec batch-git.md）。
 """
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
