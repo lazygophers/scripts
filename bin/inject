@@ -60,23 +60,46 @@ def _build_rc_block() -> str:
     return f"{_MARKER_BEGIN}\n{_SOURCE_LINE_TMPL}\n{_MARKER_END}\n"
 
 
+def _read_existing_ai_config() -> tuple[str, str]:
+    """从 scripts.sh 解析已存的 BASE_URL/TOKEN 作默认值。缺失返回 ('', '')。"""
+    import re
+
+    if not _SCRIPTS_SH.exists():
+        return "", ""
+    text = _SCRIPTS_SH.read_text(encoding="utf-8")
+    url_m = re.search(r'export\s+LAZYGOPHERS_SCRIPTS_BASE_URL="([^"]*)"', text)
+    tok_m = re.search(r'export\s+LAZYGOPHERS_SCRIPTS_TOKEN="([^"]*)"', text)
+    return (url_m.group(1) if url_m else ""), (tok_m.group(1) if tok_m else "")
+
+
 def _prompt_ai_config(r) -> tuple[str | None, str | None]:
-    """询问用户是否填入 LAZYGOPHERS AI 配置。返回 (base_url, token)，不填则 (None, None)。"""
+    """询问用户是否填入 LAZYGOPHERS AI 配置。返回 (base_url, token)，不填则 (None, None)。
+
+    预填：先读现有 scripts.sh 已存值作默认，回车保留；不覆盖已配内容。
+    """
     from lib.ui import ask_confirm, ask_text
 
-    r.panel(
-        "LAZYGOPHERS AI 配置（可选）",
-        "启用后 bin/commit 自动生成 message 时优先走 /chat/compate API\n"
-        "（比 claude CLI 快，实测 ~3s）。env 缺失则回退 claude CLI。\n"
-        "需提供: 服务 base_url + token。示例: http://127.0.0.1:9894/proxy / free",
-        style="cyan",
-    )
-    enable = ask_confirm("是否现在配置?", default=False)
+    cur_url, cur_tok = _read_existing_ai_config()
+    summary = "启用后 bin/commit 自动生成 message 时优先走 /chat/compate API\n（比 claude CLI 快，实测 ~3s）。env 缺失则回退 claude CLI。"
+    if cur_url or cur_tok:
+        summary += "\n检测到现有配置（回车保留）:"
+        if cur_url:
+            summary += f"\n  BASE_URL = {cur_url}"
+        if cur_tok:
+            masked = cur_tok[:2] + "*" * max(2, len(cur_tok) - 2) if len(cur_tok) > 2 else "*" * len(cur_tok)
+            summary += f"\n  TOKEN    = {masked}"
+    else:
+        summary += "\n示例: http://127.0.0.1:9894/proxy / free"
+    r.panel("LAZYGOPHERS AI 配置（可选）", summary, style="cyan")
+
+    has_existing = bool(cur_url or cur_tok)
+    enable = ask_confirm("是否配置?", default=has_existing)
     if enable is None or not enable:
-        r.step("跳过 AI 配置（可后续手填 scripts.sh）")
-        return None, None
-    base_url = ask_text("LAZYGOPHERS_SCRIPTS_BASE_URL")
-    token = ask_text("LAZYGOPHERS_SCRIPTS_TOKEN")
+        # 跳过：保留现有配置（若有），返回现有值而非 None，避免 _write_scripts_sh 覆盖丢失
+        r.step("跳过 AI 配置（保留现有）" if has_existing else "跳过 AI 配置（可后续手填 scripts.sh）")
+        return (cur_url or None), (cur_tok or None)
+    base_url = ask_text("LAZYGOPHERS_SCRIPTS_BASE_URL", default=cur_url)
+    token = ask_text("LAZYGOPHERS_SCRIPTS_TOKEN", default=cur_tok)
     if base_url is None or token is None:
         r.step("输入取消，跳过 AI 配置")
         return None, None
