@@ -230,7 +230,9 @@ def run_workflow(
             raise GitError(f"自动创建 {target_branch} 分支失败（可能无推送权限或网络问题）")
 
         _step(f"同步目标分支 {target_branch}", r)
-        update_branch(target_branch, r=r)
+        # 目标分支 checkout 后工作区可能因 gitignore/行尾残留显示"脏"但无实质改动，
+        # 此处不 check；合并后的干净度检查在 merge 完成后统一做（下方 check_bit_clean）。
+        update_branch(target_branch, r=r, check_after_pull=False)
 
         _step(f"预演合并 {current_branch} → {target_branch}（无副作用）", r)
         if _preview_merge_conflicts(target_branch, current_branch, r=r):

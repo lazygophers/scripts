@@ -76,8 +76,12 @@ def _run_git_retry(
         _report(r, "output", result.last_output)
 
 
-def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", r: Reporter | None = None) -> None:
+def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", r: Reporter | None = None, check_after_pull: bool = True) -> None:
     """更新分支：切换到目标分支，同步远程更新，推送本地更改。
+
+    check_after_pull=False 时跳过 pull 后的 check_bit_clean（用于切到目标分支后，
+    工作区可能因 gitignore/行尾等残留显示"脏"但无实质改动的场景；合并后的检查
+    由调用方在 merge 完成后统一做）。
 
     Raises:
         GitError: 当切换分支、拉取或推送失败时
@@ -95,13 +99,15 @@ def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", 
             [bit_cmd, "push", "-u", remote, branch],
             **retry_ctx, error_msg="推送失败", title="push -u 输出",
         )
-        check_bit_clean(bit_cmd=bit_cmd)
+        if check_after_pull:
+            check_bit_clean(bit_cmd=bit_cmd)
         return
 
     pull_cmd = [bit_cmd, "-c", "merge.autoEdit=false", "pull", remote, branch]
     _report(r, "step", f"{bit_cmd} pull {remote} {branch}")
     _run_git_retry(pull_cmd, **retry_ctx, error_msg="拉取或合并失败", title="pull 输出")
-    check_bit_clean(bit_cmd=bit_cmd)
+    if check_after_pull:
+        check_bit_clean(bit_cmd=bit_cmd)
 
     push_cmd = [bit_cmd, "push", remote, branch]
     _report(r, "step", f"{bit_cmd} push {remote} {branch}")
