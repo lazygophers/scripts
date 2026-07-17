@@ -312,13 +312,175 @@ def run_workflow(
                 _git(["checkout", original_branch], r=r, title="兜底切回原始分支", show_ok=True)
 
 
+def run_merge_workflow(
+    script_name: str,
+    default_branch: str | None,
+    argv: list[str],
+) -> int:
+    """merge_* 流程：把目标分支 merge 到当前分支（方向 target → current）。
+
+    5 步：
+    1. 本地工作区干净检查
+    2. 更新当前分支为最新（远端无则跳过）
+    3. 更新目标分支为最新
+    4. 预演 target → current 冲突，有冲突问用户是否停止
+    5. 执行 merge target 到 current
+
+    与 push_*（current → target + push）方向相反，故独立流程不复用 run_workflow。
+    """
+    global _STEP_COUNTER
+    _STEP_COUNTER = 0
+
+    auto_detect = default_branch == "master"
+    parser = argparse.ArgumentParser(
+        description=f"合并目标分支到当前分支（target → current）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="示例:\n"
+               f"  {script_name}           # 合并 {default_branch if not auto_detect else '远端默认分支'} → 当前\n"
+               f"  {script_name} --dry-run # 仅预览",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="仅预览，不执行实际操作")
+    parser.add_argument("--auto-commit", action="store_true",
+                        help="当前分支有未提交变更时，自动调 commit 提交后再继续")
+    parser.add_argument("target_arg", nargs="?", default=default_branch if not auto_detect else None,
+                        help=f"目标分支（将被 merge 到当前分支；默认: {default_branch if not auto_detect else '远端默认分支'}）")
+    parsed = parser.parse_args(argv[1:])
+
+    from lib.ui import ask_confirm
+
+    r = reporter(stderr=True)
+    script_dir = Path(__file__).resolve().parent
+
+    resolved_target, default_hint = _resolve_target(
+        parsed.target_arg,
+        auto_detect=auto_detect,
+        r=r,
+    )
+    target_branch = resolved_target
+    if default_hint:
+        r.kv("远端默认分支", {"远端 HEAD": default_hint})
+
+    p = _git(["branch", "--show-current"], r=r, title="当前分支")
+    current_branch = (p.stdout or "").strip()
+    if p.returncode != 0 or not current_branch:
+        r.err(f"无法获取当前分支: {(p.stdout or '') + (p.stderr or '')}".rstrip())
+        return 1
+
+    r.panel(
+        f"Git 合并工作流：{script_name}",
+        f"[cyan]当前分支[/cyan]  {current_branch}\n"
+        f"[cyan]目标分支[/cyan]  {target_branch}  →  merge 到当前",
+        style="blue",
+    )
+
+    if current_branch == target_branch:
+        r.warn(f"当前已是 {target_branch}，跳过操作")
+        return 0
+
+    if parsed.dry_run:
+        r.rule("演练模式", style="yellow")
+        steps = []
+        if parsed.auto_commit:
+            steps.append(("自动提交", "若有未提交变更，调 commit（lib）"))
+        steps += [
+            ("干净检查", "check_bit_clean"),
+            ("更新当前分支", f"git pull/push {current_branch}"),
+            ("更新目标分支", f"git pull {target_branch}"),
+            ("预演冲突", f"target {target_branch} → current {current_branch}"),
+            ("合并", f"git merge {target_branch} → {current_branch}"),
+        ]
+        for i, (name, detail) in enumerate(steps, 1):
+            r.step(f"[{i}] {name}: {detail}")
+        r.ok("演练完成，无实际变更")
+        return 0
+
+    try:
+        # 步骤0：--auto-commit 先处理未提交变更
+        if parsed.auto_commit:
+            from lib.commit_wf import _has_changes, run_commit
+            has, _ = _has_changes()
+            if has:
+                _step(f"检测到未提交变更，--auto-commit 自动提交 {current_branch}", r)
+                rc = run_commit()
+                if rc != 0:
+                    raise GitError(f"自动提交失败（退出码 {rc}），中止工作流")
+
+        # 步骤1：本地工作区干净检查
+        _step(f"检查工作区是否干净", r)
+        check_bit_clean()
+
+        # 步骤2：更新当前分支为最新（远端无该分支则跳过）
+        if _remote_branch_exists(current_branch):
+            _step(f"更新当前分支 {current_branch}（pull + push）", r)
+            update_branch(current_branch, r=r)
+        else:
+            r.warn(f"远端无 {current_branch}，跳过同步当前分支")
+
+        # 步骤3：更新目标分支为最新
+        if not _ensure_remote_branch_exists(target_branch, r=r):
+            raise GitError(f"自动创建 {target_branch} 分支失败（可能无推送权限或网络问题）")
+        _step(f"更新目标分支 {target_branch}（checkout 后 pull，不查未提交）", r)
+        update_branch(target_branch, r=r, check_after_pull=False)
+
+        # 切回当前分支（update_branch 可能停在 target 上）
+        p = _git(["branch", "--show-current"])
+        if (p.stdout or "").strip() != current_branch:
+            _git(["checkout", current_branch], r=r, title="切回当前分支")
+
+        # 步骤4：预演 target → current 冲突，有冲突问用户是否停止
+        _step(f"预演合并 {target_branch} → {current_branch}（无副作用）", r)
+        if _preview_merge_conflicts(current_branch, target_branch, r=r):
+            r.warn(f"预演发现合并冲突：{target_branch} → {current_branch}")
+            stop = ask_confirm("存在冲突，是否停止（不 merge）？", default=True)
+            if stop is None or stop:
+                r.err("用户选择停止，未执行 merge")
+                _notify_done("预演发现冲突，用户停止", script_dir=script_dir)
+                raise GitError("预演发现冲突，用户选择停止")
+            r.warn("用户选择继续，将执行 merge（可能产生冲突需手动解决）")
+
+        # 步骤5：执行 merge target 到 current
+        _step(f"合并 {target_branch} → {current_branch}", r)
+        merge = _git(["merge", "--no-edit", target_branch], r=r, title="执行合并", show_ok=True, timeout=DEFAULT_TIMEOUT)
+        if merge.returncode != 0:
+            if sys.stdin.isatty():
+                r.warn("检测到合并冲突：请手动解决后按回车继续")
+                input()
+                _git(["add", "."], r=r, title="标记所有冲突已解决")
+                cont = _git(["commit", "--no-edit"], r=r, title="完成合并提交", show_ok=True)
+            else:
+                r.err("检测到合并冲突：非交互模式下无法继续，请手动解决后重新运行")
+                _git(["merge", "--abort"], r=r, title="回滚合并")
+                _notify_done("合并冲突未解决", script_dir=script_dir)
+                raise GitError("合并冲突未解决")
+            if cont.returncode != 0:
+                _git(["merge", "--abort"], r=r, title="回滚合并")
+                _notify_done("合并冲突未解决", script_dir=script_dir)
+                raise GitError("冲突未完全解决，操作已终止！")
+
+        r.panel(
+            "合并完成",
+            f"{target_branch}  →  {current_branch}\n"
+            f"留在 {current_branch}",
+            style="green",
+        )
+        _notify_done("merge 工作流完成", script_dir=script_dir)
+        return 0
+
+    except GitError as e:
+        r.err(str(e))
+        return 1
+
+
 def merge_to(target: str, argv: list[str] | None = None) -> int:
-    """合并当前分支 → target, 留在 target。供薄壳 (bin/merge_canary 等) 直接调用。"""
+    """把目标分支 merge 到当前分支（target → current），留在当前分支。
+
+    供薄壳 (bin/merge_canary 等) 直接调用。方向与 push_* 相反，走 run_merge_workflow。
+    """
     if argv is None:
         argv = sys.argv
     script_name = os.environ.get("_SCRIPT_NAME", f"merge-{target}")
     passthrough = [target, *argv[1:]]
-    return run_workflow(script_name, target, passthrough, stay_on_target=True)
+    return run_merge_workflow(script_name, target, passthrough)
 
 
 def push_to(target: str, argv: list[str] | None = None) -> int:

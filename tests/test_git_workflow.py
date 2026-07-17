@@ -10,32 +10,30 @@ import lib.git_workflow as gw
 
 
 class TestMergeTo(unittest.TestCase):
-    @patch.object(gw, "run_workflow", return_value=0)
+    @patch.object(gw, "run_merge_workflow", return_value=0)
     def test_forwards_args(self, mock_wf):
         rc = gw.merge_to("canary", argv=["merge_canary", "--dry-run"])
         self.assertEqual(rc, 0)
         mock_wf.assert_called_once()
         args, kwargs = mock_wf.call_args
-        args[0]
         target = args[1]
         passthrough = args[2]
         self.assertEqual(target, "canary")
         self.assertEqual(passthrough, ["canary", "--dry-run"])
-        self.assertTrue(kwargs["stay_on_target"])
 
-    @patch.object(gw, "run_workflow", return_value=0)
+    @patch.object(gw, "run_merge_workflow", return_value=0)
     def test_default_script_name(self, mock_wf):
         gw.merge_to("dev", argv=["x"])
         script_name = mock_wf.call_args[0][0]
         self.assertIn("dev", script_name)
 
-    @patch.object(gw, "run_workflow", return_value=0)
+    @patch.object(gw, "run_merge_workflow", return_value=0)
     def test_env_script_name_override(self, mock_wf):
         with patch.dict("os.environ", {"_SCRIPT_NAME": "custom"}):
             gw.merge_to("x", argv=["x"])
         self.assertEqual(mock_wf.call_args[0][0], "custom")
 
-    @patch.object(gw, "run_workflow", return_value=7)
+    @patch.object(gw, "run_merge_workflow", return_value=7)
     def test_propagates_exit_code(self, mock_wf):
         self.assertEqual(gw.merge_to("x", argv=["x"]), 7)
 
