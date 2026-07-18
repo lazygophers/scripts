@@ -17,6 +17,10 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from lib.notify import consume_no_say
+
+sys.argv = consume_no_say(sys.argv)
+
 _NAME_MAP = {
     "merge_canary": ("merge", "canary"),
     "merge_develop": ("merge", "develop"),

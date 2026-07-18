@@ -8,6 +8,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.notify import consume_no_say
 from lib.process import kill_by_port
 
 
@@ -31,4 +32,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    sys.argv = consume_no_say(sys.argv)
     raise SystemExit(main(sys.argv))

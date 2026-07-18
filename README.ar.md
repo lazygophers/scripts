@@ -49,6 +49,8 @@ inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف 
 > **ملاحظات الترحيل (الأسماء القديمة محذوفة)** : `mergec`/`mergedev`/`mergem`/`merget` → `merge_canary`/`merge_develop`/`merge_master`/`merge_test` ; `pushc`/`pushdev`/`pushm`/`pusht` → `push_canary`/`push_develop`/`push_master`/`push_test` ; `pushc_all` دُمج في `push_*` (التنفيذ خارج دليل git للدفعة التلقائية، التنفيذ التلقائي بدون تأكيد، `--dry-run` معاينة).
 
 > **متغيرات البيئة** : `BATCH_CONCURRENCY` يتحكم في عملية الدفعات (`push_*` / `switch_branch` / `sync_branch` / `sync_master`) حد التوازي، الافتراضي `4`. مثال : `BATCH_CONCURRENCY=8 push_canary`.
+>
+> **خيار شامل `--no-say`** : جميع `bin/*` (عدا `n` نفسه) تدعم `--no-say` لكتم صوت macOS ؛ يكافئ `SCRIPTS_NO_SAY=1`. مثال : `delete_branch --no-say hotfix/x`، `push_canary --no-say`.
 
 ---
 

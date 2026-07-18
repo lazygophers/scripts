@@ -22,6 +22,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.notify import consume_no_say
 from lib.ui import reporter, timed
 
 # ponytail: 固定 rc 候选清单, 不读 $SHELL (多机拷贝/换 shell 时 rc 已存在即写)
@@ -234,4 +235,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    sys.argv = consume_no_say(sys.argv)
     raise SystemExit(timed(main, label="inject")(sys.argv))

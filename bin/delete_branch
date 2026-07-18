@@ -13,6 +13,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.batch_git import _delete_branch_one_factory
+from lib.notify import consume_no_say
 from lib.ui import reporter, timed
 
 # 单仓 / 批量统一的状态 → 退出码映射（skip 非失败，exit 0）
@@ -47,4 +48,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    sys.argv = consume_no_say(sys.argv)
     raise SystemExit(timed(main, label="delete_branch")(sys.argv))

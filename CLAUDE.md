@@ -75,7 +75,7 @@ Run scripts from the repository root (`./bin/<name>`; `chmod +x bin/*` once). Ea
 - **Dependencies**: Scripts with dependencies must be run from the repository root directory
 - **Git Commands**: Scripts use standard `git`
 - **Safety First**: `merge_*` / `push_*` cannot be run directly on the target branch (safety mechanism)
-- **Voice Notifications**: Use `n` for system voice notifications
+- **Voice Notifications**: Use `n` for system voice notifications. All `bin/*` (except `n`) accept `--no-say` (or `SCRIPTS_NO_SAY=1`) to mute; implemented via `lib/notify.py` (`consume_no_say` + `set_say_disabled`), so every bin entry must call `sys.argv = consume_no_say(sys.argv)` before its main/argparse.
  - **Output**: All Python scripts prefer Rich `Reporter` output (fallback to plain stderr)
 
 ### Testing Scripts

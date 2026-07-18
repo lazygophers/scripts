@@ -53,6 +53,8 @@ inject is idempotent: rerunning won't duplicate. After completion, restart shell
 > **Migration Notes (old names removed)**: `mergec`/`mergedev`/`mergem`/`merget` → `merge_canary`/`merge_develop`/`merge_master`/`merge_test`; `pushc`/`pushdev`/`pushm`/`pusht` → `push_canary`/`push_develop`/`push_master`/`push_test`; `pushc_all` merged into `push_*` (execute in non-git directory for auto batch, auto execute without confirmation, `--dry-run` preview).
 
 > **Environment Variables**: `BATCH_CONCURRENCY` controls batch operation (`push_*` / `switch_branch` / `sync_branch` / `sync_master`) parallel concurrency limit, defaults to `4`. Example: `BATCH_CONCURRENCY=8 push_canary`.
+>
+> **Global option `--no-say`**: all `bin/*` (except `n` itself) support `--no-say` to mute macOS voice playback; equivalent to `SCRIPTS_NO_SAY=1`. Example: `delete_branch --no-say hotfix/x`, `push_canary --no-say`.
 
 ---
 

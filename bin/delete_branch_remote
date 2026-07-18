@@ -13,6 +13,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.batch_git import _delete_branch_remote_one_factory
+from lib.notify import consume_no_say
 from lib.ui import reporter, timed
 
 _STATUS_EXIT = {"ok": 0, "skip": 0, "fail": 1}
@@ -44,4 +45,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    sys.argv = consume_no_say(sys.argv)
     raise SystemExit(timed(main, label="delete_branch_remote")(sys.argv))

@@ -53,6 +53,8 @@ inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.z
 > **迁移说明（旧名已移除）**：原 `mergec/mergedev/mergem/merget` → `merge_canary/merge_develop/merge_master/merge_test`；`pushc/pushdev/pushm/pusht` → `push_canary/push_develop/push_master/push_test`；`pushc_all` 已并入 `push_*`（在非 git 目录执行即自动批量，自动执行无确认，`--dry-run` 预览）。
 
 > **环境变量**：`BATCH_CONCURRENCY` 控制批量操作（`push_*` / `switch_branch` / `sync_branch` / `sync_master`）并行并发上限，默认 `4`。例：`BATCH_CONCURRENCY=8 push_canary`。
+>
+> **通用选项 `--no-say`**：所有 `bin/*`（除 `n` 本身）支持 `--no-say` 静音 macOS 语音播报；等价于 `SCRIPTS_NO_SAY=1`。例：`delete_branch --no-say hotfix/x`、`push_canary --no-say`。
 
 ---
 

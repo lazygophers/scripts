@@ -10,7 +10,8 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.commit_wf import run_commit, commit_all
+from lib.commit_wf import commit_all, run_commit
+from lib.notify import consume_no_say
 from lib.ui import timed
 
 
@@ -45,4 +46,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    sys.argv = consume_no_say(sys.argv)
     raise SystemExit(timed(main, label="commit")(sys.argv))
