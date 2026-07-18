@@ -51,6 +51,8 @@ inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف 
 > **متغيرات البيئة** : `BATCH_CONCURRENCY` يتحكم في عملية الدفعات (`push_*` / `switch_branch` / `sync_branch` / `sync_master`) حد التوازي، الافتراضي `4`. مثال : `BATCH_CONCURRENCY=8 push_canary`.
 >
 > **خيار شامل `--no-say`** : جميع `bin/*` (عدا `n` نفسه) تدعم `--no-say` لكتم صوت macOS ؛ يكافئ `SCRIPTS_NO_SAY=1`. مثال : `delete_branch --no-say hotfix/x`، `push_canary --no-say`.
+>
+> **خيار `push_*` `--no-check`** : يتخطى بوابات checkwork (فحص مسبق للفرع الحالي + فحص نتيجة الدمج) ؛ بقية التدفق دون تغيير. مثال : `push_canary --no-check`.
 
 ---
 

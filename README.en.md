@@ -55,6 +55,8 @@ inject is idempotent: rerunning won't duplicate. After completion, restart shell
 > **Environment Variables**: `BATCH_CONCURRENCY` controls batch operation (`push_*` / `switch_branch` / `sync_branch` / `sync_master`) parallel concurrency limit, defaults to `4`. Example: `BATCH_CONCURRENCY=8 push_canary`.
 >
 > **Global option `--no-say`**: all `bin/*` (except `n` itself) support `--no-say` to mute macOS voice playback; equivalent to `SCRIPTS_NO_SAY=1`. Example: `delete_branch --no-say hotfix/x`, `push_canary --no-say`.
+>
+> **`push_*` option `--no-check`**: skip the checkwork build gates (current-branch pre-check + merged-result check); the rest of the flow is unchanged. Example: `push_canary --no-check`.
 
 ---
 

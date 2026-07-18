@@ -152,6 +152,8 @@ def run_workflow(
     parser.add_argument("--dry-run", action="store_true", help="仅预览，不执行实际操作")
     parser.add_argument("--auto-commit", action="store_true",
                         help="当前分支有未提交变更时，自动调 commit 提交后再继续工作流")
+    parser.add_argument("--no-check", action="store_true",
+                        help="跳过 checkwork 构建检查闸门（当前分支预检 + 合并结果检）")
     parser.add_argument("target_arg", nargs="?", default=default_branch if not auto_detect else None, help=f"目标分支（默认: {default_branch if not auto_detect else '远端默认分支'}）")
     parsed = parser.parse_args(argv[1:])
 
@@ -193,6 +195,8 @@ def run_workflow(
         steps = []
         if parsed.auto_commit:
             steps.append(("自动提交", "若有未提交变更，调 commit（lib）"))
+        if not parsed.no_check:
+            steps.append(("构建检查", f"checkwork 当前分支 + 合并结果"))
         steps += [
             ("同步分支", f"git pull + git push ({current_branch})"),
             ("合并", f"git merge {current_branch} → {target_branch}"),
@@ -203,6 +207,8 @@ def run_workflow(
             steps.append(("切回", f"git checkout {current_branch}"))
         for i, (name, detail) in enumerate(steps, 1):
             r.step(f"[{i}] {name}: {detail}")
+        if parsed.no_check:
+            r.warn("--no-check：已跳过 checkwork 构建检查闸门")
         r.ok("演练完成，无实际变更")
         return 0
 
@@ -219,9 +225,12 @@ def run_workflow(
 
         # 闸门1：切目标分支前，当前分支必须 build 通过（防止把会 break 的代码合进目标分支）。
         # 与 push 前的第二道闸（合并后 check）互补：此处在源分支拦截，彼处在合并结果上拦截。
-        _step(f"预检：当前分支 {current_branch} 构建检查", r)
-        check_bit_clean()
-        _gate_check_build(r, where=f"当前分支 {current_branch} ")
+        if parsed.no_check:
+            _step(f"跳过当前分支 {current_branch} 构建检查（--no-check）", r)
+        else:
+            _step(f"预检：当前分支 {current_branch} 构建检查", r)
+            check_bit_clean()
+            _gate_check_build(r, where=f"当前分支 {current_branch} ")
 
         _step(f"同步当前分支 {current_branch}", r)
         update_branch(current_branch, r=r)
@@ -261,7 +270,10 @@ def run_workflow(
                 raise GitError("冲突未完全解决，操作已终止！")
 
         check_bit_clean()
-        _gate_check_build(r, where=f"合并结果({target_branch}) ")
+        if parsed.no_check:
+            _step(f"跳过合并结果({target_branch}) 构建检查（--no-check）", r)
+        else:
+            _gate_check_build(r, where=f"合并结果({target_branch}) ")
 
         _step(f"推送 {target_branch} 到远端", r)
         sync = retry_command(["git", "push", "origin", target_branch], max_retries=3, timeout=NET_TIMEOUT)
