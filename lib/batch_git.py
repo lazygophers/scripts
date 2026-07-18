@@ -92,14 +92,28 @@ def print_summary(
 
 
 def notify_batch_done(folder_name: str, result: BatchResult, *, script_dir: Path) -> None:
-    """批量操作完成通知。"""
+    """批量操作完成通知 — 文案按 succeeded/skipped/failed 精确组合，避免误导。
+
+    全 skip（如 delete_branch 删不存在的分支）说"全部跳过"而非"完成"。
+    """
     from lib.notify import notify_via_n
-    if result.failed:
-        msg = f"{folder_name} 部分仓库失败（{len(result.failed)} 个）"
-    elif result.succeeded:
-        msg = f"{folder_name} 成功同步 {len(result.succeeded)} 个项目"
+    s, k, f = len(result.succeeded), len(result.skipped), len(result.failed)
+    if f and s:
+        parts = [f"成功 {s}"]
+        if k:
+            parts.append(f"跳过 {k}")
+        parts.append(f"失败 {f}")
+        msg = f"{folder_name} 部分失败：" + "、".join(parts)
+    elif f:
+        msg = f"{folder_name} 失败 {f} 个" + (f"、跳过 {k}" if k else "")
+    elif s and k:
+        msg = f"{folder_name} 成功 {s}、跳过 {k}"
+    elif s:
+        msg = f"{folder_name} 成功 {s} 个"
+    elif k:
+        msg = f"{folder_name} 全部跳过（{k} 个）"
     else:
-        msg = f"{folder_name} 的所有内容完成"
+        msg = f"{folder_name} 无仓库可处理"
     notify_via_n(msg, script_dir=script_dir)
 
 

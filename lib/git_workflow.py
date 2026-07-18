@@ -311,7 +311,7 @@ def run_workflow(
                 style="green",
             )
 
-        _notify_done("Git 工作流完成", script_dir=script_dir)
+        _notify_done(f"已推送到 {target_branch}", script_dir=script_dir)
         return 0
 
     except GitError as e:
@@ -475,7 +475,7 @@ def run_merge_workflow(
             f"留在 {current_branch}",
             style="green",
         )
-        _notify_done("merge 工作流完成", script_dir=script_dir)
+        _notify_done(f"已合并 {target_branch} 到 {current_branch}", script_dir=script_dir)
         return 0
 
     except GitError as e:
