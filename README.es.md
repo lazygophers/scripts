@@ -41,6 +41,7 @@ inject es idempotente : reejecutar no duplicará. Después de completar, reinici
 | `delete_branch` | Eliminar rama local (repo único; lote si no en dir git) | `delete_branch <name> [--force] [-y]` |
 | `delete_branch_remote` | Eliminar rama remota (repo único; lote si no en dir git) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | Recuperar por lotes todos los repositorios Git                                     | `fetch_all`               |
+| `list_branches`  | Listar ramas locales (repo único o escanear todos, nombres duplicados cross-repo marcados ⟱) | `list_branches` |
 | `unsleep`        | Evitar suspensión macOS caffeinate                                      | `unsleep -t 3600`             |
 | `reindex`        | Reindexar proyecto (local-only, .gitignore)                        | `reindex`                     |
 | `inject`         | Inyectar bin/ en PATH shell                                      | `inject`                      |

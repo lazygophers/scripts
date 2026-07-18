@@ -41,6 +41,7 @@ inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف 
 | `delete_branch` | حذف فرع محلي (مستودع واحد; دفعة إن لم في dir git) | `delete_branch <name> [--force] [-y]` |
 | `delete_branch_remote` | حذف فرع بعيد (مستودع واحد; دفعة إن لم في dir git) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | جلب بالدفعات جميع مستودعات Git                                     | `fetch_all`               |
+| `list_branches`  | سرد الفروع المحلية (مستودع واحد أو فحص الكل، الأسماء المكررة عبر المستودعات مميزة ⟱) | `list_branches` |
 | `unsleep`        | منع السكون macOS caffeinate                                      | `unsleep -t 3600`             |
 | `reindex`        | إعادة فهرسة المشروع (local-only، .gitignore)                        | `reindex`                     |
 | `inject`         | حقن bin/ في PATH shell                                      | `inject`                      |

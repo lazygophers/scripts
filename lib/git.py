@@ -216,3 +216,163 @@ def fetch_all(root: Path = Path(".")) -> int:
         r.info("无仓库可处理")
 
     return 1 if failures else 0
+
+
+# ── list_branches 入口 ────────────────────────────
+
+from collections import Counter  # noqa: E402, I001
+
+# for-each-ref 字段分隔符（分支名不含该字符，安全）
+_REF_SEP = "\x1f"
+
+
+def _parse_branch_refs(cwd: str) -> list[dict]:
+    """解析单个仓库的本地分支列表。
+
+    用 `git for-each-ref` 一次性取全部分支元信息（分支名 / 是否当前 /
+    短 SHA / 最后提交日期 / 上游 / ahead-behind），避免多次 git 调用。
+    detached HEAD 时无当前分支，仍列出所有分支。
+    """
+    fmt = _REF_SEP.join([
+        "%(refname:short)",
+        "%(HEAD)",
+        "%(objectname:short)",
+        "%(committerdate:short)",
+        "%(upstream:short)",
+        "%(upstream:track)",
+    ])
+    p = run(
+        ["git", "for-each-ref", f"--format={fmt}", "refs/heads/"],
+        check=False, capture_output=True, cwd=cwd,
+    )
+    branches: list[dict] = []
+    for line in (p.stdout or "").splitlines():
+        parts = line.split(_REF_SEP)
+        if len(parts) < 6:
+            continue
+        name, head, sha, date, upstream, track = parts[:6]
+        branches.append({
+            "name": name,
+            "current": head.strip() == "*",
+            "sha": sha,
+            "date": date,
+            "upstream": upstream,
+            "track": track.strip(),
+        })
+    return branches
+
+
+def _collect_all_branches(repos: list[Path], root: Path) -> list[tuple[str, dict]]:
+    """收集所有仓库的分支，返回 (repo_display, branch_dict) 列表。"""
+    rows: list[tuple[str, dict]] = []
+    for repo in repos:
+        display = str(repo.relative_to(root)) if str(repo) != str(root) else repo.name
+        for br in _parse_branch_refs(str(repo)):
+            rows.append((display, br))
+    return rows
+
+
+def _render_branch_table(
+    r,
+    rows: list[tuple[str, dict]],
+    *,
+    mark_duplicates: bool,
+) -> None:
+    """渲染分支表（Rich Table 或纯文本降级）。"""
+    # ponytail: 全局重复标注 — 跨仓库同名分支计数 > 1 标 ⟱
+    dup_names: set[str] = set()
+    if mark_duplicates:
+        counter = Counter(br["name"] for _, br in rows)
+        dup_names = {n for n, c in counter.items() if c > 1}
+
+    from lib.ui import Table, Text  # noqa: E402, I001
+
+    if r.console is not None and Table is not None:
+        table = Table(
+            title="分支总览",
+            show_header=True,
+            box=None,
+            border_style="blue",
+            title_style="bold",
+            header_style="dim",
+            expand=False,
+        )
+        table.add_column("仓库", style="bold", no_wrap=True)
+        table.add_column("分支", no_wrap=True)
+        table.add_column("当前", justify="center")
+        table.add_column("SHA", style="dim", no_wrap=True)
+        table.add_column("日期", no_wrap=True)
+        table.add_column("upstream", style="dim", no_wrap=True)
+        table.add_column("track", no_wrap=True)
+        for repo, br in rows:
+            name_text = Text(br["name"])
+            if br["current"]:
+                name_text.stylize("bold green")
+            if br["name"] in dup_names:
+                name_text.append("  ⟱", style="yellow bold")
+            track = br["track"]
+            track_style = "yellow" if "ahead" in track else (
+                "red" if "behind" in track else "dim"
+            )
+            table.add_row(
+                repo,
+                name_text,
+                "●" if br["current"] else "",
+                br["sha"],
+                br["date"],
+                br["upstream"] or "—",
+                Text(track or "", style=track_style) if track else "",
+            )
+        r.console.print(table)
+        if dup_names:
+            r.warn(f"⟱ = 跨仓库重复分支名（{len(dup_names)} 个）")
+        return
+
+    # 纯文本降级
+    r.rule("分支总览")
+    for repo, br in rows:
+        cur = "*" if br["current"] else " "
+        dup = " ⟱" if br["name"] in dup_names else ""
+        sha = f" {br['sha']} {br['date']}" if br["sha"] else ""
+        parts = [f"  {repo}  {cur} {br['name']}{dup}{sha}"]
+        if br["upstream"]:
+            parts.append(f"[{br['upstream']}")
+            if br["track"]:
+                parts.append(f" {br['track']}")
+            parts.append("]")
+        elif br["track"]:
+            parts.append(f"[{br['track']}]")
+        r._print("", "".join(parts))
+    if dup_names:
+        r.warn(f"⟱ = 跨仓库重复分支名（{len(dup_names)} 个）")
+
+
+def list_branches(root: Path = Path(".")) -> int:
+    """列出所有仓库的本地分支。
+
+    单仓（root 自身是 git 仓库）→ 仅列该仓库；否则扫描子目录所有 git 仓库。
+    Rich 表输出，跨仓库同名分支标 ⟱。
+    """
+    root = root.resolve()
+    r = reporter(stderr=True)
+
+    # 单仓：root/.git 存在 → 仅列该仓
+    if (root / ".git").exists():
+        repos = [root]
+    else:
+        from lib.batch_git import scan_repos
+        repos = scan_repos(root)
+
+    r.rule("Git 分支总览", style="blue")
+    r.info(f"扫描 {len(repos)} 个仓库（{root}）")
+
+    if not repos:
+        r.info("无仓库可处理")
+        return 0
+
+    rows = _collect_all_branches(repos, root)
+    _render_branch_table(r, rows, mark_duplicates=len(repos) > 1)
+
+    total_branches = len(rows)
+    r.status_footer([(f"仓库 {len(repos)}", "cyan"), (f"分支 {total_branches}", "green")])
+    return 0

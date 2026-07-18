@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""list_branches 薄壳入口 — 列出所有仓库的本地分支。
+
+单仓（当前在 git 仓库）→ 仅列该仓库；非 git 目录 → 批量扫描所有 Git 仓库。
+Rich 表输出，跨仓库同名分支标 ⟱。
+"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.git import list_branches
+from lib.ui import timed
+
+raise SystemExit(timed(list_branches, label="list_branches")())
