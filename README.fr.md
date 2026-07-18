@@ -41,7 +41,7 @@ inject est idempotent : réexécuter ne dupliquera pas. Après achèvement, red�
 | `delete_branch` | Supprimer branche locale (repo unique; lot si hors dir git) | `delete_branch <name> [--force] [-y]` |
 | `delete_branch_remote` | Supprimer branche distante (repo unique; lot si hors dir git) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | Récupérer par lots tous les dépôts Git                                     | `fetch_all`               |
-| `list_branches`  | Lister les branches locales (repo unique ou scan tous les dépôts, noms dupliqués cross-repo marqués ⟱) | `list_branches` |
+| `list_branch`  | Lister les branches locales (repo unique ou scan tous les dépôts, noms dupliqués cross-repo marqués ⟱ ; groupé par dépôt) | `list_branch` |
 | `unsleep`        | Empêcher la mise en veille macOS caffeinate                                      | `unsleep -t 3600`             |
 | `reindex`        | Réindexer le projet (local-only, .gitignore)                        | `reindex`                     |
 | `inject`         | Injecter bin/ dans le PATH shell                                      | `inject`                      |

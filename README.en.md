@@ -46,7 +46,7 @@ inject is idempotent: rerunning won't duplicate. After completion, restart shell
 | `delete_branch` | Delete local branch (single-repo; batch if not in git dir) | `delete_branch <name> [--force] [-y]` |
 | `delete_branch_remote` | Delete remote branch (single-repo; batch if not in git dir) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `fetch_all`  | Batch fetch all Git repositories                                     | `fetch_all`               |
-| `list_branches`  | List local branches (single-repo or scan all repos, cross-repo dup names marked ⟱) | `list_branches` |
+| `list_branch`  | List local branches (single-repo or scan all repos, cross-repo dup names marked ⟱; grouped by repo) | `list_branch` |
 | `unsleep`        | macOS caffeinate anti-idle                                      | `unsleep -t 3600`             |
 | `inject`         | Inject bin/ into shell PATH                                      | `inject`                      |
 

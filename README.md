@@ -46,7 +46,7 @@ inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.z
 | `delete_branch_remote` | 删远端分支 (单仓;非 git 目录批量) | `delete_branch_remote <name> [--remote <r>] [-y]` |
 | `sync_master`    | 批量同步 master (= `sync_branch master`)                     | `sync_master`                 |
 | `fetch_all`      | 批量 fetch 所有 Git 仓库                                     | `fetch_all`                   |
-| `list_branches`  | 列出本地分支（单仓或扫描所有 Git 仓库，跨仓同名分支标 ⟱）   | `list_branches`               |
+| `list_branch`  | 列出本地分支（单仓或扫描所有 Git 仓库，跨仓同名分支标 ⟱；按仓库分组）   | `list_branch`               |
 | `unsleep`        | macOS caffeinate 防休眠                                      | `unsleep -t 3600`             |
 | `inject`         | 把 bin/ 注入 shell PATH                                      | `inject`                      |
 

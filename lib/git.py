@@ -218,7 +218,7 @@ def fetch_all(root: Path = Path(".")) -> int:
     return 1 if failures else 0
 
 
-# ── list_branches 入口 ────────────────────────────
+# ── list_branch 入口 ────────────────────────────
 
 from collections import Counter  # noqa: E402, I001
 
@@ -272,82 +272,112 @@ def _collect_all_branches(repos: list[Path], root: Path) -> list[tuple[str, dict
     return rows
 
 
+def _branch_name_cell(br, dup_names):
+    """构造分支名 Rich Text（当前分支绿色加粗，跨仓重复标 ⟱）。"""
+    from lib.ui import Text  # noqa: E402, I001
+
+    name_text = Text(br["name"])
+    if br["current"]:
+        name_text.stylize("bold green")
+    if br["name"] in dup_names:
+        name_text.append("  ⟱", style="yellow bold")
+    return name_text
+
+
+def _track_cell(br):
+    from lib.ui import Text  # noqa: E402, I001
+
+    track = br["track"]
+    if not track:
+        return ""
+    style = "yellow" if "ahead" in track else (
+        "red" if "behind" in track else "dim"
+    )
+    return Text(track, style=style)
+
+
 def _render_branch_table(
     r,
     rows: list[tuple[str, dict]],
     *,
     mark_duplicates: bool,
 ) -> None:
-    """渲染分支表（Rich Table 或纯文本降级）。"""
+    """按仓库分组渲染分支（Rich: 每仓一 Table；纯文本: 每仓一 rule）。
+
+    跨仓库同名分支全局标 ⟱（mark_duplicates=True 时）。
+    Rich Table expand=False 按内容自然宽度；分支/upstream/track 列设 overflow=fold，
+    总宽超终端时折行而非省略，保证长内容完整可见。
+    """
     # ponytail: 全局重复标注 — 跨仓库同名分支计数 > 1 标 ⟱
     dup_names: set[str] = set()
     if mark_duplicates:
         counter = Counter(br["name"] for _, br in rows)
         dup_names = {n for n, c in counter.items() if c > 1}
 
-    from lib.ui import Table, Text  # noqa: E402, I001
+    from lib.ui import Table  # noqa: E402, I001
 
-    if r.console is not None and Table is not None:
-        table = Table(
-            title="分支总览",
-            show_header=True,
-            box=None,
-            border_style="blue",
-            title_style="bold",
-            header_style="dim",
-            expand=False,
-        )
-        table.add_column("仓库", style="bold", no_wrap=True)
-        table.add_column("分支", no_wrap=True)
-        table.add_column("当前", justify="center")
-        table.add_column("SHA", style="dim", no_wrap=True)
-        table.add_column("日期", no_wrap=True)
-        table.add_column("upstream", style="dim", no_wrap=True)
-        table.add_column("track", no_wrap=True)
-        for repo, br in rows:
-            name_text = Text(br["name"])
-            if br["current"]:
-                name_text.stylize("bold green")
-            if br["name"] in dup_names:
-                name_text.append("  ⟱", style="yellow bold")
-            track = br["track"]
-            track_style = "yellow" if "ahead" in track else (
-                "red" if "behind" in track else "dim"
+    # 按仓库分组，保持发现顺序
+    groups: dict[str, list[dict]] = {}
+    for repo, br in rows:
+        groups.setdefault(repo, []).append(br)
+
+    rich = r.console is not None and Table is not None
+
+    if rich:
+        # expand=False：表按内容自然宽度；总宽 > 终端时 Rich 对未设 no_wrap 的列
+        # 自动换行（而非省略号），确保长分支名/upstream 完整可见。
+        # 固定短列（当前/SHA/日期）no_wrap 防 header 压缩。
+        for repo, branches in groups.items():
+            table = Table(
+                title=f"📦 {repo}" if repo else "分支",
+                title_style="bold cyan",
+                header_style="dim",
+                show_header=True,
+                box=None,
+                expand=False,
             )
-            table.add_row(
-                repo,
-                name_text,
-                "●" if br["current"] else "",
-                br["sha"],
-                br["date"],
-                br["upstream"] or "—",
-                Text(track or "", style=track_style) if track else "",
-            )
-        r.console.print(table)
+            table.add_column("分支", overflow="fold", no_wrap=False)
+            table.add_column("当前", justify="center", no_wrap=True)
+            table.add_column("SHA", style="dim", no_wrap=True)
+            table.add_column("日期", no_wrap=True)
+            table.add_column("upstream", style="dim", overflow="fold", no_wrap=False)
+            table.add_column("track", overflow="fold", no_wrap=False)
+            for br in branches:
+                table.add_row(
+                    _branch_name_cell(br, dup_names),
+                    "●" if br["current"] else "",
+                    br["sha"],
+                    br["date"],
+                    br["upstream"] or "—",
+                    _track_cell(br),
+                )
+            r.console.print(table)
+            r.console.print()
         if dup_names:
             r.warn(f"⟱ = 跨仓库重复分支名（{len(dup_names)} 个）")
         return
 
-    # 纯文本降级
-    r.rule("分支总览")
-    for repo, br in rows:
-        cur = "*" if br["current"] else " "
-        dup = " ⟱" if br["name"] in dup_names else ""
-        sha = f" {br['sha']} {br['date']}" if br["sha"] else ""
-        parts = [f"  {repo}  {cur} {br['name']}{dup}{sha}"]
-        if br["upstream"]:
-            parts.append(f"[{br['upstream']}")
-            if br["track"]:
-                parts.append(f" {br['track']}")
-            parts.append("]")
-        elif br["track"]:
-            parts.append(f"[{br['track']}]")
-        r._print("", "".join(parts))
+    # 纯文本降级：每仓一个 rule
+    for repo, branches in groups.items():
+        r.rule(repo or "分支")
+        for br in branches:
+            cur = "*" if br["current"] else " "
+            dup = " ⟱" if br["name"] in dup_names else ""
+            sha = f" {br['sha']} {br['date']}" if br["sha"] else ""
+            parts = [f"  {cur} {br['name']}{dup}{sha}"]
+            if br["upstream"]:
+                parts.append(f"[{br['upstream']}")
+                if br["track"]:
+                    parts.append(f" {br['track']}")
+                parts.append("]")
+            elif br["track"]:
+                parts.append(f"[{br['track']}]")
+            r._print("", "".join(parts))
     if dup_names:
         r.warn(f"⟱ = 跨仓库重复分支名（{len(dup_names)} 个）")
 
 
-def list_branches(root: Path = Path(".")) -> int:
+def list_branch(root: Path = Path(".")) -> int:
     """列出所有仓库的本地分支。
 
     单仓（root 自身是 git 仓库）→ 仅列该仓库；否则扫描子目录所有 git 仓库。

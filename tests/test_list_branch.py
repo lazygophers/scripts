@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for lib.git (list_branches 分支总览)."""
+"""Tests for lib.git (list_branch 分支总览)."""
 import io
 import sys
 import unittest
@@ -13,7 +13,7 @@ from lib.git import (
     _collect_all_branches,
     _parse_branch_refs,
     _render_branch_table,
-    list_branches,
+    list_branch,
 )
 
 
@@ -136,7 +136,7 @@ class TestRenderBranchTable(unittest.TestCase):
         self.assertIn("⟱", out)
         self.assertIn("跨仓库重复分支名", out)
         # dev 仅 1 次 → 不标
-        dev_line = next(ln for ln in out.splitlines() if "dev" in ln and "repoA" in ln)
+        dev_line = next(ln for ln in out.splitlines() if "dev" in ln)
         self.assertNotIn("⟱", dev_line)
 
     def test_plain_no_duplicate_mark_when_disabled(self):
@@ -183,7 +183,7 @@ class TestListBranches(unittest.TestCase):
         mock_r = MagicMock()
         mock_rep.return_value = mock_r
         with patch.object(Path, "exists", return_value=True):
-            rc = list_branches(Path("/repo"))
+            rc = list_branch(Path("/repo"))
         self.assertEqual(rc, 0)
         mock_collect.assert_called_once()
         repos_arg = mock_collect.call_args[0][0]
@@ -200,7 +200,7 @@ class TestListBranches(unittest.TestCase):
         found = [Path("/root/a"), Path("/root/b")]
         mock_scan.return_value = found
         with patch.object(Path, "exists", return_value=False):
-            rc = list_branches(Path("/root"))
+            rc = list_branch(Path("/root"))
         self.assertEqual(rc, 0)
         mock_scan.assert_called_once()
         mock_collect.assert_called_once_with(found, Path("/root").resolve())
@@ -213,7 +213,7 @@ class TestListBranches(unittest.TestCase):
         mock_rep.return_value = mock_r
         mock_scan.return_value = []
         with patch.object(Path, "exists", return_value=False):
-            rc = list_branches(Path("/empty"))
+            rc = list_branch(Path("/empty"))
         self.assertEqual(rc, 0)
 
     @patch("lib.git._collect_all_branches")
@@ -226,7 +226,7 @@ class TestListBranches(unittest.TestCase):
         mock_collect.return_value = []
         with patch.object(Path, "exists", return_value=False):
             with patch("lib.batch_git.scan_repos", return_value=[Path("/r1"), Path("/r2")]):
-                list_branches(Path("/root"))
+                list_branch(Path("/root"))
         _, kwargs = mock_render.call_args
         self.assertTrue(kwargs["mark_duplicates"])
 
@@ -238,7 +238,7 @@ class TestListBranches(unittest.TestCase):
         mock_r = MagicMock()
         mock_rep.return_value = mock_r
         with patch.object(Path, "exists", return_value=True):
-            list_branches(Path("/repo"))
+            list_branch(Path("/repo"))
         _, kwargs = mock_render.call_args
         self.assertFalse(kwargs["mark_duplicates"])
 
