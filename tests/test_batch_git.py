@@ -195,7 +195,7 @@ class TestNotifyBatchDone(unittest.TestCase):
 
 class TestPushFactory(unittest.TestCase):
     def test_returns_callable(self):
-        op = _push_one_factory(target="canary", dry_run=True, extra=[])
+        op = _push_one_factory(target="canary", dry_run=True, auto_commit=False, extra=[])
         self.assertTrue(callable(op))
 
     @patch("lib.batch_git._run")
@@ -208,7 +208,7 @@ class TestPushFactory(unittest.TestCase):
             _mock_run(returncode=1),   # show-ref remote target (不存在)
             _mock_run(returncode=1),   # show-ref local target (不存在)
         ]
-        op = _push_one_factory(target="canary", dry_run=True, extra=[])
+        op = _push_one_factory(target="canary", dry_run=True, auto_commit=False, extra=[])
         r = MagicMock()
         status, _ = op(Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "ok")
@@ -220,7 +220,7 @@ class TestPushFactory(unittest.TestCase):
                 _mock_run(returncode=0),   # fetch
                 _mock_run(returncode=1),   # show-ref remote target
             ]
-            op = _push_one_factory(target="canary", dry_run=False, extra=[])
+            op = _push_one_factory(target="canary", dry_run=False, auto_commit=False, extra=[])
             r = MagicMock()
             status, detail = op(Path("/repo"), r, Path("/root"))
             self.assertEqual(status, "skip")
@@ -236,7 +236,7 @@ class TestPushFactory(unittest.TestCase):
             _mock_run(returncode=1),   # show-ref local target (不存在) → cond2 不通过
             _mock_run(returncode=0),   # 执行 push_develop
         ]
-        op = _push_one_factory(target="develop", dry_run=False, extra=[])
+        op = _push_one_factory(target="develop", dry_run=False, auto_commit=False, extra=[])
         r = MagicMock()
         status, _ = op(Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "ok")
@@ -264,7 +264,7 @@ class TestPushFactory(unittest.TestCase):
             _mock_run(returncode=1),   # show-ref local target → cond2 不通过
             _mock_run(returncode=1, stdout=full_log),  # push_canary 失败
         ]
-        op = _push_one_factory(target="canary", dry_run=False, extra=[])
+        op = _push_one_factory(target="canary", dry_run=False, auto_commit=False, extra=[])
         r = MagicMock()
         status, detail = op(Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "fail")

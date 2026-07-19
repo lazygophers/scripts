@@ -14,6 +14,10 @@ _DANGEROUS_RE = re.compile(r"[;|&$`']")
 # bin/n 是播报工具本身，不经此开关（用 say_content 直达）。
 _SAY_DISABLED = os.environ.get("SCRIPTS_NO_SAY", "") == "1"
 
+# 全局调试开关：--debug 或 SCRIPTS_DEBUG=1 置 True 后，lib/exec 成功命令也输出
+# stdout/stderr（默认仅失败时打）。子进程经 env 透传，全链路生效。
+_DEBUG = os.environ.get("SCRIPTS_DEBUG", "") == "1"
+
 
 def set_say_disabled(disabled: bool) -> None:
     """运行时切换语音禁用状态（由 bin 层 --no-say 调用）。"""
@@ -23,6 +27,16 @@ def set_say_disabled(disabled: bool) -> None:
 
 def is_say_disabled() -> bool:
     return _SAY_DISABLED
+
+
+def set_debug(debug: bool) -> None:
+    """运行时切换调试状态（由 bin 层 --debug 调用）。"""
+    global _DEBUG
+    _DEBUG = debug
+
+
+def is_debug() -> bool:
+    return _DEBUG
 
 
 def consume_no_say(argv: list[str]) -> list[str]:
@@ -37,6 +51,20 @@ def consume_no_say(argv: list[str]) -> list[str]:
     if "--no-say" in argv[1:]:
         _SAY_DISABLED = True
         argv = [argv[0]] + [a for a in argv[1:] if a != "--no-say"]
+    return argv
+
+
+def consume_debug(argv: list[str]) -> list[str]:
+    """剥离 argv 中所有 --debug 并启用调试输出，返回剩余 argv。
+
+    与 consume_no_say 同构：bin 层 argparse 前调用
+    sys.argv = consume_debug(sys.argv)。子进程经 env SCRIPTS_DEBUG=1 透传，
+    无需逐个 bin 注册参数。
+    """
+    global _DEBUG
+    if "--debug" in argv[1:]:
+        _DEBUG = True
+        argv = [argv[0]] + [a for a in argv[1:] if a != "--debug"]
     return argv
 
 

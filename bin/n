@@ -7,7 +7,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.notify import say_content
+from lib.notify import consume_debug, say_content
 from lib.ui import timed
 
 
@@ -23,4 +23,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    sys.argv = consume_debug(sys.argv)
     raise SystemExit(timed(main, label="n")(sys.argv))

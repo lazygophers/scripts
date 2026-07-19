@@ -52,5 +52,31 @@ class TestNotifyViaN(unittest.TestCase):
         self.assertEqual(mock_run.call_count, 2)
 
 
+class TestConsumeDebug(unittest.TestCase):
+    def setUp(self):
+        # 保留并恢复全局 flag, 避免污染其他用例
+        self._prev = notify_mod._DEBUG
+        notify_mod._DEBUG = False
+
+    def tearDown(self):
+        notify_mod._DEBUG = self._prev
+
+    def test_strips_debug_and_sets_flag(self):
+        out = notify_mod.consume_debug(["bin/x", "--debug", "arg"])
+        self.assertEqual(out, ["bin/x", "arg"])
+        self.assertTrue(notify_mod.is_debug())
+
+    def test_no_debug_keeps_argv(self):
+        out = notify_mod.consume_debug(["bin/x", "arg"])
+        self.assertEqual(out, ["bin/x", "arg"])
+        self.assertFalse(notify_mod.is_debug())
+
+    def test_set_debug_toggles(self):
+        notify_mod.set_debug(True)
+        self.assertTrue(notify_mod.is_debug())
+        notify_mod.set_debug(False)
+        self.assertFalse(notify_mod.is_debug())
+
+
 if __name__ == "__main__":
     unittest.main()

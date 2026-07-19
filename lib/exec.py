@@ -52,7 +52,7 @@ def run(
             text=True,
             timeout=timeout,
             start_new_session=True,
-            env=env,
+            env=_propagate_debug_env(env),
             stdin=stdin,
         )
     except subprocess.TimeoutExpired as e:
@@ -136,6 +136,31 @@ def _log_after_run(
         r.cmd_result(cmd, cwd=cwd, returncode=p.returncode, output=out, show_output=True, title=title)
     elif show_output_on_success and out.strip():
         r.output(out)
+    elif _debug_enabled() and out.strip():
+        # --debug：成功命令也打输出，便于排查静默路径
+        r.output(out)
+
+
+def _debug_enabled() -> bool:
+    """延迟导入避免 exec ↔ notify 循环依赖。"""
+    from lib.notify import is_debug
+    return is_debug()
+
+
+def _propagate_debug_env(env: dict[str, str] | None) -> dict[str, str] | None:
+    """子进程继承父的 SCRIPTS_DEBUG，确保全链路 --debug 生效。
+
+    env=None（默认继承父环境）时：父环境已含 SCRIPTS_DEBUG（若 bin 层 consume_debug
+    在父进程置位且 env 由 os.environ 提供）—— 但 consume_debug 只改内存 flag 不写
+    os.environ，故 None 路径下子进程拿不到。统一在 debug 时显式注入。
+    非 debug 时原样返回，保留 None 的「继承父」语义。
+    """
+    from lib.notify import is_debug
+    if not is_debug():
+        return env
+    base = dict(os.environ if env is None else env)
+    base["SCRIPTS_DEBUG"] = "1"
+    return base
 
 
 _NETWORK_ERROR_RE = re.compile(
