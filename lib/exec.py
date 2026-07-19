@@ -43,6 +43,8 @@ def run(
     env=None 继承父进程环境；传 dict 覆盖（批量调子进程时用于传抑制信号）。
     stdin=None 继承父 stdin；传 subprocess.DEVNULL 给 claude 等读 stdin 会阻塞的子进程。
     """
+    import time
+    t0 = time.monotonic()
     try:
         p = subprocess.run(
             list(cmd),
@@ -56,23 +58,31 @@ def run(
             stdin=stdin,
         )
     except subprocess.TimeoutExpired as e:
+        _debug_log(None, cmd, cwd, time.monotonic() - t0, rc=None)
         raise CommandTimeout(
             f"命令超时（{timeout}s）: {shell_join(cmd)}"
         ) from e
     except KeyboardInterrupt:
+        _debug_log(None, cmd, cwd, time.monotonic() - t0, rc=None)
         raise KeyboardInterrupt(f"命令被用户中断: {shell_join(cmd)}") from None
 
-    _debug_log(p, cmd, cwd)
+    _debug_log(p, cmd, cwd, time.monotonic() - t0)
     return p
 
 
-def _debug_log(p: subprocess.CompletedProcess, cmd: Sequence[str], cwd: str | None) -> None:
-    """--debug 时把每条命令 + stdout/stderr 打到 Reporter。
+def _debug_log(
+    p: subprocess.CompletedProcess | None,
+    cmd: Sequence[str],
+    cwd: str | None,
+    elapsed: float,
+    *,
+    rc: int | None = None,
+) -> None:
+    """--debug 时把每条命令 + rc + 耗时打到 Reporter（含 stdout/stderr 摘要）。
 
-    run() 是绝大多数命令的唯一通道（git/gh/cargo/go build 等）, 挂这里覆盖最广。
-    run_logged 已有自己的 before/after 日志, 此处会重复——故 run_logged 内部
-    的 run 调用经 capture 路径正常打, 不会双重（run_logged 的 _log_after_run
-    在 debug 时已输出, 与本函数内容一致, 略冗余但无害）。
+    run() 与 run_no_capture() 共用此函数, 故全链路命令（checkwork 的 go build /
+    cargo check / mypy / tsc 等所有检查点）在 --debug 下都打耗时。run_no_capture
+    透传 stdout 到终端, 此处仅记 cmd/rc/elapsed（无 stdout 可记）。
     """
     if not _debug_enabled():
         return
@@ -82,11 +92,12 @@ def _debug_log(p: subprocess.CompletedProcess, cmd: Sequence[str], cwd: str | No
         return
     r = reporter(stderr=True)
     where = f" (cwd={cwd})" if cwd else ""
-    rc = p.returncode
-    r.step(f"[debug]{where} {shell_join(cmd)} → rc={rc}")
-    out = (p.stdout or "") + (p.stderr or "")
-    if out.strip():
-        r.output(out)
+    retcode = rc if rc is not None else (p.returncode if p is not None else "?")
+    r.step(f"[debug]{where} {shell_join(cmd)} → rc={retcode} elapsed={elapsed:.2f}s")
+    if p is not None:
+        out = (p.stdout or "") + (p.stderr or "")
+        if out.strip():
+            r.output(out)
 
 
 def run_no_capture(
@@ -99,16 +110,25 @@ def run_no_capture(
     """执行 shell 命令（不捕获输出），支持 Ctrl+C 中断与超时。
 
     stdin=None 继承父 stdin；传 subprocess.DEVNULL 给 claude 等读 stdin 会阻塞的子进程。
+    --debug 下打 cmd/rc/elapsed（stdout 已透传终端, 不在此重复记录）。
     """
+    import time
+    t0 = time.monotonic()
+    proc = None
     try:
         proc = subprocess.Popen(list(cmd), cwd=cwd, start_new_session=True, stdin=stdin)
-        return proc.wait(timeout=timeout)
+        rc = proc.wait(timeout=timeout)
+        _debug_log(None, cmd, cwd, time.monotonic() - t0, rc=rc)
+        return rc
     except subprocess.TimeoutExpired:
         _kill_proc_group(proc)
+        _debug_log(None, cmd, cwd, time.monotonic() - t0, rc=None)
         raise CommandTimeout(f"命令超时（{timeout}s）: {shell_join(cmd)}") from None
     except KeyboardInterrupt:
-        proc.terminate()
-        proc.wait(timeout=5)
+        if proc is not None:
+            proc.terminate()
+            proc.wait(timeout=5)
+        _debug_log(None, cmd, cwd, time.monotonic() - t0, rc=None)
         raise KeyboardInterrupt(f"命令被用户中断: {shell_join(cmd)}") from None
 
 
@@ -162,9 +182,7 @@ def _log_after_run(
         r.cmd_result(cmd, cwd=cwd, returncode=p.returncode, output=out, show_output=True, title=title)
     elif show_output_on_success and out.strip():
         r.output(out)
-    elif _debug_enabled() and out.strip():
-        # --debug：成功命令也打输出，便于排查静默路径
-        r.output(out)
+    # --debug 的 cmd/rc/elapsed 由 run() 内的 _debug_log 统一负责, 此处不重复
 
 
 def _debug_enabled() -> bool:

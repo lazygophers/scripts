@@ -27,6 +27,19 @@ class RepoResult:
 
 
 @dataclass
+class RepoPlan:
+    """detect 阶段产出: 决定该仓库是否进串行 execute。
+
+    status="skip"/"fail" → 不进 execute, 直接入结果 (detail 即原因)。
+    status="ok" 且 execute 非 None → 进串行执行段。
+    dry_run 模式 detect 返回 status="skip", detail 为预览文案。
+    """
+    status: str  # "ok" | "skip" | "fail"
+    detail: str = ""
+    execute: Callable[[Path, "RepoPlan", Reporter, Path], tuple[str, str]] | None = None
+
+
+@dataclass
 class BatchResult:
     """批量操作汇总。"""
     total: int = 0
@@ -117,29 +130,34 @@ def notify_batch_done(folder_name: str, result: BatchResult, *, script_dir: Path
     notify_via_n(msg, script_dir=script_dir)
 
 
-# type alias for the per-repo operation callback
-# operation(repo, r, root) → (status, detail) where status ∈ {"ok", "skip", "fail"}
-OperationFn = Callable[[Path, Reporter, Path], tuple[str, str]]
+# type aliases for the two-phase per-repo callbacks
+# detect(repo, r, root) → RepoPlan  (并发, 只读判定)
+# execute(repo, plan, r, root) → (status, detail)  (串行, 写操作实时输出)
+DetectFn = Callable[[Path, Reporter, Path], RepoPlan]
+ExecuteFn = Callable[[Path, RepoPlan, Reporter, Path], tuple[str, str]]
 
 
 def run_batch(
     title: str,
     root: Path,
-    operation: OperationFn,
+    detect: DetectFn,
     *,
     folder_name: str | None = None,
     script_dir: Path | None = None,
     confirm: bool = True,
 ) -> BatchResult:
-    """批量仓库操作公共流程（并行）。
+    """批量仓库操作公共流程（两阶段: 检测并发, 执行串行实时）。
 
-    扫描仓库 → 确认 → ThreadPoolExecutor 并行执行（per-repo buffer，
-    完成即 flush，避免多线程 Rich 输出交错）→ 汇总 → 通知。
+    阶段1 扫描 → 确认 → ThreadPoolExecutor 并行 detect（per-repo buffer，
+    完成即 flush，避免多线程 Rich 输出交错）→ 收集 RepoPlan。
+    阶段2 对 plan.execute 非空的仓库**串行**执行，execute 用全局 Reporter
+    直写 stderr（不 buffer），命令 capture_output=False 实时流式输出。
+    → 汇总 → 通知。
 
     Args:
         title: 规则标题
         root: 仓库根目录
-        operation: 每个仓库的操作函数 (repo, r, root) → (status, detail)
+        detect: 每个仓库的检测函数 (repo, r, root) → RepoPlan
         folder_name: 通知用目录名（默认为 root.name）
         script_dir: 脚本目录（用于通知）
         confirm: 是否需要用户确认
@@ -154,7 +172,7 @@ def run_batch(
     repos = scan_repos(root)
     concurrency = max(1, int(os.environ.get("BATCH_CONCURRENCY", "4")))
     # 单行扫描摘要（禁逐行列仓库，避免与汇总段重复）
-    r.info(f"扫描 {len(repos)} 个仓库（并发 {concurrency}）")
+    r.info(f"扫描 {len(repos)} 个仓库（检测并发 {concurrency}，执行串行）")
 
     if confirm and os.environ.get("BATCH_NO_CONFIRM") != "1":
         # 非 TTY（cron/管道/CI）下无法交互确认 → fail-closed：要求显式 -y / BATCH_NO_CONFIRM=1
@@ -171,67 +189,116 @@ def run_batch(
 
     result = BatchResult(total=len(repos))
 
-    def _run_one(idx: int, repo: Path) -> tuple[int, str, RepoResult]:
-        """单仓库在线程内执行：写 per-repo buffer，返回 (idx, buf, RepoResult)。"""
+    # ── 阶段1: 并发 detect ──────────────────────────────────────────
+    def _detect_one(idx: int, repo: Path) -> tuple[int, str, RepoPlan, RepoResult]:
+        """单仓库在线程内跑 detect: 写 per-repo buffer, 返回 (idx, buf, plan, 预填 result)。"""
         rel = repo.relative_to(root)
         buf = io.StringIO()
         rr_per_repo = Reporter.from_buffer(buf)
         try:
-            status, detail = operation(repo, rr_per_repo, root)
-            rr = RepoResult(name=str(rel), path=str(repo), status=status, detail=detail)
+            plan = detect(repo, rr_per_repo, root)
+            if plan is None:
+                plan = RepoPlan(status="fail", detail="detect 返回 None")
         except Exception as e:
-            rr_per_repo.err(f"异常: {e}")
-            rr = RepoResult(name=str(rel), path=str(repo), status="fail", detail=str(e))
-        return idx, buf.getvalue(), rr
+            rr_per_repo.err(f"检测异常: {e}")
+            plan = RepoPlan(status="fail", detail=str(e))
+        rr = RepoResult(name=str(rel), path=str(repo), status=plan.status, detail=plan.detail)
+        return idx, buf.getvalue(), plan, rr
 
-    # Progress 进度条：best-effort（无 rich 退回裸 stderr flush）。
-    # per-repo buffer 防交错优先于进度条视觉；进度条与日志共存靠 Live 重定向。
+    # detect 阶段进度
     prog = progress(r.console)
     prog_task = None
     if prog is not None:
-        prog_task = prog.add_task("处理中", total=len(repos))
+        prog_task = prog.add_task("检测中", total=len(repos))
         prog.start()
 
+    plans: list[tuple[RepoPlan, RepoResult, str]] = [None] * len(repos)  # type: ignore[list-item]
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = {
-            pool.submit(_run_one, idx, repo): (idx, repo)
+            pool.submit(_detect_one, idx, repo): idx
             for idx, repo in enumerate(repos)
         }
         try:
             for fut in as_completed(futures):
-                idx, buf_text, rr = fut.result()
+                idx, buf_text, plan, rr = fut.result()
                 if prog is not None and prog_task is not None:
                     prog.advance(prog_task)
-                    prog.update(prog_task, description=f"处理中 {rr.name}")
-                # 先 flush 该仓库整段日志（顺序完整不交错），再追状态行
-                if buf_text:
-                    if prog is not None:
-                        # Live 激活时走 console.print，让 Rich 在进度条上方渲染
-                        if not print_ansi(prog.console, buf_text):
-                            sys.stderr.write(buf_text)
-                    else:
-                        sys.stderr.write(buf_text)
-                # 单图标状态行（去双图标：✓/•/✗ 单 icon + 仓库名 + 详情）
-                name = rr.name
-                line = f"{name}{(' — ' + rr.detail) if rr.detail else ''}"
-                r.status(rr.status, line)
-                if rr.status == "ok":
-                    result.succeeded.append(rr)
-                elif rr.status == "skip":
-                    result.skipped.append(rr)
-                else:
-                    result.failed.append(rr)
+                    prog.update(prog_task, description=f"检测中 {rr.name}")
+                plans[idx] = (plan, rr, buf_text)
         except KeyboardInterrupt:
-            # ponytail: os._exit 跳过 with 的 shutdown(wait=True) + 解释器 _python_exit join。
-            # worker 不可中断（git 子进程在跑），cancel_futures 只取消未启动 future；
-            # 不强退会死等 worker 跑完整 fetch/push，表现为"中断后卡住"。
-            r.warn("\n用户中断，停止执行")
+            r.warn("\n用户中断（检测阶段）")
             if prog is not None:
                 prog.stop()
             os._exit(130)
         finally:
             if prog is not None:
                 prog.stop()
+
+    # flush detect 日志（按仓库顺序, 整段不交错）
+    for plan, rr, buf_text in plans:
+        if buf_text:
+            if prog is not None:
+                if not print_ansi(prog.console, buf_text):
+                    sys.stderr.write(buf_text)
+            else:
+                sys.stderr.write(buf_text)
+
+    # detect 阶段已定 skip/fail 的直接入结果
+    to_execute: list[tuple[RepoPlan, RepoResult]] = []
+    for plan, rr, _ in plans:
+        if plan.execute is None:
+            if rr.status == "ok":
+                rr.status = "skip"
+                if not rr.detail:
+                    rr.detail = "无可执行操作"
+            if rr.status == "ok":
+                result.succeeded.append(rr)
+            elif rr.status == "skip":
+                result.skipped.append(rr)
+            else:
+                result.failed.append(rr)
+            r.status(rr.status, f"{rr.name}{(' — ' + rr.detail) if rr.detail else ''}")
+        else:
+            to_execute.append((plan, rr))
+
+    # ── 阶段2: 串行 execute (全局 Reporter 直写 stderr, 实时流式) ────
+    if to_execute:
+        r.rule("执行（串行）", style="blue")
+        prog2 = progress(r.console)
+        prog2_task = None
+        if prog2 is not None:
+            prog2_task = prog2.add_task("执行中", total=len(to_execute))
+            prog2.start()
+        try:
+            for plan, rr in to_execute:
+                if prog2 is not None and prog2_task is not None:
+                    prog2.update(prog2_task, description=f"执行中 {rr.name}")
+                # execute 用全局 r 直写 stderr; 命令 capture_output=False 实时吐
+                try:
+                    status, detail = plan.execute(Path(rr.path), plan, r, root)
+                    rr.status = status
+                    rr.detail = detail
+                except KeyboardInterrupt:
+                    r.warn(f"\n用户中断（执行 {rr.name}）")
+                    if prog2 is not None:
+                        prog2.stop()
+                    os._exit(130)
+                except Exception as e:
+                    r.err(f"执行异常 ({rr.name}): {e}")
+                    rr.status = "fail"
+                    rr.detail = str(e)
+                if prog2 is not None and prog2_task is not None:
+                    prog2.advance(prog2_task)
+                if rr.status == "ok":
+                    result.succeeded.append(rr)
+                elif rr.status == "skip":
+                    result.skipped.append(rr)
+                else:
+                    result.failed.append(rr)
+                r.status(rr.status, f"{rr.name}{(' — ' + rr.detail) if rr.detail else ''}")
+        finally:
+            if prog2 is not None:
+                prog2.stop()
 
     print_summary(r, "执行结果", result)
     notify_batch_done(folder_name, result, script_dir=script_dir)
@@ -281,19 +348,40 @@ def _dirty_detail(repo: Path) -> str:
     return detail[:200]
 
 
-def _push_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list[str]) -> OperationFn:
-    """构造 push 单仓库操作（捕获 target/dry_run/auto_commit/extra）。
+def _push_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list[str]) -> DetectFn:
+    """构造 push 单仓库检测函数（捕获 target/dry_run/auto_commit/extra）。
 
-    单仓执行调新名 symlink `push_{target}`（需在 PATH 中可见）。
+    detect 阶段只读判定 cond1/cond2; 命中则返回带 execute 的 plan。
+    execute 串行执行：先（按需）auto-commit, 再调 `push_{target}` 子进程
+    （capture_output=False, 子进程直吐 stderr 实时流式）。
     """
-    def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
+    def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
+        # auto-commit 写操作归 execute（串行）, 避免并发提交
+        if auto_commit:
+            from lib.commit_wf import _has_changes, run_commit
+            has, _ = _has_changes(cwd=str(repo))
+            if has:
+                cur = _get_current_branch(cwd=str(repo)) or "?"
+                r.step(f"--auto-commit 自动提交 {cur}")
+                rc = run_commit(cwd=str(repo))
+                if rc != 0:
+                    return "fail", f"自动提交失败（退出码 {rc}）"
+        r.step(f"执行 push_{target} …")
+        # capture_output=False: 子进程直吐 stderr, 实时流式（串行无交错风险）
+        rc = _run([f"push_{target}", *extra], cwd=str(repo), check=False,
+                  capture_output=False, env={**os.environ, "_GITWF_BATCH": "1"}).returncode
+        if rc == 0:
+            return "ok", ""
+        return "fail", f"push_{target} 退出码 {rc}"
+
+    def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
         # fetch
         r.step("fetch origin …")
         p = _run(["git", "fetch", "origin"], cwd=str(repo), check=False, capture_output=True)
         if p.returncode != 0:
             err = ((p.stdout or '') + (p.stderr or '')).strip()
             r.err(f"fetch origin 失败: {err[:200]}")
-            return "fail", f"fetch origin 失败: {err[:120]}"
+            return RepoPlan(status="fail", detail=f"fetch origin 失败: {err[:120]}")
 
         ref_check = _run(
             ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{target}"],
@@ -303,7 +391,7 @@ def _push_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list
 
         current_branch = _get_current_branch(cwd=str(repo))
         if not current_branch:
-            return "skip", "无法获取当前分支（detached HEAD）"
+            return RepoPlan(status="skip", detail="无法获取当前分支（detached HEAD）")
         r.info(f"当前分支: {current_branch}")
 
         # 条件1：当前分支相对远端 target 有新 commit
@@ -326,32 +414,15 @@ def _push_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list
                 cond1 = True
             else:
                 cond1_reason = f"当前分支相对 origin/{target} 无新 commit"
-                # HEAD 虽追平, 但工作区可能脏（未 commit 改动）—— 探测并附进 reason,
-                # 避免静默 skip 掩盖「仓库不是空的」的真实改动
                 dirty = _dirty_detail(repo)
                 if dirty:
                     cond1_reason = f"{cond1_reason}（但{dirty}）"
-                    # --auto-commit：批量层在 skip 判定前先提交, 让脏工作区也能进 push_{target}
+                    # auto-commit 时, 即便 cond1 当前 false 也放行进 execute
+                    # (execute 内会先提交, push_{target} 自身再判 commit 是否真有差异)
                     if auto_commit and not dry_run:
-                        from lib.commit_wf import _has_changes, run_commit
-                        has, _ = _has_changes(cwd=str(repo))
-                        if has:
-                            r.step(f"--auto-commit 自动提交 {current_branch}")
-                            rc = run_commit(cwd=str(repo))
-                            if rc != 0:
-                                return "fail", f"自动提交失败（退出码 {rc}）"
-                            # 提交后重算：HEAD 是否领先 origin/{target}
-                            again = _run(
-                                ["git", "log", f"origin/{target}..HEAD", "--oneline"],
-                                cwd=str(repo), check=False, capture_output=True,
-                            )
-                            if (again.stdout or "").strip():
-                                n = len(again.stdout.splitlines())
-                                r.ok(f"条件1 通过 — auto-commit 后 {n} 个新 commit 待合并")
-                                cond1 = True
-                                cond1_reason = ""
-                            else:
-                                cond1_reason = "自动提交后仍无领先 origin/{} 的 commit".format(target)
+                        r.ok(f"条件1 放行 — 工作区脏 + --auto-commit, 提交后由 push_{target} 复判")
+                        cond1 = True
+                        cond1_reason = ""
                 r.info(f"条件1 不满足 — {cond1_reason}")
 
         # 条件2：本地 target 相对远端 target 有差异
@@ -384,27 +455,14 @@ def _push_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list
             if not cond2_reason and local_target.returncode != 0:
                 cond2_reason = f"无本地 {target} 分支"
             reasons = [r for r in (cond1_reason, cond2_reason) if r]
-            return "skip", "；".join(reasons) or "两个条件均不满足"
+            return RepoPlan(status="skip", detail="；".join(reasons) or "两个条件均不满足")
 
         if dry_run:
-            return "ok", f"条件满足（dry-run 模式，不执行 push_{target}）"
+            return RepoPlan(status="skip", detail=f"条件满足（dry-run 模式，不执行 push_{target}）")
 
-        r.step(f"执行 push_{target} …")
-        # 批量模式：子进程 run_workflow 不单独播报，由本入口收尾统一播报
-        p = _run([f"push_{target}", *extra], cwd=str(repo), check=False, capture_output=True,
-                 env={**os.environ, "_GITWF_BATCH": "1"})
-        if p.returncode == 0:
-            return "ok", ""
-        out = (p.stdout or "") + (p.stderr or "")
-        # 失败时流式打印子进程完整输出（info 降级），让用户看 gitc 上下文
-        if out.strip():
-            r.warn(f"push_{target} 子进程输出：")
-            for ln in out.splitlines():
-                if ln.strip():
-                    r.info(f"  {ln}")
-        return "fail", _extract_error(out, p.returncode, f"push_{target}")
+        return RepoPlan(status="ok", execute=_execute)
 
-    return _op
+    return _detect
 
 
 def push_all(
@@ -425,7 +483,7 @@ def push_all(
     )
     parser.add_argument("--dry-run", action="store_true", help="仅检查条件并预览仓库列表，不执行 push")
     parser.add_argument("--auto-commit", action="store_true",
-                        help="工作区有未提交变更时, 在 skip 判定前自动提交当前分支")
+                        help="工作区有未提交变更时, 在 execute 段先提交再 push")
     parsed, extra = parser.parse_known_args(argv[1:] if argv is not None else None)
     # --auto-commit 仅批量层消费, 不透传子进程（子进程会再次判定导致重复提交）
     extra = [a for a in extra if a != "--auto-commit"]
@@ -433,15 +491,43 @@ def push_all(
     result = run_batch(
         title=f"push_{target} 批量推送",
         root=Path(".").resolve(),
-        operation=_push_one_factory(target, parsed.dry_run, parsed.auto_commit, extra),
+        detect=_push_one_factory(target, parsed.dry_run, parsed.auto_commit, extra),
         confirm=False,
     )
     return 1 if result.failed else 0
 
 
-def _switch_one_factory(target: str) -> OperationFn:
-    """构造 switch_branch 单仓库操作（捕获 target）。"""
-    def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
+def _switch_one_factory(target: str) -> DetectFn:
+    """构造 switch_branch 单仓库检测函数（捕获 target）。
+
+    detect: fetch + 当前分支/dirty/分支存在性判定。
+    execute: 串行跑 git switch（capture_output=False 实时）。
+    """
+    def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
+        mode = plan.detail  # detect 把执行模式塞进 detail: local/remote/create
+        if mode == "local":
+            r.step(f"本地分支 {target} 已存在 → switch")
+            sw = _run(["git", "switch", target], cwd=str(repo), check=False, capture_output=False).returncode
+            if sw == 0:
+                return "ok", f"切换到 {target}"
+            return "fail", f"切换失败 (rc={sw})"
+        if mode == "remote":
+            r.step(f"远端分支 origin/{target} 存在 → track & switch")
+            sw = _run(["git", "switch", "-c", target, f"origin/{target}"],
+                      cwd=str(repo), check=False, capture_output=False).returncode
+            if sw == 0:
+                return "ok", f"追踪并切换到 {target}"
+            return "fail", f"切换失败 (rc={sw})"
+        # create
+        base = _resolve_main_branch(repo)
+        r.step(f"分支不存在 → 从 origin/{base} 创建")
+        sw = _run(["git", "switch", "-c", target, f"origin/{base}"],
+                  cwd=str(repo), check=False, capture_output=False).returncode
+        if sw == 0:
+            return "ok", f"从 origin/{base} 创建并切换到 {target}"
+        return "fail", f"创建失败 (rc={sw})"
+
+    def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
         r.step("fetch origin …")
         p = _run(["git", "fetch", "origin"], cwd=str(repo), check=False, capture_output=True)
         if p.returncode != 0:
@@ -450,63 +536,30 @@ def _switch_one_factory(target: str) -> OperationFn:
         current = _get_current_branch(cwd=str(repo))
         if current == target:
             r.ok(f"已在 {target} → 跳过")
-            return "skip", "已在目标分支"
+            return RepoPlan(status="skip", detail="已在目标分支")
 
         # 脏工作树 → fail（不自动 stash，防丢失上下文）
         diff_p = _run(["git", "diff", "--quiet", "HEAD"], cwd=str(repo), check=False, capture_output=True)
         if diff_p.returncode != 0:
             err = _dirty_detail(repo)
             r.err(f"未提交变更 → 跳过: {err}")
-            return "fail", err
+            return RepoPlan(status="fail", detail=err)
 
-        switched = False
-        fail_err = ""
         local_check = _run(
             ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{target}"],
             cwd=str(repo), check=False, capture_output=True,
         )
         if local_check.returncode == 0:
-            r.step(f"本地分支 {target} 已存在 → switch")
-            sw = _run(["git", "switch", target], cwd=str(repo), check=False, capture_output=True)
-            if sw.returncode == 0:
-                r.ok(f"切换到 {target}")
-                switched = True
-            else:
-                fail_err = _extract_error((sw.stderr or "") + (sw.stdout or ""), sw.returncode, "切换失败")
-                r.err(f"切换失败: {fail_err}")
-        else:
-            remote_check = _run(
-                ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{target}"],
-                cwd=str(repo), check=False, capture_output=True,
-            )
-            if remote_check.returncode == 0:
-                r.step(f"远端分支 origin/{target} 存在 → track & switch")
-                sw = _run(["git", "switch", "-c", target, f"origin/{target}"],
-                          cwd=str(repo), check=False, capture_output=True)
-                if sw.returncode == 0:
-                    r.ok(f"追踪并切换到 {target}")
-                    switched = True
-                else:
-                    fail_err = _extract_error((sw.stderr or "") + (sw.stdout or ""), sw.returncode, "切换失败")
-                    r.err(f"切换失败: {fail_err}")
-            else:
-                base = _resolve_main_branch(repo)
-                r.step(f"分支不存在 → 从 origin/{base} 创建")
-                sw = _run(["git", "switch", "-c", target, f"origin/{base}"],
-                          cwd=str(repo), check=False, capture_output=True)
-                if sw.returncode == 0:
-                    r.ok(f"从 origin/{base} 创建并切换到 {target}")
-                    switched = True
-                else:
-                    fail_err = _extract_error((sw.stderr or "") + (sw.stdout or ""), sw.returncode, "创建失败")
-                    r.err(f"创建失败: {fail_err}")
+            return RepoPlan(status="ok", detail="local", execute=_execute)
+        remote_check = _run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{target}"],
+            cwd=str(repo), check=False, capture_output=True,
+        )
+        if remote_check.returncode == 0:
+            return RepoPlan(status="ok", detail="remote", execute=_execute)
+        return RepoPlan(status="ok", detail="create", execute=_execute)
 
-        if not switched:
-            return "fail", fail_err or "切换/创建失败"
-
-        return "ok", ""
-
-    return _op
+    return _detect
 
 
 def switch_branch_all(target: str) -> int:
@@ -514,7 +567,7 @@ def switch_branch_all(target: str) -> int:
     result = run_batch(
         title=f"分支切换 → {target}",
         root=Path(".").resolve(),
-        operation=_switch_one_factory(target),
+        detect=_switch_one_factory(target),
         confirm=False,
     )
     return 1 if result.failed else 0
@@ -561,26 +614,51 @@ def _resolve_main_branch(repo: Path) -> str:
             return cand
     return "master"
 
-def _sync_one_factory(branch: str | None, force: bool) -> OperationFn:
-    """构造单仓库同步操作。
+def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
+    """构造单仓库同步检测函数。
 
     branch=None → 同步该仓库当前分支；branch=<name> → 同步指定分支（不还原原 checkout）。
     硬对齐到 origin/<branch>：本地领先默认 skip，--force 才 reset 丢弃。dirty → fail。
+    detect 把 (target, remote_ref, ahead, behind) 塞进 plan.detail 供 execute 复用。
     """
-    def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
+    def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
+        # detail 编码: target|remote_ref|ahead|behind
+        target, remote_ref, ahead, behind = plan.detail.split("|")
+        ahead, behind = int(ahead), int(behind)
+        cur_p = _run(["git", "branch", "--show-current"],
+                     cwd=str(repo), check=False, capture_output=True)
+        if (cur_p.stdout or "").strip() != target:
+            r.step(f"checkout {target} …")
+            co = _run(["git", "checkout", "-q", target],
+                      cwd=str(repo), check=False, capture_output=True)
+            if co.returncode != 0:
+                return "fail", _extract_error((co.stderr or "") + (co.stdout or ""), co.returncode, f"checkout {target} 失败")
+        r.step(f"reset --hard {remote_ref} …")
+        _run(["git", "reset", "--hard", "-q", remote_ref],
+             cwd=str(repo), check=False, capture_output=False)
+        sha_p = _run(["git", "rev-parse", "--short", remote_ref],
+                     cwd=str(repo), check=False, capture_output=True)
+        sha = (sha_p.stdout or "").strip()
+        if ahead > 0:
+            return "ok", f"强制对齐 {remote_ref} ({sha})，丢弃 {ahead} 本地 commit"
+        elif behind > 0:
+            return "ok", f"快进 {behind} → {remote_ref} ({sha})"
+        else:
+            return "ok", f"已在最新 {remote_ref} ({sha})"
+
+    def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
         p = _run(["git", "fetch", "--prune", "-q", "origin"],
                  cwd=str(repo), check=False, capture_output=True)
         if p.returncode != 0:
-            return "fail", _extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "fetch 失败")
+            return RepoPlan(status="fail", detail=_extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "fetch 失败"))
 
         if branch is None:
             cur_p = _run(["git", "branch", "--show-current"],
                          cwd=str(repo), check=False, capture_output=True)
             target = (cur_p.stdout or "").strip()
             if not target:
-                return "skip", "处于 detached HEAD"
+                return RepoPlan(status="skip", detail="处于 detached HEAD")
         elif branch == _MAIN_SENTINEL:
-            # 主分支语义: 逐仓探测真实 master/main (命令层用 master 即可)
             target = _resolve_main_branch(repo)
         else:
             target = branch
@@ -588,18 +666,18 @@ def _sync_one_factory(branch: str | None, force: bool) -> OperationFn:
         local = _run(["git", "rev-parse", "--verify", "-q", target],
                      cwd=str(repo), check=False, capture_output=True)
         if local.returncode != 0:
-            return "skip", f"无 {target} 分支"
+            return RepoPlan(status="skip", detail=f"无 {target} 分支")
 
         remote_ref = f"origin/{target}"
         remote = _run(["git", "rev-parse", "--verify", "-q", remote_ref],
                       cwd=str(repo), check=False, capture_output=True)
         if remote.returncode != 0:
-            return "skip", f"无 {remote_ref}"
+            return RepoPlan(status="skip", detail=f"无 {remote_ref}")
 
         dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
                      cwd=str(repo), check=False, capture_output=True)
         if dirty.returncode != 0:
-            return "fail", _dirty_detail(repo)
+            return RepoPlan(status="fail", detail=_dirty_detail(repo))
 
         counts_p = _run(
             ["git", "rev-list", "--left-right", "--count", f"{target}...{remote_ref}"],
@@ -618,31 +696,15 @@ def _sync_one_factory(branch: str | None, force: bool) -> OperationFn:
             detail = f"本地 {target} 领先 {ahead} 个 commit"
             if commits:
                 detail += "\n" + "\n".join(f"    {line}" for line in commits.splitlines()[:5])
-            return "skip", detail
+            return RepoPlan(status="skip", detail=detail)
 
-        cur_p = _run(["git", "branch", "--show-current"],
-                     cwd=str(repo), check=False, capture_output=True)
-        if (cur_p.stdout or "").strip() != target:
-            co = _run(["git", "checkout", "-q", target],
-                      cwd=str(repo), check=False, capture_output=True)
-            if co.returncode != 0:
-                return "fail", _extract_error((co.stderr or "") + (co.stdout or ""), co.returncode, f"checkout {target} 失败")
+        return RepoPlan(
+            status="ok",
+            detail=f"{target}|{remote_ref}|{ahead}|{behind}",
+            execute=_execute,
+        )
 
-        _run(["git", "reset", "--hard", "-q", remote_ref],
-             cwd=str(repo), check=False, capture_output=True)
-
-        sha_p = _run(["git", "rev-parse", "--short", remote_ref],
-                     cwd=str(repo), check=False, capture_output=True)
-        sha = (sha_p.stdout or "").strip()
-
-        if ahead > 0:
-            return "ok", f"强制对齐 {remote_ref} ({sha})，丢弃 {ahead} 本地 commit"
-        elif behind > 0:
-            return "ok", f"快进 {behind} → {remote_ref} ({sha})"
-        else:
-            return "ok", f"已在最新 {remote_ref} ({sha})"
-
-    return _op
+    return _detect
 
 
 def sync_branch_all(branch: str | None = None, *, force: bool = False) -> int:
@@ -654,7 +716,7 @@ def sync_branch_all(branch: str | None = None, *, force: bool = False) -> int:
     result = run_batch(
         title=title,
         root=Path(".").resolve(),
-        operation=_sync_one_factory(branch, force),
+        detect=_sync_one_factory(branch, force),
         confirm=False,
     )
     return 1 if result.failed else 0
@@ -665,28 +727,71 @@ def sync_master_all(*, force: bool = False) -> int:
     return sync_branch_all(_MAIN_SENTINEL, force=force)
 
 
-def _push_branch_one_factory(branch: str | None, force: bool, single: bool = False) -> OperationFn:
-    """构造单仓库推送操作（本地 → 远端同名分支）。
+def _push_branch_one_factory(branch: str | None, force: bool, single: bool = False) -> DetectFn:
+    """构造单仓库推送检测函数（本地 → 远端同名分支）。
 
     branch=None → 推送该仓库当前分支；branch=<name> → 推送指定分支。
-    流程：fetch → pull --ff-only（同步远端到本地）→ push。
-    分叉：单仓(single=True)自动 pull --no-rebase 合并（merge commit）；批量仍 skip。
+    流程：detect 只读判 fetch/dirty/分支存在; execute 跑 pull --ff-only → push (实时)。
+    分叉：批量 skip; 单仓(single=True) execute 内自动 pull --no-rebase 合并。
     dirty → fail；--force 用 --force-with-lease。
     """
-    def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
+    def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
+        # detail 编码: target|remote_exists|ahead_n
+        target, remote_exists_s, ahead_n_s = plan.detail.split("|")
+        remote_exists = remote_exists_s == "1"
+        ahead_n = int(ahead_n_s)
+        remote_ref = f"origin/{target}"
+
+        if remote_exists:
+            r.step(f"pull --ff-only {remote_ref} …")
+            pull = _run(["git", "pull", "--ff-only", "-q", "origin", target],
+                        cwd=str(repo), check=False, capture_output=False).returncode
+            if pull != 0:
+                if not single:
+                    return "skip", f"远端有分叉/冲突 (pull rc={pull})"
+                # 单仓: ff-only 失败 → pull --no-rebase 合并分叉
+                r.step(f"pull --no-rebase（合并分叉）{remote_ref} …")
+                pull_merge = _run(
+                    ["git", "pull", "--no-rebase", "--no-edit", "origin", target],
+                    cwd=str(repo), check=False, capture_output=False,
+                ).returncode
+                if pull_merge != 0:
+                    return "skip", f"自动 merge 失败（需手动解决冲突）(rc={pull_merge})"
+
+        push_args = ["git", "push"]
+        if not remote_exists:
+            push_args += ["-u"]
+        if force:
+            push_args += ["--force-with-lease"]
+        push_args += ["origin", target]
+
+        r.step(f"push {target} → origin/{target} …")
+        push = _run(push_args, cwd=str(repo), check=False, capture_output=False).returncode
+        if push != 0:
+            return "fail", f"push 失败 (rc={push})"
+
+        sha_p = _run(["git", "rev-parse", "--short", "HEAD"],
+                     cwd=str(repo), check=False, capture_output=True)
+        sha = (sha_p.stdout or "").strip()
+        if not remote_exists:
+            return "ok", f"新建远端分支 origin/{target} ({sha})"
+        if ahead_n > 0:
+            return "ok", f"推送 {ahead_n} 个 commit → origin/{target} ({sha})"
+        return "ok", f"无变化（已在最新 origin/{target}, {sha})"
+
+    def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
         p = _run(["git", "fetch", "--prune", "-q", "origin"],
                  cwd=str(repo), check=False, capture_output=True)
         if p.returncode != 0:
-            return "fail", _extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "fetch 失败")
+            return RepoPlan(status="fail", detail=_extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "fetch 失败"))
 
         if branch is None:
             cur_p = _run(["git", "branch", "--show-current"],
                          cwd=str(repo), check=False, capture_output=True)
             target = (cur_p.stdout or "").strip()
             if not target:
-                return "skip", "处于 detached HEAD"
+                return RepoPlan(status="skip", detail="处于 detached HEAD")
         elif branch == _MAIN_SENTINEL:
-            # 主分支语义: 逐仓探测真实 master/main (命令层用 master 即可)
             target = _resolve_main_branch(repo)
         else:
             target = branch
@@ -694,7 +799,7 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
         local = _run(["git", "rev-parse", "--verify", "-q", target],
                      cwd=str(repo), check=False, capture_output=True)
         if local.returncode != 0:
-            return "skip", f"无 {target} 分支"
+            return RepoPlan(status="skip", detail=f"无 {target} 分支")
 
         remote_ref = f"origin/{target}"
         remote = _run(["git", "rev-parse", "--verify", "-q", remote_ref],
@@ -704,43 +809,7 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
         dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
                      cwd=str(repo), check=False, capture_output=True)
         if dirty.returncode != 0:
-            return "fail", _dirty_detail(repo)
-
-        # 先同步远端到本地（pull --ff-only）
-        if remote_exists:
-            r.step(f"pull --ff-only {remote_ref} …")
-            pull = _run(["git", "pull", "--ff-only", "-q", "origin", target],
-                        cwd=str(repo), check=False, capture_output=True)
-            if pull.returncode != 0:
-                err = _extract_error(
-                    (pull.stderr or "") + (pull.stdout or ""),
-                    pull.returncode, "pull --ff-only",
-                )
-                # 批量场景：skip 不中断；单仓场景：自动 merge 合并分叉
-                if not single:
-                    return "skip", f"远端有分叉/冲突 — {err}"
-                # 单仓：ff-only 失败（分叉）→ 自动 pull --no-rebase 产生 merge commit
-                r.step(f"pull --no-rebase（合并分叉）{remote_ref} …")
-                pull_merge = _run(
-                    ["git", "pull", "--no-rebase", "--no-edit", "origin", target],
-                    cwd=str(repo), check=False, capture_output=True,
-                )
-                if pull_merge.returncode != 0:
-                    merr = _extract_error(
-                        (pull_merge.stderr or "") + (pull_merge.stdout or ""),
-                        pull_merge.returncode, "pull --no-rebase",
-                    )
-                    return "skip", f"自动 merge 失败（需手动解决冲突）— {merr}"
-                if (pull_merge.stdout or "").strip():
-                    r.output(pull_merge.stdout)
-
-        # 再推本地到远端
-        push_args = ["git", "push"]
-        if not remote_exists:
-            push_args += ["-u"]
-        if force:
-            push_args += ["--force-with-lease"]
-        push_args += ["origin", target]
+            return RepoPlan(status="fail", detail=_dirty_detail(repo))
 
         # push 前统计要推送的区间（push 会更新本地 remote-tracking ref，之后无法再数）
         ahead_n = 0
@@ -750,25 +819,13 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
                 cwd=str(repo), check=False, capture_output=True,
             ).stdout or "0").strip() or "0")
 
-        r.step(f"push {target} → origin/{target} …")
-        push = _run(push_args, cwd=str(repo), check=False, capture_output=True)
-        if push.returncode != 0:
-            err = _extract_error(
-                (push.stderr or "") + (push.stdout or ""),
-                push.returncode, "push",
-            )
-            return "fail", err
+        return RepoPlan(
+            status="ok",
+            detail=f"{target}|{1 if remote_exists else 0}|{ahead_n}",
+            execute=_execute,
+        )
 
-        sha_p = _run(["git", "rev-parse", "--short", "HEAD"],
-                     cwd=str(repo), check=False, capture_output=True)
-        sha = (sha_p.stdout or "").strip()
-        if not remote_exists:
-            return "ok", f"新建远端分支 origin/{target} ({sha})"
-        if ahead_n > 0:
-            return "ok", f"推送 {ahead_n} 个 commit → origin/{target} ({sha})"
-        return "ok", f"无变化（已在最新 origin/{target}, {sha}）"
-
-    return _op
+    return _detect
 
 
 def push_branch_all(branch: str | None = None, *, force: bool = False) -> int:
@@ -786,41 +843,43 @@ def push_branch_all(branch: str | None = None, *, force: bool = False) -> int:
     result = run_batch(
         title=title,
         root=root,
-        operation=_push_branch_one_factory(branch, force, single=single),
+        detect=_push_branch_one_factory(branch, force, single=single),
         confirm=False,
     )
     return 1 if result.failed else 0
 
 
-def _delete_branch_one_factory(target: str, force: bool) -> OperationFn:
-    """构造删除本地分支单仓库操作。
+def _delete_branch_one_factory(target: str, force: bool) -> DetectFn:
+    """构造删除本地分支单仓库检测函数。
 
     -D (force) 强删未合并；-d 仅删已合并。
-    当前分支 == target → skip；本地无该分支 → skip。
+    detect: 当前分支 == target → skip；本地无该分支 → skip。
+    execute: git branch -d/-D（实时）; not fully merged 且非 force → skip。
     """
-    def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
+    def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
+        flag = "-D" if force else "-d"
+        r.step(f"git branch {flag} {target} …")
+        p = _run(["git", "branch", flag, target],
+                 cwd=str(repo), check=False, capture_output=True)
+        if p.returncode != 0:
+            if not force and "not fully merged" in (p.stderr or ""):
+                return "skip", f"{target} 未合并（--force 强删）"
+            return "fail", _extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "删除失败")
+        return "ok", f"已删本地 {target}"
+
+    def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
         current = _get_current_branch(cwd=str(repo))
         if current == target:
-            return "skip", f"当前分支即 {target}（先 switch 再删）"
-
+            return RepoPlan(status="skip", detail=f"当前分支即 {target}（先 switch 再删）")
         exists = _run(
             ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{target}"],
             cwd=str(repo), check=False, capture_output=True,
         )
         if exists.returncode != 0:
-            return "skip", f"无本地分支 {target}"
+            return RepoPlan(status="skip", detail=f"无本地分支 {target}")
+        return RepoPlan(status="ok", execute=_execute)
 
-        flag = "-D" if force else "-d"
-        p = _run(["git", "branch", flag, target],
-                 cwd=str(repo), check=False, capture_output=True)
-        if p.returncode != 0:
-            err = _extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "删除失败")
-            if not force and "not fully merged" in (p.stderr or ""):
-                return "skip", f"{target} 未合并（--force 强删）"
-            return "fail", err
-        return "ok", f"已删本地 {target}"
-
-    return _op
+    return _detect
 
 
 def delete_branch_all(target: str, *, force: bool = False) -> int:
@@ -828,38 +887,39 @@ def delete_branch_all(target: str, *, force: bool = False) -> int:
     result = run_batch(
         title=f"删除本地分支 {target}" + ("（强删）" if force else ""),
         root=Path(".").resolve(),
-        operation=_delete_branch_one_factory(target, force),
+        detect=_delete_branch_one_factory(target, force),
         confirm=True,
     )
     return 1 if result.failed else 0
 
 
-def _delete_branch_remote_one_factory(target: str, remote: str) -> OperationFn:
-    """构造删除远端分支单仓库操作。
+def _delete_branch_remote_one_factory(target: str, remote: str) -> DetectFn:
+    """构造删除远端分支单仓库检测函数。
 
-    git push <remote> --delete <target>。删后 fetch --prune 清 tracking ref。
-    无 origin/<target> → skip。
+    detect: 无 origin/<target> → skip。
+    execute: git push <remote> --delete <target>（实时）+ fetch --prune 清 tracking ref。
     """
-    def _op(repo: Path, r: Reporter, _root: Path) -> tuple[str, str]:
-        ref_check = _run(
-            ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/{remote}/{target}"],
-            cwd=str(repo), check=False, capture_output=True,
-        )
-        if ref_check.returncode != 0:
-            return "skip", f"无 {remote}/{target}"
-
+    def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
+        r.step(f"git push {remote} --delete {target} …")
         p = _run(["git", "push", remote, "--delete", target],
-                 cwd=str(repo), check=False, capture_output=True)
-        if p.returncode != 0:
-            err = _extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "删除失败")
-            return "fail", err
-
+                 cwd=str(repo), check=False, capture_output=False).returncode
+        if p != 0:
+            return "fail", f"删除失败 (rc={p})"
         # 清理本地 tracking ref
         _run(["git", "fetch", "--prune", remote],
              cwd=str(repo), check=False, capture_output=True)
         return "ok", f"已删 {remote}/{target}"
 
-    return _op
+    def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
+        ref_check = _run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/{remote}/{target}"],
+            cwd=str(repo), check=False, capture_output=True,
+        )
+        if ref_check.returncode != 0:
+            return RepoPlan(status="skip", detail=f"无 {remote}/{target}")
+        return RepoPlan(status="ok", execute=_execute)
+
+    return _detect
 
 
 def delete_branch_remote_all(target: str, *, remote: str = "origin") -> int:
@@ -867,7 +927,7 @@ def delete_branch_remote_all(target: str, *, remote: str = "origin") -> int:
     result = run_batch(
         title=f"删除远端分支 {remote}/{target}",
         root=Path(".").resolve(),
-        operation=_delete_branch_remote_one_factory(target, remote),
+        detect=_delete_branch_remote_one_factory(target, remote),
         confirm=True,
     )
     return 1 if result.failed else 0

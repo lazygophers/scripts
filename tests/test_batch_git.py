@@ -30,6 +30,18 @@ def _mock_run(stdout: str = "", returncode: int = 0, stderr: str = ""):
     return MagicMock(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+def _run_op(detect_fn, repo, r, root):
+    """模拟 run_batch 单仓: 跑 detect, 若 plan.execute 非空则执行, 返 (status, detail)。
+
+    测试用 helper — 让旧式 `status, detail = op(repo, r, root)` 测试在新两阶段
+    契约下继续工作（detect 现返 RepoPlan 而非直接 (status, detail)）。
+    """
+    plan = detect_fn(repo, r, root)
+    if plan.execute is None:
+        return plan.status, plan.detail
+    return plan.execute(repo, plan, r, root)
+
+
 class TestDataclasses(unittest.TestCase):
     def test_repo_result_defaults(self):
         r = RepoResult(name="a", path="/a", status="ok")
@@ -200,9 +212,9 @@ class TestPushFactory(unittest.TestCase):
 
     @patch("lib.batch_git._run")
     @patch("lib.batch_git._get_current_branch", return_value="feat")
-    def test_dry_run_returns_ok(self, _mock_br, mock_run):
+    def test_dry_run_skips_with_preview(self, _mock_br, mock_run):
         # fetch ok, remote target 不存在 (cond1 通过), local target 不存在 (cond2 不通过)
-        # cond1 || cond2 → 满足 → dry_run 返 ok
+        # cond1 || cond2 → 满足 → dry_run 模式不执行, 返 skip + 预览 detail
         mock_run.side_effect = [
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=1),   # show-ref remote target (不存在)
@@ -210,8 +222,9 @@ class TestPushFactory(unittest.TestCase):
         ]
         op = _push_one_factory(target="canary", dry_run=True, auto_commit=False, extra=[])
         r = MagicMock()
-        status, _ = op(Path("/repo"), r, Path("/root"))
-        self.assertEqual(status, "ok")
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "skip")
+        self.assertIn("dry-run", detail)
 
     @patch("lib.batch_git._run")
     def test_detached_skips(self, mock_run):
@@ -222,7 +235,7 @@ class TestPushFactory(unittest.TestCase):
             ]
             op = _push_one_factory(target="canary", dry_run=False, auto_commit=False, extra=[])
             r = MagicMock()
-            status, detail = op(Path("/repo"), r, Path("/root"))
+            status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
             self.assertEqual(status, "skip")
             self.assertIn("detached", detail)
 
@@ -238,7 +251,7 @@ class TestPushFactory(unittest.TestCase):
         ]
         op = _push_one_factory(target="develop", dry_run=False, auto_commit=False, extra=[])
         r = MagicMock()
-        status, _ = op(Path("/repo"), r, Path("/root"))
+        status, _ = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "ok")
         # 最后一次 _run 调用应是 push_develop
         last_call_args = mock_run.call_args_list[-1][0][0]
@@ -247,35 +260,28 @@ class TestPushFactory(unittest.TestCase):
     @patch("lib.batch_git._run")
     @patch("lib.batch_git._get_current_branch", return_value="feat")
     def test_fail_detail_is_concise(self, _mock_br, mock_run):
-        """失败时 detail 仅单行关键错误，非整段 gitc 日志；全量流式打印到 Reporter。"""
-        full_log = (
-            "Git 自动化工作流\n"
-            "当前分支: feat\n"
-            "任务概览: merge → push\n"
-            "step 1: fetch ok\n"
-            "step 2: merge\n"
-            "Auto-merging foo.go\n"
-            "CONFLICT (content): Merge conflict in foo.go\n"
-            "Automatic merge failed; fix conflicts and then commit the result.\n"
-        )
+        """execute 失败: detail 简短（退出码）, 子进程输出已 capture_output=False 实时直吐 stderr。
+
+        新两阶段契约: push_{target} 子进程 capture_output=False, 失败 detail 仅标退出码;
+        旧的 _extract_error 提取 + warn 重打逻辑已移除（实时流式无需再攒着重放）。
+        """
         mock_run.side_effect = [
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=1),   # show-ref remote target (不存在) → cond1 通过
             _mock_run(returncode=1),   # show-ref local target → cond2 不通过
-            _mock_run(returncode=1, stdout=full_log),  # push_canary 失败
+            _mock_run(returncode=1),   # push_canary 失败 (capture_output=False, 不读 stdout)
         ]
         op = _push_one_factory(target="canary", dry_run=False, auto_commit=False, extra=[])
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "fail")
-        # detail 单行（关键错误），不含 "Git 自动化工作流" 等头部噪音
-        self.assertNotIn("自动化工作流", detail)
+        # detail 单行, 含 push_canary + 退出码
         self.assertEqual(detail.count("\n"), 0)
-        # 末次匹配行 = "Automatic merge failed; fix conflicts..."（conflicts 命中 conflict 关键词）
-        self.assertIn("conflict", detail.lower())
-        # 全量输出流式打印
-        self.assertTrue(any("子进程输出" in str(c) for c in r.warn.call_args_list))
-        self.assertGreaterEqual(r.info.call_count, 1)
+        self.assertIn("push_canary", detail)
+        self.assertIn("1", detail)
+        # execute 跑了 push_canary 子进程（第 4 次 _run 调用）
+        last_call_args = mock_run.call_args_list[-1][0][0]
+        self.assertEqual(last_call_args[0], "push_canary")
 
 
 class TestExtractError(unittest.TestCase):
@@ -317,8 +323,8 @@ class TestPushAllArgparse(unittest.TestCase):
         push_all("canary", argv=["push_canary", "--dry-run"])
         _, kwargs = mock_batch.call_args
         self.assertFalse(kwargs["confirm"])
-        op = kwargs["operation"]
-        self.assertTrue(callable(op))
+        detect = kwargs["detect"]
+        self.assertTrue(callable(detect))
 
     @patch("lib.batch_git.run_batch")
     def test_confirm_always_false(self, mock_batch):
@@ -334,9 +340,9 @@ class TestPushAllArgparse(unittest.TestCase):
         captured = {}
         original = _push_one_factory
 
-        def spy(target, dry_run, extra):
+        def spy(target, dry_run, auto_commit, extra):
             captured["extra"] = extra
-            return original(target, dry_run, extra)
+            return original(target, dry_run, auto_commit, extra)
 
         with patch("lib.batch_git._push_one_factory", side_effect=spy):
             push_all("canary", argv=["push_canary", "--stay"])
@@ -372,7 +378,7 @@ class TestSwitchFactory(unittest.TestCase):
     def test_already_on_target_skips(self, _mock_br, mock_run):
         op = _switch_one_factory("main")
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
         self.assertIn("已在", detail)
 
@@ -386,23 +392,25 @@ class TestSyncFactory(unittest.TestCase):
         mock_run.return_value = _mock_run(returncode=1)
         op = _sync_one_factory("master", force=False)
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "fail")
         self.assertIn("fetch", detail)
 
+    @patch("lib.batch_git._resolve_main_branch", return_value="master")
     @patch("lib.batch_git._run")
-    def test_no_local_master(self, mock_run):
+    def test_no_local_master(self, mock_run, _mock_resolve):
         mock_run.side_effect = [
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=1),   # rev-parse master (不存在)
         ]
         op = _sync_one_factory("master", force=False)
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
 
+    @patch("lib.batch_git._resolve_main_branch", return_value="master")
     @patch("lib.batch_git._run")
-    def test_no_remote_master(self, mock_run):
+    def test_no_remote_master(self, mock_run, _mock_resolve):
         mock_run.side_effect = [
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=0),   # local master exists
@@ -410,12 +418,13 @@ class TestSyncFactory(unittest.TestCase):
         ]
         op = _sync_one_factory("master", force=False)
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
         self.assertIn("origin/master", detail)
 
+    @patch("lib.batch_git._resolve_main_branch", return_value="master")
     @patch("lib.batch_git._run")
-    def test_dirty_tree_fails(self, mock_run):
+    def test_dirty_tree_fails(self, mock_run, _mock_resolve):
         mock_run.side_effect = [
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=0),   # local master
@@ -425,12 +434,13 @@ class TestSyncFactory(unittest.TestCase):
         ]
         op = _sync_one_factory("master", force=False)
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "fail")
         self.assertIn("未提交", detail)
 
+    @patch("lib.batch_git._resolve_main_branch", return_value="master")
     @patch("lib.batch_git._run")
-    def test_ahead_no_force_skips(self, mock_run):
+    def test_ahead_no_force_skips(self, mock_run, _mock_resolve):
         mock_run.side_effect = [
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=0),   # local master
@@ -441,7 +451,7 @@ class TestSyncFactory(unittest.TestCase):
         ]
         op = _sync_one_factory("master", force=False)
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
         self.assertIn("领先", detail)
 
@@ -461,7 +471,7 @@ class TestSyncFactory(unittest.TestCase):
         ]
         op = _sync_one_factory(None, force=False)
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "ok")
         self.assertIn("快进 2", detail)
 
@@ -474,12 +484,13 @@ class TestSyncFactory(unittest.TestCase):
         ]
         op = _sync_one_factory(None, force=False)
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
         self.assertIn("detached", detail)
 
+    @patch("lib.batch_git._resolve_main_branch", return_value="master")
     @patch("lib.batch_git._run")
-    def test_force_resets_when_ahead(self, mock_run):
+    def test_force_resets_when_ahead(self, mock_run, _mock_resolve):
         """force=True 且本地领先 → 硬 reset 丢弃。"""
         mock_run.side_effect = [
             _mock_run(returncode=0),        # fetch
@@ -493,7 +504,7 @@ class TestSyncFactory(unittest.TestCase):
         ]
         op = _sync_one_factory("master", force=True)
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "ok")
         self.assertIn("强制对齐", detail)
         self.assertIn("丢弃 3", detail)
@@ -506,7 +517,7 @@ class TestDeleteBranchFactory(unittest.TestCase):
         """当前分支 == 目标 → skip。"""
         op = _delete_branch_one_factory("master", force=False)
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
         self.assertIn("先 switch", detail)
         mock_run.assert_not_called()
@@ -518,7 +529,7 @@ class TestDeleteBranchFactory(unittest.TestCase):
         mock_run.return_value = _mock_run(returncode=1)  # show-ref 失败
         op = _delete_branch_one_factory("feat", force=False)
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
 
     @patch("lib.batch_git._get_current_branch", return_value="master")
@@ -531,7 +542,7 @@ class TestDeleteBranchFactory(unittest.TestCase):
         ]
         op = _delete_branch_one_factory("feat", force=False)
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "ok")
         self.assertIn("已删本地 feat", detail)
         # 验证用了 -d 而非 -D
@@ -547,7 +558,7 @@ class TestDeleteBranchFactory(unittest.TestCase):
         ]
         op = _delete_branch_one_factory("feat", force=True)
         r = MagicMock()
-        status, _ = op(Path("/repo"), r, Path("/root"))
+        status, _ = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "ok")
         self.assertEqual(mock_run.call_args_list[1].args[0], ["git", "branch", "-D", "feat"])
 
@@ -561,7 +572,7 @@ class TestDeleteBranchFactory(unittest.TestCase):
         ]
         op = _delete_branch_one_factory("feat", force=False)
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
         self.assertIn("未合并", detail)
 
@@ -572,7 +583,7 @@ class TestDeleteBranchRemoteFactory(unittest.TestCase):
         mock_run.return_value = _mock_run(returncode=1)  # show-ref 失败
         op = _delete_branch_remote_one_factory("feat", "origin")
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
 
     @patch("lib.batch_git._run")
@@ -585,7 +596,7 @@ class TestDeleteBranchRemoteFactory(unittest.TestCase):
         ]
         op = _delete_branch_remote_one_factory("feat", "origin")
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "ok")
         self.assertIn("已删 origin/feat", detail)
         self.assertEqual(mock_run.call_args_list[1].args[0],
@@ -599,7 +610,7 @@ class TestDeleteBranchRemoteFactory(unittest.TestCase):
         ]
         op = _delete_branch_remote_one_factory("feat", "origin")
         r = MagicMock()
-        status, detail = op(Path("/repo"), r, Path("/root"))
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "fail")
 
 
@@ -607,15 +618,25 @@ class TestRunBatchParallel(unittest.TestCase):
     """run_batch 并行模式：完成序无关、并发上限可调、per-repo 输出不交错、Ctrl-C 取消。"""
 
     def _op_factory(self, statuses_by_name: dict[str, tuple[str, str]], log_lines: dict[str, list[str]] | None = None):
-        """构造测试用 operation：按 repo name 返 (status, detail)，并往 r 打多行日志。"""
+        """构造测试用 detect：按 repo name 返 RepoPlan（status/detail 来自表），并往 r 打多行日志。
+
+        status="ok" 时塞一个 execute 桩（直接返原 detail），模拟两阶段 execute 段。
+        """
+        from lib.batch_git import RepoPlan
         log_lines = log_lines or {}
-        def _op(repo: Path, r, _root: Path) -> tuple[str, str]:
+        def _execute_factory(detail):
+            def _exec(repo, plan, r, _root):
+                return "ok", detail
+            return _exec
+        def _detect(repo: Path, r, _root: Path) -> RepoPlan:
             name = repo.name
             for line in log_lines.get(name, []):
                 r.info(line)
             status, detail = statuses_by_name.get(name, ("ok", ""))
-            return status, detail
-        return _op
+            if status == "ok":
+                return RepoPlan(status="ok", detail=detail, execute=_execute_factory(detail))
+            return RepoPlan(status=status, detail=detail)
+        return _detect
 
     @patch("lib.batch_git.notify_batch_done")
     @patch("lib.batch_git.scan_repos")
@@ -682,7 +703,7 @@ class TestRunBatchParallel(unittest.TestCase):
     @patch("lib.batch_git.notify_batch_done")
     @patch("lib.batch_git.scan_repos")
     def test_exception_in_op_recorded_as_fail(self, mock_scan, mock_notify):
-        """operation 抛异常 → 记为 fail，detail 含异常信息。"""
+        """detect 抛异常 → 记为 fail，detail 含异常信息。"""
         mock_scan.return_value = [Path("/r/a")]
         def _boom(repo, r, _root):
             raise RuntimeError("boom-error")
@@ -691,19 +712,19 @@ class TestRunBatchParallel(unittest.TestCase):
         self.assertEqual(len(result.failed), 1)
         self.assertIn("boom-error", result.failed[0].detail)
 
+    @patch("lib.batch_git.os._exit", side_effect=RuntimeError("exit-called"))
     @patch("lib.batch_git.notify_batch_done")
     @patch("lib.batch_git.scan_repos")
-    def test_keyboard_interrupt_cancels(self, mock_scan, mock_notify):
-        """Ctrl-C 触发 KeyboardInterrupt → cancel_futures + 汇总仅含已完成。"""
+    def test_keyboard_interrupt_cancels(self, mock_scan, mock_notify, mock_exit):
+        """Ctrl-C 在检测阶段 → os._exit(130) 中止（worker 不可中断, 强退防卡死）。"""
         mock_scan.return_value = [Path("/r/a"), Path("/r/b")]
         op = self._op_factory({"a": ("ok", ""), "b": ("ok", "")})
         with patch("lib.batch_git.as_completed", side_effect=KeyboardInterrupt):
             with patch("lib.batch_git.sys.stdin.isatty", return_value=False):
-                result = run_batch("t", Path("/r"), op, confirm=False)
-        # 中断 → 汇总空（无 fut.result 完成）
-        self.assertEqual(result.total, 2)
-        self.assertEqual(result.succeeded, [])
-        mock_notify.assert_called_once()
+                with self.assertRaises(RuntimeError):
+                    run_batch("t", Path("/r"), op, confirm=False)
+        # os._exit(130) 被调用
+        mock_exit.assert_called_once_with(130)
 
 
 class _FakeFuture:
