@@ -281,8 +281,8 @@ def _dirty_detail(repo: Path) -> str:
     return detail[:200]
 
 
-def _push_one_factory(target: str, dry_run: bool, extra: list[str]) -> OperationFn:
-    """构造 push 单仓库操作（捕获 target/dry_run/extra）。
+def _push_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list[str]) -> OperationFn:
+    """构造 push 单仓库操作（捕获 target/dry_run/auto_commit/extra）。
 
     单仓执行调新名 symlink `push_{target}`（需在 PATH 中可见）。
     """
@@ -331,6 +331,27 @@ def _push_one_factory(target: str, dry_run: bool, extra: list[str]) -> Operation
                 dirty = _dirty_detail(repo)
                 if dirty:
                     cond1_reason = f"{cond1_reason}（但{dirty}）"
+                    # --auto-commit：批量层在 skip 判定前先提交, 让脏工作区也能进 push_{target}
+                    if auto_commit and not dry_run:
+                        from lib.commit_wf import _has_changes, run_commit
+                        has, _ = _has_changes(cwd=str(repo))
+                        if has:
+                            r.step(f"--auto-commit 自动提交 {current_branch}")
+                            rc = run_commit(cwd=str(repo))
+                            if rc != 0:
+                                return "fail", f"自动提交失败（退出码 {rc}）"
+                            # 提交后重算：HEAD 是否领先 origin/{target}
+                            again = _run(
+                                ["git", "log", f"origin/{target}..HEAD", "--oneline"],
+                                cwd=str(repo), check=False, capture_output=True,
+                            )
+                            if (again.stdout or "").strip():
+                                n = len(again.stdout.splitlines())
+                                r.ok(f"条件1 通过 — auto-commit 后 {n} 个新 commit 待合并")
+                                cond1 = True
+                                cond1_reason = ""
+                            else:
+                                cond1_reason = "自动提交后仍无领先 origin/{} 的 commit".format(target)
                 r.info(f"条件1 不满足 — {cond1_reason}")
 
         # 条件2：本地 target 相对远端 target 有差异
@@ -403,12 +424,16 @@ def push_all(
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--dry-run", action="store_true", help="仅检查条件并预览仓库列表，不执行 push")
+    parser.add_argument("--auto-commit", action="store_true",
+                        help="工作区有未提交变更时, 在 skip 判定前自动提交当前分支")
     parsed, extra = parser.parse_known_args(argv[1:] if argv is not None else None)
+    # --auto-commit 仅批量层消费, 不透传子进程（子进程会再次判定导致重复提交）
+    extra = [a for a in extra if a != "--auto-commit"]
 
     result = run_batch(
         title=f"push_{target} 批量推送",
         root=Path(".").resolve(),
-        operation=_push_one_factory(target, parsed.dry_run, extra),
+        operation=_push_one_factory(target, parsed.dry_run, parsed.auto_commit, extra),
         confirm=False,
     )
     return 1 if result.failed else 0
