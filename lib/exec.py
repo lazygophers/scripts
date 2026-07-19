@@ -44,7 +44,7 @@ def run(
     stdin=None 继承父 stdin；传 subprocess.DEVNULL 给 claude 等读 stdin 会阻塞的子进程。
     """
     try:
-        return subprocess.run(
+        p = subprocess.run(
             list(cmd),
             cwd=cwd,
             check=check,
@@ -61,6 +61,32 @@ def run(
         ) from e
     except KeyboardInterrupt:
         raise KeyboardInterrupt(f"命令被用户中断: {shell_join(cmd)}") from None
+
+    _debug_log(p, cmd, cwd)
+    return p
+
+
+def _debug_log(p: subprocess.CompletedProcess, cmd: Sequence[str], cwd: str | None) -> None:
+    """--debug 时把每条命令 + stdout/stderr 打到 Reporter。
+
+    run() 是绝大多数命令的唯一通道（git/gh/cargo/go build 等）, 挂这里覆盖最广。
+    run_logged 已有自己的 before/after 日志, 此处会重复——故 run_logged 内部
+    的 run 调用经 capture 路径正常打, 不会双重（run_logged 的 _log_after_run
+    在 debug 时已输出, 与本函数内容一致, 略冗余但无害）。
+    """
+    if not _debug_enabled():
+        return
+    try:
+        from lib.ui import reporter
+    except Exception:
+        return
+    r = reporter(stderr=True)
+    where = f" (cwd={cwd})" if cwd else ""
+    rc = p.returncode
+    r.step(f"[debug]{where} {shell_join(cmd)} → rc={rc}")
+    out = (p.stdout or "") + (p.stderr or "")
+    if out.strip():
+        r.output(out)
 
 
 def run_no_capture(
