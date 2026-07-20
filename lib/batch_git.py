@@ -497,6 +497,100 @@ def push_all(
     return 1 if result.failed else 0
 
 
+def _merge_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list[str]) -> DetectFn:
+    """构造 merge 单仓库检测函数（捕获 target/dry_run/auto_commit/extra）。
+
+    detect 阶段只读判定: fetch origin + 当前分支可获取 + 远端 target 存在 + 当前 != target;
+    命中则返回带 execute 的 plan。
+    execute 串行执行：先（按需）auto-commit, 再调 `merge_{target}` 子进程
+    （capture_output=False, 子进程直吐 stderr 实时流式）。
+    """
+    def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
+        if auto_commit:
+            from lib.commit_wf import _has_changes, run_commit
+            has, _ = _has_changes(cwd=str(repo))
+            if has:
+                cur = _get_current_branch(cwd=str(repo)) or "?"
+                r.step(f"--auto-commit 自动提交 {cur}")
+                rc = run_commit(cwd=str(repo))
+                if rc != 0:
+                    return "fail", f"自动提交失败（退出码 {rc}）"
+        r.step(f"执行 merge_{target} …")
+        rc = _run([f"merge_{target}", *extra], cwd=str(repo), check=False,
+                  capture_output=False, env={**os.environ, "_GITWF_BATCH": "1"}).returncode
+        if rc == 0:
+            return "ok", ""
+        return "fail", f"merge_{target} 退出码 {rc}"
+
+    def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
+        r.step("fetch origin …")
+        p = _run(["git", "fetch", "origin"], cwd=str(repo), check=False, capture_output=True)
+        if p.returncode != 0:
+            err = ((p.stdout or '') + (p.stderr or '')).strip()
+            r.err(f"fetch origin 失败: {err[:200]}")
+            return RepoPlan(status="fail", detail=f"fetch origin 失败: {err[:120]}")
+
+        current_branch = _get_current_branch(cwd=str(repo))
+        if not current_branch:
+            return RepoPlan(status="skip", detail="无法获取当前分支（detached HEAD）")
+        r.info(f"当前分支: {current_branch}")
+
+        if current_branch == target:
+            return RepoPlan(status="skip", detail=f"已在 {target}")
+
+        # target 哨兵 "master" 语义=主分支, 逐仓探真实主分支再判远端存在性
+        effective_target = (
+            _resolve_main_branch(repo) if target == _MAIN_SENTINEL else target
+        )
+        ref_check = _run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{effective_target}"],
+            cwd=str(repo), check=False, capture_output=True,
+        )
+        if ref_check.returncode != 0:
+            return RepoPlan(status="skip", detail=f"无远端 {effective_target}（merge 需源分支存在）")
+
+        r.ok(f"可合并 origin/{effective_target} → {current_branch}")
+
+        if dry_run:
+            return RepoPlan(status="skip", detail=f"条件满足（dry-run 模式，不执行 merge_{target}）")
+
+        return RepoPlan(status="ok", execute=_execute)
+
+    return _detect
+
+
+def merge_all(
+    target: str,
+    argv: list[str] | None = None,
+) -> int:
+    """批量 merge：扫描 Git 仓库，逐个执行 merge_{target}（target → 当前分支）。
+
+    解析 --dry-run / --auto-commit；其余参数透传给单仓 merge_{target}。
+    批量模式自动执行，无确认门（confirm=False）。
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog=f"merge_{target}",
+        description=f"批量 merge：扫描 Git 仓库，逐个执行 merge_{target}",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--dry-run", action="store_true", help="仅检查条件并预览仓库列表，不执行 merge")
+    parser.add_argument("--auto-commit", action="store_true",
+                        help="工作区有未提交变更时, 在 execute 段先提交再 merge")
+    parsed, extra = parser.parse_known_args(argv[1:] if argv is not None else None)
+    # --auto-commit 仅批量层消费, 不透传子进程（子进程会再次判定导致重复提交）
+    extra = [a for a in extra if a != "--auto-commit"]
+
+    result = run_batch(
+        title=f"merge_{target} 批量合并",
+        root=Path(".").resolve(),
+        detect=_merge_one_factory(target, parsed.dry_run, parsed.auto_commit, extra),
+        confirm=False,
+    )
+    return 1 if result.failed else 0
+
+
 def _switch_one_factory(target: str) -> DetectFn:
     """构造 switch_branch 单仓库检测函数（捕获 target）。
 

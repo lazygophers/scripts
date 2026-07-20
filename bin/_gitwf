@@ -7,7 +7,7 @@
 
 自动识别单仓/批量:
   - 当前目录是 git 仓库（有 .git）→ 单仓: push_to / merge_to
-  - 非 git 目录 → push_* 进批量扫描; merge_* 报错退出
+  - 非 git 目录 → 进批量扫描（push_* / merge_* 均扫描子目录 git 仓库）
   - --help / -h 在任何环境下直接转发到下游 argparse
 
 新增分支只需新增 symlink: ln -s _gitwf bin/push_staging
@@ -48,18 +48,15 @@ def main() -> int:
 
     in_git_repo = wants_help or (pathlib.Path.cwd() / ".git").exists()
 
-    if action == "merge":
-        if not in_git_repo:
-            sys.stderr.write("merge_* 需在 git 仓库内执行\n")
-            return 2
-        from lib.git_workflow import merge_to
-        return merge_to(target, sys.argv)
-
-    # push 系列：git 仓库 → 单仓；否则进批量
+    # merge / push 系列：git 仓库 → 单仓；否则进批量（扫描子目录 git 仓库）
     if in_git_repo:
-        from lib.git_workflow import push_to
+        from lib.git_workflow import merge_to, push_to
+        if action == "merge":
+            return merge_to(target, sys.argv)
         return push_to(target, sys.argv)
-    from lib.batch_git import push_all
+    from lib.batch_git import merge_all, push_all
+    if action == "merge":
+        return merge_all(target, sys.argv)
     return push_all(target, sys.argv)
 
 
