@@ -487,27 +487,74 @@ def _run_checks_parallel(types: list[ProjectType], project_dir: Path, *,
 
 
 def run_checkwork() -> int:
-    """执行编译检查并播报结果。供 bin/checkwork 薄壳调用。"""
+    """执行编译检查并播报结果。供 bin/checkwork 薄壳调用。
+
+    当前目录是 git 仓库 → 仅检查当前目录；否则扫描所有子目录 git 根逐个检查
+    （与 push_*/merge_* 批量语义对齐：在父目录跑即覆盖全部子仓库）。
+    """
     from lib.notify import notify_via_n, project_done_message
+    from lib.batch_git import scan_repos
 
     r = reporter(stderr=True)
     r.rule("编译检查", style="blue")
-    r.step("开始编译检查...")
+
+    cwd = Path(".").resolve()
+    in_git_repo = (cwd / ".git").exists()
+
+    if in_git_repo:
+        rc, _detail = _checkwork_single(cwd, r)
+        notify_via_n(project_done_message("编译检查失败" if rc == 2 else "编译检查完成"))
+        return rc
+
+    # 批量: 扫子目录 git 根
+    repos = scan_repos(cwd)
+    r.info(f"扫描 {len(repos)} 个仓库")
+    if not repos:
+        r.ok("未发现子目录 git 仓库")
+        return 0
+
+    # ponytail: 收集 (repo, status, detail) 末尾打汇总表
+    rows: list[tuple[str, str, str]] = []
+    overall_fail = False
+    for repo in repos:
+        rel = repo.relative_to(cwd)
+        r.rule(f"📂 {rel}", style="cyan")
+        rc, detail = _checkwork_single(repo, r)
+        status = "fail" if rc == 2 else "ok"
+        if rc == 2:
+            overall_fail = True
+        rows.append((str(rel), status, detail))
+
+    r.status_table("批量编译检查汇总", rows)
+    failed = sum(1 for _, s, _ in rows if s == "fail")
+    r.status_footer([
+        (f"失败 {failed}/{len(rows)}" if failed else f"成功 {len(rows)}/{len(rows)}",
+         "red" if failed else "green"),
+    ])
+    if overall_fail:
+        notify_via_n(project_done_message("编译检查失败"))
+        return 2
+    notify_via_n(project_done_message("编译检查完成"))
+    return 0
+
+
+def _checkwork_single(project_dir: Path, r) -> tuple[int, str]:
+    """单仓库编译检查 + 播报。返回 (rc, detail): rc 0=通过(含 warn), 2=失败。"""
+    r.step(f"开始编译检查: {project_dir.name}")
 
     parallel_hint = os.environ.get("CHECKWORK_PARALLEL", "") == "1"
     if not parallel_hint:
         r.info("提示: 设 CHECKWORK_PARALLEL=1 可并行加速多语言检查")
 
     try:
-        results = check_build(project_dir=Path("."), log=r.step)
+        results = check_build(project_dir=project_dir, log=r.step)
     except BuildError as e:
         r.err(f"编译失败\n{e}")
-        return 2
+        return 2, str(e)[:200]
 
     if not results:
         r.ok("未检测到已知项目类型，跳过")
-        notify_via_n(project_done_message("编译检查完成"))
-        return 0
+        return 0, "无已知项目类型"
 
     # 汇总
     _print_results(r, results)
@@ -517,15 +564,16 @@ def run_checkwork() -> int:
 
     if fails:
         r.err(f"编译检查失败: {len(fails)} 项")
-        notify_via_n(project_done_message("编译检查失败"))
-        return 2
+        detail = f"失败 {len(fails)} 项: " + "; ".join(
+            f"{x.name}" + (f"({x.message})" if x.message else "") for x in fails
+        )
+        return 2, detail[:200]
 
     if warns:
         r.warn(f"编译检查通过（{len(warns)} 项告警）")
-    else:
-        r.ok("编译检查通过")
-    notify_via_n(project_done_message("编译检查完成"))
-    return 0
+        return 0, f"通过（{len(warns)} 告警）"
+    r.ok("编译检查通过")
+    return 0, "通过"
 
 
 def _print_results(r, results: list[CheckResult]) -> None:
