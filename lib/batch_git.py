@@ -598,7 +598,7 @@ def _switch_one_factory(target: str) -> DetectFn:
     execute: 串行跑 git switch（capture_output=False 实时）。
     """
     def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
-        mode = plan.detail  # detect 把执行模式塞进 detail: local/remote/create
+        mode = plan.detail  # detect 把执行模式塞进 detail: local/remote/create/sync-behind
         if mode == "local":
             r.step(f"本地分支 {target} 已存在 → switch")
             sw = _run(["git", "switch", target], cwd=str(repo), check=False, capture_output=False).returncode
@@ -612,6 +612,15 @@ def _switch_one_factory(target: str) -> DetectFn:
             if sw == 0:
                 return "ok", f"追踪并切换到 {target}"
             return "fail", f"切换失败 (rc={sw})"
+        if mode == "sync-behind":
+            # 已在 target 但落后远端 → ff-only 对齐（switch 语义：切到分支且最新）
+            r.step(f"已在 {target}，落后远端 → pull --ff-only")
+            pull = _run(["git", "pull", "--ff-only", "-q", "origin", target],
+                        cwd=str(repo), check=False, capture_output=True)
+            if pull.returncode != 0:
+                err = _extract_error((pull.stderr or "") + (pull.stdout or ""), pull.returncode, "pull --ff-only")
+                return "fail", err
+            return "ok", f"快进对齐 {target} → origin/{target}"
         # create
         base = _resolve_main_branch(repo)
         r.step(f"分支不存在 → 从 origin/{base} 创建")
@@ -629,6 +638,21 @@ def _switch_one_factory(target: str) -> DetectFn:
 
         current = _get_current_branch(cwd=str(repo))
         if current == target:
+            # 分支名匹配 ≠ 真同步：本地可能落后/领先 origin/<target>。
+            # 落后 → ff-only 对齐；领先 → 仅提示不丢 commit；已同步 → 真跳过。
+            counts = _run(
+                ["git", "rev-list", "--left-right", "--count", f"{target}...origin/{target}"],
+                cwd=str(repo), check=False, capture_output=True,
+            )
+            parts = (counts.stdout or "0\t0").strip().split()
+            ahead = int(parts[0]) if len(parts) >= 1 else 0
+            behind = int(parts[1]) if len(parts) >= 2 else 0
+            if behind > 0 and ahead == 0:
+                r.step(f"已在 {target}，落后 {behind} → ff-only 对齐")
+                return RepoPlan(status="ok", detail="sync-behind", execute=_execute)
+            if ahead > 0:
+                r.ok(f"已在 {target}（本地领先 {ahead} 个 commit）→ 跳过")
+                return RepoPlan(status="skip", detail=f"已在 {target}（本地领先 {ahead}）")
             r.ok(f"已在 {target} → 跳过")
             return RepoPlan(status="skip", detail="已在目标分支")
 

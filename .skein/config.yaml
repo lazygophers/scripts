@@ -5,6 +5,7 @@ worktree_root: .worktrees
 retain_days: 7
 web_serve: false
 board_open: true
+spec_core_budget: 1000
 max_parallel: 2
 board_theme: sketch
 board_palette: stone
