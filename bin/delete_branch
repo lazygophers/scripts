@@ -12,7 +12,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.batch_git import _delete_branch_one_factory
+from lib.batch_git import _delete_branch_one_factory, run_single_repo
 from lib.notify import consume_debug, consume_no_say
 from lib.ui import reporter, timed
 
@@ -36,7 +36,7 @@ def main(argv: list[str]) -> int:
     if in_git:
         r = reporter(stderr=True)
         op = _delete_branch_one_factory(args.branch, args.force)
-        status, detail = op(pathlib.Path.cwd(), r, pathlib.Path.cwd())
+        status, detail = run_single_repo(op, pathlib.Path.cwd(), r, pathlib.Path.cwd())
         if detail:
             (r.ok if status == "ok" else r.warn if status == "skip" else r.err)(detail)
         return _STATUS_EXIT.get(status, 1)

@@ -12,7 +12,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.batch_git import _delete_branch_remote_one_factory
+from lib.batch_git import _delete_branch_remote_one_factory, run_single_repo
 from lib.notify import consume_debug, consume_no_say
 from lib.ui import reporter, timed
 
@@ -29,11 +29,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument("-y", "--yes", action="store_true", help="批量模式跳过确认")
     args = parser.parse_args(argv[1:])
 
+    # 容忍带远端前缀的写法 (origin/feature/x → feature/x)，避免双前缀 refs/remotes/origin/origin/...
+    branch = args.branch
+    prefix = f"{args.remote}/"
+    if branch.startswith(prefix):
+        branch = branch[len(prefix):]
+
     in_git = (pathlib.Path.cwd() / ".git").exists()
     if in_git:
         r = reporter(stderr=True)
-        op = _delete_branch_remote_one_factory(args.branch, remote=args.remote)
-        status, detail = op(pathlib.Path.cwd(), r, pathlib.Path.cwd())
+        op = _delete_branch_remote_one_factory(branch, remote=args.remote)
+        status, detail = run_single_repo(op, pathlib.Path.cwd(), r, pathlib.Path.cwd())
         if detail:
             (r.ok if status == "ok" else r.warn if status == "skip" else r.err)(detail)
         return _STATUS_EXIT.get(status, 1)
@@ -41,7 +47,7 @@ def main(argv: list[str]) -> int:
     from lib.batch_git import delete_branch_remote_all
     if args.yes:
         os.environ["BATCH_NO_CONFIRM"] = "1"
-    return delete_branch_remote_all(args.branch, remote=args.remote)
+    return delete_branch_remote_all(branch, remote=args.remote)
 
 
 if __name__ == "__main__":

@@ -137,6 +137,25 @@ DetectFn = Callable[[Path, Reporter, Path], RepoPlan]
 ExecuteFn = Callable[[Path, RepoPlan, Reporter, Path], tuple[str, str]]
 
 
+def run_single_repo(
+    detect: DetectFn, repo: Path, r: Reporter, root: Path
+) -> tuple[str, str]:
+    """单仓两阶段执行（detect → execute），返回 (status, detail)。
+
+    供 bin/* 单仓路径复用：detect 只读判定，命中则串行 execute 写操作。
+    与 run_batch 同语义，但无扫描/确认/汇总/通知。
+    """
+    plan = detect(repo, r, root)
+    if plan is None:
+        return "fail", "detect 返回 None"
+    if plan.execute is None:
+        # detect 已定 skip/fail；ok 但无 execute → skip
+        if plan.status == "ok":
+            return "skip", plan.detail or "无可执行操作"
+        return plan.status, plan.detail
+    return plan.execute(repo, plan, r, root)
+
+
 def run_batch(
     title: str,
     root: Path,
