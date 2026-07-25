@@ -39,20 +39,23 @@ def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
     base = os.environ["LAZYGOPHERS_SCRIPTS_BASE_URL"].rstrip("/")
     token = os.environ["LAZYGOPHERS_SCRIPTS_TOKEN"]
     url = f"{base}/chat/compate"
-    body = json.dumps({
+    payload = {
         "model": "haiku",
         "max_tokens": max_tokens,
         "system": system_prompt,
         "disable_thinking": True,
         "messages": [{"role": "user", "content": prompt}],
-    }).encode()
+    }
+    body = json.dumps(payload, ensure_ascii=False).encode()
     req = urllib.request.Request(url, data=body, headers={
         "authorization": f"Bearer {token}",
         "content-type": "application/json",
     })
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
+            raw = resp.read()
+            _debug_dump(url, payload, raw)
+            data = json.loads(raw)
         # Anthropic 风响应：content[].text（实测 /chat/compate）
         parts = data.get("content") or []
         return "".join(p.get("text", "") for p in parts
@@ -61,6 +64,19 @@ def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
             ValueError, TimeoutError, KeyError, IndexError) as e:
         r.err(f"LAZYGOPHERS API 生成失败: {e}")
         return ""
+
+
+def _debug_dump(url: str, payload: dict, raw: bytes | None = None) -> None:
+    """--debug 打印 LAZYGOPHERS 原始请求 body + 响应 body 到 stderr。"""
+    from lib.notify import is_debug
+    if not is_debug():
+        return
+    rr = reporter(stderr=True)
+    rr.step(f"[debug] LAZYGOPHERS POST {url}")
+    rr.step("[debug] request body:")
+    rr.output(json.dumps(payload, ensure_ascii=False, indent=2))
+    rr.step("[debug] response body:")
+    rr.output(raw.decode("utf-8", "replace") if raw else "(无)")
 
 
 def _has_changes(*, cwd: str | None = None) -> tuple[bool, list[str]]:
