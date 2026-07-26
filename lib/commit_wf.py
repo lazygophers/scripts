@@ -27,7 +27,7 @@ def _lazygophers_enabled() -> bool:
 
 
 def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
-                              max_tokens: int = 200, timeout: float = 30.0) -> str:
+                              max_tokens: int = 800, timeout: float = 30.0) -> str:
     """调 LAZYGOPHERS /chat/compate（Anthropic 风格式）生成 message。
 
     请求：POST {BASE_URL}/chat/compate，body {model, max_tokens, system, messages}，
@@ -56,14 +56,46 @@ def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
             raw = resp.read()
             _debug_dump(url, payload, raw)
             data = json.loads(raw)
-        # Anthropic 风响应：content[].text（实测 /chat/compate）
+        # Anthropic 风响应：content[].text。haiku 经 proxy 会把思考过程混进
+        # text block（disable_thinking 字段对 proxy 无效）——多个 text block 时，
+        # 第一块常是散文思考，最后一块才是真正的 message。识别策略：取首个
+        # 以 commit type 前缀（feat/fix/...:）开头的块；都没有则回退最后一块。
         parts = data.get("content") or []
-        return "".join(p.get("text", "") for p in parts
-                       if p.get("type") == "text").strip()
+        texts = [p.get("text", "") for p in parts if p.get("type") == "text"]
+        return _extract_message(texts).strip()
     except (urllib.error.URLError, urllib.error.HTTPError,
             ValueError, TimeoutError, KeyError, IndexError) as e:
         r.err(f"LAZYGOPHERS API 生成失败: {e}")
         return ""
+
+
+# commit message subject 前缀 type 列表（与 _build_prompt 规范一致）
+_SUBJECT_TYPES = (
+    "feat", "fix", "docs", "style", "refactor", "perf", "test",
+    "build", "ci", "chore", "revert", "deps", "config", "security",
+)
+
+
+def _extract_message(texts: list[str]) -> str:
+    """从 text block（可能多块、或块内混思考散文）提取真正的 commit message。
+
+    haiku 经 proxy 会无视 disable_thinking，先输出一段思考散文（含 "subject:"/
+    "feat:" 等字样但非 message 本体），再输出真正的 message。两种泄漏形态：
+    1. 思考与 message 分在不同 text block
+    2. 思考与 message 挤在同一 text block（思考在前，message 在后）
+
+    识别：扫所有块所有行，找首行匹配 `<type>[!][(<scope>)]: <desc>` 的位置，
+    取该行起到所有块拼接的结尾。都没匹配 → 回退最后一块。
+    """
+    import re
+    pat = re.compile(
+        r"^(?:(" + "|".join(_SUBJECT_TYPES) + r"))!?(?:\([^)]*\))?:\s+\S"
+    )
+    blob = "\n".join(t for t in texts if t)
+    for i, line in enumerate(blob.split("\n")):
+        if pat.match(line.lstrip()):
+            return "\n".join(blob.split("\n")[i:]).strip()
+    return (texts[-1] if texts else "").strip()
 
 
 def _debug_dump(url: str, payload: dict, raw: bytes | None = None) -> None:
@@ -167,18 +199,25 @@ def run_commit(
 
 
 def _build_prompt(status_lines: list[str], *, cwd: str | None = None) -> str:
-    # 预注入文件清单 + diff stat，claude 不必自己跑 git
+    # 预注入文件清单 + 真实 diff（截断），AI 不必跑 git 也能写贴合事实的 message。
+    # 只给 stat（行数）→ AI 只能编抽象套话，必须喂真实代码变更。
     files_block = "\n".join(f"  {ln}" for ln in status_lines) or "  （无）"
-    stat = run(["git", "diff", "--cached", "--stat"], check=False, capture_output=True, cwd=cwd)
-    stat_block = (stat.stdout or "").strip() or "（暂存区空）"
+    diff = run(["git", "diff", "--cached"],
+               check=False, capture_output=True, cwd=cwd)
+    diff_text = (diff.stdout or "").strip()
+    # 截断超长 diff（防 token 爆炸 + 慢）：保留前 8000 字符，超出按文件边界裁断
+    if len(diff_text) > 8000:
+        cut = diff_text.rfind("\n", 0, 8000)
+        diff_text = diff_text[: cut if cut > 0 else 8000] + "\n...（diff 已截断）"
+    diff_block = diff_text or "（暂存区空）"
     return f"""根据变更生成一条 git commit message。上下文已预收集（勿跑 git，只输出 message）。
 
 <<<DATA>>>
 暂存文件（git status --short）：
 {files_block}
 
-diff --stat：
-{stat_block}
+diff（git diff --cached）：
+{diff_block}
 <<<END DATA>>>
 
 规范：
@@ -186,6 +225,8 @@ diff --stat：
 - type：feat / fix / docs / style / refactor / perf / test / build / ci / chore / revert / deps / config / security
 - 推断：package.json/go.mod→deps, .github/workflows→ci, *_test.*→test, README/注释→docs, 仅格式→style, 其他→feat/fix/chore
 - 优先具体 type，避免 chore；breaking → type 后加 !
+- subject 必须贴合 diff 实际改动，禁止抽象套话（「重构并优化」「增强稳定性」「提升可维护性」类空泛措辞一律不准）；动词要具体（「拆 X 为 Y」「新增 X 函数」「改 X 条件从 A 到 B」）
+- body 只描述 diff 事实（改了什么、为何），禁止臆测动机或价值，禁止「提升可读性/稳定性/性能」等无证据收益
 
 直接输出 message（subject + 空行 + body），无引号无解释。"""
 
