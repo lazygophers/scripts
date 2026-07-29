@@ -99,30 +99,65 @@ def _is_main_package(dir_path: Path) -> bool:
     return False
 
 
+_MAIN_ENTRY_DIRS = ("cmd", "app")
+
+
+def _collect_go_main_targets(scan_dir: Path, targets: list[Path],
+                             *, include_self: bool = True) -> None:
+    """收集 scan_dir 下的 Go main 包: 可选 scan_dir 自身、其 cmd/app 子目录及其直接子目录。
+
+    复用于 project_dir 根、service/ 子项，布局一致:
+    - include_self 且 scan_dir 本身是 main 包 → 编译
+    - scan_dir/cmd、scan_dir/app 本身或其直接子目录是 main 包 → 编译
+    """
+    if include_self and _is_main_package(scan_dir) and scan_dir not in targets:
+        targets.append(scan_dir)
+    for entry in _MAIN_ENTRY_DIRS:
+        sub = scan_dir / entry
+        if not sub.is_dir():
+            continue
+        if _is_main_package(sub) and sub not in targets:
+            targets.append(sub)
+        for child in sorted(sub.iterdir()):
+            if child.is_dir() and _is_main_package(child) and child not in targets:
+                targets.append(child)
+
+
 def _check_go_project(project_dir: Path, *,
                       log: Callable[[str], None] | None = None) -> list[CheckResult]:
-    """编译 Go 项目：编译 cmd/app 自身及子目录中的 main 包，再编译根目录。"""
+    """编译 Go 项目: 根目录 cmd/app、以及 service/<name>/cmd|app 的 main 包。"""
     results: list[CheckResult] = []
     targets: list[Path] = []
 
-    for d in ("cmd", "app"):
-        sub_dir = project_dir / d
-        if sub_dir.is_dir():
-            if _is_main_package(sub_dir):
-                targets.append(sub_dir)
-            for sub in sorted(sub_dir.iterdir()):
-                if sub.is_dir() and _is_main_package(sub):
-                    targets.append(sub)
+    # 根目录 main 包编译:
+    # - pay-core / *dao-* 跳过（排除项目）
+    # - go.work (workspace) 根不是编译单元，main 包在各 member module（service/cmd），
+    #   根目录的 *.go 即便是 package main 也不应编译
+    include_root_self = (
+        not _is_excluded_project(project_dir.name)
+        and not (project_dir / "go.work").exists()
+    )
+    _collect_go_main_targets(project_dir, targets, include_self=include_root_self)
 
-    if not _is_excluded_project(project_dir.name) and _is_main_package(project_dir):
-        targets.append(project_dir)
+    # service/<name>/ 下同样探测 cmd/app 与 main 包
+    service_dir = project_dir / "service"
+    if service_dir.is_dir():
+        for svc in sorted(service_dir.iterdir()):
+            if svc.is_dir():
+                _collect_go_main_targets(svc, targets)
 
     for t in targets:
+        # name 用相对 project_dir 的路径区分同名目录（多个 service/cmd）
+        try:
+            rel = t.relative_to(project_dir)
+        except ValueError:
+            rel = t
+        label = f"go build: {rel}"
         try:
             _go_build(t, log=log)
-            results.append(CheckResult(f"go build: {t.name}", "ok"))
+            results.append(CheckResult(label, "ok"))
         except BuildError as e:
-            results.append(CheckResult(f"go build: {t.name}", "fail", str(e)))
+            results.append(CheckResult(label, "fail", str(e)))
     return results
 
 
@@ -415,7 +450,7 @@ def _detect_project_types(project_dir: Path) -> list[ProjectType]:
     """检测项目类型（一个项目可命中多种，如 Go + Node 混合）。"""
     types: list[ProjectType] = []
 
-    if (project_dir / "go.mod").exists():
+    if (project_dir / "go.mod").exists() or (project_dir / "go.work").exists():
         types.append(ProjectType("Go", _check_go_project))
     if (project_dir / "Cargo.toml").exists():
         types.append(ProjectType("Rust", _check_rust_project))

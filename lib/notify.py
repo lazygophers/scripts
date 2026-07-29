@@ -68,6 +68,31 @@ def consume_debug(argv: list[str]) -> list[str]:
     return argv
 
 
+def consume_help(argv: list[str], description: str, usage: str = "") -> list[str]:
+    """命中 -h/--help 时打印用法并退出 0，否则原样返回 argv。
+
+    无 argparse 的薄壳（checkwork/fetch_all/list_branch/cpd）调用以支持 --help。
+    需在 consume_debug/consume_no_say 之后调用，确保 --help 与 --no-say 可组合。
+    description 取薄壳模块 docstring；usage 缺省为 `$(basename) [选项]`。
+    """
+    if not any(a in ("-h", "--help") for a in argv[1:]):
+        return argv
+    prog = os.path.basename(argv[0]) if argv else "script"
+    lines = []
+    if description:
+        lines.append(description.strip())
+        lines.append("")
+    lines.append(f"用法: {usage or (prog + ' [选项]')}")
+    lines.append("")
+    lines.append("选项:")
+    lines.append("  -h, --help    显示帮助并退出")
+    lines.append("  --no-say      禁用语音通知")
+    lines.append("  --debug       打印成功命令的输出")
+    print("\n".join(lines))
+    raise SystemExit(0)
+
+
+
 def project_done_message(suffix: str) -> str:
     """生成项目完成通知消息。"""
     from lib.project import safe_project_context
