@@ -70,6 +70,15 @@ def _run_verbose(cmd: Sequence[str], *, cwd: str | None = None,
 
 # === Go ===
 
+def _go_mod_tidy(module_dir: Path, *, log: Callable[[str], None] | None = None) -> None:
+    """go mod tidy（先整理依赖，再编译）。"""
+    if log is not None:
+        log(f"go mod tidy: {module_dir}")
+    rc = run_no_capture(["go", "mod", "tidy"], cwd=str(module_dir))
+    if rc != 0:
+        raise BuildError(f"go mod tidy 失败: {module_dir} (exit={rc})")
+
+
 def _go_build(dir_path: Path, *, log: Callable[[str], None] | None = None) -> None:
     """go build -v -o /dev/null（verbose 透传，零产物）。"""
     if log is not None:
@@ -123,6 +132,15 @@ def _collect_go_main_targets(scan_dir: Path, targets: list[Path],
                 targets.append(child)
 
 
+def _go_module_dir(dir_path: Path, project_dir: Path) -> Path | None:
+    for p in (dir_path, *dir_path.parents):
+        if (p / "go.mod").exists():
+            return p
+        if p == project_dir:
+            break
+    return None
+
+
 def _check_go_project(project_dir: Path, *,
                       log: Callable[[str], None] | None = None) -> list[CheckResult]:
     """编译 Go 项目: 根目录 cmd/app、以及 service/<name>/cmd|app 的 main 包。"""
@@ -145,6 +163,23 @@ def _check_go_project(project_dir: Path, *,
         for svc in sorted(service_dir.iterdir()):
             if svc.is_dir():
                 _collect_go_main_targets(svc, targets)
+
+    module_dirs = []
+    if (project_dir / "go.mod").exists():
+        module_dirs.append(project_dir)
+    for t in targets:
+        module_dir = _go_module_dir(t, project_dir)
+        if module_dir is not None and module_dir not in module_dirs:
+            module_dirs.append(module_dir)
+
+    for module_dir in module_dirs:
+        try:
+            _go_mod_tidy(module_dir, log=log)
+            label = "go mod tidy" if module_dir == project_dir else f"go mod tidy: {module_dir.relative_to(project_dir)}"
+            results.append(CheckResult(label, "ok"))
+        except BuildError as e:
+            results.append(CheckResult("go mod tidy", "fail", str(e)))
+            return results
 
     for t in targets:
         # name 用相对 project_dir 的路径区分同名目录（多个 service/cmd）

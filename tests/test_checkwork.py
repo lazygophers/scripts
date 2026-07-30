@@ -25,7 +25,8 @@ class TestRunCheckwork(unittest.TestCase):
         mock_check_build.side_effect = BuildError("编译失败: syntax error")
         with patch("lib.notify.notify_via_n") as mock_notify:
             self.assertEqual(run_checkwork(), 2)
-            mock_notify.assert_not_called()
+            mock_notify.assert_called_once()
+            self.assertIn("编译检查失败", mock_notify.call_args[0][0])
 
     @patch("lib.build.check_build")
     def test_check_build_called_with_project_dir(self, mock_check_build):

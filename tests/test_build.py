@@ -4,9 +4,11 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from lib.build import (
     CheckResult,
+    _check_go_project,
     _detect_node_pkg_manager,
     _detect_project_types,
     check_build,
@@ -77,6 +79,37 @@ class TestNodePackageManager(unittest.TestCase):
             (Path(d) / "bun.lockb").write_bytes(b"")
             (Path(d) / "yarn.lock").write_text("")
             self.assertEqual(_detect_node_pkg_manager(Path(d)), "bun")
+
+
+class TestCheckGoProject(unittest.TestCase):
+    @patch("lib.build.run_no_capture")
+    def test_go_mod_tidy_runs_before_build(self, mock_run_no_capture) -> None:
+        mock_run_no_capture.return_value = 0
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "go.mod").write_text("module x\ngo 1.21\n")
+            (root / "main.go").write_text("package main\nfunc main() {}\n")
+
+            results = _check_go_project(root)
+
+        calls = [call.args[0] for call in mock_run_no_capture.call_args_list]
+        self.assertEqual(calls[0], ["go", "mod", "tidy"])
+        self.assertEqual(calls[1][:3], ["go", "build", "-v"])
+        self.assertEqual([r.name for r in results], ["go mod tidy", "go build: ."])
+
+    @patch("lib.build.run_no_capture")
+    def test_go_mod_tidy_failure_skips_build(self, mock_run_no_capture) -> None:
+        mock_run_no_capture.return_value = 1
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "go.mod").write_text("module x\ngo 1.21\n")
+            (root / "main.go").write_text("package main\nfunc main() {}\n")
+
+            results = _check_go_project(root)
+
+        self.assertEqual(mock_run_no_capture.call_count, 1)
+        self.assertEqual(results[0].name, "go mod tidy")
+        self.assertEqual(results[0].status, "fail")
 
 
 class TestCheckBuildUnknownProject(unittest.TestCase):
