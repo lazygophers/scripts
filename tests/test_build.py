@@ -111,6 +111,25 @@ class TestCheckGoProject(unittest.TestCase):
         self.assertEqual(results[0].name, "go mod tidy")
         self.assertEqual(results[0].status, "fail")
 
+    @patch("lib.build.run_no_capture")
+    def test_go_work_skips_go_mod_tidy(self, mock_run_no_capture) -> None:
+        mock_run_no_capture.return_value = 0
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "go.work").write_text("go 1.21\n\nuse (\n\t./svc/a\n\t./svc/b\n)\n")
+            (root / "main.go").write_text("package main\nfunc main() {}\n")
+            for name in ("a", "b"):
+                mod = root / "svc" / name
+                mod.mkdir(parents=True)
+                (mod / "go.mod").write_text(f"module example.com/{name}\ngo 1.21\n")
+
+            results = _check_go_project(root)
+
+        calls = [call.args[0] for call in mock_run_no_capture.call_args_list]
+        self.assertNotIn(["go", "mod", "tidy"], calls)
+        self.assertEqual(results[0].name, "go mod tidy")
+        self.assertEqual(results[0].status, "warn")
+
 
 class TestCheckBuildUnknownProject(unittest.TestCase):
     def test_no_known_type_returns_empty(self) -> None:

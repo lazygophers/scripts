@@ -144,6 +144,7 @@ def _go_module_dir(dir_path: Path, project_dir: Path) -> Path | None:
 def _check_go_project(project_dir: Path, *,
                       log: Callable[[str], None] | None = None) -> list[CheckResult]:
     """编译 Go 项目: 根目录 cmd/app、以及 service/<name>/cmd|app 的 main 包。"""
+    project_dir = project_dir.resolve()
     results: list[CheckResult] = []
     targets: list[Path] = []
 
@@ -165,12 +166,17 @@ def _check_go_project(project_dir: Path, *,
                 _collect_go_main_targets(svc, targets)
 
     module_dirs = []
-    if (project_dir / "go.mod").exists():
+    skip_tidy = (project_dir / "go.work").exists()
+    if not skip_tidy and (project_dir / "go.mod").exists():
         module_dirs.append(project_dir)
-    for t in targets:
-        module_dir = _go_module_dir(t, project_dir)
-        if module_dir is not None and module_dir not in module_dirs:
-            module_dirs.append(module_dir)
+    if not skip_tidy:
+        for t in targets:
+            module_dir = _go_module_dir(t, project_dir)
+            if module_dir is not None and module_dir not in module_dirs:
+                module_dirs.append(module_dir)
+
+    if skip_tidy:
+        results.append(CheckResult("go mod tidy", "warn", "go.work 模式跳过（workspace 内 go mod tidy 会脱离工作区解析本地模块）"))
 
     for module_dir in module_dirs:
         try:
@@ -178,7 +184,8 @@ def _check_go_project(project_dir: Path, *,
             label = "go mod tidy" if module_dir == project_dir else f"go mod tidy: {module_dir.relative_to(project_dir)}"
             results.append(CheckResult(label, "ok"))
         except BuildError as e:
-            results.append(CheckResult("go mod tidy", "fail", str(e)))
+            label = "go mod tidy" if module_dir == project_dir else f"go mod tidy: {module_dir.relative_to(project_dir)}"
+            results.append(CheckResult(label, "fail", str(e)))
             return results
 
     for t in targets:
