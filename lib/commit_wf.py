@@ -13,7 +13,9 @@ from lib.ui import reporter
 
 
 _COMMIT_SYSTEM = (
-    "你是 git commit message 生成器。输出多行 message（首行 subject + 空行 + body），"
+    "你是 git commit message 生成器。"
+    "禁止输出思考过程、分析推理、内心独白或任何解释性文字——直接输出 commit message 本身。"
+    "输出必须是且仅是：多行 message（首行 subject + 空行 + body）。"
     "不要解释、不要代码块、不要引号、不要执行任何命令。"
     "subject 格式 type[(scope)]: description（中文，命令式，不超 50 字，不加句号）；"
     "body 用 - 列要点说明变更内容与动机，每行不超 72 字，可多行。"
@@ -27,7 +29,7 @@ def _lazygophers_enabled() -> bool:
 
 
 def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
-                              max_tokens: int = 800, timeout: float = 30.0) -> str:
+                              max_tokens: int = 300, timeout: float = 30.0) -> str:
     """调 LAZYGOPHERS /chat/compate（Anthropic 风格式）生成 message。
 
     请求：POST {BASE_URL}/chat/compate，body {model, max_tokens, system, messages}，
@@ -86,6 +88,7 @@ def _extract_message(texts: list[str]) -> str:
 
     识别：扫所有块所有行，找首行匹配 `<type>[!][(<scope>)]: <desc>` 的位置，
     取该行起到所有块拼接的结尾。都没匹配 → 回退最后一块。
+    回退后若结果明显是思考散文（超长或无 commit 结构），返回空串让调用方中止。
     """
     import re
     pat = re.compile(
@@ -95,7 +98,11 @@ def _extract_message(texts: list[str]) -> str:
     for i, line in enumerate(blob.split("\n")):
         if pat.match(line.lstrip()):
             return "\n".join(blob.split("\n")[i:]).strip()
-    return (texts[-1] if texts else "").strip()
+    # fallback：最后一块。若超长（>300 字符）说明是思考散文而非 message，拒绝。
+    tail = (texts[-1] if texts else "").strip()
+    if len(tail) > 300:
+        return ""
+    return tail
 
 
 def _debug_dump(url: str, payload: dict, raw: bytes | None = None) -> None:
@@ -151,10 +158,36 @@ def run_commit(
         r.kv("dry-run", {"分支": branch, "消息": msg or "（自动生成）"})
         return 0
 
-    # 暂存区为空 → bit add .
+    # 预清理 stale index.lock（上次 git 进程崩溃残留）。
+    # 不等操作失败再清——index.lock 存在时 add/commit 全连锁失败。
+    lock_path = ".git/index.lock"
+    if cwd:
+        lock_path = f"{cwd}/.git/index.lock"
+    from os.path import exists
+    if exists(lock_path):
+        r.step("检测到残留 index.lock，自动清理")
+        run(["rm", "-f", lock_path], check=False, cwd=cwd)
+
+    # 暂存区为空 → bit add .（index.lock 冲突自动清理重试）
     if not staged:
-        r.step("bit add .")
-        run(["bit", "add", "."], check=False, cwd=cwd)
+        for add_attempt in range(2):
+            r.step("bit add .")
+            add_p = run(["bit", "add", "."], check=False, capture_output=True, cwd=cwd)
+            if add_p.returncode == 0:
+                break
+            add_err = (add_p.stderr or "") + (add_p.stdout or "")
+            if "index.lock" in add_err and add_attempt == 0:
+                run(["rm", "-f", ".git/index.lock"], check=False, cwd=cwd)
+                continue
+            r.err(f"暂存失败：{add_err.strip()[:300]}")
+            return 1
+        # bit add . 成功 ≠ 暂存区有内容（bit 可能跳过某些文件）。
+        # 验证暂存区，空则 fallback git add -A。
+        staged_check = run(["git", "diff", "--cached", "--name-only"],
+                           check=False, capture_output=True, cwd=cwd)
+        if not (staged_check.stdout or "").strip():
+            r.step("bit add 未暂存任何文件，回退 git add -A")
+            run(["git", "add", "-A"], check=False, cwd=cwd)
 
     # message 已显式给出 → 直接提交（省 AI 往返）
     # message 缺失 → LAZYGOPHERS env 存在走 /chat/compate API；否则回退 claude CLI
@@ -228,7 +261,8 @@ diff（git diff --cached）：
 - subject 必须贴合 diff 实际改动，禁止抽象套话（「重构并优化」「增强稳定性」「提升可维护性」类空泛措辞一律不准）；动词要具体（「拆 X 为 Y」「新增 X 函数」「改 X 条件从 A 到 B」）
 - body 只描述 diff 事实（改了什么、为何），禁止臆测动机或价值，禁止「提升可读性/稳定性/性能」等无证据收益
 
-直接输出 message（subject + 空行 + body），无引号无解释。"""
+直接输出 message（subject + 空行 + body），无引号无解释。
+首行必须以 type: 开头（如 feat:/fix:/refactor: 等），禁止输出思考过程或分析推理。"""
 
 
 def commit_all(
