@@ -87,6 +87,23 @@ class TestRunCommit(unittest.TestCase):
         self.assertEqual(rc, 0)
         mock_gen.assert_not_called()
 
+    @patch("lib.commit_wf.current_branch", return_value="master")
+    @patch("lib.commit_wf.run")
+    @patch("lib.commit_wf._has_changes")
+    def test_commit_retries_three_times(self, mock_has, mock_run, _mock_branch):
+        mock_has.return_value = (True, ["M  file.py"])
+        mock_run.side_effect = [
+            MagicMock(stdout="file.py\n", stderr="", returncode=0),
+            MagicMock(stdout="", stderr="try1", returncode=1),
+            MagicMock(stdout="", stderr="try2", returncode=1),
+            MagicMock(stdout="", stderr="", returncode=0),
+            MagicMock(stdout="abc123\n", stderr="", returncode=0),
+        ]
+        rc = run_commit("msg")
+        self.assertEqual(rc, 0)
+        commit_calls = [c.args[0] for c in mock_run.call_args_list if c.args[0][:2] == ["bit", "commit"]]
+        self.assertEqual(len(commit_calls), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

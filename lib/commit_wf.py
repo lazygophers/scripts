@@ -205,8 +205,9 @@ def run_commit(
             return 1
         r.step(f"生成 message: {final_msg}")
 
-    # index.lock 冲突先清理再重试
-    for attempt in range(2):
+    # 提交失败自动重试 3 次；index.lock 冲突先清理再继续。
+    last_err = ""
+    for attempt in range(3):
         p = run(["bit", "commit", "--no-verify", "-m", final_msg],
                 check=False, capture_output=True, cwd=cwd)
         if p.returncode == 0:
@@ -222,12 +223,13 @@ def run_commit(
                 style="green",
             )
             return 0
-        err = (p.stderr or "") + (p.stdout or "")
-        if "index.lock" in err and attempt == 0:
+        last_err = ((p.stderr or "") + (p.stdout or "")).strip()
+        if "index.lock" in last_err:
             run(["rm", "-f", ".git/index.lock"], check=False, cwd=cwd)
+        if attempt < 2:
+            r.warn(f"提交失败，重试 {attempt + 2}/3：{last_err[:200]}")
             continue
-        r.err(f"提交失败：{err.strip()[:300]}")
-        return 1
+    r.err(f"提交失败：{last_err[:300]}")
     return 1
 
 
