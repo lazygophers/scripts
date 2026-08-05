@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.batch_git import switch_branch_all
-from lib.notify import consume_debug, consume_no_say
+from lib.notify import consume_debug, consume_dry_run, consume_no_say
 from lib.ui import timed
 
 
@@ -18,10 +18,14 @@ def main(argv: list[str]) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("branch", help="目标分支名")
+    parser.add_argument("--dry-run", action="store_true", help="仅预览，不切换")
     args = parser.parse_args(argv[1:])
+    if args.dry_run:
+        print(f"switch_branch: dry-run，将切换到 {args.branch}（未执行）")
+        return 0
     return switch_branch_all(args.branch)
 
 
 if __name__ == "__main__":
-    sys.argv = consume_debug(consume_no_say(sys.argv))
+    sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
     raise SystemExit(timed(main, label="switch_branch")(sys.argv))

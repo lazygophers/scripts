@@ -7,7 +7,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.notify import consume_debug, say_content
+from lib.notify import consume_debug, consume_dry_run, say_content
 from lib.ui import timed
 
 
@@ -18,10 +18,14 @@ def main(argv: list[str]) -> int:
         epilog="示例:\n  n '编译完成'\n  n '构建失败，请检查'",
     )
     parser.add_argument("content", help="播报内容")
+    parser.add_argument("--dry-run", action="store_true", help="仅预览，不播报")
     args = parser.parse_args(argv[1:])
+    if args.dry_run:
+        print(f"n: dry-run，将播报: {args.content}（未执行）")
+        return 0
     return say_content(args.content)
 
 
 if __name__ == "__main__":
-    sys.argv = consume_debug(sys.argv)
+    sys.argv = consume_dry_run(consume_debug(sys.argv), __doc__)
     raise SystemExit(timed(main, label="n")(sys.argv))

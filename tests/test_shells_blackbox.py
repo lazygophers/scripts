@@ -2,11 +2,11 @@
 """薄壳黑盒冒烟测试（隔离环境）。
 
 每个薄壳:
-  - python3 bin/<name> --help 应 SystemExit(0)
+  - python3 bin/<name> --help / -h / --dry-run 应 SystemExit(0)
   - 在临时 HOME + cwd 下运行, 不污染用户环境
-  - 不实际触发 git/claude/say 等外部副作用 (--help 仅走 argparse)
+  - 不实际触发 git/claude/say 等外部副作用
 
-覆盖: bin/ 下所有可执行薄壳的 import 链 + argparse 配置正确性。
+覆盖: bin/ 下所有可执行薄壳的 import 链 + 通用参数配置正确性。
 """
 import os
 import subprocess
@@ -20,50 +20,45 @@ BIN_DIR = REPO_ROOT / "bin"
 
 
 def _all_shells() -> list[str]:
-    """返回 bin/ 下所有可执行文件名（排除 _ 前缀的内部脚本 + inject 等有副作用的）。"""
+    """返回 bin/ 下所有可执行文件名（排除目录）。"""
     shells = []
     for p in sorted(BIN_DIR.iterdir()):
-        if p.name.startswith("_"):
-            continue
         if p.is_file() and os.access(p, os.X_OK):
             shells.append(p.name)
     return shells
 
 
-class TestShellHelp(unittest.TestCase):
-    """所有薄壳 --help 必须正常退出 (import 链 + argparse 通)。"""
+class TestShellCommonFlags(unittest.TestCase):
+    """所有薄壳通用参数必须正常退出。"""
 
-    def _run_help(self, name: str) -> subprocess.CompletedProcess:
+    def _run_shell(self, name: str, flag: str) -> subprocess.CompletedProcess:
         # 隔离: 临时 HOME 防止任何 rc 副作用; PYTHONPATH 指向 repo root
         env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": tempfile.mkdtemp(prefix="shelltest_home_"),
             "PYTHONPATH": str(REPO_ROOT),
             "LC_ALL": "en_US.UTF-8",
-            # 关闭可能干扰的交互式 env
             "TERM": "dumb",
         }
-        # 在隔离 cwd 下运行
         cwd = tempfile.mkdtemp(prefix="shelltest_cwd_")
         return subprocess.run(
-            [sys.executable, str(BIN_DIR / name), "--help"],
+            [sys.executable, str(BIN_DIR / name), flag],
             capture_output=True, text=True, env=env, cwd=cwd, timeout=10,
         )
 
-    def test_all_shells_help_exit_zero(self):
+    def test_all_shells_common_flags_exit_zero(self):
         shells = _all_shells()
         self.assertGreater(len(shells), 10, "应检测到多个薄壳")
         failures = []
         for name in shells:
-            with self.subTest(shell=name):
-                p = self._run_help(name)
-                # argparse --help → SystemExit(0); 但部分薄壳无 argparse (如 cpd)
-                # 接受 0; 其他码记录失败
-                if p.returncode != 0:
-                    failures.append((name, p.returncode, p.stderr[:200]))
+            for flag in ("--help", "-h", "--dry-run"):
+                with self.subTest(shell=name, flag=flag):
+                    p = self._run_shell(name, flag)
+                    if p.returncode != 0:
+                        failures.append((name, flag, p.returncode, p.stderr[:200]))
         if failures:
-            msg = "\n".join(f"{n}: exit={rc} stderr={e}" for n, rc, e in failures)
-            self.fail(f"薄壳 --help 失败:\n{msg}")
+            msg = "\n".join(f"{n} {flag}: exit={rc} stderr={e}" for n, flag, rc, e in failures)
+            self.fail(f"薄壳通用参数失败:\n{msg}")
 
 
 class TestInjectDryRunIsolated(unittest.TestCase):

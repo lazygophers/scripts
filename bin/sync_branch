@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.batch_git import sync_branch_all
-from lib.notify import consume_debug, consume_no_say
+from lib.notify import consume_debug, consume_dry_run, consume_no_say
 from lib.ui import timed
 
 
@@ -21,10 +21,15 @@ def main(argv: list[str]) -> int:
                         help="目标分支名（省略则同步各仓库当前分支）")
     parser.add_argument("--force", action="store_true",
                         help="强制：即便本地领先也硬 reset 到 origin/<branch>")
+    parser.add_argument("--dry-run", action="store_true", help="仅预览，不同步")
     args = parser.parse_args(argv[1:])
+    if args.dry_run:
+        target = args.branch or "当前分支"
+        print(f"sync_branch: dry-run，将同步 {target} 到 origin/{target}（未执行）")
+        return 0
     return sync_branch_all(args.branch, force=args.force)
 
 
 if __name__ == "__main__":
-    sys.argv = consume_debug(consume_no_say(sys.argv))
+    sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
     raise SystemExit(timed(main, label="sync_branch")(sys.argv))

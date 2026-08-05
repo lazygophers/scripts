@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.batch_git import _delete_branch_one_factory, run_single_repo
-from lib.notify import consume_debug, consume_no_say
+from lib.notify import consume_debug, consume_dry_run, consume_no_say
 from lib.ui import reporter, timed
 
 # 单仓 / 批量统一的状态 → 退出码映射（skip 非失败，exit 0）
@@ -28,9 +28,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument("branch", help="要删除的分支名")
     parser.add_argument("--force", action="store_true",
                         help="强删（-D）：即便未合并也删")
+    parser.add_argument("--dry-run", action="store_true", help="仅预览，不删除")
     parser.add_argument("-y", "--yes", action="store_true",
                         help="批量模式跳过确认")
     args = parser.parse_args(argv[1:])
+
+    if args.dry_run:
+        print(f"delete_branch: dry-run，将删除本地分支 {args.branch}（未执行）")
+        return 0
 
     in_git = (pathlib.Path.cwd() / ".git").exists()
     if in_git:
@@ -48,5 +53,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.argv = consume_debug(consume_no_say(sys.argv))
+    sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
     raise SystemExit(timed(main, label="delete_branch")(sys.argv))

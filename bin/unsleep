@@ -7,7 +7,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.notify import consume_debug, consume_no_say
+from lib.notify import consume_debug, consume_dry_run, consume_no_say
 from lib.system import prevent_sleep
 from lib.ui import timed
 
@@ -25,11 +25,17 @@ def main(argv: list[str]) -> int:
         """,
     )
     parser.add_argument("-t", "--time", type=int, default=None, help="防休眠时长（秒），不指定则无限制运行")
+    parser.add_argument("--dry-run", action="store_true", help="仅预览，不防休眠、不执行命令")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="要运行的命令（可选）")
     args = parser.parse_args(argv[1:])
+    if args.dry_run:
+        command = " ".join(args.command) if args.command else "无命令"
+        duration = args.time if args.time is not None else "无限制"
+        print(f"unsleep: dry-run，时长 {duration}，命令 {command}（未执行）")
+        return 0
     return prevent_sleep(duration=args.time, command=args.command or None)
 
 
 if __name__ == "__main__":
-    sys.argv = consume_debug(consume_no_say(sys.argv))
+    sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
     raise SystemExit(timed(main, label="unsleep")(sys.argv))

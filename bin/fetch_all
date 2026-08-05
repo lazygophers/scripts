@@ -5,12 +5,12 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.git import fetch_all
-from lib.notify import consume_debug, consume_help, consume_no_say
+from lib.notify import consume_debug, consume_dry_run, consume_help, consume_no_say
 from lib.ui import timed
 
-sys.argv = consume_help(
+sys.argv = consume_dry_run(consume_help(
     consume_debug(consume_no_say(sys.argv)),
     __doc__,
     usage="fetch_all [选项]",
-)
+), __doc__)
 raise SystemExit(timed(fetch_all, label="fetch_all")())

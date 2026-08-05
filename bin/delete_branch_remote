@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.batch_git import _delete_branch_remote_one_factory, run_single_repo
-from lib.notify import consume_debug, consume_no_say
+from lib.notify import consume_debug, consume_dry_run, consume_no_say
 from lib.ui import reporter, timed
 
 _STATUS_EXIT = {"ok": 0, "skip": 0, "fail": 1}
@@ -26,6 +26,7 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("branch", help="要删除的分支名")
     parser.add_argument("--remote", default="origin", help="远端名（默认 origin）")
+    parser.add_argument("--dry-run", action="store_true", help="仅预览，不删除")
     parser.add_argument("-y", "--yes", action="store_true", help="批量模式跳过确认")
     args = parser.parse_args(argv[1:])
 
@@ -34,6 +35,10 @@ def main(argv: list[str]) -> int:
     prefix = f"{args.remote}/"
     if branch.startswith(prefix):
         branch = branch[len(prefix):]
+
+    if args.dry_run:
+        print(f"delete_branch_remote: dry-run，将删除远端分支 {args.remote}/{branch}（未执行）")
+        return 0
 
     in_git = (pathlib.Path.cwd() / ".git").exists()
     if in_git:
@@ -51,5 +56,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.argv = consume_debug(consume_no_say(sys.argv))
+    sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
     raise SystemExit(timed(main, label="delete_branch_remote")(sys.argv))

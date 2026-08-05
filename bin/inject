@@ -22,7 +22,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.notify import consume_debug, consume_no_say
+from lib.notify import consume_debug, consume_dry_run, consume_no_say
 from lib.ui import reporter, timed
 
 # ponytail: 固定 rc 候选清单, 不读 $SHELL (多机拷贝/换 shell 时 rc 已存在即写)
@@ -185,19 +185,20 @@ def main(argv: list[str]) -> int:
                "  inject --uninstall # 卸载",
     )
     parser.add_argument("--show", action="store_true", help="仅打印将生成的内容, 不写盘")
+    parser.add_argument("--dry-run", action="store_true", help="同 --show，仅预览不写盘")
     parser.add_argument("--uninstall", action="store_true", help="从 rc 移除 source 行并删除 scripts.sh")
     parsed = parser.parse_args(argv[1:])
 
     r = reporter(stderr=True)
 
-    if parsed.uninstall:
+    if parsed.uninstall and not parsed.dry_run:
         return _uninstall(r)
 
     bin_dir = _bin_dir()
     scripts_sh = _build_scripts_sh(bin_dir)
     block = _build_rc_block()
 
-    if parsed.show:
+    if parsed.show or parsed.dry_run:
         print(f"{_SCRIPTS_SH} 内容:")
         print(scripts_sh)
         print("rc 文件将追加的块:")
@@ -235,5 +236,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.argv = consume_debug(consume_no_say(sys.argv))
+    sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
     raise SystemExit(timed(main, label="inject")(sys.argv))

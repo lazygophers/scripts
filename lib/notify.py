@@ -68,6 +68,18 @@ def consume_debug(argv: list[str]) -> list[str]:
     return argv
 
 
+def consume_dry_run(argv: list[str], description: str = "") -> list[str]:
+    """命中裸 --dry-run 时打印 no-op 预览并退出 0，否则原样返回 argv。"""
+    if argv[1:] != ["--dry-run"]:
+        return argv
+    prog = os.path.basename(argv[0]) if argv else "script"
+    if description:
+        print(description.strip())
+        print()
+    print(f"{prog}: dry-run，无实际操作")
+    raise SystemExit(0)
+
+
 def consume_help(argv: list[str], description: str, usage: str = "") -> list[str]:
     """命中 -h/--help 时打印用法并退出 0，否则原样返回 argv。
 
@@ -86,6 +98,7 @@ def consume_help(argv: list[str], description: str, usage: str = "") -> list[str
     lines.append("")
     lines.append("选项:")
     lines.append("  -h, --help    显示帮助并退出")
+    lines.append("  --dry-run     预览模式，不执行实际操作")
     lines.append("  --no-say      禁用语音通知")
     lines.append("  --debug       打印成功命令的输出")
     print("\n".join(lines))
