@@ -3,12 +3,16 @@
 import json
 import sys
 import unittest
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.ai_workflow import ProviderInfo
 from lib.mr_wf import _find_existing_pr
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+_mr_bin = SourceFileLoader("mr_bin_test_mod", str(REPO_ROOT / "bin" / "mr")).load_module()
 
 
 def _gh_info() -> ProviderInfo:
@@ -23,6 +27,21 @@ def _glab_info() -> ProviderInfo:
         provider="glab", host="gitlab.example.com", repo="owner/repo",
         remote="origin", remote_url="git@gitlab.example.com:owner/repo.git",
     )
+
+
+class TestMrCli(unittest.TestCase):
+    @patch.object(_mr_bin, "run_mr", return_value=0)
+    def test_branch_alias_sets_base(self, mock_run_mr):
+        rc = _mr_bin.main(["mr", "--branch", "test", "--dry-run"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_run_mr.call_args.args[0], "test")
+        self.assertTrue(mock_run_mr.call_args.kwargs["dry_run"])
+
+    @patch.object(_mr_bin, "run_mr", return_value=0)
+    def test_base_takes_priority_over_branch_alias(self, mock_run_mr):
+        rc = _mr_bin.main(["mr", "--base", "develop", "--branch", "test"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_run_mr.call_args.args[0], "develop")
 
 
 class TestFindExistingPrGh(unittest.TestCase):

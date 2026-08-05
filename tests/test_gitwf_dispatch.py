@@ -16,8 +16,8 @@ _gitwf = SourceFileLoader("_gitwf_test_mod", str(GITWF_PATH)).load_module()
 class TestNameMap(unittest.TestCase):
     def test_all_new_names_present(self):
         expected = {
-            "merge_canary", "merge_develop", "merge_auto", "merge_test",
-            "push_canary", "push_develop", "push_auto", "push_test",
+            "merge_canary", "merge_develop", "merge_master", "merge_test",
+            "push_canary", "push_develop", "push_master", "push_test",
         }
         self.assertEqual(set(_gitwf._NAME_MAP), expected)
 
@@ -29,7 +29,7 @@ class TestNameMap(unittest.TestCase):
     def test_action_target_pairs(self):
         cases = {
             "merge_canary": ("merge", "canary"),
-            "merge_auto": ("merge", "auto"),
+            "merge_master": ("merge", "master"),
             "push_develop": ("push", "develop"),
             "push_test": ("push", "test"),
         }
@@ -70,11 +70,13 @@ class TestDispatchAutoDetect(unittest.TestCase):
         mock_push.assert_called_once()
         self.assertEqual(mock_push.call_args[0][0], "develop")
 
+    @patch("lib.batch_git.merge_all", return_value=2)
     @patch("lib.git_workflow.merge_to")
-    def test_merge_in_non_git_repo_errors(self, mock_merge):
+    def test_merge_in_non_git_repo_errors(self, mock_merge, mock_merge_all):
         rc = self._run_with_argv("merge_canary", in_git_repo=False)
         self.assertEqual(rc, 2)
         mock_merge.assert_not_called()
+        mock_merge_all.assert_called_once()
 
     @patch("lib.batch_git.push_all", return_value=0)
     def test_push_in_non_git_repo_calls_push_all(self, mock_push_all):
@@ -88,7 +90,7 @@ class TestDispatchAutoDetect(unittest.TestCase):
     def test_push_targets_dispatched(self, mock_push):
         for name, target in [("push_canary", "canary"),
                              ("push_develop", "develop"),
-                             ("push_auto", "auto"),
+                             ("push_master", "master"),
                              ("push_test", "test")]:
             mock_push.reset_mock()
             with patch("sys.argv", [name]), \

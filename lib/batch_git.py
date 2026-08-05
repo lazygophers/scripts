@@ -942,11 +942,28 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
     dirty → fail；--force 用 --force-with-lease。
     """
     def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
-        # detail 编码: target|remote_exists|ahead_n
-        target, remote_exists_s, ahead_n_s = plan.detail.split("|")
+        # detail 编码: target|remote_exists|ahead_n|mode
+        target, remote_exists_s, ahead_n_s, mode = plan.detail.split("|")
         remote_exists = remote_exists_s == "1"
         ahead_n = int(ahead_n_s)
         remote_ref = f"origin/{target}"
+
+        if mode == "create":
+            base = _resolve_main_branch(repo)
+            r.step(f"本地无 {target} → 从 origin/{base} 创建")
+            create = _run(["git", "switch", "-c", target, f"origin/{base}"],
+                          cwd=str(repo), check=False, capture_output=False).returncode
+            if create != 0:
+                return "fail", f"创建 {target} 失败 (rc={create})"
+        else:
+            cur_p = _run(["git", "branch", "--show-current"],
+                         cwd=str(repo), check=False, capture_output=True)
+            if (cur_p.stdout or "").strip() != target:
+                r.step(f"checkout {target} …")
+                co = _run(["git", "checkout", "-q", target],
+                          cwd=str(repo), check=False, capture_output=True)
+                if co.returncode != 0:
+                    return "fail", _extract_error((co.stderr or "") + (co.stdout or ""), co.returncode, f"checkout {target} 失败")
 
         if remote_exists:
             r.step(f"pull --ff-only {remote_ref} …")
@@ -1004,8 +1021,6 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
 
         local = _run(["git", "rev-parse", "--verify", "-q", target],
                      cwd=str(repo), check=False, capture_output=True)
-        if local.returncode != 0:
-            return RepoPlan(status="skip", detail=f"无 {target} 分支")
 
         remote_ref = f"origin/{target}"
         remote = _run(["git", "rev-parse", "--verify", "-q", remote_ref],
@@ -1017,6 +1032,12 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
         if dirty.returncode != 0:
             return RepoPlan(status="fail", detail=_dirty_detail(repo))
 
+        mode = "push"
+        if local.returncode != 0:
+            if remote_exists:
+                return RepoPlan(status="skip", detail=f"无本地 {target} 分支")
+            mode = "create"
+
         # push 前统计要推送的区间（push 会更新本地 remote-tracking ref，之后无法再数）
         ahead_n = 0
         if remote_exists:
@@ -1027,7 +1048,7 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
 
         return RepoPlan(
             status="ok",
-            detail=f"{target}|{1 if remote_exists else 0}|{ahead_n}",
+            detail=f"{target}|{1 if remote_exists else 0}|{ahead_n}|{mode}",
             execute=_execute,
         )
 

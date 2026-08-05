@@ -21,6 +21,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--dry-run", action="store_true", help="预览模式，不创建")
     parser.add_argument("--no-draft", action="store_true", help="创建为正式 PR/MR（默认 draft）")
     parser.add_argument("--base", help="目标分支（默认: 检测远端默认分支）")
+    parser.add_argument("--branch", help="目标分支（--base 别名）")
     parser.add_argument("--settings", help="指定 claude settings 文件")
     parser.add_argument("--reviews", help="指定 reviewers")
     parser.add_argument("--labels", help="指定 labels")
@@ -28,7 +29,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("base_pos", nargs="?", default=None, help="目标分支（位置参数，与 --base 等价）")
     args = parser.parse_args(argv[1:])
 
-    base = args.base or args.base_pos
+    base = args.base or args.branch or args.base_pos
     return run_mr(
         base,
         dry_run=args.dry_run,

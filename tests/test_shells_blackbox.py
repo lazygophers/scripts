@@ -198,6 +198,17 @@ class TestBatchGitCliBlackbox(unittest.TestCase):
         self.assertIn("push-me", remote_heads)
         self.assertIn("main", remote_heads)
 
+    def test_push_branch_batch_creates_missing_named_branch(self):
+        p = self._run_bin("push_branch", "test")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self._branch(), "test")
+        self.assertEqual(
+            self._git(self.repo, "rev-parse", "test").stdout.strip(),
+            self._git(self.repo, "rev-parse", "main").stdout.strip(),
+        )
+        remote_heads = self._git(None, "--git-dir", str(self.remote), "for-each-ref", "--format=%(refname:short)", "refs/heads").stdout
+        self.assertIn("test", remote_heads)
+
 
 if __name__ == "__main__":
     unittest.main()
