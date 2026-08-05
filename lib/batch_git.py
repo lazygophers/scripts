@@ -9,6 +9,7 @@ import io
 import os
 import re
 import sys
+from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,6 +47,85 @@ class BatchResult:
     succeeded: list[RepoResult] = field(default_factory=list)
     skipped: list[RepoResult] = field(default_factory=list)
     failed: list[RepoResult] = field(default_factory=list)
+
+
+@dataclass
+class RepoOutcome:
+    """单仓库结构化结果。"""
+    status: str
+    detail: str = ""
+
+
+class GitDetectAdapter:
+    """Git 检测 adapter：提供只读检测 helper。"""
+
+
+class ShellExecuteAdapter:
+    """Shell 执行 adapter：提供子进程执行 helper。"""
+
+
+class PythonExecuteAdapter:
+    """Python 执行 adapter：提供进程内调用 helper。"""
+
+
+class NotifyAdapter:
+    """通知 adapter：提供完成通知 helper。"""
+
+    def notify(self, folder_name: str, result: BatchResult, *, script_dir: Path) -> None:
+        notify_batch_done(folder_name, result, script_dir=script_dir)
+
+
+@dataclass
+class BatchOperation(ABC):
+    """批量操作 external seam。
+
+    operation 拥有 scan/confirm 策略；runner 只负责并发 detect、串行 execute、汇总。
+    """
+    title: str
+    root: Path
+    confirm: bool = False
+    folder_name: str | None = None
+    script_dir: Path | None = None
+
+    def __post_init__(self) -> None:
+        self.root = Path(self.root).resolve()
+        if self.folder_name is None:
+            self.folder_name = self.root.name
+        if self.script_dir is None:
+            self.script_dir = Path(__file__).resolve().parent.parent
+
+    def scan(self) -> list[Path]:
+        return scan_repos(self.root)
+
+    @abstractmethod
+    def detect(self, repo: Path, r: Reporter, root: Path) -> RepoPlan:
+        """只读阶段：可并发。"""
+
+    @abstractmethod
+    def execute(self, repo: Path, plan: RepoPlan, r: Reporter, root: Path) -> RepoOutcome:
+        """写阶段：必须串行。"""
+
+
+@dataclass
+class CallbackBatchOperation(BatchOperation, GitDetectAdapter, ShellExecuteAdapter, PythonExecuteAdapter, NotifyAdapter):
+    """callback 适配器，用于把现有 detect factory 接进 BatchOperation seam。"""
+    detect_fn: DetectFn | None = None
+
+    def detect(self, repo: Path, r: Reporter, root: Path) -> RepoPlan:
+        if self.detect_fn is None:
+            return RepoPlan(status="fail", detail="detect_fn 未设置")
+        plan = self.detect_fn(repo, r, root)
+        if plan is None:
+            return RepoPlan(status="fail", detail="detect 返回 None")
+        return plan
+
+    def execute(self, repo: Path, plan: RepoPlan, r: Reporter, root: Path) -> RepoOutcome:
+        if plan.execute is None:
+            if plan.status == "ok":
+                return RepoOutcome("skip", plan.detail or "无可执行操作")
+            return RepoOutcome(plan.status, plan.detail)
+        status, detail = plan.execute(repo, plan, r, root)
+        return RepoOutcome(status, detail)
 
 
 def scan_repos(root: Path, *, max_depth: int = 3) -> list[Path]:
@@ -156,6 +236,142 @@ def run_single_repo(
     return plan.execute(repo, plan, r, root)
 
 
+class BatchRunner:
+    """批量调度器：并发 detect、串行 execute、统一汇总/通知。"""
+
+    def run(self, operation: BatchOperation) -> BatchResult:
+        r = reporter(stderr=True)
+        root = operation.root
+        folder_name = operation.folder_name or root.name
+        script_dir = operation.script_dir or Path(__file__).resolve().parent.parent
+
+        r.rule(operation.title, style="blue")
+        repos = operation.scan()
+        concurrency = max(1, int(os.environ.get("BATCH_CONCURRENCY", "4")))
+        r.info(f"扫描 {len(repos)} 个仓库（检测并发 {concurrency}，执行串行）")
+
+        if operation.confirm and os.environ.get("BATCH_NO_CONFIRM") != "1":
+            if not sys.stdin.isatty():
+                r.err("批量删除需交互确认，但当前非 TTY。加 -y 或 BATCH_NO_CONFIRM=1 显式放行。")
+                raise SystemExit(1)
+            try:
+                answer = input("\n确认执行？(y/N) ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                answer = "n"
+            if answer not in ("y", "yes"):
+                r.warn("已取消")
+                raise SystemExit(0)
+
+        result = BatchResult(total=len(repos))
+
+        def _detect_one(idx: int, repo: Path) -> tuple[int, str, RepoPlan, RepoResult]:
+            rel = repo.relative_to(root)
+            buf = io.StringIO()
+            rr_per_repo = Reporter.from_buffer(buf)
+            try:
+                plan = operation.detect(repo, rr_per_repo, root)
+                if plan is None:
+                    plan = RepoPlan(status="fail", detail="detect 返回 None")
+            except Exception as e:
+                rr_per_repo.err(f"检测异常: {e}")
+                plan = RepoPlan(status="fail", detail=str(e))
+            rr = RepoResult(name=str(rel), path=str(repo), status=plan.status, detail=plan.detail)
+            return idx, buf.getvalue(), plan, rr
+
+        prog = progress(r.console)
+        prog_task = None
+        if prog is not None:
+            prog_task = prog.add_task("检测中", total=len(repos))
+            prog.start()
+
+        plans: list[tuple[RepoPlan, RepoResult, str]] = [None] * len(repos)  # type: ignore[list-item]
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = {
+                pool.submit(_detect_one, idx, repo): idx
+                for idx, repo in enumerate(repos)
+            }
+            try:
+                for fut in as_completed(futures):
+                    idx, buf_text, plan, rr = fut.result()
+                    if prog is not None and prog_task is not None:
+                        prog.advance(prog_task)
+                        prog.update(prog_task, description=f"检测中 {rr.name}")
+                    plans[idx] = (plan, rr, buf_text)
+            except KeyboardInterrupt:
+                r.warn("\n用户中断（检测阶段）")
+                if prog is not None:
+                    prog.stop()
+                os._exit(130)
+            finally:
+                if prog is not None:
+                    prog.stop()
+
+        for plan, rr, buf_text in plans:
+            if buf_text:
+                if prog is not None:
+                    if not print_ansi(prog.console, buf_text):
+                        sys.stderr.write(buf_text)
+                else:
+                    sys.stderr.write(buf_text)
+
+        to_execute: list[tuple[RepoPlan, RepoResult]] = []
+        for plan, rr, _ in plans:
+            if plan.execute is None:
+                outcome = operation.execute(Path(rr.path), plan, r, root)
+                rr.status = outcome.status
+                rr.detail = outcome.detail
+                if rr.status == "ok":
+                    result.succeeded.append(rr)
+                elif rr.status == "skip":
+                    result.skipped.append(rr)
+                else:
+                    result.failed.append(rr)
+                r.status(rr.status, f"{rr.name}{(' — ' + rr.detail) if rr.detail else ''}")
+            else:
+                to_execute.append((plan, rr))
+
+        if to_execute:
+            r.rule("执行（串行）", style="blue")
+            prog2 = progress(r.console)
+            prog2_task = None
+            if prog2 is not None:
+                prog2_task = prog2.add_task("执行中", total=len(to_execute))
+                prog2.start()
+            try:
+                for plan, rr in to_execute:
+                    if prog2 is not None and prog2_task is not None:
+                        prog2.update(prog2_task, description=f"执行中 {rr.name}")
+                    try:
+                        outcome = operation.execute(Path(rr.path), plan, r, root)
+                        rr.status = outcome.status
+                        rr.detail = outcome.detail
+                    except KeyboardInterrupt:
+                        r.warn(f"\n用户中断（执行 {rr.name}）")
+                        if prog2 is not None:
+                            prog2.stop()
+                        os._exit(130)
+                    except Exception as e:
+                        r.err(f"执行异常 ({rr.name}): {e}")
+                        rr.status = "fail"
+                        rr.detail = str(e)
+                    if prog2 is not None and prog2_task is not None:
+                        prog2.advance(prog2_task)
+                    if rr.status == "ok":
+                        result.succeeded.append(rr)
+                    elif rr.status == "skip":
+                        result.skipped.append(rr)
+                    else:
+                        result.failed.append(rr)
+                    r.status(rr.status, f"{rr.name}{(' — ' + rr.detail) if rr.detail else ''}")
+            finally:
+                if prog2 is not None:
+                    prog2.stop()
+
+        print_summary(r, "执行结果", result)
+        operation.notify(folder_name, result, script_dir=script_dir)
+        return result
+
+
 def run_batch(
     title: str,
     root: Path,
@@ -165,163 +381,16 @@ def run_batch(
     script_dir: Path | None = None,
     confirm: bool = True,
 ) -> BatchResult:
-    """批量仓库操作公共流程（两阶段: 检测并发, 执行串行实时）。
-
-    阶段1 扫描 → 确认 → ThreadPoolExecutor 并行 detect（per-repo buffer，
-    完成即 flush，避免多线程 Rich 输出交错）→ 收集 RepoPlan。
-    阶段2 对 plan.execute 非空的仓库**串行**执行，execute 用全局 Reporter
-    直写 stderr（不 buffer），命令 capture_output=False 实时流式输出。
-    → 汇总 → 通知。
-
-    Args:
-        title: 规则标题
-        root: 仓库根目录
-        detect: 每个仓库的检测函数 (repo, r, root) → RepoPlan
-        folder_name: 通知用目录名（默认为 root.name）
-        script_dir: 脚本目录（用于通知）
-        confirm: 是否需要用户确认
-    """
-    r = reporter(stderr=True)
-    if folder_name is None:
-        folder_name = root.name
-    if script_dir is None:
-        script_dir = Path(__file__).resolve().parent.parent
-
-    r.rule(title, style="blue")
-    repos = scan_repos(root)
-    concurrency = max(1, int(os.environ.get("BATCH_CONCURRENCY", "4")))
-    # 单行扫描摘要（禁逐行列仓库，避免与汇总段重复）
-    r.info(f"扫描 {len(repos)} 个仓库（检测并发 {concurrency}，执行串行）")
-
-    if confirm and os.environ.get("BATCH_NO_CONFIRM") != "1":
-        # 非 TTY（cron/管道/CI）下无法交互确认 → fail-closed：要求显式 -y / BATCH_NO_CONFIRM=1
-        if not sys.stdin.isatty():
-            r.err("批量删除需交互确认，但当前非 TTY。加 -y 或 BATCH_NO_CONFIRM=1 显式放行。")
-            raise SystemExit(1)
-        try:
-            answer = input("\n确认执行？(y/N) ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            answer = "n"
-        if answer not in ("y", "yes"):
-            r.warn("已取消")
-            raise SystemExit(0)
-
-    result = BatchResult(total=len(repos))
-
-    # ── 阶段1: 并发 detect ──────────────────────────────────────────
-    def _detect_one(idx: int, repo: Path) -> tuple[int, str, RepoPlan, RepoResult]:
-        """单仓库在线程内跑 detect: 写 per-repo buffer, 返回 (idx, buf, plan, 预填 result)。"""
-        rel = repo.relative_to(root)
-        buf = io.StringIO()
-        rr_per_repo = Reporter.from_buffer(buf)
-        try:
-            plan = detect(repo, rr_per_repo, root)
-            if plan is None:
-                plan = RepoPlan(status="fail", detail="detect 返回 None")
-        except Exception as e:
-            rr_per_repo.err(f"检测异常: {e}")
-            plan = RepoPlan(status="fail", detail=str(e))
-        rr = RepoResult(name=str(rel), path=str(repo), status=plan.status, detail=plan.detail)
-        return idx, buf.getvalue(), plan, rr
-
-    # detect 阶段进度
-    prog = progress(r.console)
-    prog_task = None
-    if prog is not None:
-        prog_task = prog.add_task("检测中", total=len(repos))
-        prog.start()
-
-    plans: list[tuple[RepoPlan, RepoResult, str]] = [None] * len(repos)  # type: ignore[list-item]
-    with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        futures = {
-            pool.submit(_detect_one, idx, repo): idx
-            for idx, repo in enumerate(repos)
-        }
-        try:
-            for fut in as_completed(futures):
-                idx, buf_text, plan, rr = fut.result()
-                if prog is not None and prog_task is not None:
-                    prog.advance(prog_task)
-                    prog.update(prog_task, description=f"检测中 {rr.name}")
-                plans[idx] = (plan, rr, buf_text)
-        except KeyboardInterrupt:
-            r.warn("\n用户中断（检测阶段）")
-            if prog is not None:
-                prog.stop()
-            os._exit(130)
-        finally:
-            if prog is not None:
-                prog.stop()
-
-    # flush detect 日志（按仓库顺序, 整段不交错）
-    for plan, rr, buf_text in plans:
-        if buf_text:
-            if prog is not None:
-                if not print_ansi(prog.console, buf_text):
-                    sys.stderr.write(buf_text)
-            else:
-                sys.stderr.write(buf_text)
-
-    # detect 阶段已定 skip/fail 的直接入结果
-    to_execute: list[tuple[RepoPlan, RepoResult]] = []
-    for plan, rr, _ in plans:
-        if plan.execute is None:
-            if rr.status == "ok":
-                rr.status = "skip"
-                if not rr.detail:
-                    rr.detail = "无可执行操作"
-            if rr.status == "ok":
-                result.succeeded.append(rr)
-            elif rr.status == "skip":
-                result.skipped.append(rr)
-            else:
-                result.failed.append(rr)
-            r.status(rr.status, f"{rr.name}{(' — ' + rr.detail) if rr.detail else ''}")
-        else:
-            to_execute.append((plan, rr))
-
-    # ── 阶段2: 串行 execute (全局 Reporter 直写 stderr, 实时流式) ────
-    if to_execute:
-        r.rule("执行（串行）", style="blue")
-        prog2 = progress(r.console)
-        prog2_task = None
-        if prog2 is not None:
-            prog2_task = prog2.add_task("执行中", total=len(to_execute))
-            prog2.start()
-        try:
-            for plan, rr in to_execute:
-                if prog2 is not None and prog2_task is not None:
-                    prog2.update(prog2_task, description=f"执行中 {rr.name}")
-                # execute 用全局 r 直写 stderr; 命令 capture_output=False 实时吐
-                try:
-                    status, detail = plan.execute(Path(rr.path), plan, r, root)
-                    rr.status = status
-                    rr.detail = detail
-                except KeyboardInterrupt:
-                    r.warn(f"\n用户中断（执行 {rr.name}）")
-                    if prog2 is not None:
-                        prog2.stop()
-                    os._exit(130)
-                except Exception as e:
-                    r.err(f"执行异常 ({rr.name}): {e}")
-                    rr.status = "fail"
-                    rr.detail = str(e)
-                if prog2 is not None and prog2_task is not None:
-                    prog2.advance(prog2_task)
-                if rr.status == "ok":
-                    result.succeeded.append(rr)
-                elif rr.status == "skip":
-                    result.skipped.append(rr)
-                else:
-                    result.failed.append(rr)
-                r.status(rr.status, f"{rr.name}{(' — ' + rr.detail) if rr.detail else ''}")
-        finally:
-            if prog2 is not None:
-                prog2.stop()
-
-    print_summary(r, "执行结果", result)
-    notify_batch_done(folder_name, result, script_dir=script_dir)
-    return result
+    """兼容壳：新代码用 BatchRunner().run(BatchOperation)。"""
+    operation = CallbackBatchOperation(
+        title=title,
+        root=root,
+        confirm=confirm,
+        folder_name=folder_name,
+        script_dir=script_dir,
+        detect_fn=detect,
+    )
+    return BatchRunner().run(operation)
 
 
 # ── 三个具体批量操作的薄壳入口 ─────────────────────────────────────────
@@ -507,12 +576,12 @@ def push_all(
     # --auto-commit 仅批量层消费, 不透传子进程（子进程会再次判定导致重复提交）
     extra = [a for a in extra if a != "--auto-commit"]
 
-    result = run_batch(
+    result = BatchRunner().run(CallbackBatchOperation(
         title=f"push_{target} 批量推送",
         root=Path(".").resolve(),
-        detect=_push_one_factory(target, parsed.dry_run, parsed.auto_commit, extra),
         confirm=False,
-    )
+        detect_fn=_push_one_factory(target, parsed.dry_run, parsed.auto_commit, extra),
+    ))
     return 1 if result.failed else 0
 
 
@@ -601,12 +670,12 @@ def merge_all(
     # --auto-commit 仅批量层消费, 不透传子进程（子进程会再次判定导致重复提交）
     extra = [a for a in extra if a != "--auto-commit"]
 
-    result = run_batch(
+    result = BatchRunner().run(CallbackBatchOperation(
         title=f"merge_{target} 批量合并",
         root=Path(".").resolve(),
-        detect=_merge_one_factory(target, parsed.dry_run, parsed.auto_commit, extra),
         confirm=False,
-    )
+        detect_fn=_merge_one_factory(target, parsed.dry_run, parsed.auto_commit, extra),
+    ))
     return 1 if result.failed else 0
 
 
@@ -701,12 +770,12 @@ def _switch_one_factory(target: str) -> DetectFn:
 
 def switch_branch_all(target: str) -> int:
     """批量切换分支：扫描 Git 仓库，切换到指定分支（不存在则从主分支创建）。"""
-    result = run_batch(
+    result = BatchRunner().run(CallbackBatchOperation(
         title=f"分支切换 → {target}",
         root=Path(".").resolve(),
-        detect=_switch_one_factory(target),
         confirm=False,
-    )
+        detect_fn=_switch_one_factory(target),
+    ))
     return 1 if result.failed else 0
 
 
@@ -850,12 +919,12 @@ def sync_branch_all(branch: str | None = None, *, force: bool = False) -> int:
         title = "同步当前分支 → origin/<当前分支>"
     else:
         title = f"同步 {branch} → origin/{branch}"
-    result = run_batch(
+    result = BatchRunner().run(CallbackBatchOperation(
         title=title,
         root=Path(".").resolve(),
-        detect=_sync_one_factory(branch, force),
         confirm=False,
-    )
+        detect_fn=_sync_one_factory(branch, force),
+    ))
     return 1 if result.failed else 0
 
 
@@ -977,12 +1046,12 @@ def push_branch_all(branch: str | None = None, *, force: bool = False) -> int:
         title = f"推送 {branch} → origin/{branch}"
     root = Path(".").resolve()
     single = len(scan_repos(root)) == 1
-    result = run_batch(
+    result = BatchRunner().run(CallbackBatchOperation(
         title=title,
         root=root,
-        detect=_push_branch_one_factory(branch, force, single=single),
         confirm=False,
-    )
+        detect_fn=_push_branch_one_factory(branch, force, single=single),
+    ))
     return 1 if result.failed else 0
 
 
@@ -1021,12 +1090,12 @@ def _delete_branch_one_factory(target: str, force: bool) -> DetectFn:
 
 def delete_branch_all(target: str, *, force: bool = False) -> int:
     """批量删除本地分支。删前确认。"""
-    result = run_batch(
+    result = BatchRunner().run(CallbackBatchOperation(
         title=f"删除本地分支 {target}" + ("（强删）" if force else ""),
         root=Path(".").resolve(),
-        detect=_delete_branch_one_factory(target, force),
         confirm=True,
-    )
+        detect_fn=_delete_branch_one_factory(target, force),
+    ))
     return 1 if result.failed else 0
 
 
@@ -1061,10 +1130,10 @@ def _delete_branch_remote_one_factory(target: str, remote: str) -> DetectFn:
 
 def delete_branch_remote_all(target: str, *, remote: str = "origin") -> int:
     """批量删除远端分支。删前确认。"""
-    result = run_batch(
+    result = BatchRunner().run(CallbackBatchOperation(
         title=f"删除远端分支 {remote}/{target}",
         root=Path(".").resolve(),
-        detect=_delete_branch_remote_one_factory(target, remote),
         confirm=True,
-    )
+        detect_fn=_delete_branch_remote_one_factory(target, remote),
+    ))
     return 1 if result.failed else 0

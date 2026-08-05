@@ -279,7 +279,7 @@ def commit_all(
     默认不确认（对齐 push_*）。
     """
     from pathlib import Path
-    from lib.batch_git import run_batch, BatchResult
+    from lib.batch_git import BatchResult, BatchRunner, CallbackBatchOperation
     from lib.ui import reporter
 
     r = reporter(stderr=True)
@@ -294,13 +294,13 @@ def commit_all(
             return "ok", "演练" if dry_run else "已提交"
         return "fail", f"退出码 {rc}"
 
-    result: BatchResult = run_batch(
-        "批量 commit",
-        root,
-        _operation,
+    result: BatchResult = BatchRunner().run(CallbackBatchOperation(
+        title="批量 commit",
+        root=root,
         folder_name=root.name,
         confirm=confirm,
-    )
+        detect_fn=_operation,
+    ))
     items = [(rr.name, rr.status, rr.detail)
              for rr in (result.succeeded + result.skipped + result.failed)]
     r.status_table(f"批量 commit 结果（{result.total} 仓）", items)

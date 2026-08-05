@@ -108,5 +108,96 @@ class TestNRejectsDangerousIsolated(unittest.TestCase):
         self.assertEqual(p.returncode, 1)
 
 
+class TestBatchGitCliBlackbox(unittest.TestCase):
+    """批量 Git CLI 黑盒：系统临时目录 + 本地 bare remote。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="batch_git_cli_")
+        self.root = Path(self.tmp.name) / "work"
+        self.root.mkdir()
+        self.home = Path(self.tmp.name) / "home"
+        self.home.mkdir()
+        self.remote = Path(self.tmp.name) / "remote.git"
+        self.repo = self.root / "repo1"
+        self.env = {
+            "PATH": f"{BIN_DIR}:{os.environ.get('PATH', '')}",
+            "HOME": str(self.home),
+            "PYTHONPATH": str(REPO_ROOT),
+            "SCRIPTS_NO_SAY": "1",
+            "BATCH_NO_CONFIRM": "1",
+            "TERM": "dumb",
+        }
+        self._git(None, "init", "--bare", "--initial-branch=main", str(self.remote))
+        self._git(None, "init", "--initial-branch=main", str(self.repo))
+        self._git(self.repo, "config", "user.email", "test@example.invalid")
+        self._git(self.repo, "config", "user.name", "Test User")
+        self._git(self.repo, "remote", "add", "origin", str(self.remote))
+        (self.repo / "README.md").write_text("main\n")
+        self._git(self.repo, "add", "README.md")
+        self._git(self.repo, "commit", "-m", "init")
+        self._git(self.repo, "push", "-u", "origin", "main")
+        self._git(self.repo, "fetch", "origin")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _git(self, cwd: Path | None, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", *args], cwd=cwd, env=self.env, text=True,
+            capture_output=True, check=True, timeout=20,
+        )
+
+    def _run_bin(self, name: str, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(BIN_DIR / name), *args], cwd=self.root, env=self.env,
+            text=True, capture_output=True, timeout=30,
+        )
+
+    def _branch(self) -> str:
+        return self._git(self.repo, "branch", "--show-current").stdout.strip()
+
+    def test_switch_branch_batch_creates_from_origin_main(self):
+        p = self._run_bin("switch_branch", "topic")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self._branch(), "topic")
+        main_sha = self._git(self.repo, "rev-parse", "main").stdout.strip()
+        topic_sha = self._git(self.repo, "rev-parse", "topic").stdout.strip()
+        self.assertEqual(topic_sha, main_sha)
+
+    def test_delete_branch_batch_only_deletes_test_branch(self):
+        self._git(self.repo, "switch", "-c", "delete-me")
+        self._git(self.repo, "switch", "main")
+        p = self._run_bin("delete_branch", "delete-me", "-y")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        branches = self._git(self.repo, "branch", "--list").stdout
+        self.assertNotIn("delete-me", branches)
+        self.assertIn("main", branches)
+        self.assertEqual(self._branch(), "main")
+
+    def test_delete_branch_remote_batch_only_deletes_test_branch(self):
+        self._git(self.repo, "switch", "-c", "remote-delete-me")
+        (self.repo / "remote.txt").write_text("remote\n")
+        self._git(self.repo, "add", "remote.txt")
+        self._git(self.repo, "commit", "-m", "remote branch")
+        self._git(self.repo, "push", "-u", "origin", "remote-delete-me")
+        self._git(self.repo, "switch", "main")
+        p = self._run_bin("delete_branch_remote", "remote-delete-me", "-y")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        remote_heads = self._git(None, "--git-dir", str(self.remote), "for-each-ref", "--format=%(refname:short)", "refs/heads").stdout
+        self.assertIn("main", remote_heads)
+        self.assertNotIn("remote-delete-me", remote_heads)
+
+    def test_push_branch_batch_pushes_current_test_branch(self):
+        self._git(self.repo, "switch", "-c", "push-me")
+        (self.repo / "push.txt").write_text("push\n")
+        self._git(self.repo, "add", "push.txt")
+        self._git(self.repo, "commit", "-m", "push branch")
+        p = self._run_bin("push_branch")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        remote_heads = self._git(None, "--git-dir", str(self.remote), "for-each-ref", "--format=%(refname:short)", "refs/heads").stdout
+        self.assertIn("push-me", remote_heads)
+        self.assertIn("main", remote_heads)
+
+
 if __name__ == "__main__":
     unittest.main()

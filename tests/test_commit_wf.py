@@ -42,6 +42,7 @@ class TestRunCommit(unittest.TestCase):
         self.assertEqual(rc, 0)
         mock_gen.assert_not_called()
 
+    @patch.dict("lib.commit_wf.os.environ", {"LAZYGOPHERS_SCRIPTS_BASE_URL": "", "LAZYGOPHERS_SCRIPTS_TOKEN": ""})
     @patch("lib.commit_wf.generate_via_claude")
     @patch("lib.commit_wf.run")
     @patch("lib.commit_wf._has_changes")
@@ -53,6 +54,7 @@ class TestRunCommit(unittest.TestCase):
         self.assertEqual(rc, 0)
         mock_gen.assert_called_once()
 
+    @patch.dict("lib.commit_wf.os.environ", {"LAZYGOPHERS_SCRIPTS_BASE_URL": "", "LAZYGOPHERS_SCRIPTS_TOKEN": ""})
     @patch("lib.commit_wf.generate_via_claude")
     @patch("lib.commit_wf.run")
     @patch("lib.commit_wf._has_changes")
@@ -68,9 +70,10 @@ class TestRunCommit(unittest.TestCase):
     def test_empty_staged_calls_bit_add(self, mock_has, mock_run):
         mock_has.return_value = (True, ["?? new.py"])
         mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-        with patch("lib.commit_wf.generate_via_claude") as mock_gen:
-            mock_gen.return_value = "feat: 加文件"
-            run_commit()
+        with patch.dict("lib.commit_wf.os.environ", {"LAZYGOPHERS_SCRIPTS_BASE_URL": "", "LAZYGOPHERS_SCRIPTS_TOKEN": ""}):
+            with patch("lib.commit_wf.generate_via_claude") as mock_gen:
+                mock_gen.return_value = "feat: 加文件"
+                run_commit()
         calls = [c.args[0] for c in mock_run.call_args_list]
         self.assertIn(["bit", "add", "."], calls)
 

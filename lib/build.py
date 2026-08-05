@@ -570,7 +570,7 @@ def run_checkwork() -> int:
     （与 push_*/merge_* 批量语义对齐：在父目录跑即覆盖全部子仓库）。
     """
     from lib.notify import notify_via_n, project_done_message
-    from lib.batch_git import scan_repos
+    from lib.batch_git import BatchRunner, CallbackBatchOperation, RepoPlan
 
     r = reporter(stderr=True)
     r.rule("编译检查", style="blue")
@@ -583,32 +583,21 @@ def run_checkwork() -> int:
         notify_via_n(project_done_message("编译检查失败" if rc == 2 else "编译检查完成"))
         return rc
 
-    # 批量: 扫子目录 git 根
-    repos = scan_repos(cwd)
-    r.info(f"扫描 {len(repos)} 个仓库")
-    if not repos:
-        r.ok("未发现子目录 git 仓库")
-        return 0
+    def _detect(repo: Path, _r, _root: Path) -> RepoPlan:
+        return RepoPlan(status="ok", execute=_execute)
 
-    # ponytail: 收集 (repo, status, detail) 末尾打汇总表
-    rows: list[tuple[str, str, str]] = []
-    overall_fail = False
-    for repo in repos:
-        rel = repo.relative_to(cwd)
-        r.rule(f"📂 {rel}", style="cyan")
+    def _execute(repo: Path, _plan: RepoPlan, r, _root: Path) -> tuple[str, str]:
+        r.rule(f"📂 {repo.relative_to(cwd)}", style="cyan")
         rc, detail = _checkwork_single(repo, r)
-        status = "fail" if rc == 2 else "ok"
-        if rc == 2:
-            overall_fail = True
-        rows.append((str(rel), status, detail))
+        return ("fail" if rc == 2 else "ok"), detail
 
-    r.status_table("批量编译检查汇总", rows)
-    failed = sum(1 for _, s, _ in rows if s == "fail")
-    r.status_footer([
-        (f"失败 {failed}/{len(rows)}" if failed else f"成功 {len(rows)}/{len(rows)}",
-         "red" if failed else "green"),
-    ])
-    if overall_fail:
+    result = BatchRunner().run(CallbackBatchOperation(
+        title="批量编译检查",
+        root=cwd,
+        confirm=False,
+        detect_fn=_detect,
+    ))
+    if result.failed:
         notify_via_n(project_done_message("编译检查失败"))
         return 2
     notify_via_n(project_done_message("编译检查完成"))

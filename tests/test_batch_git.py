@@ -318,22 +318,21 @@ class TestExtractError(unittest.TestCase):
 class TestPushAllArgparse(unittest.TestCase):
     """push_all(target, argv) 参数解析。"""
 
-    @patch("lib.batch_git.run_batch")
-    def test_parses_dry_run(self, mock_batch):
+    @patch("lib.batch_git.BatchRunner.run")
+    def test_parses_dry_run(self, mock_run):
         push_all("canary", argv=["push_canary", "--dry-run"])
-        _, kwargs = mock_batch.call_args
-        self.assertFalse(kwargs["confirm"])
-        detect = kwargs["detect"]
-        self.assertTrue(callable(detect))
+        operation = mock_run.call_args.args[0]
+        self.assertFalse(operation.confirm)
+        self.assertTrue(callable(operation.detect_fn))
 
-    @patch("lib.batch_git.run_batch")
-    def test_confirm_always_false(self, mock_batch):
+    @patch("lib.batch_git.BatchRunner.run")
+    def test_confirm_always_false(self, mock_run):
         """批量模式自动执行，无确认门（confirm=False）。"""
         push_all("develop", argv=["push_develop"])
-        self.assertFalse(mock_batch.call_args[1]["confirm"])
+        self.assertFalse(mock_run.call_args.args[0].confirm)
 
-    @patch("lib.batch_git.run_batch")
-    def test_extra_passthrough(self, mock_batch):
+    @patch("lib.batch_git.BatchRunner.run")
+    def test_extra_passthrough(self, mock_run):
         """--stay 等非批量参数透传给 factory 的 extra。"""
         push_all("canary", argv=["push_canary", "--stay"])
         # 通过直接调 factory 验证 extra 透传（factory 内部捕获 extra）
@@ -348,23 +347,23 @@ class TestPushAllArgparse(unittest.TestCase):
             push_all("canary", argv=["push_canary", "--stay"])
         self.assertIn("--stay", captured["extra"])
 
-    @patch("lib.batch_git.run_batch")
-    def test_exit_code_zero_when_no_failure(self, mock_batch):
+    @patch("lib.batch_git.BatchRunner.run")
+    def test_exit_code_zero_when_no_failure(self, mock_run):
         """全成功/跳过 → 退出码 0。"""
         from lib.batch_git import BatchResult as _BR
         ok = _BR(total=1)
         ok.succeeded.append(RepoResult("a", "/a", "ok"))
-        mock_batch.return_value = ok
+        mock_run.return_value = ok
         rc = push_all("canary", argv=["push_canary"])
         self.assertEqual(rc, 0)
 
-    @patch("lib.batch_git.run_batch")
-    def test_exit_code_one_when_failed(self, mock_batch):
+    @patch("lib.batch_git.BatchRunner.run")
+    def test_exit_code_one_when_failed(self, mock_run):
         """有失败 → 退出码 1（shell && / || 可感知）。"""
         from lib.batch_git import BatchResult as _BR
         bad = _BR(total=2)
         bad.failed.append(RepoResult("x", "/x", "fail", "boom"))
-        mock_batch.return_value = bad
+        mock_run.return_value = bad
         rc = push_all("canary", argv=["push_canary"])
         self.assertEqual(rc, 1)
 
