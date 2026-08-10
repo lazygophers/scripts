@@ -65,9 +65,25 @@ def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
         parts = data.get("content") or []
         texts = [p.get("text", "") for p in parts if p.get("type") == "text"]
         return _extract_message(texts).strip()
-    except (urllib.error.URLError, urllib.error.HTTPError,
-            ValueError, TimeoutError, KeyError, IndexError) as e:
-        r.err(f"LAZYGOPHERS API 生成失败: {e}")
+    except urllib.error.HTTPError as e:
+        # HTTP 错误：打印状态码 + 原因（已 strip），不暴露 traceback/异常类名
+        r.err(f"LAZYGOPHERS API 返回 HTTP {e.code}（{e.reason}）")
+        return ""
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        # 网络层错误（连接拒绝/超时/DNS 等）：不打印异常 repr（含 errno/类名），
+        # 只输出可读中文，避免像堆栈
+        reason = getattr(e, "reason", None) or e
+        # OSError 子类（ConnectionRefusedError 等）优先取 strerror（纯文案，
+        # 无 errno 数字）；普通 OSError / TimeoutError 取 strerror；
+        # 其他（reason 为字符串等）直接 str()
+        text = getattr(reason, "strerror", None) or getattr(e, "strerror", None)
+        if not text:
+            text = str(reason)
+        r.err(f"LAZYGOPHERS API 连接失败：{text}")
+        return ""
+    except (ValueError, KeyError, IndexError) as e:
+        # JSON 解析 / 字段缺失：不暴露异常类名
+        r.err("LAZYGOPHERS API 响应格式异常")
         return ""
 
 
@@ -281,20 +297,21 @@ def commit_all(
     默认不确认（对齐 push_*）。
     """
     from pathlib import Path
-    from lib.batch_git import BatchResult, BatchRunner, CallbackBatchOperation
-    from lib.ui import reporter
+    from lib.batch_git import (
+        BatchResult, BatchRunner, CallbackBatchOperation, RepoPlan,
+    )
 
     r = reporter(stderr=True)
     root = Path(root).resolve()
 
-    def _operation(repo, rr, _root):
+    def _operation(repo, rr, _root) -> RepoPlan:
         has, _ = _has_changes(cwd=str(repo))
         if not has:
-            return "skip", "无变更"
+            return RepoPlan(status="skip", detail="无变更")
         rc = run_commit(msg, dry_run=dry_run, cwd=str(repo))
         if rc == 0:
-            return "ok", "演练" if dry_run else "已提交"
-        return "fail", f"退出码 {rc}"
+            return RepoPlan(status="ok", detail="演练" if dry_run else "已提交")
+        return RepoPlan(status="fail", detail=f"退出码 {rc}")
 
     result: BatchResult = BatchRunner().run(CallbackBatchOperation(
         title="批量 commit",

@@ -50,6 +50,17 @@ def main(argv: list[str]) -> int:
     if not cmd:
         parser.error("必须指定要执行的命令")
 
+    # 用户引号包裹整个命令时 (如 loop 3 'bit push -f')，cmd 只有一个含空格的元素，
+    # subprocess 会把它当作可执行文件名而 FileNotFoundError。
+    # 含 shell 操作符 (| & ; < > 等) 时用 sh -c 包裹；否则 shlex.split 拆 argv。
+    if len(cmd) == 1 and ' ' in cmd[0]:
+        import shlex
+        shell_special = {'|', '&', ';', '<', '>', '(', ')'}
+        if any(c in cmd[0] for c in shell_special):
+            cmd = ['sh', '-c', cmd[0]]
+        else:
+            cmd = shlex.split(cmd[0])
+
     if args.dry_run:
         times = count if count is not None else "无限"
         print(f"loop: dry-run，将执行 {times} 次: {' '.join(cmd)}（未执行）")
