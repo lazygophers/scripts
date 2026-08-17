@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""check_ai 薄壳入口 — AI API 端点连通性检测。"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.check_ai import main
+from lib.notify import consume_debug, consume_dry_run, consume_no_say
+from lib.ui import timed
+
+sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
+raise SystemExit(timed(main, label="check_ai")(sys.argv))
