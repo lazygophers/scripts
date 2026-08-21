@@ -20,7 +20,7 @@ class KkCli(BaseCli):
         用法: kk <pattern1> [pattern2 ...] [--dry-run]
         """
         if not patterns:
-            self.r.err("kk: 至少需要一个进程名")
+            self._r.err("kk: 至少需要一个进程名")
             return 1
         return kill_by_name(
             list(patterns),

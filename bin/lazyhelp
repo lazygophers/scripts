@@ -22,9 +22,9 @@ class LazyhelpCli(BaseCli):
         """默认：按分类速查全部 bin/ 工具及功能"""
         from lib.lazyhelp import TOOLS
         rows = [(name, cat, desc) for name, (cat, desc) in sorted(TOOLS.items())]
-        self.r.rule(f"bin/ 工具速查（共 {len(rows)} 个）", style="blue")
-        self.r.step("用法: lazyhelp help <工具名>  # 输出该工具的完整 --help")
-        _render_table(rows, self.r)
+        self._r.rule(f"bin/ 工具速查（共 {len(rows)} 个）", style="blue")
+        self._r.step("用法: lazyhelp help <工具名>  # 输出该工具的完整 --help")
+        _render_table(rows, self._r)
         return 0
 
     @timed_cli
@@ -51,7 +51,7 @@ if __name__ == "__main__":
     if len(sys.argv) <= 1:
         # 无参数 → 直接调 all() 并退出（避免 fire 走总览打印）
         from lib.lazyhelp import TOOLS
-        r = LazyhelpCli().r
+        r = LazyhelpCli()._r
         rows = [(name, cat, desc) for name, (cat, desc) in sorted(TOOLS.items())]
         r.rule(f"bin/ 工具速查（共 {len(rows)} 个）", style="blue")
         r.step("用法: lazyhelp help <工具名>  # 输出该工具的完整 --help")

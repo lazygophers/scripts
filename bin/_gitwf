@@ -54,7 +54,7 @@ class GitWfCli(BaseCli):
     def _dispatch(self, *, single: bool, auto_commit: bool) -> int:
         name = pathlib.Path(sys.argv[0]).name
         if name not in _NAME_MAP:
-            self.r.err(f"未知入口名 {name!r}，已知: {sorted(_NAME_MAP)}")
+            self._r.err(f"未知入口名 {name!r}，已知: {sorted(_NAME_MAP)}")
             return 2
         action, target = _NAME_MAP[name]
         # 让 run_workflow 显示用户输入的入口名

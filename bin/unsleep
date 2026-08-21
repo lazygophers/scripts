@@ -38,7 +38,7 @@ class UnsleepCli(BaseCli):
         用法: unsleep with_command <cmd> [args...]
         """
         if not cmd:
-            self.r.err("unsleep with_command: 缺少命令")
+            self._r.err("unsleep with_command: 缺少命令")
             return 1
         return prevent_sleep(duration=None, command=list(cmd))
 

@@ -1,4 +1,9 @@
-"""fire 公共基底：BaseCli + 入口工具函数。"""
+"""fire 公共基底：BaseCli + 入口工具函数。
+
+子命令方法里通过 `self._r` 访问 Rich Reporter；属性名加下划线前缀
+避免 fire 反射成 GROUPS 里那个名为 `r` 的占位项（fire 把所有公开实例
+属性当 group 列出来）。
+"""
 
 from __future__ import annotations
 
@@ -16,15 +21,13 @@ from lib.ui import Reporter, reporter
 class BaseCli:
     """fire CLI 基类。子类直接写方法即可被 fire.Fire() 反射成子命令。
 
-    self.r: Reporter — 统一 Rich 输出（含降级）
-
     注意：fire 把 BaseCli 实例属性视为 values/flags（不能作为子命令参数前缀）。
     因此全局 `--dry-run` / `--no-say` / `--debug` 不放在 self 上，改走
     consume_* 拦截器（见 run_cli）。
     """
 
     def __init__(self) -> None:
-        self.r: Reporter = reporter(stderr=True)
+        self._r: Reporter = reporter(stderr=True)
 
 
 def timed_cli(method: Callable[..., Any]) -> Callable[..., Any]:

@@ -44,7 +44,7 @@ class LoopCli(BaseCli):
         """
         count, cmd = _split_count_cmd(args)
         if not cmd:
-            self.r.err("loop: 缺少命令")
+            self._r.err("loop: 缺少命令")
             return 1
         return run_loop(_normalize_cmd(cmd), count=count, force=force, timeout=timeout)
 
@@ -55,7 +55,7 @@ class LoopCli(BaseCli):
         用法: loop infinite <cmd...> [--force]
         """
         if not cmd:
-            self.r.err("loop: 缺少命令")
+            self._r.err("loop: 缺少命令")
             return 1
         return run_loop(_normalize_cmd(list(cmd)), count=None, infinite=True, force=force)
 
@@ -67,7 +67,7 @@ class LoopCli(BaseCli):
         """
         count, cmd = _split_count_cmd(args)
         if not cmd:
-            self.r.err("loop: 缺少命令")
+            self._r.err("loop: 缺少命令")
             return 1
         return run_loop(_normalize_cmd(cmd), count=count, force=True, timeout=timeout)
 

@@ -34,7 +34,7 @@ class SquashPrCli(BaseCli):
         if source is None:
             source = get_current_branch()
         if not source:
-            self.r.err("squash_pr: 无法获取当前分支作为 source，请显式传入")
+            self._r.err("squash_pr: 无法获取当前分支作为 source，请显式传入")
             return 1
         res = run_squash_pr(source, target, dry_run=dry_run, no_mr=push_only)
         return res.returncode
