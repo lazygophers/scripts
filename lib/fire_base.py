@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from functools import wraps
@@ -53,6 +54,10 @@ def run_cli(cli: BaseCli) -> None:
 
     方法返回 int 时，fire 不会自动转 exit code（fire 本身把返回值当字符串打印）；
     这里显式 sys.exit 把 int 转成退出码。None 当作 0。
+
+    PAGER=- 强制 fire 走 fallback internal pager；为彻底避免任何 pager 行为
+    （PAGER=- 不阻止 fire.console.console_pager.Pager），monkey-patch
+    fire.console.console_io.More 直接 out.write，不调用 pager。
     """
     from lib.notify import consume_debug, consume_dry_run, consume_no_say
 
@@ -61,6 +66,12 @@ def run_cli(cli: BaseCli) -> None:
     argv = consume_debug(argv)
     argv = consume_no_say(argv)
     sys.argv = argv
+    os.environ.setdefault("PAGER", "-")
+
+    # 禁用 pager：fire 默认长 help 走 less / 内置 pager，-h 时不便。
+    import fire.console.console_io as _cio
+    _cio.More = lambda contents, out, prompt=None, check_pager=True: out.write(contents)
+
     result = fire.Fire(cli)
     if isinstance(result, int):
         sys.exit(result)
