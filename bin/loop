@@ -36,6 +36,10 @@ def _normalize_cmd(cmd: list[str]) -> list[str]:
 class LoopCli(BaseCli):
     """循环执行命令并追踪结果"""
 
+    def __call__(self, *args: str, force: bool = False, timeout: int | None = None):
+        """裸调用 `loop [count] <cmd...>` 等同 `loop run [count] <cmd...>`"""
+        return self.run(*args, force=force, timeout=timeout)
+
     @timed_cli
     def run(self, *args: str, force: bool = False, timeout: int | None = None):
         """循环执行（成功即停；首 token 为数字时视为 count）

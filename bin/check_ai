@@ -13,6 +13,23 @@ from lib.fire_base import BaseCli, run_cli, timed_cli
 class CheckAiCli(BaseCli):
     """AI API 端点连通性检测（空 POST，无任何密钥；HTTP 状态码 / TTFB / 断流）"""
 
+    def __call__(
+        self,
+        target: str,
+        *,
+        count: int = 5,
+        infinite: bool = False,
+        timeout: float = 15.0,
+        interval: float = 5.0,
+        proxy: str | None = None,
+    ):
+        """裸调用 `check_ai <端点名|URL>` 等同 `check_ai probe <端点名|URL>`"""
+        return self.probe(
+            target,
+            count=count, infinite=infinite, timeout=timeout,
+            interval=interval, proxy=proxy,
+        )
+
     @timed_cli
     def probe(
         self,

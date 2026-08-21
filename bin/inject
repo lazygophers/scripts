@@ -151,6 +151,10 @@ def _uninstall(r) -> int:
 class InjectCli(BaseCli):
     """把当前仓库 bin/ 注入 shell PATH"""
 
+    def __call__(self):
+        """裸调用 `inject` 等同 `inject run`"""
+        return self.run()
+
     @timed_cli
     def run(self):
         """写入 rc 并询问 LAZYGOPHERS AI 配置"""

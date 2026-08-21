@@ -18,6 +18,17 @@ from lib.squash_pr_wf import run_squash_pr
 class SquashPrCli(BaseCli):
     """压 source 自分叉以来的改动为单 commit → 开 PR"""
 
+    def __call__(
+        self,
+        target: str,
+        source: str | None = None,
+        *,
+        dry_run: bool = False,
+        push_only: bool = False,
+    ):
+        """裸调用 `squash_pr <target> [source]` 等同 `squash_pr run <target> [source]`"""
+        return self.run(target, source, dry_run=dry_run, push_only=push_only)
+
     @timed_cli
     def run(
         self,

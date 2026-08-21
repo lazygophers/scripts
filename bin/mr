@@ -13,6 +13,23 @@ from lib.mr_wf import run_mr
 class MrCli(BaseCli):
     """自动创建 PR/MR（调 claude 生成 title/body）"""
 
+    def __call__(
+        self,
+        base: str | None = None,
+        *,
+        dry_run: bool = False,
+        publish: bool = False,
+        reviews: str | None = None,
+        labels: str | None = None,
+        assignee: str | None = None,
+        settings: str | None = None,
+    ):
+        """裸调用 `mr [<base>]` 等同 `mr create [<base>]`"""
+        return self.create(
+            base, dry_run=dry_run, publish=publish,
+            reviews=reviews, labels=labels, assignee=assignee, settings=settings,
+        )
+
     @timed_cli
     def create(
         self,

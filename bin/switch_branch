@@ -13,6 +13,10 @@ from lib.fire_base import BaseCli, run_cli, timed_cli
 class SwitchBranchCli(BaseCli):
     """批量切换所有仓库到指定分支"""
 
+    def __call__(self, branch: str):
+        """裸调用 `switch_branch <branch>` 等同 `switch_branch to <branch>`"""
+        return self.to(branch)
+
     @timed_cli
     def to(self, branch: str):
         """切换到指定分支

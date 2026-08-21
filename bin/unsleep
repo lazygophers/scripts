@@ -18,6 +18,10 @@ from lib.system import prevent_sleep
 class UnsleepCli(BaseCli):
     """防止 macOS 系统休眠"""
 
+    def __call__(self):
+        """裸调用 `unsleep` 等同 `unsleep forever`"""
+        return self.forever()
+
     @timed_cli
     def forever(self):
         """无限制防休眠（Ctrl+C 结束）"""

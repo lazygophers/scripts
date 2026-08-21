@@ -13,6 +13,10 @@ from lib.process import kill_by_name
 class KkCli(BaseCli):
     """按进程名终止进程（正则）"""
 
+    def __call__(self, *patterns: str, dry_run: bool = False):
+        """裸调用 `kk <pattern...>` 等同 `kk by_name <pattern...>`"""
+        return self.by_name(*patterns, dry_run=dry_run)
+
     @timed_cli
     def by_name(self, *patterns: str, dry_run: bool = False):
         """终止匹配的进程

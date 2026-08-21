@@ -31,19 +31,42 @@ class BaseCli:
 
 
 def timed_cli(method: Callable[..., Any]) -> Callable[..., Any]:
-    """装饰 bin/* CLI 方法：跑完打印耗时（与 lib.ui.timed 同语义，但只打印一次）。
+    """装饰 bin/* CLI 方法：跑完用 Rich 打 dim 灰色耗时（含起止时间）。
 
+    自适应单位：<1s 显示 ms；<60s 显示 s；≥1m 显示 m+s。
+    走 Rich Console(stderr=True) → dim 样式统一。
     透传方法返回值（fire 用作 exit code）。
     """
 
     @wraps(method)
     def wrapper(self, *args, **kwargs):
+        from datetime import datetime
+
+        from rich.console import Console
+        from rich.text import Text
+
         t0 = time.monotonic()
+        start_wall = time.time()
         try:
             return method(self, *args, **kwargs)
         finally:
-            ms = (time.monotonic() - t0) * 1000
-            print(f"⏱ {method.__qualname__} · {ms:.1f}ms", file=sys.stderr)
+            elapsed = time.monotonic() - t0
+            ms = int(elapsed * 1000)
+            if ms < 1000:
+                elapsed_s = f"{ms}ms"
+            elif elapsed < 60:
+                elapsed_s = f"{elapsed:.1f}s"
+            else:
+                m, s = divmod(int(elapsed), 60)
+                elapsed_s = f"{m}m{s}s"
+            start_s = datetime.fromtimestamp(start_wall).strftime("%H:%M:%S")
+            end_s = datetime.fromtimestamp(time.time()).strftime("%H:%M:%S")
+            con = Console(stderr=True)
+            t = Text()
+            t.append("⏱ ", style="dim")
+            t.append(elapsed_s, style="dim bold")
+            t.append(f" · {start_s}–{end_s}", style="dim")
+            con.print(t)
 
     return wrapper
 
@@ -85,12 +108,23 @@ def run_cli(cli: BaseCli) -> None:
     _real_print = _bi.print
     _bi.print = lambda *a, **kw: (_render_fire_info(a, kw) if a and isinstance(a[0], str) and a[0].startswith("INFO: ") else _real_print(*a, **kw))
 
+    # 拦截 _PrintResult：避免 fire 把子命令返回值（int/None/str）打到 stdout
+    _fc._PrintResult = lambda component_trace, verbose=False, serialize=None: _handle_fire_result(component_trace)
+
     result = fire.Fire(cli)
     # 还原 builtins.print（避免污染同进程后续代码）
     _bi.print = _real_print
     if isinstance(result, int):
         sys.exit(result)
     sys.exit(0)
+
+
+def _handle_fire_result(component_trace) -> None:
+    """吞掉 fire._PrintResult：返回值由 run_cli 末尾的 sys.exit 决定。
+
+    原始 fire._PrintResult 会 print(value) 到 stdout，导致 CLI 返回 int 0 时多出一个
+    '0' 行。我们不输出值，退出码由 run_cli 统一处理。
+    """
 
 
 def _render_fire_info(args, kwargs) -> None:

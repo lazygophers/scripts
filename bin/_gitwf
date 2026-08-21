@@ -33,6 +33,10 @@ _NAME_MAP = {
 class GitWfCli(BaseCli):
     """merge*/push* 统一入口（由 symlink basename 决定 action+target）"""
 
+    def __call__(self, *, auto_commit: bool = False):
+        """裸调用 `merge_*/push_*` 等同 `<cmd> auto`（cwd 是 git 仓库时 here，否则 all）"""
+        return self.auto(auto_commit=auto_commit)
+
     @timed_cli
     def here(self, *, auto_commit: bool = False):
         """单仓模式：merge/push 当前分支 → <target>（target 由入口名决定）"""

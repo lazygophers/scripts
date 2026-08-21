@@ -14,6 +14,10 @@ from lib.fire_base import BaseCli, run_cli, timed_cli
 class PushBranchCli(BaseCli):
     """批量推送当前分支到远端同名分支"""
 
+    def __call__(self, force: bool = False):
+        """裸调用 `push_branch` 等同 `push_branch current`（推送当前分支）"""
+        return self.current(force=force)
+
     @timed_cli
     def current(self, force: bool = False):
         """推送各仓库当前分支（先 pull --ff-only 再 push）

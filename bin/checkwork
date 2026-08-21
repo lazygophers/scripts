@@ -13,6 +13,10 @@ from lib.build import run_checkwork
 class CheckworkCli(BaseCli):
     """多语言编译检查（Go/Rust/Python/Java/Node）"""
 
+    def __call__(self):
+        """裸调用 `checkwork` 等同 `checkwork run`"""
+        return self.run()
+
     @timed_cli
     def run(self):
         """执行当前目录（单仓或批量）的编译检查"""

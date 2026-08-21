@@ -13,6 +13,10 @@ from lib.git import list_branch
 class ListBranchCli(BaseCli):
     """列出所有仓库的本地分支"""
 
+    def __call__(self):
+        """裸调用 `list_branch` 等同 `list_branch all`"""
+        return self.all()
+
     @timed_cli
     def all(self):
         """扫描当前目录所有 Git 仓库并列分支"""
