@@ -1,14 +1,60 @@
 #!/usr/bin/env python3
-"""lazyhelp 薄壳入口 — 一页速查所有 bin/ 工具及功能。"""
+"""lazyhelp — 一页速查所有 bin/ 工具及功能（fire 重构）
+
+默认无参数：按分类速查全部 bin/ 工具。
+任意参数 <name>：调 bin/<name> --help，剩余参数透传。
+"""
 from __future__ import annotations
 
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.lazyhelp import main
-from lib.notify import consume_debug, consume_dry_run, consume_no_say
-from lib.ui import timed
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.lazyhelp import _all_bins, _render_table, show_full
 
-sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
-raise SystemExit(timed(main, label="lazyhelp")(sys.argv))
+
+class LazyhelpCli(BaseCli):
+    """一页速查所有 bin/ 工具及功能"""
+
+    @timed_cli
+    def all(self):
+        """默认：按分类速查全部 bin/ 工具及功能"""
+        from lib.lazyhelp import TOOLS
+        rows = [(name, cat, desc) for name, (cat, desc) in sorted(TOOLS.items())]
+        self.r.rule(f"bin/ 工具速查（共 {len(rows)} 个）", style="blue")
+        self.r.step("用法: lazyhelp help <工具名>  # 输出该工具的完整 --help")
+        _render_table(rows, self.r)
+        return 0
+
+    @timed_cli
+    def help(self, name: str, *extra: str):
+        """调 bin/<name> --help 输出完整说明
+
+        用法: lazyhelp help <工具名> [额外参数...]
+        """
+        # 把所有位置参数都透传给目标 bin
+        return show_full(name, extra_args=list(extra))
+
+    @timed_cli
+    def list(self):
+        """按字母排序输出所有 bin/ 工具名（覆盖 _gitwf 内部入口）"""
+        names = _all_bins()
+        for n in names:
+            print(n)
+        return 0
+
+
+if __name__ == "__main__":
+    # 默认行为：fire 把类方法当 subcommand；无 subcommand 时 fire 默认打印总览，
+    # 但我们要的是直接渲染速查表。用 Fire 的 trace 拦截太重，直接判 argv。
+    if len(sys.argv) <= 1:
+        # 无参数 → 直接调 all() 并退出（避免 fire 走总览打印）
+        from lib.lazyhelp import TOOLS
+        r = LazyhelpCli().r
+        rows = [(name, cat, desc) for name, (cat, desc) in sorted(TOOLS.items())]
+        r.rule(f"bin/ 工具速查（共 {len(rows)} 个）", style="blue")
+        r.step("用法: lazyhelp help <工具名>  # 输出该工具的完整 --help")
+        _render_table(rows, r)
+        sys.exit(0)
+    run_cli(LazyhelpCli())

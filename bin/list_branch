@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""list_branch 薄壳入口 — 列出所有仓库的本地分支。
+"""list_branch — 列出所有仓库的本地分支（fire 重构）"""
+from __future__ import annotations
 
-单仓（当前在 git 仓库）→ 仅列该仓库；非 git 目录 → 批量扫描所有 Git 仓库。
-Rich 表输出，跨仓库同名分支标 ⟱。
-"""
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.git import list_branch
-from lib.notify import consume_debug, consume_dry_run, consume_help, consume_no_say
-from lib.ui import timed
 
-sys.argv = consume_dry_run(consume_help(
-    consume_debug(consume_no_say(sys.argv)),
-    __doc__,
-    usage="list_branch [选项]",
-), __doc__)
-raise SystemExit(timed(list_branch, label="list_branch")())
+
+class ListBranchCli(BaseCli):
+    """列出所有仓库的本地分支"""
+
+    @timed_cli
+    def all(self):
+        """扫描当前目录所有 Git 仓库并列分支"""
+        return list_branch()
+
+
+if __name__ == "__main__":
+    run_cli(ListBranchCli())

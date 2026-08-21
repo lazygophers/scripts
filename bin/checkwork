@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-"""checkwork 薄壳入口 — 自动化编译检查。"""
+"""checkwork — 多语言编译检查（fire 重构）"""
+from __future__ import annotations
+
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.build import run_checkwork
-from lib.notify import consume_debug, consume_dry_run, consume_help, consume_no_say
-from lib.ui import timed
 
-sys.argv = consume_dry_run(consume_help(
-    consume_debug(consume_no_say(sys.argv)),
-    __doc__,
-    usage="checkwork [选项] [目录]",
-), __doc__)
-raise SystemExit(timed(run_checkwork, label="checkwork")())
+
+class CheckworkCli(BaseCli):
+    """多语言编译检查（Go/Rust/Python/Java/Node）"""
+
+    @timed_cli
+    def run(self):
+        """执行当前目录（单仓或批量）的编译检查"""
+        return run_checkwork()
+
+
+if __name__ == "__main__":
+    run_cli(CheckworkCli())

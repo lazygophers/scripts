@@ -1,35 +1,34 @@
 #!/usr/bin/env python3
-"""sync_branch 薄壳入口 — 批量同步分支到 origin/<branch>。"""
+"""sync_branch — 批量同步分支到 origin/<branch>（fire 重构）"""
 from __future__ import annotations
 
-import argparse
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.batch_git import sync_branch_all
-from lib.notify import consume_debug, consume_dry_run, consume_no_say
-from lib.ui import timed
+from lib.fire_base import BaseCli, run_cli, timed_cli
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description="批量同步分支：默认同步各仓库当前分支，传 <branch> 同步指定分支（硬对齐 origin/<branch>）",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("branch", nargs="?", default=None,
-                        help="目标分支名（省略则同步各仓库当前分支）")
-    parser.add_argument("--force", action="store_true",
-                        help="强制：即便本地领先也硬 reset 到 origin/<branch>")
-    parser.add_argument("--dry-run", action="store_true", help="仅预览，不同步")
-    args = parser.parse_args(argv[1:])
-    if args.dry_run:
-        target = args.branch or "当前分支"
-        print(f"sync_branch: dry-run，将同步 {target} 到 origin/{target}（未执行）")
-        return 0
-    return sync_branch_all(args.branch, force=args.force)
+class SyncBranchCli(BaseCli):
+    """批量同步分支到 origin/<branch>"""
+
+    @timed_cli
+    def current(self, force: bool = False):
+        """同步各仓库当前分支（硬对齐 origin/<当前分支>）
+
+        用法: sync_branch current [--force]
+        """
+        return sync_branch_all(branch=None, force=force)
+
+    @timed_cli
+    def to(self, branch: str, force: bool = False):
+        """同步指定分支
+
+        用法: sync_branch to <branch> [--force]
+        """
+        return sync_branch_all(branch=branch, force=force)
 
 
 if __name__ == "__main__":
-    sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
-    raise SystemExit(timed(main, label="sync_branch")(sys.argv))
+    run_cli(SyncBranchCli())

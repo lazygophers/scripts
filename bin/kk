@@ -1,37 +1,33 @@
 #!/usr/bin/env python3
-"""kk 薄壳入口 — 按进程名终止进程。"""
+"""kk — 按进程名终止进程（fire 重构）"""
 from __future__ import annotations
 
-import argparse
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.notify import consume_debug, consume_dry_run, consume_no_say
+from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.process import kill_by_name
-from lib.ui import timed
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description="根据进程名终止进程（默认自动终止，无需确认）",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="示例:\n"
-               "  kk nginx        # 终止 nginx 进程\n"
-               "  kk nginx node   # 同时终止 nginx 和 node\n"
-               "  kk --dry-run nginx   # 仅预览，不终止",
-    )
-    parser.add_argument("--dry-run", action="store_true", help="仅预览，不实际终止")
-    parser.add_argument("patterns", nargs="+", help="进程名（支持正则）")
-    args = parser.parse_args(argv[1:])
+class KkCli(BaseCli):
+    """按进程名终止进程（正则）"""
 
-    return kill_by_name(
-        args.patterns,
-        dry_run=args.dry_run,
-        script_markers={pathlib.Path(argv[0]).name, "kk.py"},
-    )
+    @timed_cli
+    def by_name(self, *patterns: str, dry_run: bool = False):
+        """终止匹配的进程
+
+        用法: kk <pattern1> [pattern2 ...] [--dry-run]
+        """
+        if not patterns:
+            self.r.err("kk: 至少需要一个进程名")
+            return 1
+        return kill_by_name(
+            list(patterns),
+            dry_run=dry_run,
+            script_markers={pathlib.Path(sys.argv[0]).name, "kk"},
+        )
 
 
 if __name__ == "__main__":
-    sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
-    raise SystemExit(timed(main, label="kk")(sys.argv))
+    run_cli(KkCli())

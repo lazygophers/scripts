@@ -1,53 +1,44 @@
 #!/usr/bin/env python3
-"""squash_pr 薄壳入口 — 把 source 自分叉以来的改动压成单 commit → 对接 mr 开 PR。
+"""squash_pr — 把 source 自分叉以来的改动压成单 commit → 对接 mr 开 PR（fire 重构）
 
 产出一个仅含单 commit 的 <source>_pr 分支，push 后调 mr <target> 开 PR。
 源分支与 target 分支本身不动。
 """
 from __future__ import annotations
 
-import argparse
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.git import get_current_branch
-from lib.notify import consume_debug, consume_dry_run, consume_no_say
 from lib.squash_pr_wf import run_squash_pr
-from lib.ui import timed
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description="squash PR 脚本：source → <source>_pr 单 commit → mr 开 PR",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="示例:\n"
-               "  squash_pr main                 # source=当前分支, target=main\n"
-               "  squash_pr feat-123 main        # 显式 source=feat-123\n"
-               "  squash_pr feat-123 main --no-mr   # 只 push 不调 mr（测试用）\n"
-               "  squash_pr feat-123 main --dry-run  # 仅打印计划",
-    )
-    parser.add_argument("branches", nargs="*", help="target（1 个）或 source target（2 个）；source 省略则用当前分支")
-    parser.add_argument("--dry-run", action="store_true", help="仅打印计划，不实际执行")
-    parser.add_argument("--no-mr", action="store_true", help="push 后停手，不调 mr 开 PR")
-    args = parser.parse_args(argv[1:])
+class SquashPrCli(BaseCli):
+    """压 source 自分叉以来的改动为单 commit → 开 PR"""
 
-    if len(args.branches) == 1:
-        source = get_current_branch()
-        target = args.branches[0]
-    elif len(args.branches) == 2:
-        source, target = args.branches
-    else:
-        parser.error("需提供 target（1 个位置参数, source 默认当前分支）或 source target（2 个）")
+    @timed_cli
+    def run(
+        self,
+        target: str,
+        source: str | None = None,
+        *,
+        dry_run: bool = False,
+        push_only: bool = False,
+    ):
+        """执行 squash → push → 开 PR
 
-    if not source:
-        parser.error("无法获取当前分支作为 source，请显式传入 source")
-
-    res = run_squash_pr(source, target,
-                        dry_run=args.dry_run, no_mr=args.no_mr)
-    return res.returncode
+        用法: squash_pr run <target> [source] [--dry-run] [--push-only]
+        """
+        if source is None:
+            source = get_current_branch()
+        if not source:
+            self.r.err("squash_pr: 无法获取当前分支作为 source，请显式传入")
+            return 1
+        res = run_squash_pr(source, target, dry_run=dry_run, no_mr=push_only)
+        return res.returncode
 
 
 if __name__ == "__main__":
-    sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
-    raise SystemExit(timed(main, label="squash_pr")(sys.argv))
+    run_cli(SquashPrCli())

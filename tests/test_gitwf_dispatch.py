@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for bin/_gitwf 分派：新名 _NAME_MAP + 单仓/批量自动识别。"""
+"""Tests for bin/_gitwf 分派：fire 重构后用 here / all / auto 三个子命令。"""
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -21,11 +21,6 @@ class TestNameMap(unittest.TestCase):
         }
         self.assertEqual(set(_gitwf._NAME_MAP), expected)
 
-    def test_old_names_absent(self):
-        for old in ("mergec", "mergedev", "mergem", "merget",
-                    "pushc", "pushdev", "pushm", "pusht"):
-            self.assertNotIn(old, _gitwf._NAME_MAP)
-
     def test_action_target_pairs(self):
         cases = {
             "merge_canary": ("merge", "canary"),
@@ -37,66 +32,86 @@ class TestNameMap(unittest.TestCase):
             self.assertEqual(_gitwf._NAME_MAP[name], expected, f"{name} mapping")
 
 
-class TestUnknownName(unittest.TestCase):
-    """未知入口名返回 2。"""
-
-    def test_unknown_returns_2(self):
-        with patch("sys.argv", ["_gitwf"]):
-            rc = _gitwf.main()
-        self.assertEqual(rc, 2)
-
-
-class TestDispatchAutoDetect(unittest.TestCase):
-    """单仓/批量自动识别：根据 cwd 下 .git 是否存在。"""
-
-    def _run_with_argv(self, name: str, in_git_repo: bool):
-        with patch("sys.argv", [name]):
-            with patch.object(_gitwf.pathlib.Path, "cwd",
-                              return_value=REPO_ROOT if in_git_repo else Path("/tmp")):
-                return _gitwf.main()
+class TestDispatchHere(unittest.TestCase):
+    """`here` 子命令 → 单仓 merge_to / push_to"""
 
     @patch("lib.git_workflow.merge_to", return_value=0)
-    def test_merge_in_git_repo_calls_merge_to(self, mock_merge):
-        rc = self._run_with_argv("merge_canary", in_git_repo=True)
+    def test_here_merge(self, mock_merge):
+        cli = _gitwf.GitWfCli()
+        with patch("sys.argv", ["merge_canary"]):
+            rc = cli.here()
         self.assertEqual(rc, 0)
         mock_merge.assert_called_once()
-        args, _ = mock_merge.call_args
-        self.assertEqual(args[0], "canary")
+        self.assertEqual(mock_merge.call_args[0][0], "canary")
 
     @patch("lib.git_workflow.push_to", return_value=0)
-    def test_push_in_git_repo_calls_push_to(self, mock_push):
-        rc = self._run_with_argv("push_develop", in_git_repo=True)
+    def test_here_push(self, mock_push):
+        cli = _gitwf.GitWfCli()
+        with patch("sys.argv", ["push_develop"]):
+            rc = cli.here()
         self.assertEqual(rc, 0)
         mock_push.assert_called_once()
         self.assertEqual(mock_push.call_args[0][0], "develop")
 
-    @patch("lib.batch_git.merge_all", return_value=2)
-    @patch("lib.git_workflow.merge_to")
-    def test_merge_in_non_git_repo_errors(self, mock_merge, mock_merge_all):
-        rc = self._run_with_argv("merge_canary", in_git_repo=False)
-        self.assertEqual(rc, 2)
-        mock_merge.assert_not_called()
+
+class TestDispatchAll(unittest.TestCase):
+    """`all` 子命令 → 批量 merge_all / push_all"""
+
+    @patch("lib.batch_git.merge_all", return_value=0)
+    def test_all_merge(self, mock_merge_all):
+        cli = _gitwf.GitWfCli()
+        with patch("sys.argv", ["merge_master"]):
+            rc = cli.all()
+        self.assertEqual(rc, 0)
         mock_merge_all.assert_called_once()
+        self.assertEqual(mock_merge_all.call_args[0][0], "master")
 
     @patch("lib.batch_git.push_all", return_value=0)
-    def test_push_in_non_git_repo_calls_push_all(self, mock_push_all):
-        rc = self._run_with_argv("push_test", in_git_repo=False)
+    def test_all_push(self, mock_push_all):
+        cli = _gitwf.GitWfCli()
+        with patch("sys.argv", ["push_test"]):
+            rc = cli.all()
         self.assertEqual(rc, 0)
         mock_push_all.assert_called_once()
-        # 第一个参数是 target
         self.assertEqual(mock_push_all.call_args[0][0], "test")
 
+
+class TestDispatchAuto(unittest.TestCase):
+    """`auto` 子命令 → 按 cwd 是否有 .git 派发 here/all"""
+
+    @patch("lib.git_workflow.merge_to", return_value=0)
+    def test_auto_in_repo_calls_here(self, mock_merge):
+        cli = _gitwf.GitWfCli()
+        with patch("sys.argv", ["merge_canary"]), \
+             patch.object(_gitwf.pathlib.Path, "cwd", return_value=REPO_ROOT):
+            rc = cli.auto()
+        self.assertEqual(rc, 0)
+        mock_merge.assert_called_once()
+
+    @patch("lib.batch_git.push_all", return_value=0)
+    def test_auto_outside_repo_calls_all(self, mock_push_all):
+        cli = _gitwf.GitWfCli()
+        with patch("sys.argv", ["push_test"]), \
+             patch.object(_gitwf.pathlib.Path, "cwd", return_value=Path("/tmp")):
+            rc = cli.auto()
+        self.assertEqual(rc, 0)
+        mock_push_all.assert_called_once()
+
+
+class TestPushTargetsDispatched(unittest.TestCase):
+    """验证所有 push_* 入口目标分支正确派发"""
+
     @patch("lib.git_workflow.push_to")
-    def test_push_targets_dispatched(self, mock_push):
+    def test_push_targets(self, mock_push):
         for name, target in [("push_canary", "canary"),
                              ("push_develop", "develop"),
                              ("push_master", "master"),
                              ("push_test", "test")]:
             mock_push.reset_mock()
-            with patch("sys.argv", [name]), \
-                 patch.object(_gitwf.pathlib.Path, "cwd", return_value=REPO_ROOT):
-                _gitwf.main()
-            self.assertEqual(mock_push.call_args[0][0], target)
+            cli = _gitwf.GitWfCli()
+            with patch("sys.argv", [name]):
+                cli.here()
+            self.assertEqual(mock_push.call_args[0][0], target, name)
 
 
 if __name__ == "__main__":

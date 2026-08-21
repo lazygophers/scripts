@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-"""fetch_all 薄壳入口 — 一键拉取所有仓库远程更新。"""
+"""fetch_all — 一键拉取所有仓库远程更新（fire 重构）"""
+from __future__ import annotations
+
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.git import fetch_all
-from lib.notify import consume_debug, consume_dry_run, consume_help, consume_no_say
-from lib.ui import timed
 
-sys.argv = consume_dry_run(consume_help(
-    consume_debug(consume_no_say(sys.argv)),
-    __doc__,
-    usage="fetch_all [选项]",
-), __doc__)
-raise SystemExit(timed(fetch_all, label="fetch_all")())
+
+class FetchAllCli(BaseCli):
+    """一键拉取所有仓库远程更新"""
+
+    @timed_cli
+    def all(self):
+        """扫描顶层 Git 仓库并 fetch 全部"""
+        return fetch_all()
+
+
+if __name__ == "__main__":
+    run_cli(FetchAllCli())

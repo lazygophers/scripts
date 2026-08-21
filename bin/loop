@@ -1,80 +1,76 @@
 #!/usr/bin/env python3
-"""loop 薄壳入口 — 循环执行命令并追踪结果。"""
+"""loop — 循环执行命令并追踪结果（fire 重构）
+
+- run [count] <cmd...>: 循环执行命令（成功即停；count 省略则无限）
+- infinite <cmd...>: 无限循环（成功即停）
+- force [count] <cmd...>: 强制跑满次数（失败也继续）
+"""
 from __future__ import annotations
 
-import argparse
 import pathlib
+import shlex
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.loop import run_loop
-from lib.notify import consume_debug, consume_dry_run, consume_no_say
-from lib.ui import timed
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description="循环执行命令并追踪结果",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="示例:\n"
-               "  loop 3 echo hello          # 失败则停止\n"
-               "  loop --force 100 make test  # 强制全部执行\n"
-               "  loop 5 --timeout=30 curl url  # 单次超时 30s\n"
-               "  loop curl url               # 无限循环（成功即停止）\n"
-               "  loop -i curl url            # 同上，显式无限模式",
-    )
-    parser.add_argument("--force", action="store_true", help="强制执行全部次数（默认：成功即停止）")
-    parser.add_argument("--timeout", type=int, help="单次命令超时（秒）")
-    parser.add_argument("--infinite", "-i", action="store_true", help="无限循环模式")
-    parser.add_argument("--dry-run", action="store_true", help="仅预览，不执行命令")
-    parser.add_argument("count", nargs="?", default=None, help="循环次数（省略则为无限）")
-    parser.add_argument("cmd", nargs="*", help="要执行的命令")
-    args = parser.parse_args(argv[1:])
+def _split_count_cmd(args: tuple[str, ...]) -> tuple[int | None, list[str]]:
+    """首 token 为数字则视为 count；否则整组视为命令。"""
+    if args and args[0].lstrip("-").isdigit():
+        return int(args[0]), list(args[1:])
+    return None, list(args)
 
-    # count 与 cmd 混合位置参数：首 token 若为数字则视为 count
-    positional = []
-    if args.count:
-        positional.append(args.count)
-    if args.cmd:
-        positional.extend(args.cmd)
 
-    count = None
-    cmd: list[str] = []
-    if positional:
-        if positional[0].lstrip("-").isdigit():
-            count = int(positional[0])
-            cmd = positional[1:]
-        else:
-            cmd = positional
-
-    if not cmd:
-        parser.error("必须指定要执行的命令")
-
-    # 用户引号包裹整个命令时 (如 loop 3 'bit push -f')，cmd 只有一个含空格的元素，
-    # subprocess 会把它当作可执行文件名而 FileNotFoundError。
-    # 含 shell 操作符 (| & ; < > 等) 时用 sh -c 包裹；否则 shlex.split 拆 argv。
-    if len(cmd) == 1 and ' ' in cmd[0]:
-        import shlex
-        shell_special = {'|', '&', ';', '<', '>', '(', ')'}
+def _normalize_cmd(cmd: list[str]) -> list[str]:
+    """单元素含空格时拆 argv；含 shell 特殊字符则 sh -c 包裹。"""
+    if len(cmd) == 1 and " " in cmd[0]:
+        shell_special = {"|", "&", ";", "<", ">", "(", ")"}
         if any(c in cmd[0] for c in shell_special):
-            cmd = ['sh', '-c', cmd[0]]
-        else:
-            cmd = shlex.split(cmd[0])
+            return ["sh", "-c", cmd[0]]
+        return shlex.split(cmd[0])
+    return cmd
 
-    if args.dry_run:
-        times = count if count is not None else "无限"
-        print(f"loop: dry-run，将执行 {times} 次: {' '.join(cmd)}（未执行）")
-        return 0
 
-    return run_loop(
-        cmd,
-        count=count,
-        force=args.force,
-        timeout=args.timeout,
-        infinite=args.infinite,
-    )
+class LoopCli(BaseCli):
+    """循环执行命令并追踪结果"""
+
+    @timed_cli
+    def run(self, *args: str, force: bool = False, timeout: int | None = None):
+        """循环执行（成功即停；首 token 为数字时视为 count）
+
+        用法: loop run [count] <cmd...> [--force] [--timeout N]
+        """
+        count, cmd = _split_count_cmd(args)
+        if not cmd:
+            self.r.err("loop: 缺少命令")
+            return 1
+        return run_loop(_normalize_cmd(cmd), count=count, force=force, timeout=timeout)
+
+    @timed_cli
+    def infinite(self, *cmd: str, force: bool = False):
+        """无限循环
+
+        用法: loop infinite <cmd...> [--force]
+        """
+        if not cmd:
+            self.r.err("loop: 缺少命令")
+            return 1
+        return run_loop(_normalize_cmd(list(cmd)), count=None, infinite=True, force=force)
+
+    @timed_cli
+    def force(self, *args: str, timeout: int | None = None):
+        """强制跑满次数（失败也继续）
+
+        用法: loop force [count] <cmd...> [--timeout N]
+        """
+        count, cmd = _split_count_cmd(args)
+        if not cmd:
+            self.r.err("loop: 缺少命令")
+            return 1
+        return run_loop(_normalize_cmd(cmd), count=count, force=True, timeout=timeout)
 
 
 if __name__ == "__main__":
-    sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
-    raise SystemExit(timed(main, label="loop")(sys.argv))
+    run_cli(LoopCli())

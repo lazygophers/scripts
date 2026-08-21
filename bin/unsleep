@@ -1,41 +1,47 @@
 #!/usr/bin/env python3
-"""unsleep 薄壳入口 — macOS 防休眠。"""
+"""unsleep — 防止 macOS 系统休眠（fire 重构）
+
+- 无参数: 无限制防休眠（Ctrl+C 结束）
+- -t N: 持续 N 秒
+- 位置参数: 跟随命令运行，命令结束即结束
+"""
 from __future__ import annotations
 
-import argparse
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.notify import consume_debug, consume_dry_run, consume_no_say
+from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.system import prevent_sleep
-from lib.ui import timed
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description="防止 macOS 系统休眠，支持跟随命令或指定时长运行",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例:
-  unsleep                # 防止系统休眠（无限制，直到手动 Ctrl-C）
-  unsleep -t 3600        # 防止系统休眠 1 小时
-  unsleep make build     # 防止系统休眠直到命令完成
-  unsleep -t 1800 npm run test
-        """,
-    )
-    parser.add_argument("-t", "--time", type=int, default=None, help="防休眠时长（秒），不指定则无限制运行")
-    parser.add_argument("--dry-run", action="store_true", help="仅预览，不防休眠、不执行命令")
-    parser.add_argument("command", nargs=argparse.REMAINDER, help="要运行的命令（可选）")
-    args = parser.parse_args(argv[1:])
-    if args.dry_run:
-        command = " ".join(args.command) if args.command else "无命令"
-        duration = args.time if args.time is not None else "无限制"
-        print(f"unsleep: dry-run，时长 {duration}，命令 {command}（未执行）")
-        return 0
-    return prevent_sleep(duration=args.time, command=args.command or None)
+class UnsleepCli(BaseCli):
+    """防止 macOS 系统休眠"""
+
+    @timed_cli
+    def forever(self):
+        """无限制防休眠（Ctrl+C 结束）"""
+        return prevent_sleep(duration=None, command=None)
+
+    @timed_cli
+    def timed(self, seconds: int):
+        """指定时长防休眠
+
+        用法: unsleep timed <秒数>
+        """
+        return prevent_sleep(duration=seconds, command=None)
+
+    @timed_cli
+    def with_command(self, *cmd: str):
+        """跟随命令运行（命令结束即结束防休眠）
+
+        用法: unsleep with_command <cmd> [args...]
+        """
+        if not cmd:
+            self.r.err("unsleep with_command: 缺少命令")
+            return 1
+        return prevent_sleep(duration=None, command=list(cmd))
 
 
 if __name__ == "__main__":
-    sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
-    raise SystemExit(timed(main, label="unsleep")(sys.argv))
+    run_cli(UnsleepCli())

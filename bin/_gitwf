@@ -1,25 +1,22 @@
 #!/usr/bin/env python3
-"""merge*/push* 系列薄壳的统一入口。
+"""merge*/push* 系列薄壳的统一入口（fire 重构）
 
 通过 argv[0] 的 basename 推断 action 与 target 分支:
-  merge_canary/merge_develop/merge_master/merge_test  → merge_to(...)
-  push_canary/push_develop/push_master/push_test      → push_to(...) 或批量
+  merge_canary/merge_develop/merge_master/merge_test  → merge_to / merge_all
+  push_canary/push_develop/push_master/push_test      → push_to / push_all
 
 自动识别单仓/批量:
-  - 当前目录是 git 仓库（有 .git）→ 单仓: push_to / merge_to
-  - 非 git 目录 → 进批量扫描（push_* / merge_* 均扫描子目录 git 仓库）
-  - --help / -h 在任何环境下直接转发到下游 argparse
-
-新增分支只需新增 symlink: ln -s _gitwf bin/push_staging
+  - 当前目录是 git 仓库（有 .git）→ 单仓: merge_to / push_to
+  - 非 git 目录 → 进批量扫描（merge_all / push_all）
 """
+from __future__ import annotations
+
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.fire_base import BaseCli, run_cli, timed_cli
 
-from lib.notify import consume_debug, consume_dry_run, consume_no_say
-
-sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
 
 _NAME_MAP = {
     "merge_canary": ("merge", "canary"),
@@ -33,37 +30,49 @@ _NAME_MAP = {
 }
 
 
-def main() -> int:
-    name = pathlib.Path(sys.argv[0]).name
-    if name not in _NAME_MAP:
-        if any(a in ("--help", "-h") for a in sys.argv[1:]):
-            print(__doc__.strip())
-            return 0
-        sys.stderr.write(f"_gitwf: 未知入口名 '{name}'\n")
-        sys.stderr.write(f"已知: {sorted(_NAME_MAP)}\n")
-        return 2
-    action, target = _NAME_MAP[name]
-    # 让 run_workflow 显示用户输入的入口名而非 _gitwf
-    sys.argv[0] = name
+class GitWfCli(BaseCli):
+    """merge*/push* 统一入口（由 symlink basename 决定 action+target）"""
 
-    # --help / -h 在任何环境下都直接转发到下游 argparse（标准约定 + 单仓/批量均通）
-    wants_help = any(a in ("--help", "-h") for a in sys.argv[1:])
+    @timed_cli
+    def here(self, *, auto_commit: bool = False):
+        """单仓模式：merge/push 当前分支 → <target>（target 由入口名决定）"""
+        return self._dispatch(single=True, auto_commit=auto_commit)
 
-    in_git_repo = wants_help or (pathlib.Path.cwd() / ".git").exists()
+    @timed_cli
+    def all(self, *, auto_commit: bool = False):
+        """批量模式：扫描所有 Git 仓库执行 merge/push → <target>"""
+        return self._dispatch(single=False, auto_commit=auto_commit)
 
-    # merge / push 系列：git 仓库 → 单仓；否则进批量（扫描子目录 git 仓库）
-    if in_git_repo:
-        from lib.git_workflow import merge_to, push_to
+    @timed_cli
+    def auto(self, *, auto_commit: bool = False):
+        """自动判断：cwd 是 git 仓库 → here；否则 → all"""
+        return self._dispatch(
+            single=(pathlib.Path.cwd() / ".git").exists(),
+            auto_commit=auto_commit,
+        )
+
+    def _dispatch(self, *, single: bool, auto_commit: bool) -> int:
+        name = pathlib.Path(sys.argv[0]).name
+        if name not in _NAME_MAP:
+            self.r.err(f"未知入口名 {name!r}，已知: {sorted(_NAME_MAP)}")
+            return 2
+        action, target = _NAME_MAP[name]
+        # 让 run_workflow 显示用户输入的入口名
+        sys.argv[0] = name
+
         if action == "merge":
-            return merge_to(target, sys.argv)
-        return push_to(target, sys.argv)
-    from lib.batch_git import merge_all, push_all
-    if action == "merge":
-        return merge_all(target, sys.argv)
-    return push_all(target, sys.argv)
+            if single:
+                from lib.git_workflow import merge_to
+                return merge_to(target, list(sys.argv) + ["--auto-commit"] if auto_commit else sys.argv)
+            from lib.batch_git import merge_all
+            return merge_all(target, list(sys.argv) + ["--auto-commit"] if auto_commit else sys.argv)
+        # push
+        if single:
+            from lib.git_workflow import push_to
+            return push_to(target, list(sys.argv) + ["--auto-commit"] if auto_commit else sys.argv)
+        from lib.batch_git import push_all
+        return push_all(target, list(sys.argv) + ["--auto-commit"] if auto_commit else sys.argv)
 
 
 if __name__ == "__main__":
-    from lib.ui import timed
-    _name = pathlib.Path(sys.argv[0]).name
-    raise SystemExit(timed(main, label=_name if _name in _NAME_MAP else "gitwf")())
+    run_cli(GitWfCli())

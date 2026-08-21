@@ -32,14 +32,18 @@ def _glab_info() -> ProviderInfo:
 class TestMrCli(unittest.TestCase):
     @patch.object(_mr_bin, "run_mr", return_value=0)
     def test_branch_alias_sets_base(self, mock_run_mr):
-        rc = _mr_bin.main(["mr", "--branch", "test", "--dry-run"])
+        """`mr create <base>` 第一位置参数即 base。"""
+        cli = _mr_bin.MrCli()
+        rc = cli.create("test", dry_run=True)
         self.assertEqual(rc, 0)
         self.assertEqual(mock_run_mr.call_args.args[0], "test")
         self.assertTrue(mock_run_mr.call_args.kwargs["dry_run"])
 
     @patch.object(_mr_bin, "run_mr", return_value=0)
     def test_base_takes_priority_over_branch_alias(self, mock_run_mr):
-        rc = _mr_bin.main(["mr", "--base", "develop", "--branch", "test"])
+        """fire 重构后只有单一 base 入参（无 --branch 别名）。"""
+        cli = _mr_bin.MrCli()
+        rc = cli.create("develop")
         self.assertEqual(rc, 0)
         self.assertEqual(mock_run_mr.call_args.args[0], "develop")
 

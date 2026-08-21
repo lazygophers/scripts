@@ -1,50 +1,47 @@
 #!/usr/bin/env python3
-"""commit 薄壳入口 — 自动提交变更（调 claude 生成 message）。
+"""commit — 自动提交变更（fire 重构）
 
 单仓（cwd 是 git 仓库）→ run_commit；否则批量扫描子目录所有 git 仓库。
 """
 from __future__ import annotations
 
-import argparse
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.commit_wf import commit_all, run_commit
-from lib.notify import consume_debug, consume_no_say
-from lib.ui import timed
+from lib.fire_base import BaseCli, run_cli, timed_cli
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description="自动提交变更（单仓或批量扫描子目录）",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="示例:\n"
-               "  commit \"fix: 修复登录bug\"\n"
-               "  commit --dry-run\n"
-               "  commit              # 非 git 目录 → 批量扫描子目录",
-    )
-    parser.add_argument("--dry-run", action="store_true", help="预览模式，不提交")
-    parser.add_argument("--settings", help="指定 claude settings 文件")
-    parser.add_argument("message", nargs="?", default=None, help="提交信息（可省略，自动生成）")
-    args = parser.parse_args(argv[1:])
+class CommitCli(BaseCli):
+    """自动提交变更（单仓或批量扫描子目录）"""
 
-    in_git_repo = (pathlib.Path.cwd() / ".git").exists()
+    @timed_cli
+    def here(self, message: str | None = None, dry_run: bool = False, settings: str | None = None):
+        """在当前 git 仓库提交
 
-    if in_git_repo:
-        return run_commit(
-            args.message,
-            dry_run=args.dry_run,
-            settings_file=args.settings,
-        )
-    # 非 git 目录 → 批量扫描当前目录下所有 git 仓库（默认不确认，对齐 push_*）
-    return commit_all(
-        pathlib.Path.cwd(),
-        msg=args.message,
-        dry_run=args.dry_run,
-    )
+        用法: commit here [message] [--dry-run] [--settings FILE]
+        """
+        return run_commit(message, dry_run=dry_run, settings_file=settings)
+
+    @timed_cli
+    def all(self, message: str | None = None, dry_run: bool = False):
+        """批量扫描当前目录所有 git 仓库并提交
+
+        用法: commit all [message] [--dry-run]
+        """
+        return commit_all(pathlib.Path.cwd(), msg=message, dry_run=dry_run)
+
+    @timed_cli
+    def auto(self, message: str | None = None, dry_run: bool = False, settings: str | None = None):
+        """智能判断：cwd 是 git 仓库 → here；否则 → all
+
+        用法: commit auto [message] [--dry-run] [--settings FILE]
+        """
+        if (pathlib.Path.cwd() / ".git").exists():
+            return run_commit(message, dry_run=dry_run, settings_file=settings)
+        return commit_all(pathlib.Path.cwd(), msg=message, dry_run=dry_run)
 
 
 if __name__ == "__main__":
-    sys.argv = consume_debug(consume_no_say(sys.argv))
-    raise SystemExit(timed(main, label="commit")(sys.argv))
+    run_cli(CommitCli())

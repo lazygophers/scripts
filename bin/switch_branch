@@ -1,31 +1,26 @@
 #!/usr/bin/env python3
-"""switch_branch 薄壳入口 — 批量切换分支。"""
+"""switch_branch — 批量切换分支（fire 重构）"""
 from __future__ import annotations
 
-import argparse
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.batch_git import switch_branch_all
-from lib.notify import consume_debug, consume_dry_run, consume_no_say
-from lib.ui import timed
+from lib.fire_base import BaseCli, run_cli, timed_cli
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description="批量切换分支：扫描 Git 仓库，切换到指定分支",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("branch", help="目标分支名")
-    parser.add_argument("--dry-run", action="store_true", help="仅预览，不切换")
-    args = parser.parse_args(argv[1:])
-    if args.dry_run:
-        print(f"switch_branch: dry-run，将切换到 {args.branch}（未执行）")
-        return 0
-    return switch_branch_all(args.branch)
+class SwitchBranchCli(BaseCli):
+    """批量切换所有仓库到指定分支"""
+
+    @timed_cli
+    def to(self, branch: str):
+        """切换到指定分支
+
+        用法: switch_branch to <branch>
+        """
+        return switch_branch_all(branch)
 
 
 if __name__ == "__main__":
-    sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
-    raise SystemExit(timed(main, label="switch_branch")(sys.argv))
+    run_cli(SwitchBranchCli())
