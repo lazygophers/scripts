@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""lazyhelp 薄壳入口 — 一页速查所有 bin/ 工具及功能。"""
+from __future__ import annotations
+
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.lazyhelp import main
+from lib.notify import consume_debug, consume_dry_run, consume_no_say
+from lib.ui import timed
+
+sys.argv = consume_dry_run(consume_debug(consume_no_say(sys.argv)), __doc__)
+raise SystemExit(timed(main, label="lazyhelp")(sys.argv))
