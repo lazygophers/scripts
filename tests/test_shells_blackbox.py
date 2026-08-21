@@ -30,7 +30,7 @@ def _all_shells() -> list[str]:
 
 # bash-only 入口（fire/python 测试套不适用；sys.executable 跑会 SyntaxError）。
 # 单独覆盖在 test_disable_ipv6_runs_in_bash 类。
-_BASH_ONLY_BINS = {"disable-ipv6"}
+_BASH_ONLY_BINS = {"disable-ipv6", "enable-ipv6"}
 
 
 class TestShellCommonFlags(unittest.TestCase):

@@ -48,6 +48,8 @@ TOOLS: dict[str, tuple[str, str]] = {
     # system: 系统 / 注入 / 通知
     "n": ("system", "macOS 语音播报（`say`）"),
     "disable-ipv6": ("system", "关闭本机所有网络服务的 IPv6"),
+    "enable-ipv6": ("system", "开启本机所有网络服务的 IPv6"),
+    "ipinfo": ("system", "查询内网 IP / 公网 IP+地区 / 代理出口 / 网络类型"),
     "inject": ("system", "把 bin/ 注入 shell PATH（写入 ~/.zshrc 等）"),
 }
 

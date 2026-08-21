@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""ipinfo — 网络信息一站式查询（内网 IP / 公网 IP+地区 / 代理出口 / 网络类型）
+
+子命令:
+  all   一次性展示全部 4 项（默认）
+  lan   仅内网 IP
+  wan   仅公网 IP+地区
+  proxy 仅代理出口 IP+地区
+  type  仅网络类型（Wi-Fi / Ethernet / USB / Thunderbolt / Unknown）
+
+参数:
+  -s/--source   公网 IP 查询源 ipinfo|ip-api（默认 ipinfo）
+  --json        JSON 输出（仅 all）
+"""
+from __future__ import annotations
+
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.ipinfo import lan_ip, net_type, proxy_info, render, wan_info
+
+
+def _fmt(info):
+    if not info:
+        return "(查询失败)"
+    ip = info.get("ip") or "?"
+    parts = [p for p in (info.get("city"), info.get("region"), info.get("country")) if p]
+    geo = " / ".join(parts) if parts else "(未知地区)"
+    return f"{ip}  ({geo})"
+
+
+class IpinfoCli(BaseCli):
+    """ipinfo — 网络信息一站式查询"""
+
+    @timed_cli
+    def all(self, source: str = "ipinfo", json: bool = False):
+        """一次性展示全部 4 项信息
+
+        用法: ipinfo all [--source ipinfo|ip-api] [--json]
+        """
+        rows = [
+            ("内网 IP", lan_ip() or "(无)"),
+            ("公网 IP", _fmt(wan_info(source=source))),
+            ("代理 IP", _fmt(proxy_info(source=source)) if proxy_info(source=source) else "(无代理)"),
+            ("网络类型", net_type()),
+        ]
+        print(render(rows, json_mode=json))
+        return 0
+
+    @timed_cli
+    def lan(self):
+        """仅显示内网 IP"""
+        print(lan_ip() or "(无)")
+        return 0
+
+    @timed_cli
+    def wan(self, source: str = "ipinfo"):
+        """仅显示公网 IP+地区"""
+        print(_fmt(wan_info(source=source)))
+        return 0
+
+    @timed_cli
+    def proxy(self, source: str = "ipinfo"):
+        """仅显示代理出口 IP+地区（无代理则提示）"""
+        info = proxy_info(source=source)
+        print(_fmt(info) if info else "(无代理 / $HTTPS_PROXY 未设)")
+        return 0
+
+    @timed_cli
+    def type(self):
+        """仅显示网络类型"""
+        print(net_type())
+        return 0
+
+
+if __name__ == "__main__":
+    run_cli(IpinfoCli())
