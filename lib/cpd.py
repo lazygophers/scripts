@@ -395,7 +395,7 @@ def _prepare_context(plan: CopyPlan) -> RunCtx:
             TimeElapsedColumn(),
             TextColumn("{task.fields[path]}", markup=False),
             console=console,
-            transient=False,
+            transient=True,  # 完成后清掉该行
         )
         task_id = progress.add_task("", total=total_ops, copied=0, skipped=0, bytes="0B", path="")
     elif tty:

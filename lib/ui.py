@@ -77,7 +77,7 @@ def progress(console_obj: Console | None) -> Progress:
         TaskProgressColumn(),
         TimeElapsedColumn(),
         console=console_obj,
-        transient=False,
+        transient=True,  # 完成后自动清掉该行，不残留
     )
 
 
