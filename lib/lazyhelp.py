@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import pathlib
 import subprocess
@@ -59,31 +58,26 @@ def _bin_dir() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parent.parent / "bin"
 
 
-def list_tools(category: str | None = None) -> list[tuple[str, str, str]]:
-    """返回 [(name, category, description), ...]；category=None 全部，否则按分类过滤。"""
-    rows: list[tuple[str, str, str]] = []
-    for name in sorted(TOOLS):
-        cat, desc = TOOLS[name]
-        if category and cat != category:
-            continue
-        rows.append((name, cat, desc))
-    return rows
+def _all_bins() -> list[str]:
+    """bin/ 下所有可执行名（按字母排序）；含 _gitwf 与 lazyhelp。"""
+    bin_dir = _bin_dir()
+    return sorted(
+        p.name for p in bin_dir.iterdir()
+        if not p.name.startswith(".") and (p.is_file() or p.is_symlink())
+    )
 
 
-def show_full(name: str) -> int:
-    """调用 bin/<name> --help 输出完整说明；找不到返回非零。"""
-    if name not in TOOLS:
-        print(f"lazyhelp: 未知工具 {name!r}（试试 `lazyhelp --list`）", file=sys.stderr)
-        return 2
+def show_full(name: str, *, extra_args: list[str] | None = None) -> int:
+    """调 bin/<name> --help 输出完整说明（extra_args 透传给子命令）。"""
     target = _bin_dir() / name
     if not target.exists():
-        print(f"lazyhelp: 未找到 bin/{name}", file=sys.stderr)
+        print(f"lazyhelp: 未在 bin/ 中找到 {name!r}", file=sys.stderr)
         return 2
-    # 透传 SCRIPTS_DEBUG / SCRIPTS_NO_SAY + 抑制嵌套 timed 输出噪音（最小化）
+    args = [str(target), "--help", *(extra_args or [])]
     env = os.environ.copy()
-    env.setdefault("SCRIPTS_NO_SAY", "1")
+    env.setdefault("SCRIPTS_NO_SAY", "1")  # 抑制嵌套 say 噪音
     try:
-        return subprocess.call([str(target), "--help"], env=env)
+        return subprocess.call(args, env=env)
     except FileNotFoundError:
         print(f"lazyhelp: 无法执行 {target}", file=sys.stderr)
         return 1
@@ -93,7 +87,6 @@ def _render_table(rows: list[tuple[str, str, str]], r: Reporter) -> None:
     if not rows:
         r.warn("无匹配工具")
         return
-    # 按分类聚合再分段
     by_cat: dict[str, list[tuple[str, str, str]]] = {}
     for name, cat, desc in rows:
         by_cat.setdefault(cat, []).append((name, cat, desc))
@@ -112,44 +105,28 @@ def _render_table(rows: list[tuple[str, str, str]], r: Reporter) -> None:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        prog="lazyhelp",
-        description="一页速查所有 bin/ 工具及功能",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "示例:\n"
-            "  lazyhelp                 # 全部分类概览\n"
-            "  lazyhelp --list          # 仅名称列表\n"
-            "  lazyhelp --category git-wf  # 按分类筛选\n"
-            "  lazyhelp --full cpd      # 调 cpd --help 看完整说明\n"
-            "  lazyhelp --search copy   # 按关键字搜索工具"
-        ),
-    )
-    parser.add_argument("--list", action="store_true", help="仅输出工具名称（按字母排序）")
-    parser.add_argument("--category", help="按分类筛选（git-wf/git-ops/process/build/check/loop/runtime/system）")
-    parser.add_argument("--search", help="按关键字搜索（匹配名称或描述）")
-    parser.add_argument("--full", metavar="NAME", help="调 bin/<NAME> --help 输出完整说明")
-    args = parser.parse_args(argv[1:])
-
     r = reporter(stderr=True)
 
-    if args.full:
-        return show_full(args.full)
+    # 任意位置参数 = 调对应 bin 的 --help（不区分是否注册在 TOOLS，
+    # 只要 bin/ 下存在即可；未注册的 bin 也能查 help）。
+    positional = argv[1:]
+    if positional:
+        name = positional[0]
+        # 第一个参数若与 bin/ 下某条目同名 → 透传剩余参数给 bin/<name> --help
+        bins = _all_bins()
+        if name in bins:
+            return show_full(name, extra_args=positional[1:])
+        # 不在任何 bin/ 中 → 提示后打印概览
+        r.warn(f"bin/ 下未找到 {name!r}（可用参数: {' / '.join(bins)}）")
 
-    rows = list_tools(category=args.category)
-    if args.search:
-        needle = args.search.lower()
-        rows = [
-            row for row in rows
-            if needle in row[0].lower() or needle in row[2].lower()
-        ]
-
-    if args.list:
-        for name, _, _ in rows:
-            print(name)
-        return 0
+    # 默认：打印全部分类速查
+    rows: list[tuple[str, str, str]] = []
+    for name in sorted(TOOLS):
+        cat, desc = TOOLS[name]
+        rows.append((name, cat, desc))
 
     r.rule(f"bin/ 工具速查（共 {len(rows)} 个）", style="blue")
+    r.step("用法: lazyhelp <工具名>  # 输出该工具的完整 --help")
     _render_table(rows, r)
     return 0
 
