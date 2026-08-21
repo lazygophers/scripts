@@ -12,6 +12,7 @@ from collections.abc import Sequence
 try:
     from rich.console import Console
     from rich.panel import Panel
+    from rich.box import ROUNDED
     from rich.progress import (
         BarColumn,
         Progress,
@@ -133,8 +134,8 @@ class Reporter:
         columns: Sequence[str] = ("仓库", "状态", "详情"),
     ) -> None:
         """状态汇总表：items 为 (name, status, detail) 三元组列表，状态列按状态着色。"""
-        table = Table(title=title, show_header=True, box=None, border_style="blue",
-                      title_style="bold", header_style="dim")
+        table = Table(title=title, show_header=True, box=ROUNDED, border_style="blue",
+                      title_style="bold", header_style="bold cyan")
         table.add_column(columns[0], style="bold")
         table.add_column(columns[1])
         table.add_column(columns[2])
@@ -177,7 +178,7 @@ class Reporter:
         self._icon_msg(ICON_ERROR, msg, "red")
 
     def kv(self, title: str, rows: dict[str, str], *, style: str = "blue") -> None:
-        table = Table(title=title, show_header=False, box=None, border_style=style)
+        table = Table(title=title, show_header=False, box=ROUNDED, border_style=style)
         table.add_column("Key", style="bold")
         table.add_column("Value")
         for k, v in rows.items():
@@ -224,7 +225,7 @@ class Reporter:
             )
 
     def summary(self, title: str, items: list[tuple[str, str, str | None]]) -> None:
-        table = Table(title=title, show_header=False, box=None)
+        table = Table(title=title, show_header=False, box=ROUNDED)
         table.add_column("Label", style="bold")
         table.add_column("Value")
         for label, value, style in items:

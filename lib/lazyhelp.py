@@ -7,7 +7,9 @@ import pathlib
 import subprocess
 import sys
 
+from rich.box import ROUNDED
 from lib.ui import Reporter, reporter
+from rich.table import Table
 
 # 名称 → (分类, 一句话功能)
 # 描述取自各 bin 入口 docstring 末段（薄壳自描述）。
@@ -97,13 +99,18 @@ def _render_table(rows: list[tuple[str, str, str]], r: Reporter) -> None:
         items = by_cat.get(cat)
         if not items:
             continue
-        r.rule(f"{cat}（{len(items)}）", style="blue")
-        max_name = max(len(n) for n, _, _ in items)
+        table = Table(
+            title=f"{cat}（{len(items)}）",
+            show_header=False,
+            box=ROUNDED,
+            border_style="blue",
+            title_style="bold",
+        )
+        table.add_column("工具", style="bold")
+        table.add_column("说明")
         for name, _, desc in items:
-            r._print(
-                f"[bold]{name:<{max_name}}[/bold]  [dim]·[/dim]  {desc}",
-                f"  {name:<{max_name}}  ·  {desc}",
-            )
+            table.add_row(name, desc)
+        r.console.print(table)
 
 
 def main(argv: list[str]) -> int:

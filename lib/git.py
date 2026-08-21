@@ -314,6 +314,7 @@ def _render_branch_table(
         counter = Counter(br["name"] for _, br in rows)
         dup_names = {n for n, c in counter.items() if c > 1}
 
+    from rich.box import ROUNDED
     from lib.ui import Table  # noqa: E402, I001
 
     # 按仓库分组，保持发现顺序
@@ -331,9 +332,10 @@ def _render_branch_table(
             table = Table(
                 title=f"📦 {repo}" if repo else "分支",
                 title_style="bold cyan",
-                header_style="dim",
+                header_style="bold cyan",
                 show_header=True,
-                box=None,
+                box=ROUNDED,
+                border_style="blue",
                 expand=False,
             )
             table.add_column("分支", overflow="fold", no_wrap=False)
