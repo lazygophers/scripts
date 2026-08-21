@@ -109,24 +109,32 @@ class TestScanRepos(unittest.TestCase):
 
 class TestPrintRepoList(unittest.TestCase):
     def test_renders(self):
-        r = reporter(stderr=True)
-        r.console = None
+        # 强制 Rich：用 StringIO buffer 接收 Rich 输出（Rich Console 支持任意 file）
+        import io
+        buf = io.StringIO()
+        r = reporter(stderr=False)
+        r.console.file = buf
         # 不应崩
         print_repo_list(r, [Path("/root/repo1")], Path("/root"))
 
 
 class TestPrintSummary(unittest.TestCase):
     def _capture(self):
-        """捕获 Reporter 纯文本输出（强制 console=None 走 _eprint 路径）。"""
+        """捕获 Reporter 输出：把 Rich Console 重定向到 StringIO。"""
         import io
-        from contextlib import redirect_stderr
+        from contextlib import contextmanager
 
-        buf = io.StringIO()
-        return buf, redirect_stderr(buf)
+        @contextmanager
+        def redir():
+            yield self._buf
+
+        return self._buf, redir()
 
     def _make_reporter(self):
-        r = reporter(stderr=True)
-        r.console = None  # 走纯文本路径，输出可字符串断言
+        import io
+        self._buf = io.StringIO()
+        r = reporter(stderr=False)
+        r.console.file = self._buf
         return r
 
     def test_renders_all_statuses(self):

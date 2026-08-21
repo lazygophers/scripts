@@ -1,4 +1,8 @@
-"""Rich 统一输出（自动降级纯文本）。"""
+"""Rich 统一输出（强制 Rich，无 Rich 直接报错退出）。
+
+所有 bin/* 工具依赖 Rich 美化输出。未安装 Rich 时脚本直接抛 RuntimeError，
+提示用户 `pip install rich`。不提供任何静默降级路径。
+"""
 
 from __future__ import annotations
 
@@ -22,24 +26,23 @@ try:
     from rich.text import Text
 
     HAS_RICH = True
-except Exception:
-    Console = None  # type: ignore[assignment,misc]
-    Progress = None  # type: ignore[assignment,misc]
-    Rule = None  # type: ignore[assignment,misc]
-    Table = None  # type: ignore[assignment,misc]
-    Panel = None  # type: ignore[assignment,misc]
-    Text = None  # type: ignore[assignment,misc]
-    Style = None  # type: ignore[assignment,misc]
-    HAS_RICH = False
+except Exception as _rich_err:
+    # 启动期就报错：bin/* 调用 Reporter 前必先 import lib.ui，
+    # 这里 raise 让调用方看到清晰提示。
+    raise RuntimeError(
+        "scripts 工具依赖 Rich 美化输出。请先安装:\n"
+        "  pip install rich\n"
+        f"原始错误: {_rich_err}"
+    ) from _rich_err
 
 
 # === 样式常量 ===
-STYLE_SUCCESS = Style(color="green", bold=True) if HAS_RICH else None
-STYLE_ERROR = Style(color="red", bold=True) if HAS_RICH else None
-STYLE_WARNING = Style(color="yellow", bold=True) if HAS_RICH else None
-STYLE_INFO = Style(color="cyan") if HAS_RICH else None
-STYLE_STEP = Style(color="blue", bold=True) if HAS_RICH else None
-STYLE_DIM = Style(dim=True) if HAS_RICH else None
+STYLE_SUCCESS = Style(color="green", bold=True)
+STYLE_ERROR = Style(color="red", bold=True)
+STYLE_WARNING = Style(color="yellow", bold=True)
+STYLE_INFO = Style(color="cyan")
+STYLE_STEP = Style(color="blue", bold=True)
+STYLE_DIM = Style(dim=True)
 
 # 图标
 ICON_SUCCESS = "✓"
@@ -59,15 +62,13 @@ STATUS_STYLE = {
 STATUS_LABEL = {"ok": "成功", "skip": "跳过", "fail": "失败"}
 
 
-def console(stderr: bool = False) -> Console | None:
-    if not HAS_RICH:
-        return None
+def console(stderr: bool = False) -> Console:
     return Console(stderr=stderr)
 
 
-def progress(console_obj: Console | None) -> Progress | None:
-    if not HAS_RICH or console_obj is None:
-        return None
+def progress(console_obj: Console | None) -> Progress:
+    if console_obj is None:
+        raise ValueError("progress() 需要 console_obj")
     return Progress(
         SpinnerColumn(),
         TextColumn("[bold]{task.description}[/bold]"),
@@ -79,12 +80,11 @@ def progress(console_obj: Console | None) -> Progress | None:
     )
 
 
-def print_ansi(console_obj: Console | None, text: str) -> bool:
-    """把含 ANSI / Rich 标记的文本原样转写到 console。无 rich 返回 False 由调用方降级。"""
-    if console_obj is None or Text is None:
-        return False
+def print_ansi(console_obj: Console | None, text: str) -> None:
+    """把含 ANSI / Rich 标记的文本原样转写到 console。"""
+    if console_obj is None:
+        raise ValueError("print_ansi() 需要 console_obj")
     console_obj.print(Text.from_ansi(text))
-    return True
 
 
 def _eprint(msg: str) -> None:
@@ -92,50 +92,33 @@ def _eprint(msg: str) -> None:
 
 
 class Reporter:
-    """统一输出：支持 Rich 美化输出，自动降级纯文本。"""
+    """统一输出（强制 Rich 美化，无任何降级）。"""
 
     def __init__(self, *, stderr: bool = True, console: Console | None = None,
                  file: object | None = None) -> None:
-        if file is not None and HAS_RICH:
+        if file is not None:
             self.console = Console(file=file, stderr=False)
         elif console is not None:
             self.console = console
-        elif file is not None:
-            # 无 Rich：靠 _file 直接写
-            self.console = None
         else:
-            self.console = Console(stderr=stderr) if HAS_RICH else None
+            self.console = Console(stderr=stderr)
         self.stderr = stderr
-        self._file = file  # plain 模式直写对象（StringIO）
+        self._file = file
 
     @classmethod
     def from_buffer(cls, buf: object) -> Reporter:
-        """构造写入 StringIO buffer 的 Reporter（线程内重定向用）。
-
-        Rich 可用时 Console(file=buf)；否则用内置 _file 直写（绕过 stderr/stdout）。
-        """
+        """构造写入 StringIO buffer 的 Reporter（线程内重定向用）。"""
         return cls(file=buf)
 
     def _print(self, rich_text, plain_text: str) -> None:
-        if self.console is not None:
-            self.console.print(rich_text)
-        elif self._file is not None:
-            print(plain_text, file=self._file)
-        elif self.stderr:
-            _eprint(plain_text)
-        else:
-            print(plain_text)
+        self.console.print(rich_text)
 
     def _icon_msg(self, icon: str, msg: str, color: str) -> None:
-        if self.console is not None and Text is not None:
-            text = Text()
-            text.append(icon, style=f"bold {color}")
-            text.append(" ")
-            # 消息文本随 icon 同色（PRD 颜色规范）
-            text.append(msg, style=color)
-            self.console.print(text)
-        else:
-            self._print("", f"{icon} {msg}")
+        text = Text()
+        text.append(icon, style=f"bold {color}")
+        text.append(" ")
+        text.append(msg, style=color)
+        self.console.print(text)
 
     def status(self, status: str, msg: str) -> None:
         """按状态选图标 + 色（ok=✓绿 / skip=•黄 / fail=✗红）。"""
@@ -150,54 +133,33 @@ class Reporter:
         columns: Sequence[str] = ("仓库", "状态", "详情"),
     ) -> None:
         """状态汇总表：items 为 (name, status, detail) 三元组列表，状态列按状态着色。"""
-        if self.console is not None and Table is not None:
-            table = Table(title=title, show_header=True, box=None, border_style="blue",
-                          title_style="bold", header_style="dim")
-            table.add_column(columns[0], style="bold")
-            table.add_column(columns[1])
-            table.add_column(columns[2])
-            for name, status, detail in items:
-                color = STATUS_STYLE.get(status, ("", "white"))[1]
-                label = STATUS_LABEL.get(status, status)
-                table.add_row(name, f"[{color}]{label}[/{color}]", detail)
-            self.console.print(table)
-            return
-        # 降级纯文本：name + 状态标签 + 详情，单行
-        self.rule(title)
+        table = Table(title=title, show_header=True, box=None, border_style="blue",
+                      title_style="bold", header_style="dim")
+        table.add_column(columns[0], style="bold")
+        table.add_column(columns[1])
+        table.add_column(columns[2])
         for name, status, detail in items:
+            color = STATUS_STYLE.get(status, ("", "white"))[1]
             label = STATUS_LABEL.get(status, status)
-            line = f"  {name}  {label}"
-            if detail:
-                line += f"  {detail}"
-            self._print("", line)
+            table.add_row(name, f"[{color}]{label}[/{color}]", detail)
+        self.console.print(table)
 
     def status_footer(self, parts: Sequence[tuple[str, str]]) -> None:
         """单行统计 footer：parts 为 (text, color) 列表，用 · 连接，各段按其色。"""
         if not parts:
             return
-        if self.console is not None and Text is not None:
-            text = Text()
-            for i, (s, color) in enumerate(parts):
-                if i > 0:
-                    text.append(" · ", style="dim")
-                text.append(s, style=color)
-            self.console.print(text)
-        else:
-            self._print("", " · ".join(s for s, _ in parts))
+        text = Text()
+        for i, (s, color) in enumerate(parts):
+            if i > 0:
+                text.append(" · ", style="dim")
+            text.append(s, style=color)
+        self.console.print(text)
 
     def rule(self, title: str, *, style: str = "blue") -> None:
-        if self.console is not None and Rule is not None:
-            self.console.print(Rule(f"[bold]{title}[/bold]", style=style))
-        else:
-            self._print("", f"\n{'═' * 10} {title} {'═' * 10}")
+        self.console.print(Rule(f"[bold]{title}[/bold]", style=style))
 
     def panel(self, title: str, content: str, *, style: str = "blue") -> None:
-        if self.console is not None and Panel is not None:
-            self.console.print(Panel(content, title=title, border_style=style))
-        else:
-            self.rule(title)
-            for line in content.splitlines():
-                self._print("", f"  {line}")
+        self.console.print(Panel(content, title=title, border_style=style))
 
     def info(self, msg: str) -> None:
         self._icon_msg(ICON_INFO, msg, "cyan")
@@ -215,18 +177,12 @@ class Reporter:
         self._icon_msg(ICON_ERROR, msg, "red")
 
     def kv(self, title: str, rows: dict[str, str], *, style: str = "blue") -> None:
-        if self.console is not None and Table is not None:
-            table = Table(title=title, show_header=False, box=None, border_style=style)
-            table.add_column("Key", style="bold")
-            table.add_column("Value")
-            for k, v in rows.items():
-                table.add_row(str(k), str(v))
-            self.console.print(table)
-            return
-        self.rule(title)
-        max_key_len = max(len(str(k)) for k in rows.keys()) if rows else 0
+        table = Table(title=title, show_header=False, box=None, border_style=style)
+        table.add_column("Key", style="bold")
+        table.add_column("Value")
         for k, v in rows.items():
-            self._print("", f"  {k:<{max_key_len}}  {v}")
+            table.add_row(str(k), str(v))
+        self.console.print(table)
 
     def cmd_result(
         self,
@@ -260,32 +216,23 @@ class Reporter:
         if len(lines) > max_lines:
             lines = lines[:max_lines]
             truncated = True
-        if self.console is not None:
-            for line in lines:
-                self._print(f"[dim]{prefix}{line}[/dim]", f"{prefix}{line}")
-            if truncated:
-                self._print(f"[dim]{prefix}... (+{len(t.splitlines()) - max_lines} 行)[/dim]", f"{prefix}... (+更多)")
-        else:
-            for line in lines:
-                self._print("", f"{prefix}{line}")
-            if truncated:
-                self._print("", f"{prefix}... (+更多)")
+        for line in lines:
+            self.console.print(f"[dim]{prefix}{line}[/dim]")
+        if truncated:
+            self.console.print(
+                f"[dim]{prefix}... (+{len(t.splitlines()) - max_lines} 行)[/dim]"
+            )
 
     def summary(self, title: str, items: list[tuple[str, str, str | None]]) -> None:
-        if self.console is not None and Table is not None:
-            table = Table(title=title, show_header=False, box=None)
-            table.add_column("Label", style="bold")
-            table.add_column("Value")
-            for label, value, style in items:
-                if style:
-                    table.add_row(label, f"[{style}]{value}[/{style}]")
-                else:
-                    table.add_row(label, value)
-            self.console.print(table)
-        else:
-            self.rule(title)
-            for label, value, _ in items:
-                self._print("", f"  {label}: {value}")
+        table = Table(title=title, show_header=False, box=None)
+        table.add_column("Label", style="bold")
+        table.add_column("Value")
+        for label, value, style in items:
+            if style:
+                table.add_row(label, f"[{style}]{value}[/{style}]")
+            else:
+                table.add_row(label, value)
+        self.console.print(table)
 
 
 def reporter(*, stderr: bool = True) -> Reporter:
@@ -293,34 +240,19 @@ def reporter(*, stderr: bool = True) -> Reporter:
 
 
 def ask_confirm(question: str, *, default: bool = False) -> bool | None:
-    """是/否确认。Rich 可用走 Confirm（带色 + 默认值提示）；非交互（EOF）返回 None。"""
-    if HAS_RICH:
-        from rich.prompt import Confirm
-        try:
-            return Confirm.ask(question, default=default, console=Console())
-        except (EOFError, KeyboardInterrupt):
-            return None
+    """是/否确认。强制 Rich：走 Confirm（带色 + 默认值提示）；非交互（EOF）返回 None。"""
+    from rich.prompt import Confirm
     try:
-        hint = "Y/n" if default else "y/N"
-        raw = input(f"{question} [{hint}] ").strip().lower()
+        return Confirm.ask(question, default=default, console=Console())
     except (EOFError, KeyboardInterrupt):
         return None
-    if not raw:
-        return default
-    return raw in ("y", "yes")
 
 
 def ask_text(prompt: str, *, default: str = "") -> str | None:
-    """文本输入。Rich 可用走 Prompt（带色 + 默认值）；非交互（EOF）返回 None。"""
-    if HAS_RICH:
-        from rich.prompt import Prompt
-        try:
-            return Prompt.ask(prompt, default=default, console=Console())
-        except (EOFError, KeyboardInterrupt):
-            return None
+    """文本输入。强制 Rich：走 Prompt（带色 + 默认值）；非交互（EOF）返回 None。"""
+    from rich.prompt import Prompt
     try:
-        suffix = f" [{default}]" if default else ""
-        return input(f"{prompt}{suffix} ").strip()
+        return Prompt.ask(prompt, default=default, console=Console())
     except (EOFError, KeyboardInterrupt):
         return None
 
@@ -342,25 +274,22 @@ def _format_elapsed(seconds: float) -> str:
 def print_runtime(start: float, end: float, *, label: str | None = None) -> None:
     """灰度打印运行耗时（耗时为核心，起止时间括号附注）。
 
-    Rich 可用时走 dim 样式（耗时数字微亮）；否则纯文本到 stderr。
+    强制 Rich：耗时数字微亮，起止时间 dim；走 rich.Console 到 stderr。
     格式: ⏱ <label> · <耗时> · <起>–<止>
     """
     from datetime import datetime
+    from rich.text import Text
     fmt = "%H:%M:%S"
     start_s = datetime.fromtimestamp(start).strftime(fmt)
     end_s = datetime.fromtimestamp(end).strftime(fmt)
     elapsed = _format_elapsed(end - start)
     head = f"⏱ {label}" if label else "⏱"
-    if HAS_RICH:
-        from rich.text import Text
-        con = Console(stderr=True)
-        t = Text()
-        t.append(f"{head} · ", style="dim")
-        t.append(elapsed, style="dim bold")
-        t.append(f" · {start_s}–{end_s}", style="dim")
-        con.print(t)
-    else:
-        print(f"{head} · {elapsed} · {start_s}–{end_s}", file=sys.stderr)
+    con = Console(stderr=True)
+    t = Text()
+    t.append(f"{head} · ", style="dim")
+    t.append(elapsed, style="dim bold")
+    t.append(f" · {start_s}–{end_s}", style="dim")
+    con.print(t)
 
 
 def timed(fn, *, label: str | None = None):

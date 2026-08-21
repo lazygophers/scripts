@@ -43,13 +43,32 @@ def _fmt_types(types: list[str]) -> str:
 
 
 class IpinfoCli(BaseCli):
-    """ipinfo — 网络信息一站式查询"""
+    """ipinfo — 网络信息一站式查询
+
+    默认展示 4 项：内网 IP / 公网 IP+地区 / 代理出口 IP+地区 / 网络类型。
+    可通过子命令单独查询任意一项或多项（如 `ipinfo lan net`）。
+
+    通用参数（仅 all/wan/proxy 接受）:
+      source   查询源 ipinfo | ip-api，默认 ip-api
+      json     仅 all 接受，输出 JSON 格式
+    """
 
     @timed_cli
     def all(self, source: str = "ip-api", json: bool = False):
-        """一次性展示全部 4 项信息
+        """一次性展示 4 项信息（默认入口）
 
-        用法: ipinfo all [--source ipinfo|ip-api] [--json]
+        展示:
+          内网 IP     — 本机局域网地址（macOS 优先 ipconfig，兜底 socket）
+          公网 IP     — 出口 IP + 城市/省份/国家
+          代理 IP     — 通过 $HTTPS_PROXY 走代理看到的出口 IP；未设代理则提示
+          网络类型    — 活动接口列表（Wi-Fi/Ethernet/USB/...），Wi-Fi 若是热点会标 (热点)
+
+        用法: ipinfo all [--source ip-api|ipinfo] [--json]
+
+        示例:
+          ipinfo all                  # 全部 4 项
+          ipinfo all --json           # JSON 输出
+          ipinfo all --source ipinfo  # 用 ipinfo.io 作源
         """
         rows = [
             ("内网 IP", lan_ip() or "(无)"),
@@ -62,26 +81,67 @@ class IpinfoCli(BaseCli):
 
     @timed_cli
     def lan(self):
-        """仅显示内网 IP"""
+        """仅显示本机内网 IP
+
+        来源: macOS `ipconfig getifaddr en0/en1/en2`，依次 fallback。
+        完全无网络时显示 (无)。
+
+        用法: ipinfo lan
+
+        示例:
+          ipinfo lan      # 输出如 192.168.1.8
+        """
         print(lan_ip() or "(无)")
         return 0
 
     @timed_cli
     def wan(self, source: str = "ip-api"):
-        """仅显示公网 IP+地区"""
+        """仅显示公网 IP + 城市/省份/国家
+
+        来源 API（无需密钥）:
+          ip-api (默认) — http://ip-api.com/json，返回 status / city / regionName / country / as
+          ipinfo        — https://ipinfo.io/json，返回 ip / city / region / country / org
+
+        用法: ipinfo wan [--source ip-api|ipinfo]
+
+        示例:
+          ipinfo wan                   # 默认 ip-api
+          ipinfo wan --source ipinfo   # 用 ipinfo.io
+        """
         print(_fmt(wan_info(source=source)))
         return 0
 
     @timed_cli
     def proxy(self, source: str = "ip-api"):
-        """仅显示代理出口 IP+地区（无代理则提示）"""
+        """仅显示代理出口 IP + 地区（无代理则提示）
+
+        读取环境变量（按优先级）:
+          $HTTPS_PROXY → $https_proxy → $HTTP_PROXY → $http_proxy
+        任一非空即视为有代理；否则输出 (无代理 / $HTTPS_PROXY 未设)。
+
+        用法: ipinfo proxy [--source ip-api|ipinfo]
+
+        示例:
+          ipinfo proxy
+          HTTPS_PROXY=socks5://127.0.0.1:7890 ipinfo proxy
+        """
         info = proxy_info(source=source)
         print(_fmt(info) if info else "(无代理 / $HTTPS_PROXY 未设)")
         return 0
 
     @timed_cli
     def net(self):
-        """仅显示网络类型（逗号分隔多个活动接口；Wi-Fi 若是热点会标 (热点)）"""
+        """仅显示网络类型（逗号分隔多个活动接口）
+
+        识别接口: Wi-Fi / USB Ethernet / Ethernet / Thunderbolt Bridge / Thunderbolt。
+        按优先级排序: Wi-Fi > USB > Ethernet > Thunderbolt。
+        Wi-Fi 若是热点（iPhone/Android 个人热点 → bridge1..bridge99 有 IPv4）则标 (热点)。
+
+        用法: ipinfo net
+
+        示例:
+          ipinfo net      # 输出如: Wi-Fi (热点), USB Ethernet
+        """
         print(_fmt_types(net_type()))
         return 0
 

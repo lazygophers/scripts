@@ -98,9 +98,13 @@ class TestCollectAllBranches(unittest.TestCase):
 
 class TestRenderBranchTable(unittest.TestCase):
     def _plain_reporter(self):
+        """Rich Reporter：输出到 StringIO buffer，便于字符串断言。"""
+        import io
         from lib.ui import reporter
-        r = reporter(stderr=True)
-        r.console = None  # 走纯文本路径
+        buf = io.StringIO()
+        r = reporter(stderr=False)
+        r.console.file = buf
+        self._buf = buf
         return r
 
     def _rows(self):
@@ -116,10 +120,8 @@ class TestRenderBranchTable(unittest.TestCase):
 
     def test_plain_renders_all_rows(self):
         r = self._plain_reporter()
-        buf = io.StringIO()
-        with redirect_stderr(buf):
-            _render_branch_table(r, self._rows(), mark_duplicates=True)
-        out = buf.getvalue()
+        _render_branch_table(r, self._rows(), mark_duplicates=True)
+        out = self._buf.getvalue()
         self.assertIn("repoA", out)
         self.assertIn("repoB", out)
         self.assertIn("master", out)
@@ -129,10 +131,8 @@ class TestRenderBranchTable(unittest.TestCase):
     def test_plain_marks_duplicates(self):
         """跨仓库同名分支（master 出现 2 次）标 ⟱。"""
         r = self._plain_reporter()
-        buf = io.StringIO()
-        with redirect_stderr(buf):
-            _render_branch_table(r, self._rows(), mark_duplicates=True)
-        out = buf.getvalue()
+        _render_branch_table(r, self._rows(), mark_duplicates=True)
+        out = self._buf.getvalue()
         self.assertIn("⟱", out)
         self.assertIn("跨仓库重复分支名", out)
         # dev 仅 1 次 → 不标
@@ -141,10 +141,8 @@ class TestRenderBranchTable(unittest.TestCase):
 
     def test_plain_no_duplicate_mark_when_disabled(self):
         r = self._plain_reporter()
-        buf = io.StringIO()
-        with redirect_stderr(buf):
-            _render_branch_table(r, self._rows(), mark_duplicates=False)
-        out = buf.getvalue()
+        _render_branch_table(r, self._rows(), mark_duplicates=False)
+        out = self._buf.getvalue()
         self.assertNotIn("⟱", out)
 
     def test_plain_track_without_upstream(self):
@@ -154,10 +152,8 @@ class TestRenderBranchTable(unittest.TestCase):
             ("r", {"name": "feat", "current": True, "sha": "a", "date": "d",
                    "upstream": "", "track": "[gone]"}),
         ]
-        buf = io.StringIO()
-        with redirect_stderr(buf):
-            _render_branch_table(r, rows, mark_duplicates=False)
-        out = buf.getvalue()
+        _render_branch_table(r, rows, mark_duplicates=False)
+        out = self._buf.getvalue()
         self.assertIn("[gone]", out)
 
     def test_rich_path_does_not_crash(self):

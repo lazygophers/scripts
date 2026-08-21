@@ -92,16 +92,9 @@ def run_cli(cli: BaseCli) -> None:
 
 def _render_fire_info(args, kwargs) -> None:
     """替代 fire.core 内部的 print('INFO: Showing help ...')：改成一行 dim 提示。"""
-    try:
-        from rich.console import Console
-        c = Console(stderr=True, force_terminal=True, highlight=False)
-        c.print(f"[dim]{args[0].rstrip()}[/dim]")
-    except Exception:
-        # 无 rich：原样
-        import sys
-        sys.stderr.write(str(args[0]))
-        if not str(args[0]).endswith("\n"):
-            sys.stderr.write("\n")
+    from rich.console import Console
+    c = Console(stderr=True, force_terminal=True, highlight=False)
+    c.print(f"[dim]{args[0].rstrip()}[/dim]")
 
 
 def _render_fire_help(lines, out) -> None:
@@ -115,12 +108,8 @@ def _render_fire_help(lines, out) -> None:
       - 整体放进 Panel（标题 = 命令名）
     """
     text = "\n".join(lines).strip("\n")
-    try:
-        from rich.console import Console
-        from rich.panel import Panel
-    except Exception:
-        out.write(text + "\n")
-        return
+    from rich.console import Console
+    from rich.panel import Panel
 
     # 保留 fire 输出语义：stderr（fire 默认 Display(... out=sys.stderr)）
     console = Console(file=out, force_terminal=True, highlight=False)
