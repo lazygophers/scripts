@@ -9,7 +9,7 @@
   type  仅网络类型（Wi-Fi / Ethernet / USB / Thunderbolt / Unknown）
 
 参数:
-  -s/--source   公网 IP 查询源 ipinfo|ip-api（默认 ipinfo）
+  -s/--source   公网 IP 查询源 ipinfo|ip-api（默认 ip-api）
   --json        JSON 输出（仅 all）
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.fire_base import BaseCli, run_cli, timed_cli
-from lib.ipinfo import lan_ip, net_type, proxy_info, render, wan_info
+from lib.ipinfo import is_hotspot_wifi, lan_ip, net_type, proxy_info, render, wan_info
 
 
 def _fmt(info):
@@ -31,11 +31,22 @@ def _fmt(info):
     return f"{ip}  ({geo})"
 
 
+def _fmt_types(types: list[str]) -> str:
+    """网络类型数组 → 人读字符串。Wi-Fi 时若检测到热点则加 (热点) 标记。"""
+    parts = []
+    for t in types:
+        if t == "Wi-Fi" and is_hotspot_wifi():
+            parts.append("Wi-Fi (热点)")
+        else:
+            parts.append(t)
+    return ", ".join(parts)
+
+
 class IpinfoCli(BaseCli):
     """ipinfo — 网络信息一站式查询"""
 
     @timed_cli
-    def all(self, source: str = "ipinfo", json: bool = False):
+    def all(self, source: str = "ip-api", json: bool = False):
         """一次性展示全部 4 项信息
 
         用法: ipinfo all [--source ipinfo|ip-api] [--json]
@@ -44,7 +55,7 @@ class IpinfoCli(BaseCli):
             ("内网 IP", lan_ip() or "(无)"),
             ("公网 IP", _fmt(wan_info(source=source))),
             ("代理 IP", _fmt(proxy_info(source=source)) if proxy_info(source=source) else "(无代理)"),
-            ("网络类型", net_type()),
+            ("网络类型", _fmt_types(net_type())),
         ]
         print(render(rows, json_mode=json))
         return 0
@@ -56,13 +67,13 @@ class IpinfoCli(BaseCli):
         return 0
 
     @timed_cli
-    def wan(self, source: str = "ipinfo"):
+    def wan(self, source: str = "ip-api"):
         """仅显示公网 IP+地区"""
         print(_fmt(wan_info(source=source)))
         return 0
 
     @timed_cli
-    def proxy(self, source: str = "ipinfo"):
+    def proxy(self, source: str = "ip-api"):
         """仅显示代理出口 IP+地区（无代理则提示）"""
         info = proxy_info(source=source)
         print(_fmt(info) if info else "(无代理 / $HTTPS_PROXY 未设)")
@@ -70,8 +81,8 @@ class IpinfoCli(BaseCli):
 
     @timed_cli
     def net(self):
-        """仅显示网络类型（Wi-Fi / Ethernet / USB / Thunderbolt / Unknown）"""
-        print(net_type())
+        """仅显示网络类型（逗号分隔多个活动接口；Wi-Fi 若是热点会标 (热点)）"""
+        print(_fmt_types(net_type()))
         return 0
 
     def __call__(self, *names: str):

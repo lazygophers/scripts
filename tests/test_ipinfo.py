@@ -58,15 +58,22 @@ class TestLanIp(unittest.TestCase):
 
 class TestWanInfo(unittest.TestCase):
     def test_ipinfo_success(self):
+        # 显式传 source="ipinfo" 才走 ipinfo.io
         payload = json.dumps({
             "ip": "1.2.3.4", "city": "Tokyo", "region": "Tokyo", "country": "JP",
             "org": "AS1234 Test",
         })
         with patch("lib.ipinfo.run", return_value=_fake_proc(stdout=payload)):
-            info = ipinfo.wan_info()
+            info = ipinfo.wan_info(source="ipinfo")
             self.assertEqual(info["ip"], "1.2.3.4")
             self.assertEqual(info["country"], "JP")
             self.assertEqual(info["city"], "Tokyo")
+
+    def test_default_source_is_ipapi(self):
+        """默认 source 改为 ip-api：ip-api shape 且 status=fail 时返回 None。"""
+        payload = json.dumps({"status": "fail", "message": "private range"})
+        with patch("lib.ipinfo.run", return_value=_fake_proc(stdout=payload)):
+            self.assertIsNone(ipinfo.wan_info())
 
     def test_ipapi_success_normalized(self):
         payload = json.dumps({
@@ -107,7 +114,11 @@ class TestProxyInfo(unittest.TestCase):
             self.assertIsNone(ipinfo.proxy_info())
 
     def test_https_proxy_env(self):
-        payload = json.dumps({"ip": "1.1.1.1", "country": "US", "city": "LA"})
+        # 默认走 ip-api：payload 必须是 ip-api shape
+        payload = json.dumps({
+            "status": "success", "query": "1.1.1.1", "country": "US",
+            "regionName": "CA", "city": "LA", "org": "AS1234",
+        })
         with patch.dict(os.environ, {"HTTPS_PROXY": "http://127.0.0.1:7890"}), \
              patch("lib.ipinfo.run", return_value=_fake_proc(stdout=payload)):
             info = ipinfo.proxy_info()
@@ -126,8 +137,8 @@ class TestNetType(unittest.TestCase):
             "Ethernet Address: 11:22:33:44:55:66\n"
         )
         with patch("lib.ipinfo.run", return_value=_fake_proc(stdout=hwports)), \
-             patch.object(ipinfo, "_ip_of", return_value="192.168.1.5"):
-            self.assertEqual(ipinfo.net_type(), "Wi-Fi")
+             patch.object(ipinfo, "_ip_of", side_effect=lambda dev: "192.168.1.5" if dev == "en0" else None):
+            self.assertEqual(ipinfo.net_type(), ["Wi-Fi"])
 
     def test_ethernet_detected(self):
         hwports = (
@@ -136,14 +147,75 @@ class TestNetType(unittest.TestCase):
             "Ethernet Address: aa:bb:cc:dd:ee:f0\n"
         )
         with patch("lib.ipinfo.run", return_value=_fake_proc(stdout=hwports)), \
-             patch.object(ipinfo, "_ip_of", return_value="10.0.0.1"):
-            self.assertEqual(ipinfo.net_type(), "Ethernet")
+             patch.object(ipinfo, "_ip_of", side_effect=lambda dev: "10.0.0.1" if dev == "en3" else None):
+            self.assertEqual(ipinfo.net_type(), ["Ethernet"])
+
+    def test_wifi_and_ethernet_both_shown(self):
+        hwports = (
+            "Hardware Port: Ethernet Adapter (en3)\n"
+            "Device: en3\n"
+            "\n"
+            "Hardware Port: Wi-Fi\n"
+            "Device: en0\n"
+        )
+        with patch("lib.ipinfo.run", return_value=_fake_proc(stdout=hwports)), \
+             patch.object(ipinfo, "_ip_of", side_effect=lambda dev: "1.2.3.4" if dev in ("en0", "en3") else None):
+            # Wi-Fi 优先于 Ethernet
+            self.assertEqual(ipinfo.net_type(), ["Wi-Fi", "Ethernet"])
 
     def test_no_active_interface(self):
         hwports = "Hardware Port: Thunderbolt Bridge\nDevice: bridge0\n"
         with patch("lib.ipinfo.run", return_value=_fake_proc(stdout=hwports)), \
              patch.object(ipinfo, "_ip_of", return_value=None):
-            self.assertEqual(ipinfo.net_type(), "Unknown")
+            self.assertEqual(ipinfo.net_type(), ["None"])
+
+    def test_empty_networksetup_output(self):
+        with patch("lib.ipinfo.run", return_value=_fake_proc(stdout="")):
+            self.assertEqual(ipinfo.net_type(), ["Unknown"])
+
+
+class TestIsHotspotWifi(unittest.TestCase):
+    """通过 ifconfig 里 bridge1..bridge99 有 IPv4 来识别热点（不依赖 SSID）。"""
+
+    def _ifconfig(self, body: str):
+        return _fake_proc(stdout=body)
+
+    def test_bridge100_with_ipv4_is_hotspot(self):
+        body = (
+            "en0: flags=8863<UP,BROADCAST,SMART,RUNNING>\n"
+            "\tether 11:22:33:44:55:66\n"
+            "bridge100: flags=8a63<UP,BROADCAST,SMART,RUNNING>\n"
+            "\tether 12:9f:41:9d:56:64\n"
+            "\tinet 172.20.0.0 netmask 0xffff0000 broadcast 172.20.255.255\n"
+            "\tinet6 fe80::109f:41ff:fe9d:5664%bridge100 prefixlen 64\n"
+        )
+        with patch("lib.ipinfo.run", return_value=self._ifconfig(body)):
+            self.assertTrue(ipinfo.is_hotspot_wifi())
+
+    def test_bridge0_only_is_not_hotspot(self):
+        body = (
+            "bridge0: flags=8863<UP,BROADCAST,SMART,RUNNING>\n"
+            "\tether 36:a7:a4:a1:47:40\n"
+        )
+        with patch("lib.ipinfo.run", return_value=self._ifconfig(body)):
+            self.assertFalse(ipinfo.is_hotspot_wifi())
+
+    def test_no_bridge_is_not_hotspot(self):
+        body = (
+            "en0: flags=8863<UP,BROADCAST,SMART,RUNNING>\n"
+            "\tether 11:22:33:44:55:66\n"
+            "\tinet 192.168.1.5 netmask 0xffffff00\n"
+        )
+        with patch("lib.ipinfo.run", return_value=self._ifconfig(body)):
+            self.assertFalse(ipinfo.is_hotspot_wifi())
+
+    def test_bridge_without_ipv4_is_not_hotspot(self):
+        body = (
+            "bridge100: flags=8a63<UP,BROADCAST,SMART,RUNNING>\n"
+            "\tether 12:9f:41:9d:56:64\n"
+        )
+        with patch("lib.ipinfo.run", return_value=self._ifconfig(body)):
+            self.assertFalse(ipinfo.is_hotspot_wifi())
 
 
 class TestRender(unittest.TestCase):
