@@ -69,11 +69,34 @@ class IpinfoCli(BaseCli):
         return 0
 
     @timed_cli
-    def type(self):
-        """仅显示网络类型"""
+    def net(self):
+        """仅显示网络类型（Wi-Fi / Ethernet / USB / Thunderbolt / Unknown）"""
         print(net_type())
         return 0
 
+    def __call__(self, *names: str):
+        """直接调用 `ipinfo [name1 name2 ...]` → 顺序执行并打印
+
+        无参 → all；多参 → 按顺序跑对应子命令。
+        支持别名：`type` → net。
+        返回 None：避免 fire 把返回值打印到 stdout。
+        """
+        aliases = {"type": "net"}
+        targets = names or ("all",)
+        for name in targets:
+            name = aliases.get(name, name)
+            method = getattr(self, name, None)
+            if not callable(method):
+                print(f"未知子命令: {name}", file=sys.stderr)
+                return None
+            method()
+        return None
+
 
 if __name__ == "__main__":
+    # 无子命令时当作 all：把首参塞到 all 后面
+    argv = sys.argv[1:]
+    subs = {"all", "lan", "wan", "proxy", "type", "-h", "--help"}
+    if argv and not argv[0].startswith("-") and argv[0] not in subs:
+        sys.argv = [sys.argv[0], "all", *argv]
     run_cli(IpinfoCli())

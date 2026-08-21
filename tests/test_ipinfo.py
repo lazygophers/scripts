@@ -166,8 +166,39 @@ class TestCliImport(unittest.TestCase):
         from importlib.machinery import SourceFileLoader
         mod = SourceFileLoader("ipinfo_test_mod", str(Path(__file__).resolve().parent.parent / "bin" / "ipinfo")).load_module()
         cli = mod.IpinfoCli()
-        for name in ("all", "lan", "wan", "proxy", "type"):
+        for name in ("all", "lan", "wan", "proxy", "net"):
             self.assertTrue(callable(getattr(cli, name)), f"missing subcommand: {name}")
+
+    def test_call_runs_all_by_default(self):
+        from importlib.machinery import SourceFileLoader
+        mod = SourceFileLoader("ipinfo_test_mod", str(Path(__file__).resolve().parent.parent / "bin" / "ipinfo")).load_module()
+        cli = mod.IpinfoCli()
+        with patch.object(cli, "all") as m_all:
+            cli()
+            m_all.assert_called_once_with()
+
+    def test_call_runs_listed_methods(self):
+        from importlib.machinery import SourceFileLoader
+        mod = SourceFileLoader("ipinfo_test_mod", str(Path(__file__).resolve().parent.parent / "bin" / "ipinfo")).load_module()
+        cli = mod.IpinfoCli()
+        with patch.object(cli, "lan") as m_lan, patch.object(cli, "wan") as m_wan:
+            cli("lan", "wan")
+            m_lan.assert_called_once_with()
+            m_wan.assert_called_once_with()
+
+    def test_type_alias_maps_to_net(self):
+        from importlib.machinery import SourceFileLoader
+        mod = SourceFileLoader("ipinfo_test_mod", str(Path(__file__).resolve().parent.parent / "bin" / "ipinfo")).load_module()
+        cli = mod.IpinfoCli()
+        with patch.object(cli, "net") as m_net:
+            cli("type")
+            m_net.assert_called_once_with()
+
+    def test_unknown_returns_none(self):
+        from importlib.machinery import SourceFileLoader
+        mod = SourceFileLoader("ipinfo_test_mod", str(Path(__file__).resolve().parent.parent / "bin" / "ipinfo")).load_module()
+        cli = mod.IpinfoCli()
+        self.assertIsNone(cli("nope"))
 
 
 if __name__ == "__main__":
