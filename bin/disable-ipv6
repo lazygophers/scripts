@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# disable-ipv6.sh — 关闭本机所有网络服务的 IPv6
+set -euo pipefail
+
+[[ $EUID -eq 0 ]] || { echo "需 sudo 运行"; exit 1; }
+
+networksetup -listallnetworkservices | tail -n +2 | sed 's/^\*//' | while IFS= read -r svc; do
+  [[ -z "$svc" ]] && continue
+  if networksetup -setv6off "$svc" 2>/dev/null; then
+    echo "off: $svc"
+  else
+    echo "skip: $svc"
+  fi
+done
