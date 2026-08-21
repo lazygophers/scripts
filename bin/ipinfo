@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
-"""ipinfo — 网络信息一站式查询（内网 IP / 公网 IP+地区 / 代理出口 / 网络类型）
+"""ipinfo — 内网 IP + 网络类型
 
 子命令:
-  all   一次性展示全部 4 项（默认）
-  lan   仅内网 IP
-  wan   仅公网 IP+地区
-  proxy 仅代理出口 IP+地区
-  type  仅网络类型（Wi-Fi / Ethernet / USB / Thunderbolt / Unknown）
-
-参数:
-  -s/--source   公网 IP 查询源 ipinfo|ip-api（默认 ip-api）
-  --json        JSON 输出（仅 all）
+  all  一次性展示全部（默认）
+  lan  仅内网 IP
+  net  仅网络类型（type 是别名）
 """
 from __future__ import annotations
 
@@ -19,16 +13,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.fire_base import BaseCli, run_cli, timed_cli
-from lib.ipinfo import is_hotspot_wifi, lan_ip, net_type, proxy_info, render, wan_info
-
-
-def _fmt(info):
-    if not info:
-        return "(查询失败)"
-    ip = info.get("ip") or "?"
-    parts = [p for p in (info.get("city"), info.get("region"), info.get("country")) if p]
-    geo = " / ".join(parts) if parts else "(未知地区)"
-    return f"{ip}  ({geo})"
+from lib.ipinfo import is_hotspot_wifi, lan_ip, net_type
 
 
 def _fmt_types(types: list[str]) -> str:
@@ -42,91 +27,34 @@ def _fmt_types(types: list[str]) -> str:
     return ", ".join(parts)
 
 
+def _kv(label: str, value: str) -> str:
+    return f"{label:<{len(label)}}  {value}"
+
+
 class IpinfoCli(BaseCli):
-    """ipinfo — 网络信息一站式查询
-
-    默认展示 4 项：内网 IP / 公网 IP+地区 / 代理出口 IP+地区 / 网络类型。
-    可通过子命令单独查询任意一项或多项（如 `ipinfo lan net`）。
-
-    通用参数（仅 all/wan/proxy 接受）:
-      source   查询源 ipinfo | ip-api，默认 ip-api
-      json     仅 all 接受，输出 JSON 格式
-    """
+    """ipinfo — 内网 IP + 网络类型"""
 
     @timed_cli
-    def all(self, source: str = "ip-api", json: bool = False):
-        """一次性展示 4 项信息（默认入口）
+    def all(self):
+        """一次性展示全部（默认入口）
 
         展示:
-          内网 IP     — 本机局域网地址（macOS 优先 ipconfig，兜底 socket）
-          公网 IP     — 出口 IP + 城市/省份/国家
-          代理 IP     — 通过 $HTTPS_PROXY 走代理看到的出口 IP；未设代理则提示
-          网络类型    — 活动接口列表（Wi-Fi/Ethernet/USB/...），Wi-Fi 若是热点会标 (热点)
+          内网 IP   本机局域网地址
+          网络类型  活动接口列表，Wi-Fi 若是热点会标 (热点)
 
-        用法: ipinfo all [--source ip-api|ipinfo] [--json]
-
-        示例:
-          ipinfo all                  # 全部 4 项
-          ipinfo all --json           # JSON 输出
-          ipinfo all --source ipinfo  # 用 ipinfo.io 作源
+        用法: ipinfo all
         """
-        rows = [
-            ("内网 IP", lan_ip() or "(无)"),
-            ("公网 IP", _fmt(wan_info(source=source))),
-            ("代理 IP", _fmt(proxy_info(source=source)) if proxy_info(source=source) else "(无代理)"),
-            ("网络类型", _fmt_types(net_type())),
-        ]
-        print(render(rows, json_mode=json))
+        print(_kv("内网 IP", lan_ip() or "(无)"))
+        print(_kv("网络类型", _fmt_types(net_type())))
         return 0
 
     @timed_cli
     def lan(self):
         """仅显示本机内网 IP
 
-        来源: macOS `ipconfig getifaddr en0/en1/en2`，依次 fallback。
-        完全无网络时显示 (无)。
-
         用法: ipinfo lan
-
-        示例:
-          ipinfo lan      # 输出如 192.168.1.8
         """
         print(lan_ip() or "(无)")
-        return 0
-
-    @timed_cli
-    def wan(self, source: str = "ip-api"):
-        """仅显示公网 IP + 城市/省份/国家
-
-        来源 API（无需密钥）:
-          ip-api (默认) — http://ip-api.com/json，返回 status / city / regionName / country / as
-          ipinfo        — https://ipinfo.io/json，返回 ip / city / region / country / org
-
-        用法: ipinfo wan [--source ip-api|ipinfo]
-
-        示例:
-          ipinfo wan                   # 默认 ip-api
-          ipinfo wan --source ipinfo   # 用 ipinfo.io
-        """
-        print(_fmt(wan_info(source=source)))
-        return 0
-
-    @timed_cli
-    def proxy(self, source: str = "ip-api"):
-        """仅显示代理出口 IP + 地区（无代理则提示）
-
-        读取环境变量（按优先级）:
-          $HTTPS_PROXY → $https_proxy → $HTTP_PROXY → $http_proxy
-        任一非空即视为有代理；否则输出 (无代理 / $HTTPS_PROXY 未设)。
-
-        用法: ipinfo proxy [--source ip-api|ipinfo]
-
-        示例:
-          ipinfo proxy
-          HTTPS_PROXY=socks5://127.0.0.1:7890 ipinfo proxy
-        """
-        info = proxy_info(source=source)
-        print(_fmt(info) if info else "(无代理 / $HTTPS_PROXY 未设)")
         return 0
 
     @timed_cli
@@ -138,9 +66,6 @@ class IpinfoCli(BaseCli):
         Wi-Fi 若是热点（iPhone/Android 个人热点 → bridge1..bridge99 有 IPv4）则标 (热点)。
 
         用法: ipinfo net
-
-        示例:
-          ipinfo net      # 输出如: Wi-Fi (热点), USB Ethernet
         """
         print(_fmt_types(net_type()))
         return 0
@@ -150,7 +75,6 @@ class IpinfoCli(BaseCli):
 
         无参 → all；多参 → 按顺序跑对应子命令。
         支持别名：`type` → net。
-        返回 None：避免 fire 把返回值打印到 stdout。
         """
         aliases = {"type": "net"}
         targets = names or ("all",)
@@ -165,9 +89,4 @@ class IpinfoCli(BaseCli):
 
 
 if __name__ == "__main__":
-    # 无子命令时当作 all：把首参塞到 all 后面
-    argv = sys.argv[1:]
-    subs = {"all", "lan", "wan", "proxy", "type", "-h", "--help"}
-    if argv and not argv[0].startswith("-") and argv[0] not in subs:
-        sys.argv = [sys.argv[0], "all", *argv]
     run_cli(IpinfoCli())
