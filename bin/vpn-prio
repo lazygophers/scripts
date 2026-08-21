@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""vpn-prio — 调整 macOS 网络服务优先级（压低 OpenVPN 推送路由的 default 出口）
+
+目标 Service Order:
+  1. USB 10/100/1000 LAN      (en5)   — 最高
+  2. USB 10/100/1000 LAN 2    (en6)   — 第二（如果存在）
+  3. Wi-Fi                    (en0)
+  4. 其他已存在 services（按字母顺序追加）
+  OpenVPN 通过进程检测识别，不在 service 列表中。
+"""
+from __future__ import annotations
+
+import pathlib
+import os
+import re
+import subprocess
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.fire_base import BaseCli, run_cli, timed_cli
+
+
+# OpenVPN Connect 真实标识（不含 utunX 字面）：
+#   - root LaunchDaemon: org.openvpn.client / ovpnagent
+#   - user helper: OVPNHelper / OpenVPNConnect.framework
+_OVPN_PROC_PATTERNS = (
+    r"/OpenVPNConnect\.framework/.*ovpnagent",
+    r"/OpenVPNConnect\.framework/.*OVPNHelper",
+    r"/OpenVPN Connect\.app/Contents/MacOS/OpenVPN Connect",
+)
+
+
+def _run(cmd: list[str]) -> tuple[int, str, str]:
+    """跑外部命令，返回 (rc, stdout, stderr)。不抛异常。"""
+    try:
+        p = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=10)
+        return p.returncode, p.stdout or "", p.stderr or ""
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return 1, "", str(e)
+
+
+def _detect_openvpn() -> dict[str, object]:
+    """真实检测 OpenVPN Connect 是否在跑。
+
+    不能靠 utun4 等字面接口名判断（其他 VPN 也用 utun）。
+    通过进程命令行包含 OpenVPNConnect.framework 或 ovpnagent 识别。
+    """
+    rc, out, _ = _run(["pgrep", "-fl", "OpenVPNConnect.framework"])
+    pids: list[str] = []
+    for line in out.splitlines():
+        # pgrep -fl 输出 "PID command..."；pid 是首个空白前
+        m = re.match(r"^(\d+)\s", line)
+        if m:
+            pids.append(m.group(1))
+    return {
+        "running": bool(pids),
+        "pids": pids,
+        "matched_pattern": next(
+            (pat for pat in _OVPN_PROC_PATTERNS if re.search(pat, out)),
+            None,
+        ),
+    }
+
+
+def _list_services() -> list[str]:
+    """从 networksetup -listnetworkserviceorder 解析 service 名（去顺序）。
+
+    输出格式：
+      An asterisk (*) denotes that a network service is disabled.
+      (1) USB 10/100/1000 LAN
+      (Hardware Port: USB 10/100/1000 LAN, Device: en5)
+      ...
+    service 名 = "(N) " 后到行尾。
+    """
+    rc, out, _ = _run(["networksetup", "-listnetworkserviceorder"])
+    services: list[str] = []
+    for line in out.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        m = re.match(r"^\(\d+\)\s+(.+?)\s*\*?\s*$", s)
+        if m:
+            services.append(m.group(1).strip())
+    return services
+
+
+def _bridge100_default_state() -> str:
+    """检查 bridge100 default 路由状态。返回 'rejected' | 'active' | 'absent'。"""
+    rc, out, _ = _run(["netstat", "-rn"])
+    for line in out.splitlines():
+        parts = line.split()
+        if parts and parts[0] == "default" and "bridge100" in parts:
+            return "rejected" if "!" in parts else "active"
+    return "absent"
+
+
+def _desired_order(services: list[str]) -> list[str]:
+    """按目标优先级重排：USB > Wi-Fi > 其他。"""
+    usb = [s for s in services if "USB" in s]
+    wifi = [s for s in services if s.startswith("Wi-Fi")]
+    others = sorted(s for s in services if s not in usb and s not in wifi)
+    return usb + wifi + others
+
+
+class VpnPrioCli(BaseCli):
+    """vpn-prio — 调整网络服务优先级（压低 OpenVPN default 路由优先级）"""
+
+    def __call__(self) -> int:
+        """裸调用 `vpn-prio` 等同 `vpn-prio status`"""
+        return self.status()
+
+    @timed_cli
+    def status(self):
+        """显示当前 Service Order + OpenVPN 状态 + bridge100 路由（默认入口）
+
+        用法: vpn-prio status
+        """
+        services = _list_services()
+        ovpn = _detect_openvpn()
+        bridge = _bridge100_default_state()
+
+        self._r.rule("当前 Service Order（top → bottom）")
+        if not services:
+            print("  (无 service)")
+        else:
+            for i, s in enumerate(services, 1):
+                print(f"  {i}. {s}")
+
+        print()
+        self._r.rule("OpenVPN Connect")
+        if ovpn["running"]:
+            print(f"  ✓ 运行中  pids={','.join(ovpn['pids'])}")
+            print(f"    匹配: {ovpn['matched_pattern']}")
+        else:
+            print("  ✗ 未运行")
+
+        print()
+        self._r.rule("Wi-Fi 热点（bridge100）")
+        emoji = "⚠" if bridge == "active" else ("✗" if bridge == "absent" else "✓")
+        print(f"  {emoji} {bridge}")
+        if bridge == "active":
+            print("    注意：bridge100 default 路由当前 active（未被 reject），")
+            print("    会竞争 default 出口。建议手动关闭热点或重启网络。")
+
+        print()
+        self._r.rule("目标顺序（apply 后）")
+        desired = _desired_order(services)
+        for i, s in enumerate(desired, 1):
+            mark = "★" if i == 1 else " "
+            print(f"  {mark} {i}. {s}")
+        return 0
+
+    @timed_cli
+    def apply(self):
+        """按目标顺序重排 Service Order（USB > Wi-Fi > 其他）
+
+        用法: vpn-prio apply
+        """
+        services = _list_services()
+        if not services:
+            print("✗ 无法列出 service，请检查 networksetup", file=sys.stderr)
+            return 1
+        desired = _desired_order(services)
+        if desired == services:
+            print("当前顺序已是目标顺序，无需调整。")
+            return 0
+
+        print("当前顺序:")
+        for i, s in enumerate(services, 1):
+            print(f"  {i}. {s}")
+        print()
+        print("新顺序:")
+        for i, s in enumerate(desired, 1):
+            mark = "★" if i == 1 else " "
+            print(f"  {mark} {i}. {s}")
+        print()
+
+        rc, out, err = _run(["networksetup", "-ordernetworkservices", *desired])
+        if os.environ.get("SCRIPTS_DRY_RUN") == "1":
+            print(f"[dry-run] would run: networksetup -ordernetworkservices {' '.join(desired)}")
+            return 0
+        if rc != 0:
+            print(f"✗ 调整失败: {err.strip() or out.strip()}", file=sys.stderr)
+            return rc
+        print("✓ Service Order 已调整")
+        print()
+        print("⚠ 注意：")
+        print("  - macOS Service Order 只影响 default 路由优先级")
+        print("  - OpenVPN 推送的 /24 子网路由（10.x、10.10.x 等）无法被本脚本压低，")
+        print("    会继续走 VPN。要彻底降低 VPN 优先级需修改 OpenVPN 配置移除")
+        print("    redirect-gateway，或拔 VPN 客户端。")
+        return 0
+
+    @timed_cli
+    def reset(self):
+        """还原为字母顺序（系统默认顺序）
+
+        用法: vpn-prio reset
+        """
+        services = _list_services()
+        if not services:
+            print("✗ 无法列出 service", file=sys.stderr)
+            return 1
+        restored = sorted(set(services))
+        if os.environ.get("SCRIPTS_DRY_RUN") == "1":
+            print(f"[dry-run] would run: networksetup -ordernetworkservices {' '.join(restored)}")
+            return 0
+        rc, out, err = _run(["networksetup", "-ordernetworkservices", *restored])
+        if rc != 0:
+            print(f"✗ 还原失败: {err.strip() or out.strip()}", file=sys.stderr)
+            return rc
+        print("✓ 已还原为字母顺序")
+        return 0
+
+
+if __name__ == "__main__":
+    run_cli(VpnPrioCli())

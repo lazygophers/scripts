@@ -51,7 +51,8 @@ TOOLS: dict[str, tuple[str, str]] = {
     "n": ("system", "macOS 语音播报（`say`）"),
     "disable-ipv6": ("system", "关闭本机所有网络服务的 IPv6"),
     "enable-ipv6": ("system", "开启本机所有网络服务的 IPv6"),
-    "ipinfo": ("system", "查询内网 IP / 公网 IP+地区 / 代理出口 / 网络类型"),
+    "ipinfo": ("system", "查询内网 IP + 网络类型（含热点识别）"),
+    "vpn-prio": ("system", "调整 macOS 网络服务优先级（压低 OpenVPN default 路由）"),
     "inject": ("system", "把 bin/ 注入 shell PATH（写入 ~/.zshrc 等）"),
 }
 
