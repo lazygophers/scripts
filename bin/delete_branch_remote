@@ -24,10 +24,14 @@ _STATUS_EXIT = {"ok": 0, "skip": 0, "fail": 1}
 class DeleteBranchRemoteCli(BaseCli):
     """删除远端分支（单仓或批量）"""
 
-    def __call__(self, branch: str, remote: str = "origin", yes: bool = False):
+    def __call__(self, *args: str, remote: str = "origin", yes: bool = False):
         """裸调用 `delete_branch_remote <branch>` 等同 `delete_branch_remote here <branch>`（cwd 是 git 仓库时），
         否则自动转发到 `delete_branch_remote all <branch>`。
         """
+        if not args:
+            self._r.err("delete_branch_remote: 缺少分支名")
+            return 1
+        branch = args[0]
         if (pathlib.Path.cwd() / ".git").exists():
             return self.here(branch, remote=remote)
         return self.all(branch, remote=remote, yes=yes)

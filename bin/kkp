@@ -14,9 +14,12 @@ from lib.process import kill_by_port
 class KkpCli(BaseCli):
     """按端口号终止占用进程"""
 
-    def __call__(self, port: int, dry_run: bool = False):
+    def __call__(self, *args: str, dry_run: bool = False):
         """裸调用 `kkp <port>` 等同 `kkp by_port <port>`"""
-        return self.by_port(port, dry_run=dry_run)
+        if not args:
+            self._r.err("kkp: 缺少端口号")
+            return 1
+        return self.by_port(int(args[0]), dry_run=dry_run)
 
     @timed_cli
     def by_port(self, port: int, dry_run: bool = False):

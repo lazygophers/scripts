@@ -24,10 +24,14 @@ _STATUS_EXIT = {"ok": 0, "skip": 0, "fail": 1}
 class DeleteBranchCli(BaseCli):
     """删除本地分支（单仓或批量）"""
 
-    def __call__(self, branch: str, force: bool = False, yes: bool = False):
+    def __call__(self, *args: str, force: bool = False, yes: bool = False):
         """裸调用 `delete_branch <branch>` 等同 `delete_branch here <branch>`（cwd 是 git 仓库时），
         否则自动转发到 `delete_branch all <branch>`。
         """
+        if not args:
+            self._r.err("delete_branch: 缺少分支名")
+            return 1
+        branch = args[0]
         if (pathlib.Path.cwd() / ".git").exists():
             return self.here(branch, force=force)
         return self.all(branch, force=force, yes=yes)

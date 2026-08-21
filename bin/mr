@@ -15,8 +15,7 @@ class MrCli(BaseCli):
 
     def __call__(
         self,
-        base: str | None = None,
-        *,
+        *args: str,
         dry_run: bool = False,
         publish: bool = False,
         reviews: str | None = None,
@@ -25,6 +24,7 @@ class MrCli(BaseCli):
         settings: str | None = None,
     ):
         """裸调用 `mr [<base>]` 等同 `mr create [<base>]`"""
+        base = args[0] if args else None
         return self.create(
             base, dry_run=dry_run, publish=publish,
             reviews=reviews, labels=labels, assignee=assignee, settings=settings,

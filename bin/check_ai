@@ -15,8 +15,7 @@ class CheckAiCli(BaseCli):
 
     def __call__(
         self,
-        target: str,
-        *,
+        *args: str,
         count: int = 5,
         infinite: bool = False,
         timeout: float = 15.0,
@@ -24,6 +23,10 @@ class CheckAiCli(BaseCli):
         proxy: str | None = None,
     ):
         """裸调用 `check_ai <端点名|URL>` 等同 `check_ai probe <端点名|URL>`"""
+        if not args:
+            self._r.err("check_ai: 缺少端点名或 URL")
+            return 1
+        target = args[0]
         return self.probe(
             target,
             count=count, infinite=infinite, timeout=timeout,

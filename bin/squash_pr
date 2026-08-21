@@ -20,13 +20,20 @@ class SquashPrCli(BaseCli):
 
     def __call__(
         self,
-        target: str,
+        *args: str,
         source: str | None = None,
-        *,
         dry_run: bool = False,
         push_only: bool = False,
     ):
-        """裸调用 `squash_pr <target> [source]` 等同 `squash_pr run <target> [source]`"""
+        """裸调用 `squash_pr <target> [source]` 等同 `squash_pr run <target> [source]`
+
+        args: 第一项 target；若有第二项视为 source（向后兼容，亦可用 --source=）。"""
+        if not args:
+            self._r.err("squash_pr: 缺少 target 分支名")
+            return 1
+        target = args[0]
+        if len(args) >= 2:
+            source = args[1]
         return self.run(target, source, dry_run=dry_run, push_only=push_only)
 
     @timed_cli

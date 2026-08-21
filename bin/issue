@@ -15,8 +15,7 @@ class IssueCli(BaseCli):
 
     def __call__(
         self,
-        title: str | None = None,
-        *,
+        *args: str,
         dry_run: bool = False,
         labels: str | None = None,
         assignee: str | None = None,
@@ -24,6 +23,7 @@ class IssueCli(BaseCli):
         settings: str | None = None,
     ):
         """裸调用 `issue [<title>]` 等同 `issue create [<title>]`"""
+        title = " ".join(args) if args else None
         return self.create(
             title, dry_run=dry_run,
             labels=labels, assignee=assignee, milestone=milestone, settings=settings,
