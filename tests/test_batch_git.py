@@ -405,19 +405,44 @@ class TestSyncFactory(unittest.TestCase):
 
     @patch("lib.batch_git._resolve_main_branch", return_value="master")
     @patch("lib.batch_git._run")
-    def test_no_local_master(self, mock_run, _mock_resolve):
+    def test_no_local_master_creates_from_remote(self, mock_run, _mock_resolve):
+        """本地无 master + 远端有 → detect 自动创建本地 master, execute 快进。"""
         mock_run.side_effect = [
             _mock_run(returncode=0),   # fetch
-            _mock_run(returncode=1),   # rev-parse master (不存在)
+            _mock_run(returncode=1),   # rev-parse master (本地不存在)
+            _mock_run(returncode=0),   # rev-parse origin/master (远端存在)
+            _mock_run(returncode=0),   # git switch -c master origin/master (创建成功)
+            _mock_run(returncode=0),   # diff-index (干净)
+            _mock_run(stdout="0\t5\n"),  # rev-list: ahead 0, behind 5
+            _mock_run(stdout="master\n"),  # branch --show-current
+            _mock_run(returncode=0),   # reset --hard
+            _mock_run(stdout="abc1234\n"),  # rev-parse --short
         ]
         op = _sync_one_factory("master", force=False)
         r = MagicMock()
         status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
-        self.assertEqual(status, "skip")
+        self.assertEqual(status, "ok")
+        self.assertIn("快进", detail)
 
     @patch("lib.batch_git._resolve_main_branch", return_value="master")
     @patch("lib.batch_git._run")
-    def test_no_remote_master(self, mock_run, _mock_resolve):
+    def test_no_local_master_create_fails(self, mock_run, _mock_resolve):
+        """本地无 master + 远端有 + switch -c 失败 → fail。"""
+        mock_run.side_effect = [
+            _mock_run(returncode=0),   # fetch
+            _mock_run(returncode=1),   # rev-parse master (本地不存在)
+            _mock_run(returncode=0),   # rev-parse origin/master (远端存在)
+            _mock_run(returncode=128, stderr="fatal: invalid reference"),  # switch -c 失败
+        ]
+        op = _sync_one_factory("master", force=False)
+        r = MagicMock()
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "fail")
+
+    @patch("lib.batch_git._resolve_main_branch", return_value="master")
+    @patch("lib.batch_git._run")
+    def test_no_remote_master_skips(self, mock_run, _mock_resolve):
+        """远端无 master → skip, 即便本地有也无法对齐。"""
         mock_run.side_effect = [
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=0),   # local master exists

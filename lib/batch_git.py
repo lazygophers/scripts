@@ -871,14 +871,23 @@ def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
 
         local = _run(["git", "rev-parse", "--verify", "-q", target],
                      cwd=str(repo), check=False, capture_output=True)
-        if local.returncode != 0:
-            return RepoPlan(status="skip", detail=f"无 {target} 分支")
 
         remote_ref = f"origin/{target}"
         remote = _run(["git", "rev-parse", "--verify", "-q", remote_ref],
                       cwd=str(repo), check=False, capture_output=True)
-        if remote.returncode != 0:
+        remote_exists = remote.returncode == 0
+
+        # 远端无 → 无法对齐, skip (本地再领先也无意义)
+        if not remote_exists:
             return RepoPlan(status="skip", detail=f"无 {remote_ref}")
+
+        # 本地缺 → detect 内自动创建本地追踪分支 (与 execute 共用同一语义)
+        if local.returncode != 0:
+            r.step(f"本地无 {target} → 从 {remote_ref} 创建")
+            create = _run(["git", "switch", "-c", target, remote_ref],
+                          cwd=str(repo), check=False, capture_output=True)
+            if create.returncode != 0:
+                return RepoPlan(status="fail", detail=_extract_error((create.stderr or "") + (create.stdout or ""), create.returncode, f"创建 {target} 失败"))
 
         dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
                      cwd=str(repo), check=False, capture_output=True)
