@@ -1,0 +1,884 @@
+#!/usr/bin/env python3
+"""archery — Archery(hhyo/archery) 的命令行客户端，按域名分别保存登录
+
+顶层命令:
+  login       录入一个站点的地址 / 用户名 / 密码（可选 2FA 密钥），登录并保存
+  hosts       列出已配置的站点，标出当前默认那个
+  use         切换默认站点
+  show        查看某个站点的配置（密码与密钥打码）
+  logout      清掉 token（加 --forget 连账号密码一起删）
+  code        打印当前 TOTP 验证码（不请求服务端）
+  info        站点版本信息（GET /api/info）
+  schema      列出这个站点支持的全部 API 端点（读 /api/schema/）
+  api         直接发任意请求，覆盖 schema 里所有端点
+
+子命令组:
+  user        用户 / 用户组 / 资源组 / 2FA
+  instance    实例、隧道、阿里云 RDS、实例资源
+  query       SQLQuery：查实例、查资源、看表结构、执行查询、历史记录、收藏
+  workflow    工单：清单、提交、SQL 检查、审核、待审清单、执行、日志
+
+配置文件: ~/.config/lazygophers/scripts/archery.yaml（权限 0600）
+所有命令都支持 --host <域名> 临时指向另一个站点。
+"""
+from __future__ import annotations
+
+import json
+import pathlib
+import sys
+from functools import wraps
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.archery import (
+    CONFIG_PATH,
+    ArcheryClient,
+    ArcheryError,
+    client_for,
+    flatten_schema,
+    host_key,
+    load_config,
+    mask,
+    normalize_url,
+    parse_data,
+    profiles,
+    put_profile,
+    resolve_profile,
+    save_config,
+)
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.ovpn import normalize_secret, totp
+from lib.ui import Reporter, ask_confirm, ask_text, reporter
+
+
+def emit(data) -> None:
+    """API 返回值统一打到 stdout（JSON），报错和进度走 stderr，方便 `| jq`。"""
+    if data is None:
+        return
+    if isinstance(data, str):
+        print(data)
+    else:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def cmd(method):
+    """子命令装饰器：计时 + 把 ArcheryError 变成一行人话（不甩 traceback）。"""
+
+    @timed_cli
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except ArcheryError as e:
+            self._r.err(str(e))
+            return 2
+
+    return wrapper
+
+
+class _Group:
+    """子命令组基类。属性一律带下划线，否则 fire 会把它们当成子命令列出来。"""
+
+    def __init__(self, reporter_obj: Reporter | None = None) -> None:
+        self._r = reporter_obj or reporter(stderr=True)
+
+    def _client(self, host: str = ""):
+        return client_for(host, reporter=self._r)
+
+
+# ---------------------------------------------------------------- user
+
+class TwoFACli(_Group):
+    """两步验证（TOTP / 短信）配置"""
+
+    @cmd
+    def state(self, engineer: str, host: str = ""):
+        """查某个用户的 2FA 开启情况
+
+        用法: archery user twofa state nico
+        """
+        emit(self._client(host).post("v1/user/2fa/state/", {"engineer": engineer}))
+        return 0
+
+    @cmd
+    def enable(self, engineer: str, auth_type: str = "totp", phone: str = "", host: str = ""):
+        """开启 2FA。totp 返回密钥（拿去 save 保存），sms 会给手机发验证码
+
+        用法:
+          archery user twofa enable nico
+          archery user twofa enable nico --auth-type sms --phone 13800000000
+        """
+        body = {"engineer": engineer, "enable": "true", "auth_type": auth_type}
+        if phone:
+            body["phone"] = phone
+        emit(self._client(host).post("v1/user/2fa/", body))
+        return 0
+
+    @cmd
+    def disable(self, engineer: str, auth_type: str = "totp", host: str = ""):
+        """关闭 2FA
+
+        用法: archery user twofa disable nico
+        """
+        emit(self._client(host).post(
+            "v1/user/2fa/", {"engineer": engineer, "enable": "false", "auth_type": auth_type}))
+        return 0
+
+    @cmd
+    def save(self, engineer: str, auth_type: str = "totp", key: str = "", phone: str = "",
+             host: str = ""):
+        """保存 2FA 配置（totp 传 --key，sms 传 --phone，关闭传 --auth-type disabled）
+
+        用法: archery user twofa save nico --key JBSWY3DPEHPK3PXP
+        """
+        body = {"engineer": engineer, "auth_type": auth_type}
+        if key:
+            body["key"] = key
+        if phone:
+            body["phone"] = phone
+        emit(self._client(host).post("v1/user/2fa/save/", body))
+        return 0
+
+    @cmd
+    def verify(self, engineer: str, otp: int, auth_type: str = "totp", key: str = "",
+               phone: str = "", host: str = ""):
+        """校验一次性验证码
+
+        用法: archery user twofa verify nico 123456
+        """
+        body = {"engineer": engineer, "otp": int(otp), "auth_type": auth_type}
+        if key:
+            body["key"] = key
+        if phone:
+            body["phone"] = phone
+        emit(self._client(host).post("v1/user/2fa/verify/", body))
+        return 0
+
+
+class UserGroupCli(_Group):
+    """Django 用户组（权限组）"""
+
+    @cmd
+    def list(self, host: str = "", **params):
+        """列出用户组（支持 --page / --size）
+
+        用法: archery user group list --size 50
+        """
+        emit(self._client(host).get("v1/user/group/", **params))
+        return 0
+
+    @cmd
+    def create(self, data, host: str = ""):
+        """新建用户组。--data 传 JSON 或 @file.json
+
+        用法: archery user group create --data '{"name":"dba"}'
+        """
+        emit(self._client(host).post("v1/user/group/", parse_data(data)))
+        return 0
+
+    @cmd
+    def update(self, pk: int, data, host: str = ""):
+        """更新用户组（整体覆盖，PUT）
+
+        用法: archery user group update 3 --data '{"name":"dba"}'
+        """
+        emit(self._client(host).put(f"v1/user/group/{int(pk)}/", parse_data(data)))
+        return 0
+
+    @cmd
+    def delete(self, pk: int, host: str = ""):
+        """删除用户组
+
+        用法: archery user group delete 3
+        """
+        self._client(host).delete(f"v1/user/group/{int(pk)}/")
+        self._r.ok(f"已删除用户组 {pk}")
+        return 0
+
+
+class ResourceGroupCli(_Group):
+    """资源组（实例的归属分组）"""
+
+    @cmd
+    def list(self, host: str = "", **params):
+        """列出资源组
+
+        用法: archery user resourcegroup list
+        """
+        emit(self._client(host).get("v1/user/resourcegroup/", **params))
+        return 0
+
+    @cmd
+    def create(self, data, host: str = ""):
+        """新建资源组
+
+        用法: archery user resourcegroup create --data '{"group_name":"核心库"}'
+        """
+        emit(self._client(host).post("v1/user/resourcegroup/", parse_data(data)))
+        return 0
+
+    @cmd
+    def update(self, pk: int, data, host: str = ""):
+        """更新资源组（PUT）
+
+        用法: archery user resourcegroup update 2 --data '{"group_name":"核心库"}'
+        """
+        emit(self._client(host).put(f"v1/user/resourcegroup/{int(pk)}/", parse_data(data)))
+        return 0
+
+    @cmd
+    def delete(self, pk: int, host: str = ""):
+        """删除资源组
+
+        用法: archery user resourcegroup delete 2
+        """
+        self._client(host).delete(f"v1/user/resourcegroup/{int(pk)}/")
+        self._r.ok(f"已删除资源组 {pk}")
+        return 0
+
+
+class UserCli(_Group):
+    """用户管理"""
+
+    def __init__(self, reporter_obj: Reporter | None = None) -> None:
+        super().__init__(reporter_obj)
+        self.group = UserGroupCli(self._r)
+        self.resourcegroup = ResourceGroupCli(self._r)
+        self.twofa = TwoFACli(self._r)
+
+    @cmd
+    def list(self, host: str = "", **params):
+        """列出用户。过滤参数直接透传（--username / --id / --page / --size）
+
+        用法:
+          archery user list --size 50
+          archery user list --username nico
+        """
+        emit(self._client(host).get("v1/user/", **params))
+        return 0
+
+    @cmd
+    def create(self, data, host: str = ""):
+        """新建用户。字段同 Archery 的 Users 模型，display 必填
+
+        用法: archery user create --data '{"username":"nico","display":"Nico","password":"..."}'
+        """
+        emit(self._client(host).post("v1/user/", parse_data(data)))
+        return 0
+
+    @cmd
+    def update(self, pk: int, data, host: str = ""):
+        """更新用户（PUT，只传要改的字段即可，username/password 可选）
+
+        用法: archery user update 7 --data '{"display":"Nico L"}'
+        """
+        emit(self._client(host).put(f"v1/user/{int(pk)}/", parse_data(data)))
+        return 0
+
+    @cmd
+    def delete(self, pk: int, host: str = ""):
+        """删除用户
+
+        用法: archery user delete 7
+        """
+        self._client(host).delete(f"v1/user/{int(pk)}/")
+        self._r.ok(f"已删除用户 {pk}")
+        return 0
+
+    @cmd
+    def auth(self, engineer: str, password: str, host: str = ""):
+        """校验某个用户的账号密码（不改变本地登录状态）
+
+        用法: archery user auth nico 'secret'
+        """
+        emit(self._client(host).post("v1/user/auth/", {"engineer": engineer, "password": password}))
+        return 0
+
+
+# ---------------------------------------------------------------- instance
+
+class TunnelCli(_Group):
+    """SSH 隧道配置"""
+
+    @cmd
+    def list(self, host: str = "", **params):
+        """列出隧道
+
+        用法: archery instance tunnel list
+        """
+        emit(self._client(host).get("v1/instance/tunnel/", **params))
+        return 0
+
+    @cmd
+    def create(self, data, host: str = ""):
+        """新建隧道
+
+        用法: archery instance tunnel create --data @tunnel.json
+        """
+        emit(self._client(host).post("v1/instance/tunnel/", parse_data(data)))
+        return 0
+
+
+class RdsCli(_Group):
+    """阿里云 RDS 配置"""
+
+    @cmd
+    def list(self, host: str = "", **params):
+        """列出 RDS 配置
+
+        用法: archery instance rds list
+        """
+        emit(self._client(host).get("v1/instance/rds/", **params))
+        return 0
+
+    @cmd
+    def create(self, data, host: str = ""):
+        """新建 RDS 配置（含一个 CloudAccessKey）
+
+        用法: archery instance rds create --data @rds.json
+        """
+        emit(self._client(host).post("v1/instance/rds/", parse_data(data)))
+        return 0
+
+
+class InstanceCli(_Group):
+    """数据库实例管理"""
+
+    def __init__(self, reporter_obj: Reporter | None = None) -> None:
+        super().__init__(reporter_obj)
+        self.tunnel = TunnelCli(self._r)
+        self.rds = RdsCli(self._r)
+
+    @cmd
+    def list(self, host: str = "", **params):
+        """列出实例。过滤：--id / --instance_name__icontains / --db_type / --host_ip / --page / --size
+
+        实例的 host 字段过滤参数写 `--host_ip` 会被原样透传成 `host`；因为 `--host`
+        已经被本工具用来选站点了，需要按实例 IP 过滤时改用 `archery api` 直接发。
+
+        用法:
+          archery instance list --size 50
+          archery instance list --db_type mysql
+        """
+        params = dict(params)
+        if "host_ip" in params:
+            params["host"] = params.pop("host_ip")
+        emit(self._client(host).get("v1/instance/", **params))
+        return 0
+
+    @cmd
+    def create(self, data, host: str = ""):
+        """新建实例
+
+        用法: archery instance create --data @instance.json
+        """
+        emit(self._client(host).post("v1/instance/", parse_data(data)))
+        return 0
+
+    @cmd
+    def update(self, pk: int, data, host: str = ""):
+        """更新实例（PUT）
+
+        用法: archery instance update 5 --data '{"host":"10.0.0.9"}'
+        """
+        emit(self._client(host).put(f"v1/instance/{int(pk)}/", parse_data(data)))
+        return 0
+
+    @cmd
+    def delete(self, pk: int, host: str = ""):
+        """删除实例
+
+        用法: archery instance delete 5
+        """
+        self._client(host).delete(f"v1/instance/{int(pk)}/")
+        self._r.ok(f"已删除实例 {pk}")
+        return 0
+
+    @cmd
+    def resource(self, instance_id: int, resource_type: str, db_name: str = "",
+                 schema_name: str = "", tb_name: str = "", host: str = ""):
+        """列实例内的资源：database / schema / table / column / server_info
+
+        用法:
+          archery instance resource 5 database
+          archery instance resource 5 table --db-name orders
+          archery instance resource 5 column --db-name orders --tb-name t_order
+        """
+        body = {"instance_id": int(instance_id), "resource_type": resource_type}
+        for key, value in (("db_name", db_name), ("schema_name", schema_name), ("tb_name", tb_name)):
+            if value:
+                body[key] = value
+        emit(self._client(host).post("v1/instance/resource/", body))
+        return 0
+
+    @cmd
+    def locate(self, table_name: str, host: str = ""):
+        """按表名反查这张表在哪些实例上
+
+        用法: archery instance locate t_order
+        """
+        emit(self._client(host).post("v1/instance/table-instances/", {"table_name": table_name}))
+        return 0
+
+
+# ---------------------------------------------------------------- sqlquery
+
+class QueryCli(_Group):
+    """SQLQuery：在线查询与历史记录"""
+
+    @cmd
+    def instances(self, host: str = "", **params):
+        """列出当前用户能查询的实例（--db_type / --tag_codes / --type）
+
+        用法: archery query instances --db_type mysql
+        """
+        emit(self._client(host).get("v1/sqlquery/instances/", **params))
+        return 0
+
+    @cmd
+    def resources(self, resource_type: str, instance_name: str = "", instance_id: int = 0,
+                  db_name: str = "", schema_name: str = "", tb_name: str = "", host: str = ""):
+        """列查询视角下的库 / 表 / 列（resource_type: database|schema|table|column|server_info）
+
+        用法: archery query resources table --instance-name prod-mysql --db-name orders
+        """
+        params = {"resource_type": resource_type, "instance_name": instance_name,
+                  "db_name": db_name, "schema_name": schema_name, "tb_name": tb_name}
+        if instance_id:
+            params["instance_id"] = int(instance_id)
+        emit(self._client(host).get("v1/sqlquery/resources/", **params))
+        return 0
+
+    @cmd
+    def describe(self, instance_name: str, db_name: str, tb_name: str,
+                 schema_name: str = "", host: str = ""):
+        """看表结构
+
+        用法: archery query describe prod-mysql orders t_order
+        """
+        emit(self._client(host).post("v1/sqlquery/describetable/", {
+            "instance_name": instance_name, "db_name": db_name,
+            "tb_name": tb_name, "schema_name": schema_name,
+        }))
+        return 0
+
+    @cmd
+    def execute(self, sql: str, instance_name: str, db_name: str, schema_name: str = "",
+                tb_name: str = "", limit_num: int = 0, host: str = "", json_out: bool = False):
+        """执行一条查询。sql 可以写 `@file.sql` 从文件读
+
+        默认把结果渲染成表格；加 --json-out 输出原始 JSON（方便 `| jq`）。
+
+        用法:
+          archery query execute 'select 1' --instance-name prod-mysql --db-name orders
+          archery query execute @big.sql --instance-name prod-mysql --db-name orders --limit-num 100
+        """
+        sql_text = str(sql)
+        if sql_text.startswith("@"):
+            path = pathlib.Path(sql_text[1:]).expanduser()
+            if not path.is_file():
+                raise ArcheryError(f"读不到 SQL 文件: {path}")
+            sql_text = path.read_text(encoding="utf-8")
+
+        data = self._client(host).post("v1/sqlquery/execute/", {
+            "instance_name": instance_name, "db_name": db_name, "schema_name": schema_name,
+            "tb_name": tb_name, "sql_content": sql_text, "limit_num": int(limit_num),
+        })
+        if json_out or not _render_rows(data):
+            emit(data)
+        return 0
+
+    @cmd
+    def logs(self, host: str = "", **params):
+        """历史查询记录（--limit / --offset / --search / --star / --start_date / --end_date）
+
+        用法: archery query logs --limit 20 --search t_order
+        """
+        emit(self._client(host).get("v1/sqlquery/logs/", **params))
+        return 0
+
+    @cmd
+    def favorite(self, query_log_id: int, star: bool = True, alias: str = "", host: str = ""):
+        """收藏 / 取消收藏一条查询记录
+
+        用法:
+          archery query favorite 123 --alias '订单表全量'
+          archery query favorite 123 --no-star
+        """
+        emit(self._client(host).post("v1/sqlquery/favorites/", {
+            "query_log_id": int(query_log_id),
+            "star": "true" if star else "false",
+            "alias": alias,
+        }))
+        return 0
+
+
+def _render_rows(data) -> bool:
+    """查询结果里有 column_list + rows 时渲染成表格，返回是否渲染成功。"""
+    payload = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(payload, dict):
+        payload = data if isinstance(data, dict) else None
+    if not isinstance(payload, dict):
+        return False
+    columns = payload.get("column_list")
+    rows = payload.get("rows")
+    if not isinstance(columns, list) or not isinstance(rows, list):
+        return False
+
+    from rich.console import Console
+    from rich.table import Table
+
+    table = Table(show_lines=False)
+    for col in columns:
+        table.add_column(str(col), overflow="fold")
+    for row in rows:
+        values = row if isinstance(row, (list, tuple)) else [row.get(c) for c in columns]
+        table.add_row(*["" if v is None else str(v) for v in values])
+    Console().print(table)
+    return True
+
+
+# ---------------------------------------------------------------- workflow
+
+class WorkflowCli(_Group):
+    """SQL 上线工单"""
+
+    @cmd
+    def list(self, host: str = "", **params):
+        """工单清单。过滤透传，如 --workflow__status / --workflow__engineer / --page / --size
+
+        用法: archery workflow list --size 20
+        """
+        emit(self._client(host).get("v1/workflow/", **params))
+        return 0
+
+    @cmd
+    def check(self, instance_id: int, db_name: str, full_sql: str, host: str = ""):
+        """提交前的 SQL 语法 / 规则检查。full_sql 可写 `@file.sql`
+
+        用法: archery workflow check 5 orders @change.sql
+        """
+        sql_text = str(full_sql)
+        if sql_text.startswith("@"):
+            path = pathlib.Path(sql_text[1:]).expanduser()
+            if not path.is_file():
+                raise ArcheryError(f"读不到 SQL 文件: {path}")
+            sql_text = path.read_text(encoding="utf-8")
+        emit(self._client(host).post("v1/workflow/sqlcheck/", {
+            "instance_id": int(instance_id), "db_name": db_name, "full_sql": sql_text,
+        }))
+        return 0
+
+    @cmd
+    def submit(self, data, host: str = ""):
+        """提交一条 SQL 上线工单。--data 是 WorkflowContent 的 JSON（含嵌套 workflow 对象）
+
+        用法: archery workflow submit --data @workflow.json
+        """
+        emit(self._client(host).post("v1/workflow/", parse_data(data)))
+        return 0
+
+    @cmd
+    def audit(self, engineer: str, workflow_id: int, audit_remark: str,
+              workflow_type: int = 2, audit_type: str = "pass", host: str = ""):
+        """审核工单。workflow_type: 1-查询权限 2-SQL 上线 3-数据归档；audit_type: pass / cancel
+
+        用法: archery workflow audit nico 42 '看过了' --audit-type pass
+        """
+        emit(self._client(host).post("v1/workflow/audit/", {
+            "engineer": engineer, "workflow_id": int(workflow_id),
+            "audit_remark": audit_remark, "workflow_type": int(workflow_type),
+            "audit_type": audit_type,
+        }))
+        return 0
+
+    @cmd
+    def auditlist(self, engineer: str, host: str = "", **params):
+        """某个用户的待审核清单（--workflow_type / --page / --size）
+
+        用法: archery workflow auditlist nico
+        """
+        emit(self._client(host).post("v1/workflow/auditlist/", {"engineer": engineer}, **params))
+        return 0
+
+    @cmd
+    def execute(self, workflow_id: int, engineer: str = "", workflow_type: int = 2,
+                mode: str = "auto", host: str = ""):
+        """执行工单。workflow_type 2 = SQL 上线（需 engineer），3 = 数据归档；mode: auto / manual
+
+        用法: archery workflow execute 42 --engineer nico
+        """
+        body = {"workflow_id": int(workflow_id), "workflow_type": int(workflow_type)}
+        if int(workflow_type) == 2:
+            if not engineer:
+                raise ArcheryError("SQL 上线工单必须带 --engineer（执行人用户名）")
+            body["engineer"] = engineer
+            body["mode"] = mode
+        emit(self._client(host).post("v1/workflow/execute/", body))
+        return 0
+
+    @cmd
+    def log(self, workflow_id: int, workflow_type: int = 2, host: str = "", **params):
+        """工单流转日志
+
+        用法: archery workflow log 42
+        """
+        emit(self._client(host).post(
+            "v1/workflow/log/",
+            {"workflow_id": int(workflow_id), "workflow_type": int(workflow_type)},
+            **params))
+        return 0
+
+
+# ---------------------------------------------------------------- 顶层
+
+class ArcheryCli(BaseCli):
+    """archery — Archery 的命令行客户端，按域名分别保存登录"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.user = UserCli(self._r)
+        self.instance = InstanceCli(self._r)
+        self.query = QueryCli(self._r)
+        self.workflow = WorkflowCli(self._r)
+
+    @cmd
+    def login(self, url: str = "", username: str = "", password: str = "",
+              totp_secret: str = "", insecure: bool = False, current: bool = True):
+        """录入一个站点的凭据，登录一次验证通过后写进配置文件
+
+        没给参数就逐项交互询问（已有值直接回车沿用）。同一域名重复 login 覆盖旧值。
+        每个域名一份独立的用户名 / 密码 / token，互不影响。
+
+        参数:
+          --url         站点地址，写 archery.example.com 或完整 URL 都行
+          --username    用户名
+          --password    密码
+          --totp-secret 可选，2FA 密钥（base32 或 otpauth:// 整串），只给 `archery code` 用
+          --insecure    跳过 TLS 证书校验（自签证书的内网站点）
+          --no-current  不把这个站点设成默认
+
+        用法:
+          archery login
+          archery login --url archery.example.com --username nico --password 'secret'
+        """
+        cfg = load_config()
+        known = profiles(cfg)
+
+        if not url:
+            url = ask_text("Archery 站点地址", default=str(cfg.get("current") or "")) or ""
+            if not url.strip():
+                self._r.err("已取消")
+                return 1
+        site = normalize_url(url)
+        key = host_key(site)
+        old = dict(known.get(key) or {})
+
+        if not username:
+            username = ask_text("用户名", default=str(old.get("username") or "")) or ""
+            if not username.strip():
+                self._r.err("已取消")
+                return 1
+        if not password:
+            password = ask_text("密码", default=str(old.get("password") or "")) or ""
+            if not password:
+                self._r.err("已取消")
+                return 1
+        if not totp_secret and not old.get("totp_secret"):
+            has_totp = ask_confirm("这个站点开了两步验证吗？", default=False)
+            if has_totp:
+                totp_secret = ask_text("2FA 密钥 (base32 或 otpauth:// 整串)") or ""
+
+        secret = normalize_secret(totp_secret) if totp_secret else str(old.get("totp_secret") or "")
+        if secret:
+            try:
+                self._r.ok(f"2FA 密钥可用，当前验证码 {totp(secret)}")
+            except ValueError as e:
+                self._r.err(str(e))
+                return 2
+
+        profile = {
+            "url": site,
+            "username": username.strip(),
+            "password": password,
+            "totp_secret": secret,
+            "insecure": bool(insecure or old.get("insecure")),
+            "token": {},
+        }
+        put_profile(cfg, key, profile)
+        if current:
+            cfg["current"] = key
+
+        client = ArcheryClient(key, profile, cfg, reporter=self._r)
+        client.login()  # 失败会抛 ArcheryError，配置不落盘
+        self._r.ok(f"{key} 登录成功，已写入 {CONFIG_PATH}（权限 0600）")
+        if not current:
+            self._r.info(f"当前默认站点仍是 {cfg.get('current')}；切换用 `archery use {key}`")
+        return 0
+
+    @cmd
+    def hosts(self):
+        """列出已配置的站点，★ 是当前默认那个
+
+        用法: archery hosts
+        """
+        cfg = load_config()
+        known = profiles(cfg)
+        if not known:
+            self._r.warn(f"还没有配置任何站点（{CONFIG_PATH}）。跑 `archery login`")
+            return 1
+        current = str(cfg.get("current") or "")
+        self._r.kv("已配置站点", {
+            ("★ " + key if key == current else "  " + key):
+                f"{profile.get('url')}  用户 {profile.get('username') or '(未设置)'}"
+            for key, profile in sorted(known.items())
+        })
+        return 0
+
+    @cmd
+    def use(self, host: str):
+        """切换默认站点
+
+        用法: archery use archery.example.com
+        """
+        cfg = load_config()
+        key, _ = resolve_profile(cfg, host)
+        cfg["current"] = key
+        save_config(cfg)
+        self._r.ok(f"默认站点已切到 {key}")
+        return 0
+
+    @cmd
+    def show(self, host: str = ""):
+        """查看某个站点的配置（密码 / 密钥 / token 打码）
+
+        用法: archery show --host archery.example.com
+        """
+        cfg = load_config()
+        key, profile = resolve_profile(cfg, host)
+        token = profile.get("token") or {}
+        self._r.kv(f"{key}（{CONFIG_PATH}）", {
+            "站点地址": str(profile.get("url") or "(未设置)"),
+            "用户名": str(profile.get("username") or "(未设置)"),
+            "密码": mask(str(profile.get("password") or "")),
+            "2FA 密钥": mask(str(profile.get("totp_secret") or "")),
+            "TLS 校验": "关（--insecure）" if profile.get("insecure") else "开",
+            "access token": mask(str(token.get("access") or "")),
+            "refresh token": mask(str(token.get("refresh") or "")),
+            "是否默认站点": "是" if key == str(cfg.get("current") or "") else "否",
+        })
+        return 0
+
+    @cmd
+    def logout(self, host: str = "", forget: bool = False):
+        """清掉 token（下次请求会用保存的密码自动重登）；--forget 连账号密码一起删
+
+        用法:
+          archery logout
+          archery logout --host archery.example.com --forget
+        """
+        cfg = load_config()
+        key, profile = resolve_profile(cfg, host)
+        known = profiles(cfg)
+        if forget:
+            known.pop(key, None)
+            cfg["profiles"] = known
+            if cfg.get("current") == key:
+                cfg["current"] = next(iter(sorted(known)), "")
+            save_config(cfg)
+            self._r.ok(f"已删除 {key} 的全部配置")
+            return 0
+        profile["token"] = {}
+        put_profile(cfg, key, profile)
+        save_config(cfg)
+        self._r.ok(f"已清掉 {key} 的 token（账号密码保留）")
+        return 0
+
+    @cmd
+    def code(self, host: str = ""):
+        """打印当前 TOTP 验证码（本地算，不请求服务端）
+
+        用法: archery code
+        """
+        cfg = load_config()
+        key, profile = resolve_profile(cfg, host)
+        secret = str(profile.get("totp_secret") or "")
+        if not secret:
+            self._r.err(f"{key} 没配 2FA 密钥。跑 `archery login --url {key}`")
+            return 1
+        try:
+            print(totp(secret))
+        except ValueError as e:
+            self._r.err(str(e))
+            return 2
+        return 0
+
+    @cmd
+    def info(self, host: str = ""):
+        """站点信息（版本等），顺带验证 token 还有效
+
+        用法: archery info
+        """
+        emit(self._client(host).get("/api/info"))
+        return 0
+
+    @cmd
+    def schema(self, host: str = "", grep: str = "", raw: bool = False):
+        """列出这个站点支持的全部 API 端点（读 /api/schema/）
+
+        拿到 path 后用 `archery api <method> <path>` 就能调任意一个。
+
+        参数:
+          --grep 只显示 path 或摘要里含这个词的端点
+          --raw  直接吐原始 OpenAPI JSON
+
+        用法:
+          archery schema
+          archery schema --grep workflow
+        """
+        client = self._client(host)
+        data = client.request("GET", "/api/schema/", params={"format": "json"})
+        if isinstance(data, str):
+            import yaml
+
+            data = yaml.safe_load(data)
+        if raw:
+            emit(data)
+            return 0
+        rows = flatten_schema(data if isinstance(data, dict) else {})
+        needle = grep.lower()
+        if needle:
+            rows = [r for r in rows if needle in r[1].lower() or needle in r[2].lower()]
+        if not rows:
+            self._r.warn("没有匹配的端点")
+            return 1
+        for method, path, summary in rows:
+            print(f"{method:<6} {path}" + (f"   # {summary}" if summary else ""))
+        self._r.info(f"共 {len(rows)} 个端点；调用: archery api <method> <path>")
+        return 0
+
+    @cmd
+    def api(self, method: str, path: str, data=None, host: str = "", **params):
+        """直接发任意请求，schema 里的端点都能调
+
+        path 三种写法都行：`v1/user/`（自动补 /api/）、`/api/v1/user/`、完整 URL。
+        剩下的 `--key value` 全部当查询参数透传。
+
+        用法:
+          archery api get v1/user/ --size 50
+          archery api post v1/workflow/sqlcheck/ --data '{"instance_id":5,"db_name":"orders","full_sql":"select 1"}'
+          archery api delete v1/user/7/
+        """
+        body = parse_data(data) if data is not None else None
+        emit(self._client(host).request(
+            method, path,
+            params={k: v for k, v in params.items() if v is not None} or None,
+            json_body=body,
+        ))
+        return 0
+
+    def _client(self, host: str = ""):
+        return client_for(host, reporter=self._r)
+
+
+if __name__ == "__main__":
+    run_cli(ArcheryCli())
