@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""ovpn — 连 OpenVPN，自动填账号密码和二步验证码
+
+子命令:
+  connect     连接（默认）；配置缺失时自动先跑 login
+  disconnect  断开正在运行的连接
+  status      查看连接状态（进程 + utun 网卡 + IP）
+  login       交互式录入 用户名 / 密码 / 二步验证密钥 / .ovpn 路径
+  show        查看当前配置（密码与密钥打码）
+  code        只打印当前二步验证码（不连 VPN）
+
+配置文件: ~/.config/lazygophers/scripts/ovpn.yaml（权限 0600）
+"""
+from __future__ import annotations
+
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.ovpn import (
+    CONFIG_PATH,
+    load_config,
+    normalize_secret,
+    running_processes,
+    save_config,
+    totp,
+    tun_interfaces,
+)
+from lib.ovpn import connect as do_connect
+from lib.ovpn import disconnect as do_disconnect
+from lib.ui import ask_confirm, ask_text
+
+
+def _mask(value: str) -> str:
+    if not value:
+        return "(未设置)"
+    if len(value) <= 4:
+        return "*" * len(value)
+    return value[:2] + "*" * (len(value) - 4) + value[-2:]
+
+
+def _ask_secret(prompt: str, *, default: str = "") -> str | None:
+    """密码类输入：明文回显（终端不回显时无法确认粘贴是否成功，故不隐藏）。
+
+    直接回车沿用已有值。设 `SCRIPTS_HIDE_SECRET=1` 可切回不回显模式。
+    """
+    if os.environ.get("SCRIPTS_HIDE_SECRET") == "1":
+        from rich.console import Console
+        from rich.prompt import Prompt
+
+        hint = "（不回显，回车沿用已有值）" if default else "（不回显）"
+        got = Prompt.ask(f"{prompt}{hint}", password=True, default="", show_default=False,
+                         console=Console())
+        if got is None:
+            return None
+        return got.strip() or default
+
+    got = ask_text(prompt, default=default)
+    if got is None:
+        return None
+    return got.strip() or default
+
+
+class OvpnCli(BaseCli):
+    """ovpn — 连 OpenVPN，自动填账号密码和二步验证码"""
+
+    @timed_cli
+    def login(self):
+        """交互式录入凭据，写入 ~/.config/lazygophers/scripts/ovpn.yaml
+
+        逐项询问（已有值直接回车沿用）：
+          .ovpn 配置文件路径 / 用户名 / 密码 / 是否有二步验证 → 二步验证密钥
+
+        二步验证密钥支持裸 base32，也支持 otpauth://totp/...?secret=XXX 整串。
+
+        用法: ovpn login
+        """
+        cfg = load_config()
+
+        profile = ask_text("VPN 配置文件 (.ovpn) 路径", default=str(cfg.get("config") or ""))
+        if profile is None:
+            self._r.err("已取消")
+            return 1
+        profile = profile.strip()
+        if profile and not pathlib.Path(profile).expanduser().is_file():
+            self._r.warn(f"文件当前不存在: {profile}（先记下，连的时候会再检查）")
+
+        username = ask_text("用户名", default=str(cfg.get("username") or ""))
+        if username is None:
+            self._r.err("已取消")
+            return 1
+
+        password = _ask_secret("密码", default=str(cfg.get("password") or ""))
+        if password is None:
+            self._r.err("已取消")
+            return 1
+
+        has_totp = ask_confirm("是否需要二步验证 (TOTP)？", default=bool(cfg.get("totp_secret")))
+        if has_totp is None:
+            self._r.err("已取消")
+            return 1
+
+        secret = ""
+        if has_totp:
+            raw = _ask_secret("二步验证密钥 (base32 或 otpauth:// 整串)",
+                              default=str(cfg.get("totp_secret") or ""))
+            if raw is None:
+                self._r.err("已取消")
+                return 1
+            secret = normalize_secret(raw)
+            if secret:
+                try:
+                    self._r.ok(f"密钥可用，当前验证码 {totp(secret)}")
+                except ValueError as e:
+                    self._r.err(str(e))
+                    return 2
+
+        cfg.update({
+            "config": profile.strip(),
+            "username": username.strip(),
+            "password": password,
+            "totp_secret": secret,
+        })
+        save_config(cfg)
+        self._r.ok(f"已写入 {CONFIG_PATH}（权限 0600）")
+        return 0
+
+    @timed_cli
+    def connect(self, verbose: bool = False):
+        """连接 VPN；配置缺失时自动先跑 login，openvpn 缺失时自动 brew 安装
+
+        流程：读配置 → 缺 config/用户名/密码 就转 login → 没有 openvpn 二进制
+        就跑 `brew install openvpn` → 启动 openvpn（management-hold +
+        management-query-passwords）→ 自动回填用户名 / 密码 / 二步验证码 →
+        前台驻留，Ctrl-C 断开。
+
+        参数:
+          --verbose  打印 openvpn 与 management 的原始日志
+
+        用法: ovpn connect [--verbose]
+        """
+        cfg = load_config()
+        missing = [k for k in ("config", "username", "password") if not str(cfg.get(k) or "").strip()]
+        if missing:
+            self._r.warn(f"配置不完整（缺 {', '.join(missing)}），先进入 login")
+            rc = self.login()
+            if rc:
+                return rc
+            cfg = load_config()
+
+        try:
+            return do_connect(cfg, self._r, verbose=verbose)
+        except KeyboardInterrupt:
+            self._r.warn("已中断，正在断开")
+            return 130
+
+    @timed_cli
+    def disconnect(self):
+        """断开正在运行的 openvpn 连接（需要 sudo）
+
+        只终止命令行里带 `--config` 的 openvpn 进程，不动 OpenVPN Connect.app
+        的常驻守护进程。先 SIGTERM，3 秒不退再 SIGKILL。
+
+        用法: ovpn disconnect
+        """
+        return do_disconnect(self._r)
+
+    @timed_cli
+    def status(self):
+        """查看连接状态：openvpn 进程 + 已配置 IP 的 utun 网卡
+
+        用法: ovpn status
+        """
+        procs = running_processes()
+        tuns = tun_interfaces()
+        if not procs:
+            self._r.warn("未连接（没有带 --config 的 openvpn 进程）")
+        else:
+            self._r.ok(f"已连接  {len(procs)} 个 openvpn 进程")
+            for pid, cmd in procs:
+                self._r.output(f"pid {pid}  {cmd}", prefix="  ")
+        self._r.kv("utun 网卡", {name: ip for name, ip in tuns} or {"(无)": "没有已配置 IP 的 utun"})
+        return 0 if procs else 1
+
+    @timed_cli
+    def show(self):
+        """查看当前配置（密码与二步验证密钥打码）
+
+        用法: ovpn show
+        """
+        cfg = load_config()
+        if not cfg:
+            self._r.warn(f"还没有配置：{CONFIG_PATH} 不存在。跑 `ovpn login`")
+            return 1
+        self._r.kv(str(CONFIG_PATH), {
+            "配置文件": str(cfg.get("config") or "(未设置)"),
+            "用户名": str(cfg.get("username") or "(未设置)"),
+            "密码": _mask(str(cfg.get("password") or "")),
+            "二步验证密钥": _mask(str(cfg.get("totp_secret") or "")),
+            "额外参数": " ".join(str(x) for x in (cfg.get("extra_args") or [])) or "(无)",
+        })
+        return 0
+
+    @timed_cli
+    def code(self):
+        """只打印当前二步验证码（不连 VPN），用于验证密钥填对没有
+
+        用法: ovpn code
+        """
+        secret = str(load_config().get("totp_secret") or "")
+        if not secret:
+            self._r.err("配置里没有二步验证密钥。跑 `ovpn login`")
+            return 1
+        try:
+            print(totp(secret))
+        except ValueError as e:
+            self._r.err(str(e))
+            return 2
+        return 0
+
+    def __call__(self, *names: str):
+        """无参 → connect；带参 → 按顺序跑对应子命令。"""
+        targets = names or ("connect",)
+        rc = 0
+        for name in targets:
+            method = getattr(self, name, None)
+            if not callable(method):
+                print(f"未知子命令: {name}", file=sys.stderr)
+                return 1
+            rc = method() or 0
+            if rc:
+                return rc
+        return rc
+
+
+if __name__ == "__main__":
+    run_cli(OvpnCli())

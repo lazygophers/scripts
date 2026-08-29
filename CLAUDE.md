@@ -14,6 +14,7 @@ This is a collection of script utilities designed to enhance development product
 - `switch_branch` / `sync_master` resolve the real default branch per repo (`origin/HEAD` → `remote set-head --auto` → enumerate `origin/main`/`origin/master` → fall back to `master`) before creating/tracking; never hardcode `origin/master`.
 - **Every `bin/*` entry must wrap its top-level call in `lib.ui.timed(fn, label="<name>")(...)`** so start/end/elapsed prints to stderr (dim) on exit. This is mandatory: new scripts add it, existing scripts keep it. Pattern: `raise SystemExit(timed(main, label="foo")(sys.argv))`.
 - `reindex` is local-only (not in `bin/`, not tracked).
+- `ovpn` is named to avoid shadowing the real `openvpn` binary (`bin/` comes first in `PATH`). It drives `openvpn` through the management interface and auto-installs it via `brew install openvpn` when missing; credentials live in `~/.config/lazygophers/scripts/ovpn.yaml` (0600).
 
 ## Key Architecture Patterns
 

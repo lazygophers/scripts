@@ -53,6 +53,7 @@ TOOLS: dict[str, tuple[str, str]] = {
     "enable-ipv6": ("system", "开启本机所有网络服务的 IPv6"),
     "ipinfo": ("system", "查询内网 IP + 网络类型（含热点识别）"),
     "vpn-prio": ("system", "调整 macOS 网络服务优先级（压低 OpenVPN default 路由）"),
+    "ovpn": ("system", "连 OpenVPN，自动填账号密码与二步验证码"),
     "inject": ("system", "把 bin/ 注入 shell PATH（写入 ~/.zshrc 等）"),
 }
 
