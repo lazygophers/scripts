@@ -26,7 +26,9 @@ access 短命，请求收到 401 时先用 refresh 换新的；refresh 也失效
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import sys
 import urllib.parse
 
 from lib.ovpn import load_config as _load_yaml
@@ -48,14 +50,14 @@ class ArcheryError(Exception):
 
 # ---------------------------------------------------------------- config
 
-def load_config(path: pathlib.Path = CONFIG_PATH) -> dict:
-    """读配置；文件不存在返回空 dict。"""
-    return _load_yaml(path)
+def load_config(path: pathlib.Path | None = None) -> dict:
+    """读配置；文件不存在返回空 dict。不给路径时按当前身份推断（见 default_config_path）。"""
+    return _load_yaml(path or default_config_path())
 
 
-def save_config(data: dict, path: pathlib.Path = CONFIG_PATH) -> None:
+def save_config(data: dict, path: pathlib.Path | None = None) -> None:
     """写配置，权限 0600（里面有明文密码和 TOTP 密钥）。"""
-    _save_yaml(data, path)
+    _save_yaml(data, path or default_config_path())
 
 
 def normalize_url(raw: str) -> str:
@@ -129,6 +131,58 @@ def mask(value: str) -> str:
     return value[:2] + "*" * (len(value) - 4) + value[-2:]
 
 
+# ---------------------------------------------------------------- 提权
+
+def is_root() -> bool:
+    """当前进程是不是 root（euid 0）。"""
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def default_config_path() -> pathlib.Path:
+    """配置文件路径，sudo 下回落到发起 sudo 的那个用户的家目录。
+
+    sudo 默认把 `$HOME` 换成 /var/root，直接敲 `sudo archery show` 就会读不到你
+    自己的配置。有 `SUDO_USER` 时按那个用户的家目录找，文件真的在才用它。
+    """
+    if is_root():
+        sudo_user = os.environ.get("SUDO_USER") or ""
+        if sudo_user:
+            import pwd
+
+            try:
+                home = pathlib.Path(pwd.getpwnam(sudo_user).pw_dir)
+            except KeyError:
+                return CONFIG_PATH
+            candidate = home / ".config" / "lazygophers" / "scripts" / "archery.yaml"
+            if candidate.exists():
+                return candidate
+    return CONFIG_PATH
+
+
+def sudo_argv(script: pathlib.Path, argv: list[str], config_path: pathlib.Path) -> list[str]:
+    """拼出用 sudo 重跑自己的命令行。
+
+    sudo 默认 env_reset，`$HOME` 到了 root 手里就变成 /var/root，配置文件会找不着，
+    所以把当前解析出来的配置路径显式当成 `--config` 参数带过去（已经带了就不重复加）。
+    解释器写成绝对路径（sys.executable），避免 sudo 的 PATH 里没有 mise/venv 的 python。
+    """
+    args = list(argv)
+    if "--config" not in args:
+        args += ["--config", str(config_path)]
+    return ["sudo", sys.executable, str(script), *args]
+
+
+def require_root(script: pathlib.Path, argv: list[str], config_path: pathlib.Path) -> None:
+    """密钥类命令的门槛：不是 root 就用 sudo 原样重跑自己（execvp，不返回）。"""
+    if is_root():
+        return
+    cmd = sudo_argv(script, argv, config_path)
+    try:
+        os.execvp("sudo", cmd)
+    except OSError as e:
+        raise ArcheryError(f"这条命令需要 root，但起不了 sudo: {e}") from e
+
+
 def parse_data(value) -> dict:
     """把 CLI 传来的 --data 归一成 dict。
 
@@ -162,12 +216,12 @@ class ArcheryClient:
     """一个站点的 API 客户端。token 变化时自动写回配置文件。"""
 
     def __init__(self, key: str, profile: dict, cfg: dict | None = None, *,
-                 config_path: pathlib.Path = CONFIG_PATH,
+                 config_path: pathlib.Path | None = None,
                  timeout: int = DEFAULT_TIMEOUT, reporter=None) -> None:
         self.key = key
         self.profile = dict(profile)
         self.cfg = cfg if cfg is not None else {}
-        self.config_path = config_path
+        self.config_path = config_path or default_config_path()
         self.timeout = timeout
         self._r = reporter
         self.base_url = normalize_url(str(self.profile.get("url") or key))
@@ -302,7 +356,7 @@ class ArcheryClient:
 
 
 def client_for(host: str = "", *, reporter=None,
-               config_path: pathlib.Path = CONFIG_PATH,
+               config_path: pathlib.Path | None = None,
                timeout: int = DEFAULT_TIMEOUT) -> ArcheryClient:
     """按 --host / current 挑 profile 并造客户端。"""
     cfg = load_config(config_path)

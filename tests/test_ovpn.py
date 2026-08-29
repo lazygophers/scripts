@@ -89,6 +89,22 @@ class TestParseDynamicChallenge(unittest.TestCase):
         self.assertIsNone(ov.parse_dynamic_challenge(">PASSWORD:Need 'Auth' username/password"))
 
 
+class TestParsePushedDns(unittest.TestCase):
+    def test_extracts_ipv4_and_ipv6(self):
+        line = ("Fri Aug 29 10:00:00 2026 PUSH: Received control message: "
+                "'PUSH_REPLY,dhcp-option DNS 10.8.0.1,dhcp-option DNS6 fd00::1,"
+                "route 10.8.0.0 255.255.0.0,ping 10'")
+        self.assertEqual(ov.parse_pushed_dns(line), ["10.8.0.1", "fd00::1"])
+
+    def test_dedups(self):
+        line = "PUSH_REPLY,dhcp-option DNS 10.8.0.1,dhcp-option DNS 10.8.0.1"
+        self.assertEqual(ov.parse_pushed_dns(line), ["10.8.0.1"])
+
+    def test_ignores_non_push_lines(self):
+        self.assertEqual(ov.parse_pushed_dns("dhcp-option DNS 10.8.0.1"), [])
+        self.assertEqual(ov.parse_pushed_dns("PUSH_REPLY,route 10.8.0.0 255.255.0.0"), [])
+
+
 class TestBuildPasswordReply(unittest.TestCase):
     def test_plain_password(self):
         got = ov.build_password_reply("pw", otp=None, sc_flags=None, crv_state=None)

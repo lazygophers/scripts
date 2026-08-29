@@ -73,6 +73,21 @@ def parse_question_name(msg: bytes) -> str | None:
     return None
 
 
+_QTYPES = {1: "A", 28: "AAAA", 5: "CNAME", 12: "PTR", 15: "MX", 16: "TXT", 33: "SRV", 65: "HTTPS"}
+
+
+def question_label(msg: bytes) -> str:
+    """把报文的问题段描述成 `域名 (A)` 这样，日志里用来指明是哪个查询。"""
+    name = parse_question_name(msg)
+    if not name:
+        return "未知查询"
+    i = _skip_name(msg, 12)
+    if i + 2 > len(msg):
+        return name
+    qtype = int.from_bytes(msg[i:i + 2], "big")
+    return f"{name} ({_QTYPES.get(qtype, f'TYPE{qtype}')})"
+
+
 def _skip_name(msg: bytes, i: int) -> int:
     """跳过一个（可能被压缩的）域名，返回下一个字节的偏移。"""
     while i < len(msg):
@@ -267,10 +282,11 @@ class DnsProxy:
     其它流量；on_ips 回调仍然按规则再确认一次，避免上游 CNAME 指到别处。
     """
 
-    def __init__(self, port: int, upstreams: list[str], domains: list[str],
+    def __init__(self, port: int, upstreams, domains: list[str],
                  on_ips, reporter=None, *, timeout: float = 5.0) -> None:
         self.port = port
-        self.upstreams = upstreams
+        # 可以传一个 callable：上游可能在代理起来之后才由服务端 push 过来
+        self._upstreams = upstreams
         self.domains = domains
         self.on_ips = on_ips
         self.reporter = reporter
@@ -278,6 +294,10 @@ class DnsProxy:
         self.sock: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+
+    @property
+    def upstreams(self) -> list[str]:
+        return list(self._upstreams() if callable(self._upstreams) else self._upstreams)
 
     def start(self) -> None:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -323,7 +343,9 @@ class DnsProxy:
 
     def forward(self, query: bytes) -> bytes | None:
         """依次问每个上游 DNS，第一个答上来的就用。全部超时返回 None。"""
-        for up in self.upstreams:
+        label = question_label(query)
+        upstreams = self.upstreams
+        for up in upstreams:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                     s.settimeout(self.timeout)
@@ -333,7 +355,7 @@ class DnsProxy:
             except OSError:
                 continue
         if self.reporter:
-            self.reporter.warn(f"上游 DNS 都没响应: {', '.join(self.upstreams)}")
+            self.reporter.warn(f"{label}: 上游 DNS 都没响应 ({', '.join(upstreams)})")
         return None
 
 
@@ -348,10 +370,22 @@ class SplitTunnel:
         self.domains = sorted({normalize_domain(d) for d in raw_domains if normalize_domain(d)})
         self.cidrs = [str(c) for c in (routes.get("cidrs") or [])]
         self.port = int(cfg.get("dns_port") or DEFAULT_DNS_PORT)
-        self.upstreams = [str(x) for x in (cfg.get("dns_upstream") or [])] or system_nameservers()
+        self.configured_upstreams = [str(x) for x in (cfg.get("dns_upstream") or [])]
+        self.pushed_dns: list[str] = []
         self.reporter = reporter
         self.table: RouteTable | None = None
         self.proxy: DnsProxy | None = None
+
+    def note_pushed_dns(self, servers: list[str]) -> None:
+        """记下服务端 push 的 DNS。命中分流的域名优先问它，未命中的仍走系统 DNS。"""
+        for ip in servers:
+            if ip not in self.pushed_dns:
+                self.pushed_dns.append(ip)
+
+    @property
+    def upstreams(self) -> list[str]:
+        """上游优先级：配置里写死的 > VPN push 的 > 系统 resolv.conf。"""
+        return self.configured_upstreams or self.pushed_dns or system_nameservers()
 
     @property
     def enabled(self) -> bool:
@@ -366,8 +400,12 @@ class SplitTunnel:
         self.table = RouteTable(iface, self.reporter)
         for c in self.cidrs:
             self.table.add_network(c)
+        # push 过来的 DNS 一般只在 VPN 内部可达；--route-nopull 下没人给它加路由
+        for ip in self.pushed_dns:
+            self.table.add_host(ip)
         if not self.domains:
             return
+        self.reporter.info(f"分流域名的 DNS 上游: {', '.join(self.upstreams)}")
 
         def on_ips(qname: str, ips: list[str]) -> None:
             assert self.table is not None
@@ -375,7 +413,7 @@ class SplitTunnel:
                 if self.table.add_host(ip) and self.reporter:
                     self.reporter.info(f"{qname} → {ip} 已加入 VPN 路由")
 
-        self.proxy = DnsProxy(self.port, self.upstreams, self.domains, on_ips, self.reporter)
+        self.proxy = DnsProxy(self.port, lambda: self.upstreams, self.domains, on_ips, self.reporter)
         try:
             self.proxy.start()
         except OSError as e:

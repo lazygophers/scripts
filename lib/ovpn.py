@@ -298,6 +298,26 @@ def parse_dynamic_challenge(line: str) -> str | None:
     return m.group(2) if m else None
 
 
+_LOG_KEEP = ("ERROR", "WARNING", "FATAL", "Cannot", "failed", "Initialization Sequence Completed")
+
+_PUSH_DNS_RE = re.compile(r"dhcp-option\s+DNS6?\s+([0-9a-fA-F:.]+)")
+
+
+def parse_pushed_dns(line: str) -> list[str]:
+    """从 openvpn 日志里的 PUSH_REPLY 取服务端下发的 DNS。
+
+    日志形如 `PUSH: Received control message: 'PUSH_REPLY,dhcp-option DNS 10.8.0.1,...'`
+    （src/openvpn/push.c，msg 等级 D_PUSH = verb 3），所以分流模式下 verb 至少要 3。
+    """
+    if "PUSH_REPLY" not in line:
+        return []
+    out = []
+    for ip in _PUSH_DNS_RE.findall(line):
+        if ip not in out:
+            out.append(ip)
+    return out
+
+
 # ---------------------------------------------------------------- connect
 
 class ManagementClient:
@@ -454,7 +474,8 @@ def _connect_once(cfg: dict, reporter, *, verbose: bool = False,
         "--auth-nocache",
         "--auth-retry", "interact",
         "--connect-retry", "5",
-        "--verb", "3" if verbose else "1",
+        # verb 3 才会打印 PUSH_REPLY（D_PUSH），分流要靠它拿服务端下发的 DNS
+        "--verb", "3" if (verbose or use_split) else "1",
         # 分流模式下不接服务端 push 的任何路由，默认出口留给本地网络
         *(["--route-nopull"] if use_split else []),
         *keepalive,
@@ -474,12 +495,22 @@ def _connect_once(cfg: dict, reporter, *, verbose: bool = False,
 
     import threading
 
+    quiet_log = use_split and not verbose
+
     def _pump_log() -> None:
         assert proc.stdout is not None
         for raw in proc.stdout:
             line = raw.rstrip()
-            if line:
-                reporter.output(line, prefix="  ovpn | ")
+            if not line:
+                continue
+            if use_split and "PUSH_REPLY" in line:
+                pushed = parse_pushed_dns(line)
+                if pushed:
+                    split.note_pushed_dns(pushed)
+                    reporter.info(f"服务端 push 的 DNS: {', '.join(pushed)}")
+            if quiet_log and not any(k in line for k in _LOG_KEEP):
+                continue  # 分流把 verb 提到了 3，非 verbose 时只留关键行，别刷屏
+            reporter.output(line, prefix="  ovpn | ")
 
     threading.Thread(target=_pump_log, daemon=True).start()
 

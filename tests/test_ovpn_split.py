@@ -272,6 +272,22 @@ class TestDnsProxyHandle(unittest.TestCase):
         self.assertEqual(got, [])
         p.sock.sendto.assert_called_once()
 
+    def test_question_label_has_name_and_type(self):
+        self.assertEqual(S.question_label(_dns_query("api.example.com")),
+                         "api.example.com (A)")
+        self.assertEqual(S.question_label(b"\x00" * 4), "未知查询")
+
+    def test_all_upstreams_dead_warns_with_query_name(self):
+        r = _FakeReporter()
+        p = S.DnsProxy(5354, ["192.0.2.1"], ["example.com"], lambda q, ips: None,
+                       r, timeout=0.01)
+        with mock.patch.object(S.socket, "socket", side_effect=OSError("no route")):
+            self.assertIsNone(p.forward(_dns_query("api.example.com")))
+        warns = [m for k, m in r.lines if k == "warn"]
+        self.assertEqual(len(warns), 1)
+        self.assertIn("api.example.com (A)", warns[0])
+        self.assertIn("192.0.2.1", warns[0])
+
     def test_upstream_dead_returns_nothing(self):
         p = S.DnsProxy(5354, ["1.1.1.1"], ["example.com"], lambda q, ips: None)
         p.sock = mock.Mock()
@@ -387,6 +403,35 @@ class TestSplitTunnel(unittest.TestCase):
         self.assertEqual(calls, ["resolver", "proxy", "routes"])
         self.assertIsNone(st.proxy)
         self.assertIsNone(st.table)
+
+    def test_pushed_dns_beats_system_but_not_config(self):
+        st = S.SplitTunnel({"routes": {"domains": ["a.com"]}}, _FakeReporter())
+        st.note_pushed_dns(["10.8.0.1", "10.8.0.1", "10.8.0.2"])
+        self.assertEqual(st.upstreams, ["10.8.0.1", "10.8.0.2"])  # 去重，压过系统 DNS
+        fixed = S.SplitTunnel({"routes": {"domains": ["a.com"]},
+                               "dns_upstream": ["9.9.9.9"]}, _FakeReporter())
+        fixed.note_pushed_dns(["10.8.0.1"])
+        self.assertEqual(fixed.upstreams, ["9.9.9.9"])  # 配置写死的优先
+
+    def test_start_routes_pushed_dns_through_tun(self):
+        st = S.SplitTunnel({"routes": {"domains": ["a.com"]}}, _FakeReporter())
+        st.note_pushed_dns(["10.8.0.1"])
+        with mock.patch.object(S, "tun_for_ip", return_value="utun4"), \
+             mock.patch.object(S.RouteTable, "add_host", return_value=True) as add_host, \
+             mock.patch.object(S.DnsProxy, "start"), \
+             mock.patch.object(S, "write_resolver_files"):
+            st.start("10.8.0.6")
+        add_host.assert_called_once_with("10.8.0.1")
+
+    def test_proxy_reads_upstreams_lazily(self):
+        st = S.SplitTunnel({"routes": {"domains": ["a.com"]}}, _FakeReporter())
+        with mock.patch.object(S, "tun_for_ip", return_value="utun4"), \
+             mock.patch.object(S.DnsProxy, "start"), \
+             mock.patch.object(S, "write_resolver_files"):
+            st.start("10.8.0.6")
+        # PUSH_REPLY 可能晚于代理启动到达，代理必须每次查询时重新取上游
+        st.note_pushed_dns(["10.8.0.1"])
+        self.assertEqual(st.proxy.upstreams, ["10.8.0.1"])
 
     def test_stop_is_idempotent(self):
         st = S.SplitTunnel({}, _FakeReporter())

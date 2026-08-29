@@ -5,9 +5,9 @@
   login       录入一个站点的地址 / 用户名 / 密码（可选 2FA 密钥），登录并保存
   hosts       列出已配置的站点，标出当前默认那个
   use         切换默认站点
-  show        查看某个站点的配置（密码与密钥打码）
+  show        查看某个站点的配置，含明文密码 / 密钥 / token —— 需要 root
   logout      清掉 token（加 --forget 连账号密码一起删）
-  code        打印当前 TOTP 验证码（不请求服务端）
+  code        打印当前 TOTP 验证码（不请求服务端）—— 需要 root
   info        站点版本信息（GET /api/info）
   schema      列出这个站点支持的全部 API 端点（读 /api/schema/）
   api         直接发任意请求，覆盖 schema 里所有端点
@@ -20,6 +20,10 @@
 
 配置文件: ~/.config/lazygophers/scripts/archery.yaml（权限 0600）
 所有命令都支持 --host <域名> 临时指向另一个站点。
+
+会把密钥 / 验证码打到屏幕上的只有 `show` 和 `code` 两条，它们要 root：不是 root
+时自动 `sudo` 重跑同一条命令（终端向你要密码）。其余命令，包括所有取数据的查询，
+普通用户直接跑。
 """
 from __future__ import annotations
 
@@ -34,20 +38,31 @@ from lib.archery import (
     ArcheryClient,
     ArcheryError,
     client_for,
+    default_config_path,
     flatten_schema,
     host_key,
     load_config,
-    mask,
     normalize_url,
     parse_data,
     profiles,
     put_profile,
+    require_root,
     resolve_profile,
     save_config,
 )
 from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.ovpn import normalize_secret, totp
 from lib.ui import Reporter, ask_confirm, ask_text, reporter
+
+
+SCRIPT_PATH = pathlib.Path(__file__).resolve()
+# run_cli 会从 sys.argv 里剥掉 --debug / --no-say，提权重跑要的是没被动过的原始 argv
+ORIG_ARGV = list(sys.argv)
+
+
+def _config_path(config: str = "") -> pathlib.Path:
+    """--config 指定的路径优先，否则按当前身份推断（sudo 下回落到原用户家目录）。"""
+    return pathlib.Path(config).expanduser() if config else default_config_path()
 
 
 def emit(data) -> None:
@@ -691,7 +706,8 @@ class ArcheryCli(BaseCli):
         secret = normalize_secret(totp_secret) if totp_secret else str(old.get("totp_secret") or "")
         if secret:
             try:
-                self._r.ok(f"2FA 密钥可用，当前验证码 {totp(secret)}")
+                totp(secret)  # 只验格式，验证码不打出来（要看得 `sudo archery code`）
+                self._r.ok("2FA 密钥格式可用")
             except ValueError as e:
                 self._r.err(str(e))
                 return 2
@@ -748,22 +764,30 @@ class ArcheryCli(BaseCli):
         return 0
 
     @cmd
-    def show(self, host: str = ""):
-        """查看某个站点的配置（密码 / 密钥 / token 打码）
+    def show(self, host: str = "", config: str = ""):
+        """查看某个站点的配置，含明文密码 / 2FA 密钥 / token —— 需要 root
+
+        不是 root 时会自动用 sudo 重跑这条命令（终端会向你要密码）。密钥只在
+        拿到 root 之后才明文打出来，所以别在别人能看到的屏幕上跑。
+
+        参数:
+          --config <路径>  指定配置文件（sudo 重跑时自动带上，一般不用手写）
 
         用法: archery show --host archery.example.com
         """
-        cfg = load_config()
+        path = _config_path(config)
+        require_root(SCRIPT_PATH, ORIG_ARGV[1:], path)
+        cfg = load_config(path)
         key, profile = resolve_profile(cfg, host)
         token = profile.get("token") or {}
-        self._r.kv(f"{key}（{CONFIG_PATH}）", {
+        self._r.kv(f"{key}（{path}）", {
             "站点地址": str(profile.get("url") or "(未设置)"),
             "用户名": str(profile.get("username") or "(未设置)"),
-            "密码": mask(str(profile.get("password") or "")),
-            "2FA 密钥": mask(str(profile.get("totp_secret") or "")),
+            "密码": str(profile.get("password") or "(未设置)"),
+            "2FA 密钥": str(profile.get("totp_secret") or "(未设置)"),
             "TLS 校验": "关（--insecure）" if profile.get("insecure") else "开",
-            "access token": mask(str(token.get("access") or "")),
-            "refresh token": mask(str(token.get("refresh") or "")),
+            "access token": str(token.get("access") or "(未设置)"),
+            "refresh token": str(token.get("refresh") or "(未设置)"),
             "是否默认站点": "是" if key == str(cfg.get("current") or "") else "否",
         })
         return 0
@@ -794,12 +818,17 @@ class ArcheryCli(BaseCli):
         return 0
 
     @cmd
-    def code(self, host: str = ""):
-        """打印当前 TOTP 验证码（本地算，不请求服务端）
+    def code(self, host: str = "", config: str = ""):
+        """打印当前 TOTP 验证码（本地算，不请求服务端）—— 需要 root
+
+        验证码是密钥直接算出来的，等于间接暴露密钥，所以和 `show` 同一个门槛：
+        不是 root 时自动用 sudo 重跑。
 
         用法: archery code
         """
-        cfg = load_config()
+        path = _config_path(config)
+        require_root(SCRIPT_PATH, ORIG_ARGV[1:], path)
+        cfg = load_config(path)
         key, profile = resolve_profile(cfg, host)
         secret = str(profile.get("totp_secret") or "")
         if not secret:

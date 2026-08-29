@@ -18,16 +18,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from lib.archery import (  # noqa: E402
+    CONFIG_PATH,
     ArcheryClient,
     ArcheryError,
+    default_config_path,
     flatten_schema,
     host_key,
     load_config,
     normalize_url,
     parse_data,
+    is_root,
     put_profile,
+    require_root,
     resolve_profile,
     save_config,
+    sudo_argv,
 )
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -191,6 +196,68 @@ class TestConfigHelpers(unittest.TestCase):
             self.assertEqual(load_config(path)["current"], "a.com")
 
 
+class TestRootGate(unittest.TestCase):
+    """密钥类命令的 root 门槛：非 root 时用 sudo 重跑自己。"""
+
+    def test_sudo_argv_appends_config_and_absolute_python(self):
+        cmd = sudo_argv(pathlib.Path("/x/bin/archery"), ["show", "--host", "a.com"],
+                        pathlib.Path("/home/nico/archery.yaml"))
+        self.assertEqual(cmd, ["sudo", sys.executable, "/x/bin/archery", "show",
+                               "--host", "a.com", "--config", "/home/nico/archery.yaml"])
+
+    def test_sudo_argv_keeps_explicit_config(self):
+        cmd = sudo_argv(pathlib.Path("/x/bin/archery"), ["code", "--config", "/tmp/a.yaml"],
+                        pathlib.Path("/home/nico/archery.yaml"))
+        self.assertEqual(cmd.count("--config"), 1)
+        self.assertNotIn("/home/nico/archery.yaml", cmd)
+
+    def test_require_root_execs_sudo_when_not_root(self):
+        with unittest.mock.patch("lib.archery.is_root", return_value=False), \
+                unittest.mock.patch("lib.archery.os.execvp") as execvp:
+            require_root(pathlib.Path("/x/bin/archery"), ["code"], pathlib.Path("/c.yaml"))
+        execvp.assert_called_once()
+        self.assertEqual(execvp.call_args[0][0], "sudo")
+        self.assertIn("--config", execvp.call_args[0][1])
+
+    def test_require_root_is_noop_when_root(self):
+        with unittest.mock.patch("lib.archery.is_root", return_value=True), \
+                unittest.mock.patch("lib.archery.os.execvp") as execvp:
+            require_root(pathlib.Path("/x/bin/archery"), ["code"], pathlib.Path("/c.yaml"))
+        execvp.assert_not_called()
+
+    def test_require_root_reports_missing_sudo(self):
+        with unittest.mock.patch("lib.archery.is_root", return_value=False), \
+                unittest.mock.patch("lib.archery.os.execvp", side_effect=OSError("no sudo")):
+            with self.assertRaises(ArcheryError) as ctx:
+                require_root(pathlib.Path("/x/bin/archery"), ["code"], pathlib.Path("/c.yaml"))
+        self.assertIn("sudo", str(ctx.exception))
+
+    def test_default_config_path_plain_user(self):
+        with unittest.mock.patch("lib.archery.is_root", return_value=False):
+            self.assertEqual(default_config_path(), CONFIG_PATH)
+
+    def test_default_config_path_falls_back_to_sudo_user_home(self):
+        """sudo 把 HOME 换成 /var/root 时，配置得从发起 sudo 的那个用户家目录读。"""
+        with tempfile.TemporaryDirectory() as home:
+            target = pathlib.Path(home) / ".config" / "lazygophers" / "scripts" / "archery.yaml"
+            target.parent.mkdir(parents=True)
+            target.write_text("current: a.com\n", encoding="utf-8")
+            fake_pw = unittest.mock.Mock(pw_dir=home)
+            with unittest.mock.patch("lib.archery.is_root", return_value=True), \
+                    unittest.mock.patch.dict(os.environ, {"SUDO_USER": "nico"}), \
+                    unittest.mock.patch("pwd.getpwnam", return_value=fake_pw):
+                self.assertEqual(default_config_path(), target)
+
+    def test_default_config_path_ignores_unknown_sudo_user(self):
+        with unittest.mock.patch("lib.archery.is_root", return_value=True), \
+                unittest.mock.patch.dict(os.environ, {"SUDO_USER": "ghost"}), \
+                unittest.mock.patch("pwd.getpwnam", side_effect=KeyError("ghost")):
+            self.assertEqual(default_config_path(), CONFIG_PATH)
+
+    def test_is_root_matches_euid(self):
+        self.assertEqual(is_root(), os.geteuid() == 0)
+
+
 class TestClient(ServerCase):
     def test_login_stores_tokens_in_config_file(self):
         client = self.client()
@@ -307,6 +374,23 @@ class TestCliSmoke(unittest.TestCase):
                                   capture_output=True, text=True, env=env, timeout=60)
             self.assertEqual(ping.returncode, 0, ping.stderr)
             self.assertEqual(json.loads(ping.stdout), {"pong": "/api/v1/ping/"})
+
+    def test_show_reexecs_through_sudo(self):
+        """非 root 跑 `show`：真的走 execvp("sudo", ...)，用假 sudo 截下来看参数。"""
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as bindir:
+            fake_sudo = pathlib.Path(bindir) / "sudo"
+            fake_sudo.write_text('#!/bin/sh\necho "FAKE-SUDO $@"\n', encoding="utf-8")
+            fake_sudo.chmod(0o755)
+            env = dict(os.environ, HOME=home, SCRIPTS_NO_SAY="1",
+                       PATH=f"{bindir}:{os.environ.get('PATH', '')}",
+                       PYTHONUSERBASE=str(pathlib.Path.home() / ".local"))
+            proc = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "bin" / "archery"), "show", "--host", "a.com"],
+                capture_output=True, text=True, env=env, timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("FAKE-SUDO", proc.stdout)
+            self.assertIn("--config", proc.stdout)
+            self.assertIn(str(pathlib.Path(home) / ".config"), proc.stdout)
 
     def test_help_lists_all_groups(self):
         proc = subprocess.run([sys.executable, str(REPO_ROOT / "bin" / "archery"), "--", "--help"],
