@@ -86,6 +86,24 @@ def normalize_secret(raw: str) -> str:
     return re.sub(r"[\s-]", "", s).upper()
 
 
+def totp_counter(at: float | None = None, *, period: int = 30) -> int:
+    """当前 TOTP 时间窗序号。同一个窗内算出来的验证码是同一个。"""
+    return int((time.time() if at is None else at) // period)
+
+
+def wait_fresh_totp(last_counter: int | None, reporter=None, *, period: int = 30) -> None:
+    """上一个验证码若还在同一时间窗内，等到下一个窗再返回。
+
+    服务端通常拒绝重复使用的 TOTP，断线重连时马上重试会直接被打回。
+    """
+    if last_counter is None or totp_counter(period=period) != last_counter:
+        return
+    wait = period - (time.time() % period) + 0.5
+    if reporter:
+        reporter.info(f"上一个验证码还在有效期内，等 {wait:.0f}s 换新码再认证")
+    time.sleep(wait)
+
+
 def totp(secret: str, *, digits: int = 6, period: int = 30, at: float | None = None) -> str:
     """RFC 6238 TOTP（HMAC-SHA1，默认 6 位 / 30 秒）。"""
     key_b32 = normalize_secret(secret)
@@ -196,9 +214,13 @@ def tun_interfaces() -> list[tuple[str, str]]:
 
 def disconnect(reporter) -> int:
     """终止所有 openvpn 连接进程（SIGTERM，必要时 SIGKILL）。需要 sudo。"""
+    from lib.ovpn_split import clean_resolver_files
+
     procs = running_processes()
     if not procs:
         reporter.info("没有正在运行的 openvpn 连接")
+        # 进程没了但 resolver 文件可能还在（上次被 kill -9），一并收干净
+        clean_resolver_files(reporter)
         return 0
     pids = [str(pid) for pid, _ in procs]
     for pid, cmd in procs:
@@ -210,11 +232,13 @@ def disconnect(reporter) -> int:
     for _ in range(30):  # 最多等 3 秒退干净
         time.sleep(0.1)
         if not running_processes():
+            clean_resolver_files(reporter)
             reporter.ok("已断开")
             return 0
     left = [str(pid) for pid, _ in running_processes()]
     reporter.warn(f"进程未在 3 秒内退出，改用 SIGKILL: {', '.join(left)}")
     subprocess.run(["sudo", "kill", "-KILL", *left])
+    clean_resolver_files(reporter)
     reporter.ok("已断开")
     return 0
 
@@ -318,20 +342,81 @@ class ManagementClient:
             pass
 
 
-def connect(cfg: dict, reporter, *, verbose: bool = False) -> int:
-    """启动 openvpn 并通过 management interface 自动应答账号密码 / 二步验证码。
+_KEEPALIVE_DIRECTIVES = ("keepalive", "ping", "ping-restart", "ping-exit")
 
-    返回 openvpn 的退出码。前台运行，Ctrl-C 断开。
+
+def _needs_keepalive(profile_path: pathlib.Path) -> bool:
+    """profile 里没写任何 keepalive / ping 指令时返回 True（我们补一组默认值）。
+
+    服务端 push 的 keepalive 优先级高于客户端本地设置，所以补上是安全的：
+    只在服务端也没管的情况下才生效，用来兜住「链路死了但进程还在」的场景。
+    """
+    try:
+        text = profile_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    for raw in text.splitlines():
+        head = raw.strip().split("#", 1)[0].split(";", 1)[0].split()
+        if head and head[0] in _KEEPALIVE_DIRECTIVES:
+            return False
+    return True
+
+
+def connect(cfg: dict, reporter, *, verbose: bool = False,
+            reconnect: bool | None = None, reconnect_max: int | None = None) -> int:
+    """连接 VPN，断线自动重连。
+
+    两层重连：
+      1. openvpn 自身的 SIGUSR1 重启 —— management 循环一直活着，重新回填凭据；
+      2. openvpn 进程整个挂掉 —— 本函数重新拉起，退避 5s 起步、翻倍、上限 60s。
+    连上一次之后退避计时重置。Ctrl-C 或认证失败（凭据错）不重连。
+
+    reconnect / reconnect_max 传 None 时读配置的 `auto_reconnect`（默认开）和
+    `reconnect_max`（默认 0 = 不限次数）。
+    """
+    if reconnect is None:
+        reconnect = bool(cfg.get("auto_reconnect", True))
+    if reconnect_max is None:
+        reconnect_max = int(cfg.get("reconnect_max", 0) or 0)
+
+    attempt = 0
+    delay = 5.0
+    last_counter: int | None = None
+    while True:
+        rc, connected, last_counter = _connect_once(
+            cfg, reporter, verbose=verbose, last_otp_counter=last_counter)
+        if rc in (0, 2, 127, 130):
+            # 0=正常退出 2=凭据/配置错 127=没有二进制 130=Ctrl-C：重连没有意义
+            return rc
+        if not reconnect:
+            return rc
+        attempt = 0 if connected else attempt + 1
+        delay = 5.0 if connected else min(delay * 2, 60.0)
+        if reconnect_max and attempt > reconnect_max:
+            reporter.err(f"连续重连 {reconnect_max} 次都失败，放弃")
+            return rc
+        reporter.warn(f"连接断开 (exit={rc})，{delay:.0f}s 后第 {attempt or 1} 次重连")
+        try:
+            time.sleep(delay)
+        except KeyboardInterrupt:
+            return 130
+
+
+def _connect_once(cfg: dict, reporter, *, verbose: bool = False,
+                  last_otp_counter: int | None = None) -> tuple[int, bool, int | None]:
+    """跑一次 openvpn 直到它退出。
+
+    返回 (退出码, 本次是否连上过, 最后一次用掉的 TOTP 时间窗序号)。
     """
     ovpn_bin = ensure_openvpn(reporter)
     if not ovpn_bin:
-        return 127
+        return 127, False, last_otp_counter
 
     profile = str(cfg.get("config") or "").strip()
     profile_path = pathlib.Path(profile).expanduser()
     if not profile or not profile_path.is_file():
-        reporter.err(f"配置里的 .ovpn 文件不存在: {profile or '(空)'}；跑 `openvpn login` 重填")
-        return 2
+        reporter.err(f"配置里的 .ovpn 文件不存在: {profile or '(空)'}；跑 `ovpn login` 重填")
+        return 2, False, last_otp_counter
 
     username = str(cfg.get("username") or "")
     password = str(cfg.get("password") or "")
@@ -349,6 +434,16 @@ def connect(cfg: dict, reporter, *, verbose: bool = False) -> int:
         f.write(mgmt_pw + "\n")
     # 保持 0600：openvpn 以 root 跑，root 读取不受权限限制
 
+    from lib.ovpn_split import SplitTunnel, clean_resolver_files
+
+    split = SplitTunnel(cfg, reporter)
+    use_split = split.enabled and bool(cfg.get("split_tunnel", True))
+    if use_split:
+        # 上次被 kill -9 可能留下 resolver 文件，指向一个已经没人监听的端口，
+        # 那些域名会解析失败 —— 起连接前先清干净
+        clean_resolver_files(reporter)
+
+    keepalive = ["--ping", "10", "--ping-restart", "60"] if _needs_keepalive(profile_path) else []
     cmd = [
         "sudo", ovpn_bin,
         "--config", str(profile_path),
@@ -358,7 +453,11 @@ def connect(cfg: dict, reporter, *, verbose: bool = False) -> int:
         "--management-query-passwords",
         "--auth-nocache",
         "--auth-retry", "interact",
+        "--connect-retry", "5",
         "--verb", "3" if verbose else "1",
+        # 分流模式下不接服务端 push 的任何路由，默认出口留给本地网络
+        *(["--route-nopull"] if use_split else []),
+        *keepalive,
         *extra,
     ]
 
@@ -385,25 +484,29 @@ def connect(cfg: dict, reporter, *, verbose: bool = False) -> int:
     threading.Thread(target=_pump_log, daemon=True).start()
 
     mgmt: ManagementClient | None = None
-    for _ in range(50):  # 最多等 5 秒让 management 端口起来
-        if proc.poll() is not None:
-            reporter.err(f"openvpn 提前退出 (exit={proc.returncode})")
-            return proc.returncode or 1
-        try:
-            mgmt = ManagementClient("127.0.0.1", port, mgmt_pw)
-            break
-        except OSError:
-            time.sleep(0.1)
-    if mgmt is None:
-        reporter.err("连不上 management 接口，放弃")
-        proc.terminate()
-        return 1
-
     try:
+        for _ in range(50):  # 最多等 5 秒让 management 端口起来
+            if proc.poll() is not None:
+                reporter.err(f"openvpn 提前退出 (exit={proc.returncode})")
+                return proc.returncode or 1, False, last_otp_counter
+            try:
+                mgmt = ManagementClient("127.0.0.1", port, mgmt_pw)
+                break
+            except OSError:
+                time.sleep(0.1)
+        if mgmt is None:
+            reporter.err("连不上 management 接口，放弃")
+            proc.terminate()
+            return 1, False, last_otp_counter
+
         return _drive(mgmt, proc, reporter, username=username, password=password,
-                      secret=secret, verbose=verbose)
+                      secret=secret, verbose=verbose, last_otp_counter=last_otp_counter,
+                      split=split if use_split else None)
     finally:
-        mgmt.close()
+        if use_split:
+            split.stop()
+        if mgmt is not None:
+            mgmt.close()
         if proc.poll() is None:
             proc.terminate()
             try:
@@ -414,18 +517,24 @@ def connect(cfg: dict, reporter, *, verbose: bool = False) -> int:
 
 
 def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: str,
-           secret: str, verbose: bool) -> int:
-    """management 主循环：应答挑战 + 打印状态，直到 openvpn 退出。"""
+           secret: str, verbose: bool,
+           last_otp_counter: int | None = None,
+           split=None) -> tuple[int, bool, int | None]:
+    """management 主循环：应答挑战 + 打印状态，直到 openvpn 退出。
+
+    openvpn 自己发起的 SIGUSR1 重启不会退出进程，只是重新走一遍 AUTH，
+    所以这个循环一直活着就等于「断线自动重连」的第一层。
+    """
     mgmt.authenticate()
     mgmt.send("state on")
     mgmt.send("hold release")
 
     crv_state: str | None = None
-    connected = False
+    connected_ever = False
 
     while True:
-        if proc.poll() is not None and not connected:
-            return proc.returncode or 1
+        if proc.poll() is not None:
+            return proc.returncode or 1, connected_ever, last_otp_counter
         try:
             line = mgmt.readline(timeout=1.0)
         except socket.timeout:
@@ -439,7 +548,11 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
 
         need_auth, sc_flags = parse_need_auth(line)
         if need_auth:
-            otp = totp(secret) if secret else None
+            otp = None
+            if secret:
+                wait_fresh_totp(last_otp_counter, reporter)
+                last_otp_counter = totp_counter()
+                otp = totp(secret)
             if crv_state:
                 reporter.step("服务端下发动态挑战，回填二步验证码")
             elif sc_flags is not None:
@@ -451,7 +564,7 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
                                              crv_state=crv_state)
             except ValueError as e:
                 reporter.err(str(e))
-                return 2
+                return 2, connected_ever, last_otp_counter
             mgmt.send(f"username {_quote('Auth')} {_quote(username)}")
             mgmt.send(f"password {_quote('Auth')} {_quote(reply)}")
             crv_state = None
@@ -464,23 +577,28 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
             continue
 
         if line.startswith(">PASSWORD:Verification Failed"):
-            reporter.err("认证失败：用户名 / 密码 / 二步验证码不对。跑 `openvpn login` 重填")
-            return 2
+            reporter.err("认证失败：用户名 / 密码 / 二步验证码不对。跑 `ovpn login` 重填")
+            return 2, connected_ever, last_otp_counter
 
         if line.startswith(">STATE:"):
             fields = line[len(">STATE:"):].split(",")
             name = fields[1] if len(fields) > 1 else "?"
             detail = fields[2] if len(fields) > 2 else ""
             if name == "CONNECTED":
-                connected = True
+                connected_ever = True
                 local_ip = fields[3] if len(fields) > 3 else ""
                 remote = fields[4] if len(fields) > 4 else ""
                 reporter.ok(f"已连接  本地 IP {local_ip or '(无)'}  服务端 {remote or '(无)'}")
+                if split is not None:
+                    # 分流规则依赖 tun 网卡，必须等 CONNECTED 拿到本地 IP 才能定位网卡
+                    split.start(local_ip)
                 reporter.info("Ctrl-C 断开")
+            elif name == "RECONNECTING":
+                reporter.warn(f"链路中断，openvpn 正在自行重连: {detail or '(无原因)'}")
             elif name == "EXITING":
                 reporter.warn(f"连接退出: {detail}")
             else:
                 reporter.step(f"状态 {name}{(' · ' + detail) if detail else ''}")
 
     proc.wait()
-    return proc.returncode or 0
+    return proc.returncode or 0, connected_ever, last_otp_counter

@@ -270,5 +270,109 @@ class TestEnsureOpenvpn(unittest.TestCase):
             self.assertIsNone(ov.ensure_openvpn(_FakeReporter()))
 
 
+class TestTotpFreshness(unittest.TestCase):
+    def test_counter_advances_with_period(self):
+        self.assertEqual(ov.totp_counter(at=0), 0)
+        self.assertEqual(ov.totp_counter(at=29.9), 0)
+        self.assertEqual(ov.totp_counter(at=30), 1)
+
+    def test_no_wait_when_counter_is_new(self):
+        from unittest import mock
+
+        with mock.patch.object(ov.time, "sleep") as sleep:
+            ov.wait_fresh_totp(None)
+            ov.wait_fresh_totp(ov.totp_counter() - 1)
+        sleep.assert_not_called()
+
+    def test_waits_out_the_window_when_code_already_used(self):
+        from unittest import mock
+
+        with mock.patch.object(ov.time, "sleep") as sleep:
+            ov.wait_fresh_totp(ov.totp_counter())
+        sleep.assert_called_once()
+        self.assertGreater(sleep.call_args[0][0], 0)
+        self.assertLessEqual(sleep.call_args[0][0], 30.5)
+
+
+class TestNeedsKeepalive(unittest.TestCase):
+    def _profile(self, text):
+        d = tempfile.mkdtemp()
+        p = pathlib.Path(d) / "x.ovpn"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_true_when_profile_has_none(self):
+        self.assertTrue(ov._needs_keepalive(self._profile("client\nremote vpn.x 1194\n")))
+
+    def test_false_when_keepalive_present(self):
+        self.assertFalse(ov._needs_keepalive(self._profile("client\nkeepalive 10 60\n")))
+
+    def test_false_when_ping_restart_present(self):
+        self.assertFalse(ov._needs_keepalive(self._profile("client\nping-restart 120\n")))
+
+    def test_comment_does_not_count(self):
+        self.assertTrue(ov._needs_keepalive(self._profile("client\n# keepalive 10 60\n")))
+
+    def test_missing_file_returns_false(self):
+        self.assertFalse(ov._needs_keepalive(pathlib.Path("/nope/nope.ovpn")))
+
+
+class TestReconnectLoop(unittest.TestCase):
+    """connect() 的外层重连循环：哪些退出码重连、哪些直接返回。"""
+
+    def _run(self, results, **kw):
+        """results: [(rc, connected), ...] 依次作为 _connect_once 的返回。"""
+        from unittest import mock
+
+        seq = iter(results)
+        calls = []
+
+        def fake_once(cfg, reporter, *, verbose=False, last_otp_counter=None):
+            calls.append(last_otp_counter)
+            rc, connected = next(seq)
+            return rc, connected, last_otp_counter
+        with mock.patch.object(ov, "_connect_once", side_effect=fake_once), \
+             mock.patch.object(ov.time, "sleep"):
+            rc = ov.connect({}, _FakeReporter(), **kw)
+        return rc, len(calls)
+
+    def test_clean_exit_does_not_reconnect(self):
+        self.assertEqual(self._run([(0, True)]), (0, 1))
+
+    def test_bad_credentials_do_not_reconnect(self):
+        self.assertEqual(self._run([(2, False)]), (2, 1))
+
+    def test_missing_binary_does_not_reconnect(self):
+        self.assertEqual(self._run([(127, False)]), (127, 1))
+
+    def test_interrupt_does_not_reconnect(self):
+        self.assertEqual(self._run([(130, True)]), (130, 1))
+
+    def test_link_failure_reconnects_until_clean_exit(self):
+        rc, n = self._run([(1, True), (1, True), (0, True)])
+        self.assertEqual((rc, n), (0, 3))
+
+    def test_reconnect_flag_off_returns_immediately(self):
+        self.assertEqual(self._run([(1, True)], reconnect=False), (1, 1))
+
+    def test_reconnect_max_gives_up(self):
+        rc, n = self._run([(1, False)] * 5, reconnect_max=2)
+        self.assertEqual((rc, n), (1, 3))
+
+    def test_successful_connect_resets_the_attempt_counter(self):
+        """连上过就把失败计数清零，长跑时不会因为累计次数被 max 挡住。"""
+        rc, n = self._run([(1, True)] * 6 + [(0, True)], reconnect_max=2)
+        self.assertEqual((rc, n), (0, 7))
+
+    def test_reads_auto_reconnect_from_config(self):
+        from unittest import mock
+
+        seq = iter([(1, True)])
+        with mock.patch.object(ov, "_connect_once",
+                               side_effect=lambda *a, **k: (*next(seq), None)), \
+             mock.patch.object(ov.time, "sleep"):
+            self.assertEqual(ov.connect({"auto_reconnect": False}, _FakeReporter()), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

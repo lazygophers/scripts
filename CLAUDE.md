@@ -14,7 +14,7 @@ This is a collection of script utilities designed to enhance development product
 - `switch_branch` / `sync_master` resolve the real default branch per repo (`origin/HEAD` → `remote set-head --auto` → enumerate `origin/main`/`origin/master` → fall back to `master`) before creating/tracking; never hardcode `origin/master`.
 - **Every `bin/*` entry must wrap its top-level call in `lib.ui.timed(fn, label="<name>")(...)`** so start/end/elapsed prints to stderr (dim) on exit. This is mandatory: new scripts add it, existing scripts keep it. Pattern: `raise SystemExit(timed(main, label="foo")(sys.argv))`.
 - `reindex` is local-only (not in `bin/`, not tracked).
-- `ovpn` is named to avoid shadowing the real `openvpn` binary (`bin/` comes first in `PATH`). It drives `openvpn` through the management interface and auto-installs it via `brew install openvpn` when missing; credentials live in `~/.config/lazygophers/scripts/ovpn.yaml` (0600).
+- `ovpn` is named to avoid shadowing the real `openvpn` binary (`bin/` comes first in `PATH`). It drives `openvpn` through the management interface and auto-installs it via `brew install openvpn` when missing; credentials live in `~/.config/lazygophers/scripts/ovpn.yaml` (0600). Split tunneling lives in `lib/ovpn_split.py`: `ovpn route add '*.example.com' 10.8.0.0/16` writes `routes.domains` / `routes.cidrs`; when either is non-empty, `connect` adds `--route-nopull`, starts a local UDP DNS proxy on `127.0.0.1:5354` and points `/etc/resolver/<domain>` at it (files carry a `# managed-by: lazygophers-ovpn` marker so stale ones are cleaned on `connect` start and on `disconnect`), then `route add -host <ip> -interface utunN` for every resolved IP. `--no-split` bypasses it for one run.
 
 ## Key Architecture Patterns
 
