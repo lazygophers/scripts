@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import pathlib
+import socket
 import struct
 import sys
 import unittest
@@ -438,6 +439,203 @@ class TestSplitTunnel(unittest.TestCase):
         with mock.patch.object(S, "clean_resolver_files"):
             st.stop()
             st.stop()
+
+
+class TestMalformedDnsMessages(unittest.TestCase):
+    def test_question_name_unterminated(self):
+        header = struct.pack(">HHHHHH", 1, 0, 1, 0, 0, 0)
+        # 长度前缀声明 3 字节但报文到此为止，且没有结尾 0
+        self.assertIsNone(S.parse_question_name(header + b"\x03ab"))
+
+    def test_question_name_runs_out_of_bytes(self):
+        header = struct.pack(">HHHHHH", 1, 0, 1, 0, 0, 0)
+        # label 恰好读完就没有结尾 0 字节 → while 退出后返回 None
+        self.assertIsNone(S.parse_question_name(header + b"\x02ab"))
+
+    def test_question_label_without_qtype(self):
+        header = struct.pack(">HHHHHH", 1, 0, 1, 0, 0, 0)
+        msg = header + b"\x01a\x00"  # 有域名但缺 QTYPE
+        self.assertEqual(S.question_label(msg), "a")
+
+    def test_skip_name_unterminated_returns_end(self):
+        self.assertEqual(S._skip_name(b"\x03abc", 0), 4)
+
+    def test_answer_truncated_record_stops(self):
+        answer = _dns_answer("a.com", [(1, bytes([1, 2, 3, 4]))])[:-8]
+        self.assertEqual(S.parse_answer_ips(answer), [])
+
+
+class TestSystemNameservers(unittest.TestCase):
+    def test_skips_invalid_and_loopback(self):
+        text = "\n".join([
+            "# comment",
+            "nameserver not-an-ip",
+            "nameserver 127.0.0.1",
+            "nameserver 9.9.9.9",
+        ])
+        with mock.patch.object(pathlib.Path, "read_text", return_value=text):
+            self.assertEqual(S.system_nameservers(), ["9.9.9.9"])
+
+    def test_falls_back_when_unreadable(self):
+        with mock.patch.object(pathlib.Path, "read_text", side_effect=OSError):
+            self.assertEqual(S.system_nameservers(), ["1.1.1.1", "8.8.8.8"])
+
+
+class _Run:
+    """subprocess.run 替身，按调用顺序返回预设结果。"""
+
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = []
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append(cmd)
+        rc, stderr = self.results.pop(0) if self.results else (0, "")
+        return mock.Mock(returncode=rc, stderr=stderr, stdout="")
+
+
+class TestRouteTableReporting(unittest.TestCase):
+    def test_add_host_reports_success(self):
+        r = _FakeReporter()
+        t = S.RouteTable("utun4", r)
+        with mock.patch.object(S.subprocess, "run", _Run([(0, "")])):
+            self.assertTrue(t.add_host("1.2.3.4"))
+        self.assertIn(("step", "路由 1.2.3.4 → utun4"), r.lines)
+
+    def test_add_host_warns_and_forgets_on_failure(self):
+        r = _FakeReporter()
+        t = S.RouteTable("utun4", r)
+        with mock.patch.object(S.subprocess, "run", _Run([(1, "network is down")])):
+            self.assertFalse(t.add_host("1.2.3.4"))
+        self.assertEqual([k for k, _ in r.lines], ["warn"])
+        self.assertNotIn("1.2.3.4", t.added)
+
+    def test_add_network_invalid_cidr_warns(self):
+        r = _FakeReporter()
+        t = S.RouteTable("utun4", r)
+        self.assertFalse(t.add_network("not-a-cidr"))
+        self.assertIn("不是合法网段", r.lines[0][1])
+
+    def test_add_network_success_reports(self):
+        r = _FakeReporter()
+        t = S.RouteTable("utun4", r)
+        with mock.patch.object(S.subprocess, "run", _Run([(0, "")])):
+            self.assertTrue(t.add_network("10.8.0.0/16"))
+        self.assertIn("10.8.0.0/16", t.added)
+        self.assertIn(("step", "路由 10.8.0.0/16 → utun4"), r.lines)
+
+    def test_add_network_failure_warns(self):
+        r = _FakeReporter()
+        t = S.RouteTable("utun4", r)
+        with mock.patch.object(S.subprocess, "run", _Run([(1, "boom")])):
+            self.assertFalse(t.add_network("10.8.0.0/16"))
+        self.assertIn("加网段失败", r.lines[0][1])
+
+    def test_add_network_ipv6_family(self):
+        t = S.RouteTable("utun4")
+        runner = _Run([(0, "")])
+        with mock.patch.object(S.subprocess, "run", runner):
+            self.assertTrue(t.add_network("fd00::/64"))
+        self.assertIn("-inet6", runner.calls[0])
+
+
+class TestResolverFileReporting(unittest.TestCase):
+    def test_clean_reports_names(self):
+        r = _FakeReporter()
+        files = [pathlib.Path("/etc/resolver/a.com")]
+        with mock.patch.object(S, "stale_resolver_files", return_value=files), \
+             mock.patch.object(S.subprocess, "run", _Run([(0, "")])):
+            self.assertEqual(S.clean_resolver_files(r), 1)
+        self.assertIn("a.com", r.lines[0][1])
+
+    def test_write_warns_on_failure_and_reports_success(self):
+        r = _FakeReporter()
+        with mock.patch.object(S.subprocess, "run", _Run([(0, ""), (1, "denied")])):
+            S.write_resolver_files(["a.com"], 5354, r, pathlib.Path("/tmp/resolver-test"))
+        kinds = [k for k, _ in r.lines]
+        self.assertEqual(kinds, ["warn", "step"])
+        self.assertIn("denied", r.lines[0][1])
+        self.assertIn("127.0.0.1:5354", r.lines[1][1])
+
+
+def _free_port() -> int:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+class TestDnsProxyLifecycle(unittest.TestCase):
+    def test_serve_forwards_and_answers_client(self):
+        port = _free_port()
+        seen: list[tuple[str, list[str]]] = []
+        answer = _dns_answer("api.example.com", [(1, bytes([93, 184, 216, 34]))])
+        proxy = S.DnsProxy(port, ["192.0.2.1"], ["example.com"],
+                           lambda q, ips: seen.append((q, ips)))
+        with mock.patch.object(S.DnsProxy, "forward", return_value=answer):
+            proxy.start()
+            try:
+                client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                client.settimeout(3)
+                client.sendto(_dns_query("api.example.com"), ("127.0.0.1", port))
+                data, _ = client.recvfrom(4096)
+                client.close()
+            finally:
+                proxy.stop()
+        self.assertEqual(data, answer)
+        self.assertEqual(seen, [("api.example.com", ["93.184.216.34"])])
+        self.assertIsNone(proxy.sock)
+
+    def test_stop_without_start_is_safe(self):
+        S.DnsProxy(_free_port(), [], [], lambda q, ips: None).stop()
+
+    def test_serve_exits_on_socket_error(self):
+        proxy = S.DnsProxy(5354, [], [], lambda q, ips: None)
+        proxy.sock = mock.Mock()
+        proxy.sock.recvfrom.side_effect = OSError("closed")
+        proxy._serve()  # 不应抛出，循环直接结束
+
+    def test_handle_ignores_send_failure(self):
+        proxy = S.DnsProxy(5354, [], ["example.com"], lambda q, ips: None)
+        proxy.sock = mock.Mock()
+        proxy.sock.sendto.side_effect = OSError("broken pipe")
+        answer = _dns_answer("api.example.com", [(1, bytes([1, 2, 3, 4]))])
+        with mock.patch.object(S.DnsProxy, "forward", return_value=answer):
+            proxy._handle(_dns_query("api.example.com"), ("127.0.0.1", 1234))
+
+    def test_forward_returns_first_upstream_answer(self):
+        answer = _dns_answer("a.com", [(1, bytes([1, 2, 3, 4]))])
+        sock = mock.MagicMock()
+        sock.__enter__.return_value = sock
+        sock.recvfrom.return_value = (answer, ("192.0.2.1", 53))
+        proxy = S.DnsProxy(5354, ["192.0.2.1"], ["a.com"], lambda q, ips: None)
+        with mock.patch.object(S.socket, "socket", return_value=sock):
+            self.assertEqual(proxy.forward(_dns_query("a.com")), answer)
+        self.assertEqual(sock.sendto.call_args[0][1], ("192.0.2.1", 53))
+
+
+class TestSplitTunnelOnIps(unittest.TestCase):
+    def test_new_ip_is_routed_and_announced(self):
+        r = _FakeReporter()
+        st = S.SplitTunnel({"routes": {"domains": ["example.com"]}}, r)
+        captured = {}
+
+        def fake_proxy_init(self, port, upstreams, domains, on_ips, reporter=None, **kw):
+            captured["on_ips"] = on_ips
+            self.port, self.domains, self.on_ips = port, domains, on_ips
+            self.sock = None
+
+        with mock.patch.object(S, "tun_for_ip", return_value="utun4"), \
+             mock.patch.object(S.RouteTable, "add_host", side_effect=[True, False]), \
+             mock.patch.object(S.DnsProxy, "__init__", fake_proxy_init), \
+             mock.patch.object(S.DnsProxy, "start"), \
+             mock.patch.object(S, "write_resolver_files"):
+            st.start("10.8.0.6")
+            captured["on_ips"]("api.example.com", ["1.1.1.1", "2.2.2.2"])
+
+        infos = [m for k, m in r.lines if k == "info"]
+        self.assertEqual(len([m for m in infos if "已加入 VPN 路由" in m]), 1)
 
 
 if __name__ == "__main__":

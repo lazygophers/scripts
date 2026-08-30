@@ -78,5 +78,98 @@ class TestConsumeDebug(unittest.TestCase):
         self.assertFalse(notify_mod.is_debug())
 
 
+class TestConsumeNoSay(unittest.TestCase):
+    def setUp(self):
+        self._prev = notify_mod._SAY_DISABLED
+        notify_mod._SAY_DISABLED = False
+
+    def tearDown(self):
+        notify_mod._SAY_DISABLED = self._prev
+
+    def test_strips_all_occurrences(self):
+        out = notify_mod.consume_no_say(["bin/x", "--no-say", "a", "--no-say"])
+        self.assertEqual(out, ["bin/x", "a"])
+        self.assertTrue(notify_mod.is_say_disabled())
+
+    def test_absent_keeps_argv(self):
+        out = notify_mod.consume_no_say(["bin/x", "a"])
+        self.assertEqual(out, ["bin/x", "a"])
+        self.assertFalse(notify_mod.is_say_disabled())
+
+    def test_set_say_disabled_toggles(self):
+        notify_mod.set_say_disabled(True)
+        self.assertTrue(notify_mod.is_say_disabled())
+        notify_mod.set_say_disabled(False)
+        self.assertFalse(notify_mod.is_say_disabled())
+
+    @patch("lib.notify.run")
+    def test_notify_skips_say_when_disabled(self, mock_run):
+        notify_mod.set_say_disabled(True)
+        notify_mod.notify("hello")
+        mock_run.assert_not_called()
+
+
+class TestConsumeDryRun(unittest.TestCase):
+    def test_passthrough_when_not_bare_dry_run(self):
+        argv = ["bin/x", "--dry-run", "extra"]
+        self.assertEqual(notify_mod.consume_dry_run(argv), argv)
+
+    def test_passthrough_without_flag(self):
+        argv = ["bin/x"]
+        self.assertEqual(notify_mod.consume_dry_run(argv), argv)
+
+    def test_bare_dry_run_exits_zero(self):
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), self.assertRaises(SystemExit) as cm:
+            notify_mod.consume_dry_run(["bin/fetch_all", "--dry-run"], "一键 fetch")
+        self.assertEqual(cm.exception.code, 0)
+        out = buf.getvalue()
+        self.assertIn("一键 fetch", out)
+        self.assertIn("fetch_all: dry-run，无实际操作", out)
+
+    def test_bare_dry_run_without_description(self):
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), self.assertRaises(SystemExit):
+            notify_mod.consume_dry_run(["bin/x", "--dry-run"])
+        self.assertIn("x: dry-run", buf.getvalue())
+
+
+class TestConsumeHelp(unittest.TestCase):
+    def _help(self, argv, *args):
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), self.assertRaises(SystemExit) as cm:
+            notify_mod.consume_help(argv, *args)
+        self.assertEqual(cm.exception.code, 0)
+        return buf.getvalue()
+
+    def test_passthrough_without_flag(self):
+        argv = ["bin/x", "arg"]
+        self.assertEqual(notify_mod.consume_help(argv, "desc"), argv)
+
+    def test_short_flag_prints_usage(self):
+        out = self._help(["bin/checkwork", "-h"], "构建检查")
+        self.assertIn("构建检查", out)
+        self.assertIn("用法: checkwork [选项]", out)
+        self.assertIn("--no-say", out)
+        self.assertIn("--debug", out)
+
+    def test_custom_usage(self):
+        out = self._help(["bin/cpd", "--help"], "复制目录", "cpd <src> <dest>")
+        self.assertIn("用法: cpd <src> <dest>", out)
+
+    def test_empty_description_skips_blank_head(self):
+        out = self._help(["bin/x", "--help"], "")
+        self.assertTrue(out.startswith("用法: x [选项]"))
+
+
 if __name__ == "__main__":
     unittest.main()

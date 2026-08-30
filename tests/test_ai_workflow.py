@@ -221,5 +221,90 @@ class TestProviderInfoDataclass(unittest.TestCase):
         self.assertEqual(info.repo, "r")
 
 
+class TestFmtOpt(unittest.TestCase):
+    def test_empty_value(self):
+        from lib.ai_workflow import fmt_opt
+        self.assertEqual(fmt_opt("--title", ""), "")
+        self.assertEqual(fmt_opt("--title", None), "")
+
+    def test_quotes_value(self):
+        from lib.ai_workflow import fmt_opt
+        self.assertEqual(fmt_opt("--title", "a b"), "--title 'a b'")
+
+
+class TestParseRemoteUrlEdgeCases(unittest.TestCase):
+    def test_host_only_no_path(self):
+        self.assertIsNone(parse_remote_url("git@github.com:"))
+
+
+class TestDetectProviderEdgeCases(unittest.TestCase):
+    @patch("lib.ai_workflow.primary_remote", return_value="origin")
+    @patch("lib.ai_workflow.run")
+    def test_empty_remote_url(self, mock_run, _mock_remote):
+        mock_run.return_value = MagicMock(returncode=0, stdout="  \n", stderr="")
+        self.assertIsNone(detect_provider())
+
+
+class TestRunClaude(unittest.TestCase):
+    @patch("lib.ai_workflow.run_no_capture", return_value=0)
+    def test_success_builds_args(self, mock_run):
+        from lib.ai_workflow import _SAFETY_SUFFIX, run_claude
+        self.assertEqual(run_claude("do it", system_prompt="SYS"), 0)
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args[:2], ["claude", "-p"])
+        self.assertEqual(args[-1], "do it")
+        self.assertIn("SYS" + _SAFETY_SUFFIX, args)
+        self.assertIn("--model", args)
+
+    @patch("lib.ai_workflow.run_no_capture", return_value=0)
+    def test_settings_file_appended(self, mock_run):
+        from lib.ai_workflow import run_claude
+        run_claude("p", system_prompt="s", settings_file="/tmp/s.json")
+        args = mock_run.call_args[0][0]
+        self.assertIn("/tmp/s.json", args)
+
+    @patch("lib.ai_workflow.run_no_capture", return_value=3)
+    def test_nonzero_reports_error(self, mock_run):
+        from lib.ai_workflow import run_claude
+        r = MagicMock()
+        with patch("lib.ai_workflow.reporter", return_value=r):
+            self.assertEqual(run_claude("p", system_prompt="s"), 3)
+        r.err.assert_called_once()
+
+
+class TestGenerateViaClaude(unittest.TestCase):
+    @patch("lib.ai_workflow.run")
+    def test_returns_stripped_stdout(self, mock_run):
+        from lib.ai_workflow import generate_via_claude
+        mock_run.return_value = MagicMock(returncode=0, stdout="feat: x\n", stderr="")
+        self.assertEqual(generate_via_claude("p", system_prompt="s"), "feat: x")
+        args = mock_run.call_args[0][0]
+        self.assertIn("--bare", args)
+        self.assertEqual(args[-1], "p")
+
+    @patch("lib.ai_workflow.run")
+    def test_settings_file_appended(self, mock_run):
+        from lib.ai_workflow import generate_via_claude
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        generate_via_claude("p", system_prompt="s", settings_file="/tmp/x.json")
+        self.assertIn("/tmp/x.json", mock_run.call_args[0][0])
+
+    @patch("lib.ai_workflow.run")
+    def test_failure_returns_empty(self, mock_run):
+        from lib.ai_workflow import generate_via_claude
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="boom")
+        r = MagicMock()
+        with patch("lib.ai_workflow.reporter", return_value=r):
+            self.assertEqual(generate_via_claude("p", system_prompt="s"), "")
+        self.assertIn("boom", r.err.call_args[0][0])
+
+    @patch("lib.ai_workflow.run")
+    def test_timeout_passed_through(self, mock_run):
+        from lib.ai_workflow import generate_via_claude
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+        generate_via_claude("p", system_prompt="s", timeout=30)
+        self.assertEqual(mock_run.call_args.kwargs["timeout"], 30)
+
+
 if __name__ == "__main__":
     unittest.main()

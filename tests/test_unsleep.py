@@ -271,5 +271,63 @@ class TestPreventSleepUnlimitedMode(unittest.TestCase):
         self.assertEqual(result, 1)
 
 
+class TestCaffeinateFailuresInCommandMode(unittest.TestCase):
+    """命令跟随模式下 caffeinate 本身启动失败：命令进程必须被回收。"""
+
+    def setUp(self):
+        self.mock_reporter = MagicMock()
+
+    def _run(self, caffeinate_error):
+        cmd_proc = MagicMock()
+        cmd_proc.pid = 999
+        cmd_proc.wait.return_value = 0
+        with patch("lib.system.subprocess.Popen", return_value=cmd_proc), \
+             patch("lib.system._start_caffeinate", side_effect=caffeinate_error), \
+             patch("lib.system.reporter", return_value=self.mock_reporter):
+            rc = system.prevent_sleep(command=["sleep", "1"])
+        return rc, cmd_proc
+
+    def test_caffeinate_missing_terminates_command(self):
+        rc, cmd_proc = self._run(FileNotFoundError("caffeinate"))
+        self.assertEqual(rc, 1)
+        cmd_proc.terminate.assert_called_once()
+        cmd_proc.wait.assert_called_once()
+
+    def test_caffeinate_subprocess_error_terminates_command(self):
+        rc, cmd_proc = self._run(subprocess.SubprocessError("boom"))
+        self.assertEqual(rc, 1)
+        cmd_proc.terminate.assert_called_once()
+
+
+class TestRemainingSystemBranches(unittest.TestCase):
+    def setUp(self):
+        self.mock_reporter = MagicMock()
+
+    def test_duration_mode_subprocess_error(self):
+        with patch("lib.system._start_caffeinate",
+                   side_effect=subprocess.SubprocessError("boom")), \
+             patch("lib.system.reporter", return_value=self.mock_reporter):
+            self.assertEqual(system.prevent_sleep(duration=60), 1)
+
+    def test_unlimited_mode_file_not_found(self):
+        with patch("lib.system._start_caffeinate", side_effect=FileNotFoundError), \
+             patch("lib.system.reporter", return_value=self.mock_reporter):
+            self.assertEqual(system.prevent_sleep(), 1)
+
+    def test_unlimited_mode_caffeinate_dies_immediately(self):
+        proc = MagicMock()
+        proc.poll.return_value = 1
+        proc.returncode = 1
+        with patch("lib.system._start_caffeinate", return_value=proc), \
+             patch("lib.system.reporter", return_value=self.mock_reporter):
+            self.assertEqual(system.prevent_sleep(), 1)
+        proc.wait.assert_not_called()
+
+    def test_start_caffeinate_uses_popen(self):
+        with patch("lib.system.subprocess.Popen", return_value="proc") as mock_popen:
+            self.assertEqual(system._start_caffeinate(["caffeinate"]), "proc")
+        mock_popen.assert_called_once_with(["caffeinate"])
+
+
 if __name__ == "__main__":
     unittest.main()

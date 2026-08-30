@@ -163,5 +163,164 @@ class TestRetryResultDataclass(unittest.TestCase):
         self.assertEqual(r.last_output, "x")
 
 
+class TestKeyboardInterrupt(unittest.TestCase):
+    def test_run_wraps_interrupt(self):
+        with patch("subprocess.run", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt) as cm:
+                exec_mod.run(["echo", "x"])
+        self.assertIn("被用户中断", str(cm.exception))
+
+    def test_run_no_capture_terminates_on_interrupt(self):
+        proc = MagicMock()
+        proc.wait.side_effect = [KeyboardInterrupt, 0]
+        with patch("subprocess.Popen", return_value=proc):
+            with self.assertRaises(KeyboardInterrupt) as cm:
+                exec_mod.run_no_capture(["sleep", "9"])
+        self.assertIn("被用户中断", str(cm.exception))
+        proc.terminate.assert_called_once()
+
+    def test_run_no_capture_interrupt_before_popen(self):
+        with patch("subprocess.Popen", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                exec_mod.run_no_capture(["sleep", "9"])
+
+
+class TestRunNoCaptureTimeout(unittest.TestCase):
+    def test_timeout_kills_group_and_raises(self):
+        import subprocess
+
+        proc = MagicMock()
+        proc.wait.side_effect = subprocess.TimeoutExpired(cmd="sleep", timeout=1)
+        with patch("subprocess.Popen", return_value=proc), \
+             patch.object(exec_mod, "_kill_proc_group") as mock_kill:
+            with self.assertRaises(exec_mod.CommandTimeout) as cm:
+                exec_mod.run_no_capture(["sleep", "9"], timeout=1)
+        self.assertIn("命令超时", str(cm.exception))
+        mock_kill.assert_called_once_with(proc)
+
+    def test_real_timeout_leaves_no_child(self):
+        import subprocess
+
+        with self.assertRaises(exec_mod.CommandTimeout):
+            exec_mod.run_no_capture(["sleep", "11"], timeout=1)
+        r = subprocess.run(["pgrep", "-f", "sleep 11"], capture_output=True)
+        self.assertEqual(r.stdout.strip(), b"", "sleep 子进程未被清理")
+
+
+class TestKillProcGroup(unittest.TestCase):
+    def test_kills_group(self):
+        proc = MagicMock(pid=4242)
+        with patch("os.getpgid", return_value=4242), patch("os.killpg") as mock_killpg:
+            exec_mod._kill_proc_group(proc)
+        mock_killpg.assert_called_once()
+        proc.kill.assert_not_called()
+
+    def test_falls_back_to_kill(self):
+        proc = MagicMock(pid=4242)
+        with patch("os.getpgid", side_effect=ProcessLookupError):
+            exec_mod._kill_proc_group(proc)
+        proc.kill.assert_called_once()
+
+    def test_oserror_falls_back(self):
+        proc = MagicMock(pid=4242)
+        with patch("os.getpgid", return_value=4242), \
+             patch("os.killpg", side_effect=OSError):
+            exec_mod._kill_proc_group(proc)
+        proc.kill.assert_called_once()
+
+
+class TestDebugLog(unittest.TestCase):
+    def setUp(self):
+        import lib.notify as notify_mod
+        self._notify = notify_mod
+        self._prev = notify_mod._DEBUG
+
+    def tearDown(self):
+        self._notify._DEBUG = self._prev
+
+    def test_disabled_is_noop(self):
+        self._notify._DEBUG = False
+        with patch("lib.ui.reporter") as mock_reporter:
+            exec_mod._debug_log(None, ["echo"], None, 0.1)
+        mock_reporter.assert_not_called()
+
+    def test_logs_cmd_rc_elapsed(self):
+        self._notify._DEBUG = True
+        r = MagicMock()
+        with patch("lib.ui.reporter", return_value=r):
+            p = MagicMock(returncode=0, stdout="out", stderr="")
+            exec_mod._debug_log(p, ["echo", "hi"], "/repo", 1.5)
+        msg = r.step.call_args[0][0]
+        self.assertIn("cwd=/repo", msg)
+        self.assertIn("rc=0", msg)
+        self.assertIn("1.50s", msg)
+        r.output.assert_called_once_with("out")
+
+    def test_no_proc_uses_explicit_rc(self):
+        self._notify._DEBUG = True
+        r = MagicMock()
+        with patch("lib.ui.reporter", return_value=r):
+            exec_mod._debug_log(None, ["sleep"], None, 0.2, rc=7)
+        self.assertIn("rc=7", r.step.call_args[0][0])
+        r.output.assert_not_called()
+
+    def test_no_proc_no_rc_shows_question_mark(self):
+        self._notify._DEBUG = True
+        r = MagicMock()
+        with patch("lib.ui.reporter", return_value=r):
+            exec_mod._debug_log(None, ["sleep"], None, 0.2)
+        self.assertIn("rc=?", r.step.call_args[0][0])
+
+    def test_blank_output_not_printed(self):
+        self._notify._DEBUG = True
+        r = MagicMock()
+        with patch("lib.ui.reporter", return_value=r):
+            p = MagicMock(returncode=0, stdout="  ", stderr="")
+            exec_mod._debug_log(p, ["echo"], None, 0.1)
+        r.output.assert_not_called()
+
+    def test_reporter_import_failure_is_swallowed(self):
+        self._notify._DEBUG = True
+        import builtins
+
+        real_import = builtins.__import__
+
+        def boom(name, *args, **kwargs):
+            if name == "lib.ui":
+                raise ImportError("no rich")
+            return real_import(name, *args, **kwargs)
+
+        with patch.object(builtins, "__import__", boom):
+            exec_mod._debug_log(None, ["echo"], None, 0.1)
+
+
+class TestPropagateDebugEnv(unittest.TestCase):
+    def setUp(self):
+        import lib.notify as notify_mod
+        self._notify = notify_mod
+        self._prev = notify_mod._DEBUG
+
+    def tearDown(self):
+        self._notify._DEBUG = self._prev
+
+    def test_non_debug_returns_unchanged(self):
+        self._notify._DEBUG = False
+        self.assertIsNone(exec_mod._propagate_debug_env(None))
+        env = {"A": "1"}
+        self.assertIs(exec_mod._propagate_debug_env(env), env)
+
+    def test_debug_injects_into_explicit_env(self):
+        self._notify._DEBUG = True
+        out = exec_mod._propagate_debug_env({"A": "1"})
+        self.assertEqual(out["A"], "1")
+        self.assertEqual(out["SCRIPTS_DEBUG"], "1")
+
+    def test_debug_copies_os_environ_when_none(self):
+        self._notify._DEBUG = True
+        out = exec_mod._propagate_debug_env(None)
+        self.assertEqual(out["SCRIPTS_DEBUG"], "1")
+        self.assertIn("PATH", out)
+
+
 if __name__ == "__main__":
     unittest.main()
