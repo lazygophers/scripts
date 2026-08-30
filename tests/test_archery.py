@@ -375,6 +375,7 @@ class TestCliSmoke(unittest.TestCase):
             self.assertEqual(ping.returncode, 0, ping.stderr)
             self.assertEqual(json.loads(ping.stdout), {"pong": "/api/v1/ping/"})
 
+    @unittest.skipIf(os.geteuid() == 0, "已经是 root，不会走 sudo 重跑")
     def test_show_reexecs_through_sudo(self):
         """非 root 跑 `show`：真的走 execvp("sudo", ...)，用假 sudo 截下来看参数。"""
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as bindir:

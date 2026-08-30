@@ -31,9 +31,6 @@ import pathlib
 import sys
 import urllib.parse
 
-from lib.ovpn import load_config as _load_yaml
-from lib.ovpn import save_config as _save_yaml
-
 CONFIG_PATH = pathlib.Path.home() / ".config" / "lazygophers" / "scripts" / "archery.yaml"
 
 # JWT 端点（不带 /api 前缀，_url() 会补）
@@ -52,12 +49,31 @@ class ArcheryError(Exception):
 
 def load_config(path: pathlib.Path | None = None) -> dict:
     """读配置；文件不存在返回空 dict。不给路径时按当前身份推断（见 default_config_path）。"""
-    return _load_yaml(path or default_config_path())
+    import yaml
+
+    target = path or default_config_path()
+    if not target.exists():
+        return {}
+    data = yaml.safe_load(target.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else {}
 
 
 def save_config(data: dict, path: pathlib.Path | None = None) -> None:
-    """写配置，权限 0600（里面有明文密码和 TOTP 密钥）。"""
-    _save_yaml(data, path or default_config_path())
+    """写配置，权限 0600（里面有明文密码和 TOTP 密钥）。
+
+    属主保持调用者自己，不像 ovpn 那样收归 root —— archery 的日常命令（查数据、
+    管工单）都是普通用户跑的，配置一旦变成 root 属主它们就全读不了了。
+    """
+    import yaml
+
+    target = path or default_config_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+    # 先建 0600 再写，避免密码在 umask 宽松时短暂可读
+    fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(target, 0o600)
 
 
 def normalize_url(raw: str) -> str:
