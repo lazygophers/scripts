@@ -87,10 +87,12 @@ class TestRunCommit(unittest.TestCase):
         self.assertEqual(rc, 0)
         mock_gen.assert_not_called()
 
+    # 仓库里真有残留 .git/index.lock 时会多插一次清理调用，打乱 side_effect 序列
+    @patch("os.path.exists", return_value=False)
     @patch("lib.commit_wf.current_branch", return_value="master")
     @patch("lib.commit_wf.run")
     @patch("lib.commit_wf._has_changes")
-    def test_commit_retries_three_times(self, mock_has, mock_run, _mock_branch):
+    def test_commit_retries_three_times(self, mock_has, mock_run, _mock_branch, _mock_exists):
         mock_has.return_value = (True, ["M  file.py"])
         mock_run.side_effect = [
             MagicMock(stdout="file.py\n", stderr="", returncode=0),
