@@ -10,7 +10,11 @@
   code        只打印当前二步验证码（不连 VPN）
   route       管理分流规则（只让指定域名 / 网段走 VPN）
 
-配置文件: ~/.config/lazygophers/scripts/ovpn.yaml（权限 0600）
+配置文件: ~/.config/lazygophers/scripts/ovpn.yaml（属主 root，权限 0600）
+
+里面是明文密码和二步验证密钥，所以只有 root 读得到。connect / login / show /
+code / route 碰配置，非 root 运行时会自动用 sudo 重跑自己（会提示输本机密码）；
+status 不读配置，普通用户就能跑。
 """
 from __future__ import annotations
 
@@ -24,8 +28,10 @@ from lib.ovpn import (
     CONFIG_PATH,
     load_config,
     normalize_secret,
+    require_root,
     running_processes,
     save_config,
+    secure_config,
     totp,
     tun_interfaces,
 )
@@ -33,6 +39,10 @@ from lib.ovpn import connect as do_connect
 from lib.ovpn import disconnect as do_disconnect
 from lib.ovpn_split import DEFAULT_DNS_PORT, normalize_domain
 from lib.ui import ask_confirm, ask_text
+
+SCRIPT_PATH = pathlib.Path(__file__).resolve()
+# run_cli 会从 sys.argv 里剥掉 --debug / --no-say，提权重跑要的是没被动过的原始 argv
+ORIG_ARGV = list(sys.argv)
 
 
 def _mask(value: str) -> str:
@@ -68,6 +78,17 @@ def _ask_secret(prompt: str, *, default: str = "") -> str | None:
 class OvpnCli(BaseCli):
     """ovpn — 连 OpenVPN，自动填账号密码和二步验证码"""
 
+    def _need_root(self, cmd: str) -> bool:
+        """凭据文件是 root:0600，碰配置的子命令要 root：不是就用 sudo 重跑自己。
+
+        返回值永远是 False（重跑走 execvp 不返回），留着是为了调用点读起来直白。
+        """
+        del cmd
+        require_root(SCRIPT_PATH, ORIG_ARGV[1:])
+        if secure_config():
+            self._r.info(f"已把 {CONFIG_PATH} 收归 root:0600")
+        return False
+
     @timed_cli
     def login(self):
         """交互式录入凭据，写入 ~/.config/lazygophers/scripts/ovpn.yaml
@@ -77,8 +98,10 @@ class OvpnCli(BaseCli):
 
         二步验证密钥支持裸 base32，也支持 otpauth://totp/...?secret=XXX 整串。
 
-        用法: ovpn login
+        用法: sudo ovpn login
         """
+        if self._need_root("login"):
+            return 13
         cfg = load_config()
 
         profile = ask_text("VPN 配置文件 (.ovpn) 路径", default=str(cfg.get("config") or ""))
@@ -155,6 +178,8 @@ class OvpnCli(BaseCli):
         """
         import ipaddress
 
+        if self._need_root("route ..."):
+            return 13
         cfg = load_config()
         routes = dict(cfg.get("routes") or {})
         domains = [str(x) for x in (routes.get("domains") or [])]
@@ -245,6 +270,8 @@ class OvpnCli(BaseCli):
 
         用法: ovpn connect [--verbose] [--no-reconnect] [--reconnect-max 10] [--no-split]
         """
+        if self._need_root("connect"):
+            return 13
         cfg = load_config()
         missing = [k for k in ("config", "username", "password") if not str(cfg.get(k) or "").strip()]
         if missing:
@@ -296,8 +323,10 @@ class OvpnCli(BaseCli):
     def show(self):
         """查看当前配置（密码与二步验证密钥打码）
 
-        用法: ovpn show
+        用法: sudo ovpn show
         """
+        if self._need_root("show"):
+            return 13
         cfg = load_config()
         if not cfg:
             self._r.warn(f"还没有配置：{CONFIG_PATH} 不存在。跑 `ovpn login`")
@@ -325,8 +354,10 @@ class OvpnCli(BaseCli):
     def code(self):
         """只打印当前二步验证码（不连 VPN），用于验证密钥填对没有
 
-        用法: ovpn code
+        用法: sudo ovpn code
         """
+        if self._need_root("code"):
+            return 13
         secret = str(load_config().get("totp_secret") or "")
         if not secret:
             self._r.err("配置里没有二步验证密钥。跑 `ovpn login`")

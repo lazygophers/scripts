@@ -33,7 +33,21 @@ import tempfile
 import time
 import urllib.parse
 
-CONFIG_PATH = pathlib.Path.home() / ".config" / "lazygophers" / "scripts" / "ovpn.yaml"
+
+def real_home() -> pathlib.Path:
+    """sudo 下 `~` 会变成 /var/root，配置得留在真实用户的家目录里。"""
+    user = os.environ.get("SUDO_USER")
+    if user:
+        import pwd
+
+        try:
+            return pathlib.Path(pwd.getpwnam(user).pw_dir)
+        except KeyError:
+            pass
+    return pathlib.Path.home()
+
+
+CONFIG_PATH = real_home() / ".config" / "lazygophers" / "scripts" / "ovpn.yaml"
 
 # brew / 系统常见安装位置（PATH 里没有时兜底）
 _EXTRA_BIN_DIRS = (
@@ -48,27 +62,75 @@ _EXTRA_BIN_DIRS = (
 
 # ---------------------------------------------------------------- config
 
+def is_root() -> bool:
+    return os.geteuid() == 0
+
+
+class NeedRoot(Exception):
+    """配置文件是 root:0600，普通用户读不到也写不了。"""
+
+
+def require_root(script: pathlib.Path, argv: list[str]) -> None:
+    """碰配置的命令的门槛：不是 root 就用 sudo 原样重跑自己（execvp，不返回）。
+
+    解释器写成绝对路径（sys.executable），避免 sudo 的 PATH 里没有 mise/venv 的
+    python；配置路径不用传，`real_home()` 会按 `SUDO_USER` 回落到真实家目录。
+    """
+    if is_root():
+        return
+    cmd = ["sudo", sys.executable, str(script), *argv]
+    try:
+        os.execvp("sudo", cmd)
+    except OSError as e:
+        raise NeedRoot(f"这条命令需要 root，但起不了 sudo: {e}") from e
+
+
+def secure_config(path: pathlib.Path = CONFIG_PATH) -> bool:
+    """把旧的用户属主配置收归 root:0600。只有 root 跑得动，改动了返回 True。"""
+    if not is_root() or not path.exists():
+        return False
+    st = path.stat()
+    if st.st_uid == 0 and (st.st_mode & 0o777) == 0o600:
+        return False
+    os.chown(path, 0, 0)
+    os.chmod(path, 0o600)
+    return True
+
+
 def load_config(path: pathlib.Path = CONFIG_PATH) -> dict:
-    """读 YAML 配置；文件不存在或为空 → 返回空 dict。"""
+    """读 YAML 配置；文件不存在或为空 → 返回空 dict。
+
+    文件属主是 root、权限 0600，所以非 root 读会拿到 PermissionError，
+    转成 NeedRoot 让调用方提示「加 sudo」。
+    """
     import yaml
 
     if not path.exists():
         return {}
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except PermissionError as e:
+        raise NeedRoot(f"读不了 {path}（只有 root 能读），命令前面加 sudo") from e
+    data = yaml.safe_load(text)
     return data if isinstance(data, dict) else {}
 
 
 def save_config(data: dict, path: pathlib.Path = CONFIG_PATH) -> None:
-    """写 YAML 配置，权限 0600（里面有明文密码和 TOTP 密钥）。"""
+    """写 YAML 配置：属主 root、权限 0600（里面有明文密码和 TOTP 密钥）。"""
     import yaml
 
     path.parent.mkdir(parents=True, exist_ok=True)
     text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
     # 先建 0600 再写，避免密码在 umask 宽松时短暂可读
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    except PermissionError as e:
+        raise NeedRoot(f"写不了 {path}（只有 root 能写），命令前面加 sudo") from e
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
     os.chmod(path, 0o600)
+    if is_root():
+        os.chown(path, 0, 0)  # 已经存在的旧文件也顺手收归 root
 
 
 # ---------------------------------------------------------------- TOTP

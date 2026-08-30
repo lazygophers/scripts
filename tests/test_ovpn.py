@@ -162,6 +162,94 @@ class TestConfigIO(unittest.TestCase):
             self.assertEqual(ov.load_config(p), {})
 
 
+class TestRootGate(unittest.TestCase):
+    def test_real_home_follows_sudo_user(self):
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"SUDO_USER": "nobody-xyz"}, clear=False), \
+             mock.patch("pwd.getpwnam") as getpw:
+            getpw.return_value.pw_dir = "/Users/someone"
+            self.assertEqual(ov.real_home(), pathlib.Path("/Users/someone"))
+
+    def test_real_home_falls_back_when_user_unknown(self):
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"SUDO_USER": "nobody-xyz"}, clear=False), \
+             mock.patch("pwd.getpwnam", side_effect=KeyError):
+            self.assertEqual(ov.real_home(), pathlib.Path.home())
+
+    def test_require_root_reexecs_with_sudo(self):
+        from unittest import mock
+
+        with mock.patch.object(ov, "is_root", return_value=False), \
+             mock.patch.object(ov.os, "execvp") as execvp:
+            ov.require_root(pathlib.Path("/x/bin/ovpn"), ["show"])
+        execvp.assert_called_once()
+        name, cmd = execvp.call_args[0]
+        self.assertEqual(name, "sudo")
+        self.assertEqual(cmd[:2], ["sudo", sys.executable])
+        self.assertEqual(cmd[2:], ["/x/bin/ovpn", "show"])
+
+    def test_require_root_noop_when_root(self):
+        from unittest import mock
+
+        with mock.patch.object(ov, "is_root", return_value=True), \
+             mock.patch.object(ov.os, "execvp") as execvp:
+            ov.require_root(pathlib.Path("/x/bin/ovpn"), ["show"])
+        execvp.assert_not_called()
+
+    def test_load_config_permission_denied_becomes_need_root(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "ovpn.yaml"
+            p.write_text("username: u\n", encoding="utf-8")
+            with mock.patch.object(pathlib.Path, "read_text", side_effect=PermissionError):
+                with self.assertRaises(ov.NeedRoot):
+                    ov.load_config(p)
+
+    def test_secure_config_noop_for_non_root(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "ovpn.yaml"
+            p.write_text("username: u\n", encoding="utf-8")
+            with mock.patch.object(ov, "is_root", return_value=False):
+                self.assertFalse(ov.secure_config(p))
+
+    def test_secure_config_chowns_user_owned_file(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "ovpn.yaml"
+            p.write_text("username: u\n", encoding="utf-8")
+            p.chmod(0o644)
+            with mock.patch.object(ov, "is_root", return_value=True), \
+                 mock.patch.object(ov.os, "chown") as chown:
+                self.assertTrue(ov.secure_config(p))
+            chown.assert_called_once_with(p, 0, 0)
+            self.assertEqual(os.stat(p).st_mode & 0o777, 0o600)
+
+    def test_secure_config_noop_when_already_root_owned(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "ovpn.yaml"
+            p.write_text("username: u\n", encoding="utf-8")
+            p.chmod(0o600)
+            fake_stat = os.stat(p)
+
+            class _St:
+                st_uid = 0
+                st_mode = fake_stat.st_mode
+
+            with mock.patch.object(ov, "is_root", return_value=True), \
+                 mock.patch.object(pathlib.Path, "stat", return_value=_St()), \
+                 mock.patch.object(ov.os, "chown") as chown:
+                self.assertFalse(ov.secure_config(p))
+            chown.assert_not_called()
+
+
 class TestFindOpenvpn(unittest.TestCase):
     def test_finds_binary_in_path(self):
         old = os.environ.get("PATH", "")
@@ -388,6 +476,31 @@ class TestReconnectLoop(unittest.TestCase):
                                side_effect=lambda *a, **k: (*next(seq), None)), \
              mock.patch.object(ov.time, "sleep"):
             self.assertEqual(ov.connect({"auto_reconnect": False}, _FakeReporter()), 1)
+
+
+class TestBinReexecsThroughSudo(unittest.TestCase):
+    """bin/ovpn 黑盒：非 root 跑 `show` 要真的 execvp 到 sudo。
+
+    盯的是 bin/ovpn 里 `require_root(SCRIPT_PATH, ORIG_ARGV[1:])` 用到的两个模块级
+    常量——漏定义时只在运行时炸 NameError，import 和 py_compile 都发现不了。
+    """
+
+    @unittest.skipIf(os.geteuid() == 0, "已经是 root，不会走 sudo 重跑")
+    def test_show_execs_sudo(self):
+        import subprocess
+
+        repo_root = pathlib.Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as bindir:
+            fake_sudo = pathlib.Path(bindir) / "sudo"
+            fake_sudo.write_text('#!/bin/sh\necho "FAKE-SUDO $@"\n', encoding="utf-8")
+            fake_sudo.chmod(0o755)
+            env = dict(os.environ, SCRIPTS_NO_SAY="1",
+                       PATH=f"{bindir}:{os.environ.get('PATH', '')}")
+            proc = subprocess.run([sys.executable, str(repo_root / "bin" / "ovpn"), "show"],
+                                  capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("FAKE-SUDO", proc.stdout)
+        self.assertIn("show", proc.stdout)
 
 
 if __name__ == "__main__":
