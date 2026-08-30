@@ -19,9 +19,11 @@ from __future__ import annotations
 import ipaddress
 import pathlib
 import re
+import select
 import socket
 import subprocess
 import threading
+import time
 
 RESOLVER_DIR = pathlib.Path("/etc/resolver")
 
@@ -125,6 +127,13 @@ def parse_answer_ips(msg: bytes) -> list[str]:
     return ips
 
 
+# 兜底上游：既没配 dns_upstream、VPN 也没 push、/etc/resolv.conf 还空的时候用。
+# 国内 + 国外各两台并列 —— forward() 是并行问、先到先用，在中国 1.1.1.1/8.8.8.8
+# 不通只是不答，223.5.5.5 照样秒回；在国外反过来。所以同一份配置两地都能用，
+# 不需要按地区切换。
+FALLBACK_NAMESERVERS = ["223.5.5.5", "119.29.29.29", "1.1.1.1", "8.8.8.8"]
+
+
 def system_nameservers() -> list[str]:
     """读 /etc/resolv.conf 里的上游 DNS，排除回环地址（避免打回自己造成死循环）。"""
     servers = []
@@ -141,7 +150,7 @@ def system_nameservers() -> list[str]:
                 continue
             if not addr.is_loopback:
                 servers.append(str(addr))
-    return servers or ["1.1.1.1", "8.8.8.8"]
+    return servers or list(FALLBACK_NAMESERVERS)
 
 
 # ---------------------------------------------------------------- 路由表
@@ -342,18 +351,45 @@ class DnsProxy:
             pass
 
     def forward(self, query: bytes) -> bytes | None:
-        """依次问每个上游 DNS，第一个答上来的就用。全部超时返回 None。"""
+        """同时问所有上游 DNS，谁先答上来就用谁。全部超时返回 None。
+
+        并行而不是逐个问，是为了让同一份配置在中国和国外都能用：兜底上游里
+        国内国外的 DNS 并列，在中国境外那几台只是不响应，不会拖慢境内那几台。
+        只在同一梯队内部并行（见 SplitTunnel.upstreams 的优先级），不混梯队 ——
+        分流域名是内网域名，公共 DNS 抢答会给出错误的公网 IP。
+        """
         label = question_label(query)
         upstreams = self.upstreams
-        for up in upstreams:
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                    s.settimeout(self.timeout)
+        socks: list[socket.socket] = []
+        try:
+            for up in upstreams:
+                s = None
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.setblocking(False)
                     s.sendto(query, (up, 53))
-                    data, _ = s.recvfrom(4096)
-                    return data
-            except OSError:
-                continue
+                except OSError:
+                    if s is not None:
+                        s.close()
+                    continue
+                socks.append(s)
+            deadline = time.monotonic() + self.timeout
+            while socks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                ready, _, _ = select.select(socks, [], [], remaining)
+                if not ready:
+                    break
+                for s in ready:
+                    try:
+                        return s.recvfrom(4096)[0]
+                    except OSError:
+                        socks.remove(s)
+                        s.close()
+        finally:
+            for s in socks:
+                s.close()
         if self.reporter:
             self.reporter.warn(f"{label}: 上游 DNS 都没响应 ({', '.join(upstreams)})")
         return None

@@ -478,7 +478,21 @@ class TestSystemNameservers(unittest.TestCase):
 
     def test_falls_back_when_unreadable(self):
         with mock.patch.object(pathlib.Path, "read_text", side_effect=OSError):
-            self.assertEqual(S.system_nameservers(), ["1.1.1.1", "8.8.8.8"])
+            servers = S.system_nameservers()
+        self.assertEqual(servers, S.FALLBACK_NAMESERVERS)
+
+    def test_fallback_covers_both_regions(self):
+        # 一份配置两地都能用：国内国外各至少一台，靠 forward() 并行赛跑挑通的那台
+        self.assertIn("223.5.5.5", S.FALLBACK_NAMESERVERS)
+        self.assertIn("1.1.1.1", S.FALLBACK_NAMESERVERS)
+
+    def test_fallback_list_is_copied_per_call(self):
+        with mock.patch.object(pathlib.Path, "read_text", side_effect=OSError):
+            first = S.system_nameservers()
+            first.append("9.9.9.9")
+            second = S.system_nameservers()
+        self.assertNotIn("9.9.9.9", second)
+        self.assertNotIn("9.9.9.9", S.FALLBACK_NAMESERVERS)
 
 
 class _Run:
@@ -558,6 +572,34 @@ class TestResolverFileReporting(unittest.TestCase):
         self.assertIn("127.0.0.1:5354", r.lines[1][1])
 
 
+class _FakeSock:
+    """UDP socket 替身：记录发出去的查询，按需模拟发送/读取失败。"""
+
+    def __init__(self, answer: bytes | None = None, *,
+                 send_error: bool = False, recv_error: bool = False):
+        self.answer = answer
+        self.send_error = send_error
+        self.recv_error = recv_error
+        self.sent: list[tuple[bytes, tuple[str, int]]] = []
+        self.closed = False
+
+    def setblocking(self, flag):
+        pass
+
+    def sendto(self, data, addr):
+        if self.send_error:
+            raise OSError("network is unreachable")
+        self.sent.append((data, addr))
+
+    def recvfrom(self, size):
+        if self.recv_error or self.answer is None:
+            raise OSError("connection refused")
+        return self.answer, ("127.0.0.1", 53)
+
+    def close(self):
+        self.closed = True
+
+
 def _free_port() -> int:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.bind(("127.0.0.1", 0))
@@ -606,13 +648,74 @@ class TestDnsProxyLifecycle(unittest.TestCase):
 
     def test_forward_returns_first_upstream_answer(self):
         answer = _dns_answer("a.com", [(1, bytes([1, 2, 3, 4]))])
-        sock = mock.MagicMock()
-        sock.__enter__.return_value = sock
-        sock.recvfrom.return_value = (answer, ("192.0.2.1", 53))
+        sock = _FakeSock(answer)
         proxy = S.DnsProxy(5354, ["192.0.2.1"], ["a.com"], lambda q, ips: None)
-        with mock.patch.object(S.socket, "socket", return_value=sock):
+        with mock.patch.object(S.socket, "socket", return_value=sock), \
+             mock.patch.object(S.select, "select", return_value=([sock], [], [])):
             self.assertEqual(proxy.forward(_dns_query("a.com")), answer)
-        self.assertEqual(sock.sendto.call_args[0][1], ("192.0.2.1", 53))
+        self.assertEqual(sock.sent[0][1], ("192.0.2.1", 53))
+        self.assertTrue(sock.closed)
+
+
+class TestDnsProxyForwardParallel(unittest.TestCase):
+    """并行问所有上游、先到先用 —— 一份配置在中国和国外都能用的关键。"""
+
+    def test_queries_all_upstreams_before_waiting(self):
+        answer = _dns_answer("a.com", [(1, bytes([1, 2, 3, 4]))])
+        socks = [_FakeSock(), _FakeSock(answer)]
+        proxy = S.DnsProxy(5354, ["223.5.5.5", "1.1.1.1"], ["a.com"], lambda q, ips: None)
+        with mock.patch.object(S.socket, "socket", side_effect=list(socks)), \
+             mock.patch.object(S.select, "select", return_value=([socks[1]], [], [])):
+            self.assertEqual(proxy.forward(_dns_query("a.com")), answer)
+        # 两台都发了查询，没有「先等第一台超时」
+        self.assertEqual([s.sent[0][1] for s in socks],
+                         [("223.5.5.5", 53), ("1.1.1.1", 53)])
+        self.assertTrue(all(s.closed for s in socks))
+
+    def test_unsendable_upstream_is_skipped(self):
+        answer = _dns_answer("a.com", [(1, bytes([1, 2, 3, 4]))])
+        dead, live = _FakeSock(send_error=True), _FakeSock(answer)
+        proxy = S.DnsProxy(5354, ["10.0.0.1", "1.1.1.1"], ["a.com"], lambda q, ips: None)
+        with mock.patch.object(S.socket, "socket", side_effect=[dead, live]), \
+             mock.patch.object(S.select, "select", return_value=([live], [], [])):
+            self.assertEqual(proxy.forward(_dns_query("a.com")), answer)
+        self.assertTrue(dead.closed)
+
+    def test_socket_creation_failure_warns(self):
+        r = _FakeReporter()
+        proxy = S.DnsProxy(5354, ["192.0.2.1"], ["a.com"], lambda q, ips: None,
+                           r, timeout=0.01)
+        with mock.patch.object(S.socket, "socket", side_effect=OSError("no fd")):
+            self.assertIsNone(proxy.forward(_dns_query("api.a.com")))
+        self.assertIn("192.0.2.1", [m for k, m in r.lines if k == "warn"][0])
+
+    def test_timeout_returns_none_and_closes_sockets(self):
+        sock = _FakeSock()
+        proxy = S.DnsProxy(5354, ["192.0.2.1"], ["a.com"], lambda q, ips: None,
+                           timeout=0.01)
+        with mock.patch.object(S.socket, "socket", return_value=sock), \
+             mock.patch.object(S.select, "select", return_value=([], [], [])):
+            self.assertIsNone(proxy.forward(_dns_query("a.com")))
+        self.assertTrue(sock.closed)
+
+    def test_expired_deadline_skips_select(self):
+        sock = _FakeSock()
+        proxy = S.DnsProxy(5354, ["192.0.2.1"], ["a.com"], lambda q, ips: None,
+                           timeout=0)
+        with mock.patch.object(S.socket, "socket", return_value=sock), \
+             mock.patch.object(S.select, "select") as sel:
+            self.assertIsNone(proxy.forward(_dns_query("a.com")))
+        sel.assert_not_called()
+
+    def test_readable_socket_that_errors_is_dropped(self):
+        bad = _FakeSock(recv_error=True)
+        proxy = S.DnsProxy(5354, ["192.0.2.1"], ["a.com"], lambda q, ips: None,
+                           timeout=0.05)
+        with mock.patch.object(S.socket, "socket", return_value=bad), \
+             mock.patch.object(S.select, "select", return_value=([bad], [], [])):
+            # 唯一的上游读失败 → 列表空掉，循环结束返回 None
+            self.assertIsNone(proxy.forward(_dns_query("a.com")))
+        self.assertTrue(bad.closed)
 
 
 class TestSplitTunnelOnIps(unittest.TestCase):
