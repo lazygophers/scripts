@@ -105,6 +105,17 @@ class TestParsePushedDns(unittest.TestCase):
         self.assertEqual(ov.parse_pushed_dns("PUSH_REPLY,route 10.8.0.0 255.255.0.0"), [])
 
 
+class TestExplainOpenvpnLog(unittest.TestCase):
+    def test_known_error_gets_actionable_hint(self):
+        got = ov.explain_openvpn_log("TLS Error: TLS key negotiation failed")
+        self.assertIn("VPN 握手超时", got)
+        self.assertIn("原始日志", got)
+
+    def test_unknown_line_is_kept_verbatim(self):
+        line = "TCP/UDP: Preserving recently used remote address"
+        self.assertEqual(ov.explain_openvpn_log(line), line)
+
+
 class TestBuildPasswordReply(unittest.TestCase):
     def test_plain_password(self):
         got = ov.build_password_reply("pw", otp=None, sc_flags=None, crv_state=None)

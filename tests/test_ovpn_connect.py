@@ -622,7 +622,7 @@ class TestConnectRetry(unittest.TestCase):
         with mock.patch.object(ovpn, "_connect_once", return_value=(1, False, None)):
             rc = ovpn.connect({}, r, reconnect=True, reconnect_max=2)
         self.assertEqual(rc, 1)
-        self.assertIn("放弃", r.err.call_args[0][0])
+        self.assertIn("已停止", r.err.call_args[0][0])
 
     def test_reconnect_max_comes_from_the_config(self) -> None:
         with mock.patch.object(ovpn, "_connect_once", return_value=(1, False, None)):
@@ -781,6 +781,7 @@ class TestConnectOnce(unittest.TestCase):
         proc.stdout = iter([
             "PUSH: Received control message: 'PUSH_REPLY,dhcp-option DNS 10.8.0.1'\n",
             "普通日志，非关键行\n",
+            "Initialization Sequence Completed\n",
             "ERROR: 关键行\n",
             "\n",
         ])
@@ -807,6 +808,7 @@ class TestConnectOnce(unittest.TestCase):
         self.assertEqual(threading.Thread, real_thread)  # patch 已还原
         self.split.note_pushed_dns.assert_called_once_with(["10.8.0.1"])
         printed = [c[0][0] for c in r.output.call_args_list]
+        self.assertIn("VPN 已经连通；现在可以访问需要 VPN 的内网站点｜原始日志: Initialization Sequence Completed", printed)
         self.assertIn("ERROR: 关键行", printed)
         self.assertNotIn("普通日志，非关键行", printed)
 

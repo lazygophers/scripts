@@ -362,6 +362,25 @@ def parse_dynamic_challenge(line: str) -> str | None:
 
 _LOG_KEEP = ("ERROR", "WARNING", "FATAL", "Cannot", "failed", "Initialization Sequence Completed")
 
+_OPENVPN_HINTS = (
+    ("Initialization Sequence Completed", "VPN 已经连通；现在可以访问需要 VPN 的内网站点"),
+    ("AUTH_FAILED", "VPN 认证被拒；跑 `sudo ovpn login` 重新填写用户名、密码和二步验证密钥"),
+    ("TLS Error", "VPN 握手超时；检查网络是否能访问 VPN 服务器，或换个网络再试"),
+    ("Cannot resolve host address", "VPN 服务器域名解析失败；检查本机 DNS 或网络连接"),
+    ("Connection refused", "VPN 服务器拒绝连接；检查 .ovpn 文件里的服务器地址和端口是否正确"),
+    ("Network is unreachable", "本机网络不可达；先确认 Wi-Fi / 有线网络能上网"),
+    ("Options error", "OpenVPN 配置文件格式有问题；检查 .ovpn 文件，或跑 `sudo ovpn login` 重新选择"),
+)
+
+
+def explain_openvpn_log(line: str) -> str:
+    """把常见 openvpn 原始日志翻译成用户能直接行动的提示。"""
+    for needle, hint in _OPENVPN_HINTS:
+        if needle in line:
+            return f"{hint}｜原始日志: {line}"
+    return line
+
+
 _PUSH_DNS_RE = re.compile(r"dhcp-option\s+DNS6?\s+([0-9a-fA-F:.]+)")
 
 
@@ -475,9 +494,9 @@ def connect(cfg: dict, reporter, *, verbose: bool = False,
         attempt = 0 if connected else attempt + 1
         delay = 5.0 if connected else min(delay * 2, 60.0)
         if reconnect_max and attempt > reconnect_max:
-            reporter.err(f"连续重连 {reconnect_max} 次都失败，放弃")
+            reporter.err(f"VPN 已连续重连 {reconnect_max} 次都失败，已停止。下一步: 跑 `ovpn connect --verbose` 看完整 OpenVPN 原始日志")
             return rc
-        reporter.warn(f"连接断开 (exit={rc})，{delay:.0f}s 后第 {attempt or 1} 次重连")
+        reporter.warn(f"VPN 连接断开，{delay:.0f} 秒后自动重试第 {attempt or 1} 次。按 Ctrl-C 可停止")
         try:
             time.sleep(delay)
         except KeyboardInterrupt:
@@ -497,7 +516,7 @@ def _connect_once(cfg: dict, reporter, *, verbose: bool = False,
     profile = str(cfg.get("config") or "").strip()
     profile_path = pathlib.Path(profile).expanduser()
     if not profile or not profile_path.is_file():
-        reporter.err(f"配置里的 .ovpn 文件不存在: {profile or '(空)'}；跑 `ovpn login` 重填")
+        reporter.err(f"找不到 VPN 配置文件: {profile or '(空)'}。下一步: 跑 `sudo ovpn login` 重新选择 .ovpn 文件")
         return 2, False, last_otp_counter
 
     username = str(cfg.get("username") or "")
@@ -544,8 +563,8 @@ def _connect_once(cfg: dict, reporter, *, verbose: bool = False,
         *extra,
     ]
 
-    reporter.step(f"启动 openvpn: {profile_path}")
-    reporter.info("需要 sudo 权限创建 tun 设备并改路由，可能会提示输入本机密码")
+    reporter.step(f"正在启动 VPN: {profile_path}")
+    reporter.info("系统会要求输入本机密码；这是为了创建 VPN 网卡和写入路由")
 
     proc = subprocess.Popen(
         cmd,
@@ -569,10 +588,10 @@ def _connect_once(cfg: dict, reporter, *, verbose: bool = False,
                 pushed = parse_pushed_dns(line)
                 if pushed:
                     split.note_pushed_dns(pushed)
-                    reporter.info(f"服务端 push 的 DNS: {', '.join(pushed)}")
+                    reporter.info(f"VPN 下发了内部 DNS: {', '.join(pushed)}。分流域名会先问这些 DNS")
             if quiet_log and not any(k in line for k in _LOG_KEEP):
                 continue  # 分流把 verb 提到了 3，非 verbose 时只留关键行，别刷屏
-            reporter.output(line, prefix="  ovpn | ")
+            reporter.output(explain_openvpn_log(line), prefix="  openvpn | ")
 
     threading.Thread(target=_pump_log, daemon=True).start()
 
@@ -580,7 +599,7 @@ def _connect_once(cfg: dict, reporter, *, verbose: bool = False,
     try:
         for _ in range(50):  # 最多等 5 秒让 management 端口起来
             if proc.poll() is not None:
-                reporter.err(f"openvpn 提前退出 (exit={proc.returncode})")
+                reporter.err(f"OpenVPN 启动后立刻退出（退出码 {proc.returncode}）。下一步: 跑 `ovpn connect --verbose` 看上方原始日志")
                 return proc.returncode or 1, False, last_otp_counter
             try:
                 mgmt = ManagementClient("127.0.0.1", port, mgmt_pw)
@@ -588,7 +607,7 @@ def _connect_once(cfg: dict, reporter, *, verbose: bool = False,
             except OSError:
                 time.sleep(0.1)
         if mgmt is None:
-            reporter.err("连不上 management 接口，放弃")
+            reporter.err("脚本连不上 OpenVPN 管理接口，无法自动填写账号密码。下一步: 跑 `ovpn connect --verbose` 看 OpenVPN 是否正常启动")
             proc.terminate()
             return 1, False, last_otp_counter
 
@@ -647,11 +666,11 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
                 last_otp_counter = totp_counter()
                 otp = totp(secret)
             if crv_state:
-                reporter.step("服务端下发动态挑战，回填二步验证码")
+                reporter.step("VPN 要求二步验证码，正在自动填写")
             elif sc_flags is not None:
-                reporter.step("服务端要求 static challenge，回填密码 + 二步验证码")
+                reporter.step("VPN 要求密码和二步验证码，正在自动填写")
             else:
-                reporter.step("回填用户名 / 密码")
+                reporter.step("VPN 要求用户名和密码，正在自动填写")
             try:
                 reply = build_password_reply(password, otp=otp, sc_flags=sc_flags,
                                              crv_state=crv_state)
@@ -666,11 +685,11 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
         state = parse_dynamic_challenge(line)
         if state:
             crv_state = state
-            reporter.warn("首轮认证被拒，服务端进入动态挑战，准备回填验证码")
+            reporter.warn("第一次认证被拒，VPN 又要求一次二步验证码，正在自动填写")
             continue
 
         if line.startswith(">PASSWORD:Verification Failed"):
-            reporter.err("认证失败：用户名 / 密码 / 二步验证码不对。跑 `ovpn login` 重填")
+            reporter.err("VPN 认证失败：用户名、密码或二步验证码不对。下一步: 跑 `sudo ovpn login` 重新填写")
             return 2, connected_ever, last_otp_counter
 
         if line.startswith(">STATE:"):
@@ -681,17 +700,17 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
                 connected_ever = True
                 local_ip = fields[3] if len(fields) > 3 else ""
                 remote = fields[4] if len(fields) > 4 else ""
-                reporter.ok(f"已连接  本地 IP {local_ip or '(无)'}  服务端 {remote or '(无)'}")
+                reporter.ok(f"VPN 已连接。本机 VPN IP: {local_ip or '(未显示)'}；VPN 服务器: {remote or '(未显示)'}")
                 if split is not None:
                     # 分流规则依赖 tun 网卡，必须等 CONNECTED 拿到本地 IP 才能定位网卡
                     split.start(local_ip)
-                reporter.info("Ctrl-C 断开")
+                reporter.info("保持这个窗口开着。要断开 VPN，按 Ctrl-C")
             elif name == "RECONNECTING":
-                reporter.warn(f"链路中断，openvpn 正在自行重连: {detail or '(无原因)'}")
+                reporter.warn(f"VPN 网络断了一下，OpenVPN 正在自动重连。原因: {detail or '没有给出原因'}")
             elif name == "EXITING":
-                reporter.warn(f"连接退出: {detail}")
+                reporter.warn(f"VPN 正在退出。原因: {detail or '没有给出原因'}")
             else:
-                reporter.step(f"状态 {name}{(' · ' + detail) if detail else ''}")
+                reporter.step(f"VPN 状态: {name}{('；详情: ' + detail) if detail else ''}")
 
     proc.wait()
     return proc.returncode or 0, connected_ever, last_otp_counter

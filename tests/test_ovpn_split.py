@@ -514,7 +514,7 @@ class TestRouteTableReporting(unittest.TestCase):
         t = S.RouteTable("utun4", r)
         with mock.patch.object(S.subprocess, "run", _Run([(0, "")])):
             self.assertTrue(t.add_host("1.2.3.4"))
-        self.assertIn(("step", "路由 1.2.3.4 → utun4"), r.lines)
+        self.assertIn(("step", "已让 1.2.3.4 走 VPN 网卡 utun4"), r.lines)
 
     def test_add_host_warns_and_forgets_on_failure(self):
         r = _FakeReporter()
@@ -528,7 +528,7 @@ class TestRouteTableReporting(unittest.TestCase):
         r = _FakeReporter()
         t = S.RouteTable("utun4", r)
         self.assertFalse(t.add_network("not-a-cidr"))
-        self.assertIn("不是合法网段", r.lines[0][1])
+        self.assertIn("分流网段写错", r.lines[0][1])
 
     def test_add_network_success_reports(self):
         r = _FakeReporter()
@@ -536,14 +536,14 @@ class TestRouteTableReporting(unittest.TestCase):
         with mock.patch.object(S.subprocess, "run", _Run([(0, "")])):
             self.assertTrue(t.add_network("10.8.0.0/16"))
         self.assertIn("10.8.0.0/16", t.added)
-        self.assertIn(("step", "路由 10.8.0.0/16 → utun4"), r.lines)
+        self.assertIn(("step", "已让 10.8.0.0/16 走 VPN 网卡 utun4"), r.lines)
 
     def test_add_network_failure_warns(self):
         r = _FakeReporter()
         t = S.RouteTable("utun4", r)
         with mock.patch.object(S.subprocess, "run", _Run([(1, "boom")])):
             self.assertFalse(t.add_network("10.8.0.0/16"))
-        self.assertIn("加网段失败", r.lines[0][1])
+        self.assertIn("加 VPN 路由失败", r.lines[0][1])
 
     def test_add_network_ipv6_family(self):
         t = S.RouteTable("utun4")
@@ -569,7 +569,7 @@ class TestResolverFileReporting(unittest.TestCase):
         kinds = [k for k, _ in r.lines]
         self.assertEqual(kinds, ["warn", "step"])
         self.assertIn("denied", r.lines[0][1])
-        self.assertIn("127.0.0.1:5354", r.lines[1][1])
+        self.assertIn("会先走 VPN DNS", r.lines[1][1])
 
 
 class _FakeSock:
@@ -738,7 +738,7 @@ class TestSplitTunnelOnIps(unittest.TestCase):
             captured["on_ips"]("api.example.com", ["1.1.1.1", "2.2.2.2"])
 
         infos = [m for k, m in r.lines if k == "info"]
-        self.assertEqual(len([m for m in infos if "已加入 VPN 路由" in m]), 1)
+        self.assertEqual(len([m for m in infos if "已让这个 IP 走 VPN" in m]), 1)
 
 
 if __name__ == "__main__":

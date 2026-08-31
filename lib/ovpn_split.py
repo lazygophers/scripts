@@ -187,12 +187,12 @@ class RouteTable:
             # 路由已存在（EEXIST）不算错，其它情况报出来
             if "File exists" not in (r.stderr or ""):
                 if self.reporter:
-                    self.reporter.warn(f"加路由失败 {ip}: {(r.stderr or '').strip()}")
+                    self.reporter.warn(f"给 {ip} 加 VPN 路由失败；这个 IP 可能走不到 VPN。系统返回: {(r.stderr or '').strip()}")
                 with self._lock:
                     self.added.discard(ip)
                 return False
         elif self.reporter:
-            self.reporter.step(f"路由 {ip} → {self.interface}")
+            self.reporter.step(f"已让 {ip} 走 VPN 网卡 {self.interface}")
         return True
 
     def add_network(self, cidr: str) -> bool:
@@ -201,7 +201,7 @@ class RouteTable:
             net = ipaddress.ip_network(cidr, strict=False)
         except ValueError:
             if self.reporter:
-                self.reporter.warn(f"不是合法网段，跳过: {cidr}")
+                self.reporter.warn(f"分流网段写错，已跳过: {cidr}。例子: 10.8.0.0/16")
             return False
         family = "-inet6" if net.version == 6 else "-inet"
         cmd = ["sudo", "route", "-n", "add", family, "-net", str(net),
@@ -212,9 +212,9 @@ class RouteTable:
             with self._lock:
                 self.added.add(str(net))
             if self.reporter:
-                self.reporter.step(f"路由 {net} → {self.interface}")
+                self.reporter.step(f"已让 {net} 走 VPN 网卡 {self.interface}")
         elif self.reporter:
-            self.reporter.warn(f"加网段失败 {net}: {(r.stderr or '').strip()}")
+            self.reporter.warn(f"给分流网段 {net} 加 VPN 路由失败。系统返回: {(r.stderr or '').strip()}")
         return ok
 
     def flush(self) -> None:
@@ -261,7 +261,7 @@ def clean_resolver_files(reporter=None, resolver_dir: pathlib.Path = RESOLVER_DI
     subprocess.run(["sudo", "rm", "-f", *[str(p) for p in stale]],
                    capture_output=True, text=True)
     if reporter:
-        reporter.step(f"清理 resolver 残留 {len(stale)} 个: {', '.join(p.name for p in stale)}")
+        reporter.step(f"已清理上次残留的 DNS 分流文件 {len(stale)} 个: {', '.join(p.name for p in stale)}")
     return len(stale)
 
 
@@ -277,9 +277,9 @@ def write_resolver_files(domains: list[str], port: int, reporter=None,
         r = subprocess.run(["sudo", "tee", str(target)], input=content,
                            capture_output=True, text=True)
         if r.returncode != 0 and reporter:
-            reporter.warn(f"写 {target} 失败: {(r.stderr or '').strip()}")
+            reporter.warn(f"写入 DNS 分流文件失败: {target}。系统返回: {(r.stderr or '').strip()}")
     if reporter:
-        reporter.step(f"DNS 分流已生效: {', '.join(domains)} → 127.0.0.1:{port}")
+        reporter.step(f"DNS 分流已打开。以下域名会先走 VPN DNS: {', '.join(domains)}")
 
 
 # ---------------------------------------------------------------- DNS 代理
@@ -391,7 +391,7 @@ class DnsProxy:
             for s in socks:
                 s.close()
         if self.reporter:
-            self.reporter.warn(f"{label}: 上游 DNS 都没响应 ({', '.join(upstreams)})")
+            self.reporter.warn(f"查不到 {label}：当前 DNS 都没回应（{', '.join(upstreams)}）。下一步: 确认 VPN 已连接，或跑 `ovpn connect --verbose` 看 DNS 细节")
         return None
 
 
@@ -431,7 +431,7 @@ class SplitTunnel:
         """openvpn 报 CONNECTED 之后调用：定位 utun、加固定网段、起 DNS 代理。"""
         iface = tun_for_ip(local_ip)
         if not iface:
-            self.reporter.err(f"找不到 IP 为 {local_ip} 的 utun 网卡，分流没启用")
+            self.reporter.err(f"VPN 已连上，但找不到本机 VPN 网卡（VPN IP: {local_ip}），所以分流没有打开。下一步: 跑 `ifconfig | grep -A2 utun` 检查 VPN 网卡")
             return
         self.table = RouteTable(iface, self.reporter)
         for c in self.cidrs:
@@ -441,19 +441,19 @@ class SplitTunnel:
             self.table.add_host(ip)
         if not self.domains:
             return
-        self.reporter.info(f"分流域名的 DNS 上游: {', '.join(self.upstreams)}")
+        self.reporter.info(f"分流域名会先问这些 DNS: {', '.join(self.upstreams)}")
 
         def on_ips(qname: str, ips: list[str]) -> None:
             assert self.table is not None
             for ip in ips:
                 if self.table.add_host(ip) and self.reporter:
-                    self.reporter.info(f"{qname} → {ip} 已加入 VPN 路由")
+                    self.reporter.info(f"{qname} 解析到 {ip}，已让这个 IP 走 VPN")
 
         self.proxy = DnsProxy(self.port, lambda: self.upstreams, self.domains, on_ips, self.reporter)
         try:
             self.proxy.start()
         except OSError as e:
-            self.reporter.err(f"DNS 代理起不来（127.0.0.1:{self.port}）: {e}")
+            self.reporter.err(f"本地 DNS 代理启动失败（127.0.0.1:{self.port}）。分流域名可能打不开。系统返回: {e}")
             self.proxy = None
             return
         write_resolver_files(self.domains, self.port, self.reporter)
