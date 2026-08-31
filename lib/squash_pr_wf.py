@@ -1,16 +1,16 @@
 """squash_pr 工作流：把 source 自分叉以来的改动压成单 commit → 对接 mr 开 PR。
 
 流程（见 prd FR1-FR10）：
-  护栏(flat clean) → fetch → 冲突预演#1 → 建 <source>_pr 分支
+  护栏(flat clean) → fetch → 冲突预演#1 → 准备 <source>_pr 分支
+  （已存在则复用：重置到 source，push 时 --force-with-lease，保持同一 PR）
   → reset --soft merge-base → 聚合 message → 单 commit → 冲突预演#2
   → push → (可选) lib 源码调 mr_wf.run_mr(target)
-任一步失败：回滚（回起始分支 + 删半成品 <source>_pr 本地/远端）+ 语音报错。
+任一步失败：回滚（回起始分支；本次新建的分支删本地/远端，
+复用的分支还原到原 sha、远端不动——删远端会关掉已存在的 PR）+ 语音报错。
 """
 from __future__ import annotations
 
-import os
 import re
-import sys
 from dataclasses import dataclass, field
 
 from lib.exec import retry_command, run, run_logged
@@ -171,11 +171,18 @@ def _detect_conflict_via_merge(branch_a: str, branch_b: str, *,
 
 @dataclass
 class _RollbackState:
-    """回滚状态：记录哪些产物需要清理。"""
+    """回滚状态：记录哪些产物需要清理。
+
+    pr_branch_preexisting_local / pr_branch_remote_preexisting 标记分支
+    是本次流程新建还是复用：新建的删除，复用的还原/不动。
+    """
     original_branch: str = ""
     pr_branch: str = ""
     pr_branch_created_local: bool = False
     pr_branch_pushed: bool = False
+    pr_branch_preexisting_local: bool = False
+    pr_branch_orig_sha: str = ""
+    pr_branch_remote_preexisting: bool = False
 
 
 @dataclass
@@ -187,38 +194,29 @@ class SquashResult:
     conflict_files: list[str] = field(default_factory=list)
 
 
-def _ask_delete_pr_branch(pr_branch: str, *, r: Reporter) -> bool:
-    """询问用户是否删除已存在的 <source>_pr 分支。
-
-    非 TTY（CI/管道）→ fail-closed：要求显式 SQUASH_PR_FORCE_DELETE=1。
-    交互默认 Y（回车=删除重建），输入 n 才中止。
-    """
-    if os.environ.get("SQUASH_PR_FORCE_DELETE") == "1":
-        return True
-    if not sys.stdin.isatty():
-        r.err(f"分支 {pr_branch} 已存在，需交互确认但当前非 TTY。"
-              f"设 SQUASH_PR_FORCE_DELETE=1 显式放行删除并重建。")
-        return False
-    try:
-        ans = input(f"\n分支 {pr_branch} 已存在，删除并重建？(Y/n) ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        ans = "n"
-    return ans not in ("n", "no")
-
-
 def _rollback(state: _RollbackState, *, r: Reporter, remote: str = REMOTE,
               cwd: str | None = None) -> None:
-    """全量回滚：回起始分支 + 删本地/远端 <source>_pr。"""
-    if state.pr_branch_pushed:
+    """回滚：回起始分支；新建的 <source>_pr 删本地/远端，复用的还原且远端不动。"""
+    # 复用的远端分支不能删——删 head 分支会关掉已存在的 PR。
+    # （回滚路径不会出现在成功 force push 之后：push 后仅剩 mr 步，失败不回滚）
+    if state.pr_branch_pushed and not state.pr_branch_remote_preexisting:
         run(["git", "push", remote, "--delete", state.pr_branch],
             cwd=cwd, check=False, capture_output=True)
+    if state.original_branch:
+        # 先切回起始分支，否则无法删/重置当前所在分支
+        run(["git", "checkout", state.original_branch],
+            cwd=cwd, check=False, capture_output=True)
     if state.pr_branch_created_local:
-        # 先切回起始分支，否则无法删当前所在分支
-        if state.original_branch:
-            run(["git", "checkout", state.original_branch],
-                cwd=cwd, check=False, capture_output=True)
         run(["git", "branch", "-D", state.pr_branch],
             cwd=cwd, check=False, capture_output=True)
+    elif state.pr_branch_preexisting_local and state.pr_branch_orig_sha:
+        # 复用的本地分支：还原到进入流程前的 commit
+        if state.original_branch == state.pr_branch:
+            run(["git", "reset", "--hard", state.pr_branch_orig_sha],
+                cwd=cwd, check=False, capture_output=True)
+        else:
+            run(["git", "branch", "-f", state.pr_branch, state.pr_branch_orig_sha],
+                cwd=cwd, check=False, capture_output=True)
 
 
 def _fail(msg: str, state: _RollbackState, *, r: Reporter, notify_msg: str = "",
@@ -346,32 +344,41 @@ def run_squash_pr(
             pass
         return res
 
-    # FR4 — 建 PR 分支
+    # FR4 — 准备 PR 分支：已存在（本地/远端）则复用，force push 保持同一 PR
     local_exists = run(["git", "rev-parse", "--verify", "--quiet", pr_branch],
                        cwd=cwd, check=False, capture_output=True).returncode == 0
-    remote_exists = remote_branch_exists(pr_branch, remote=remote, cwd=cwd)
-    if local_exists or remote_exists:
-        if not _ask_delete_pr_branch(pr_branch, r=r):
-            return _fail(f"分支 {pr_branch} 已存在，用户选择不删除", state, r=r, cwd=cwd,
-                         notify_msg="PR 分支已存在")
-        r.step(f"删除已存在的 {pr_branch}")
-        if local_exists:
-            _git(["branch", "-D", pr_branch], r=r, cwd=cwd)
-        if remote_exists:
-            _git(["push", remote, "--delete", pr_branch], r=r, cwd=cwd)
+    pr_remote_exists = remote_branch_exists(pr_branch, remote=remote, cwd=cwd)
+    if pr_remote_exists:
+        # fetch 刷新 remote-tracking ref：push --force-with-lease 以它为基准，
+        # 有并发推送时拒绝而非覆盖
+        r.step(f"fetch {remote} {pr_branch}")
+        fres_pr = retry_command(["git", "fetch", remote, pr_branch],
+                                cwd=cwd, max_retries=3)
+        if not fres_pr.ok:
+            return _fail(f"fetch {pr_branch} 失败: {fres_pr.last_output}".rstrip(),
+                         state, r=r, cwd=cwd, notify_msg="fetch PR 分支失败")
+        state.pr_branch_remote_preexisting = True
+    if local_exists:
+        state.pr_branch_preexisting_local = True
+        osha_p = run(["git", "rev-parse", pr_branch],
+                     cwd=cwd, check=False, capture_output=True)
+        state.pr_branch_orig_sha = (osha_p.stdout or "").strip()
+        r.info(f"复用已存在的 {pr_branch}（force push 更新，保持同一 PR）")
 
-    r.step(f"checkout {source} → 创建 {pr_branch}")
+    r.step(f"checkout {source} → {pr_branch}")
     c1 = _git(["checkout", source], r=r, cwd=cwd)
     if c1.returncode != 0:
         return _fail(f"checkout {source} 失败: {c1.stderr}".rstrip(), state, r=r, cwd=cwd,
                      notify_msg="checkout source 失败")
-    c2 = _git(["checkout", "-b", pr_branch], r=r, cwd=cwd)
+    # -B：分支已存在则重置到 source（当前 HEAD），不存在则新建——两条路合一
+    c2 = _git(["checkout", "-B", pr_branch], r=r, cwd=cwd)
     if c2.returncode != 0:
         # 回到 orig 才能继续后续
         _git(["checkout", orig], r=r, cwd=cwd)
-        return _fail(f"创建 {pr_branch} 失败: {c2.stderr}".rstrip(), state, r=r, cwd=cwd,
-                     notify_msg="创建 PR 分支失败")
-    state.pr_branch_created_local = True
+        return _fail(f"checkout -B {pr_branch} 失败: {c2.stderr}".rstrip(), state, r=r, cwd=cwd,
+                     notify_msg="准备 PR 分支失败")
+    if not local_exists:
+        state.pr_branch_created_local = True
 
     # FR6 — 聚合 commit message（在 reset 前读 log，reset --soft 不影响 log 历史）
     log_p = run(
@@ -390,7 +397,9 @@ def run_squash_pr(
         r.kv("计划", {
             "reset 基准": merge_base,
             "commit message": message.splitlines()[0] if message else "",
-            "将执行": f"git commit + git push -u {remote} {pr_branch}",
+            "将执行": "git commit + git push "
+                     + ("--force-with-lease" if state.pr_branch_remote_preexisting else "-u")
+                     + f" {remote} {pr_branch}",
         })
         if not no_mr:
             r.info(f"push 后调 mr {target}")
@@ -416,9 +425,13 @@ def run_squash_pr(
         return _fail("push 前冲突预演失败，已回滚", state, r=r, cwd=cwd,
                      notify_msg=f"冲突预演失败: {len(files2)} 个文件")
 
-    # FR8 — push
-    r.step(f"push -u {remote} {pr_branch}")
-    pp = _git(["push", "-u", remote, pr_branch], r=r, cwd=cwd)
+    # FR8 — push（PR 分支已存在于远端 → force-with-lease 更新，保持同一 PR）
+    if state.pr_branch_remote_preexisting:
+        r.step(f"push --force-with-lease {remote} {pr_branch}")
+        pp = _git(["push", "--force-with-lease", remote, pr_branch], r=r, cwd=cwd)
+    else:
+        r.step(f"push -u {remote} {pr_branch}")
+        pp = _git(["push", "-u", remote, pr_branch], r=r, cwd=cwd)
     if pp.returncode != 0:
         return _fail(f"push 失败: {pp.stderr}".rstrip(), state, r=r, cwd=cwd,
                      notify_msg="push 失败")

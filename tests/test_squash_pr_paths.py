@@ -127,18 +127,6 @@ class TestDetectConflictViaMerge(unittest.TestCase):
         self.assertFalse(fake.ran("checkout master"))
 
 
-class TestAskDeletePrBranch(unittest.TestCase):
-    def test_eof_treated_as_no(self):
-        r = MagicMock()
-        with patch.dict("os.environ", {}, clear=False), \
-             patch.object(W.sys, "stdin") as stdin, \
-             patch("builtins.input", side_effect=EOFError):
-            import os
-            os.environ.pop("SQUASH_PR_FORCE_DELETE", None)
-            stdin.isatty.return_value = True
-            self.assertFalse(W._ask_delete_pr_branch("source_pr", r=r))
-
-
 class TestRollbackAndFail(unittest.TestCase):
     def test_rollback_deletes_pushed_and_local_branch(self):
         fake = _FakeGit()
@@ -149,6 +137,21 @@ class TestRollbackAndFail(unittest.TestCase):
         self.assertTrue(fake.ran("push origin --delete source_pr"))
         self.assertTrue(fake.ran("checkout master"))
         self.assertTrue(fake.ran("branch -D source_pr"))
+
+    def test_rollback_restores_preexisting_branch_and_keeps_remote(self):
+        """复用的分支回滚：本地还原到原 sha，远端不删（删了会关 PR）。"""
+        fake = _FakeGit()
+        state = W._RollbackState(original_branch="master", pr_branch="source_pr",
+                                 pr_branch_preexisting_local=True,
+                                 pr_branch_orig_sha="OLDSHA",
+                                 pr_branch_remote_preexisting=True,
+                                 pr_branch_pushed=True)
+        with patch.object(W, "run", fake):
+            W._rollback(state, r=MagicMock())
+        self.assertTrue(fake.ran("checkout master"))
+        self.assertTrue(fake.ran("branch -f source_pr OLDSHA"))
+        self.assertFalse(fake.ran("branch -D source_pr"))
+        self.assertFalse(fake.ran("push origin --delete source_pr"))
 
     def test_rollback_without_original_branch_skips_checkout(self):
         fake = _FakeGit()
@@ -257,31 +260,41 @@ class TestRunSquashPrConflictAndBranchSetup(unittest.TestCase):
         res, fake, r = _run_flow(conflicts=[(True, ["a.txt", "b.txt"])], notify_error=True)
         self.assertEqual(res.returncode, 1)
         self.assertEqual(res.conflict_files, ["a.txt", "b.txt"])
-        self.assertFalse(fake.ran("checkout -b source_pr"))
+        self.assertFalse(fake.ran("checkout -B source_pr"))
 
-    def test_existing_remote_pr_branch_deleted_after_confirm(self):
-        with patch.dict("os.environ", {"SQUASH_PR_FORCE_DELETE": "1"}):
-            res, fake, _ = _run_flow(
-                {"rev-parse --verify --quiet source_pr": (0, "sha\n", "")},
-                remote_exists=lambda b, **kw: True,
-            )
+    def test_existing_pr_branch_reused_not_deleted(self):
+        """本地 + 远端都已存在 → 复用重置，force-with-lease push，不删分支。"""
+        res, fake, _ = _run_flow(
+            {"rev-parse --verify --quiet source_pr": (0, "sha\n", ""),
+             "rev-parse source_pr": (0, "OLDSHA\n", "")},
+            remote_exists=lambda b, **kw: True,
+        )
         self.assertEqual(res.returncode, 0)
-        self.assertTrue(fake.ran("branch -D source_pr"))
-        self.assertTrue(fake.ran("push origin --delete source_pr"))
-
-    def test_existing_pr_branch_declined_aborts(self):
-        with patch.object(W, "_ask_delete_pr_branch", return_value=False):
-            res, fake, _ = _run_flow({"rev-parse --verify --quiet source_pr": (0, "sha\n", "")})
-        self.assertEqual(res.returncode, 1)
+        self.assertTrue(fake.ran("checkout -B source_pr"))
+        self.assertTrue(fake.ran("push --force-with-lease origin source_pr"))
         self.assertFalse(fake.ran("branch -D source_pr"))
+        self.assertFalse(fake.ran("push origin --delete source_pr"))
+
+    def test_existing_pr_branch_conflict_rolls_back_to_orig_sha(self):
+        """复用分支 + 预演 #2 冲突 → 还原本地到原 sha，不删远端。"""
+        res, fake, _ = _run_flow(
+            {"rev-parse --verify --quiet source_pr": (0, "sha\n", ""),
+             "rev-parse source_pr": (0, "OLDSHA\n", "")},
+            remote_exists=lambda b, **kw: True,
+            conflicts=[(False, []), (True, ["c.txt"])],
+        )
+        self.assertEqual(res.returncode, 1)
+        self.assertTrue(fake.ran("branch -f source_pr OLDSHA"))
+        self.assertFalse(fake.ran("branch -D source_pr"))
+        self.assertFalse(fake.ran("push origin --delete source_pr"))
 
     def test_checkout_source_failure_aborts(self):
         res, fake, _ = _run_flow({"checkout source": (1, "", "no such branch")})
         self.assertEqual(res.returncode, 1)
-        self.assertFalse(fake.ran("checkout -b source_pr"))
+        self.assertFalse(fake.ran("checkout -B source_pr"))
 
     def test_create_pr_branch_failure_returns_to_original(self):
-        res, fake, _ = _run_flow({"checkout -b source_pr": (1, "", "exists")})
+        res, fake, _ = _run_flow({"checkout -B source_pr": (1, "", "exists")})
         self.assertEqual(res.returncode, 1)
         self.assertTrue(fake.ran("checkout master"))
 
