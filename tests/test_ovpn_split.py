@@ -405,14 +405,22 @@ class TestSplitTunnel(unittest.TestCase):
         self.assertIsNone(st.proxy)
         self.assertIsNone(st.table)
 
-    def test_pushed_dns_beats_system_but_not_config(self):
+    def test_pushed_internal_dns_beats_system_but_not_config(self):
         st = S.SplitTunnel({"routes": {"domains": ["a.com"]}}, _FakeReporter())
-        st.note_pushed_dns(["10.8.0.1", "10.8.0.1", "10.8.0.2"])
+        kept = st.note_pushed_dns(["10.8.0.1", "10.8.0.1", "10.8.0.2"])
+        self.assertEqual(kept, ["10.8.0.1", "10.8.0.2"])
         self.assertEqual(st.upstreams, ["10.8.0.1", "10.8.0.2"])  # 去重，压过系统 DNS
         fixed = S.SplitTunnel({"routes": {"domains": ["a.com"]},
                                "dns_upstream": ["9.9.9.9"]}, _FakeReporter())
         fixed.note_pushed_dns(["10.8.0.1"])
         self.assertEqual(fixed.upstreams, ["9.9.9.9"])  # 配置写死的优先
+
+    def test_pushed_public_dns_is_ignored(self):
+        st = S.SplitTunnel({"routes": {"domains": ["a.com"]}}, _FakeReporter())
+        kept = st.note_pushed_dns(["8.8.8.8", "8.8.4.4"])
+        self.assertEqual(kept, [])
+        self.assertNotIn("8.8.8.8", st.upstreams)
+        self.assertNotIn("8.8.4.4", st.upstreams)
 
     def test_start_routes_pushed_dns_through_tun(self):
         st = S.SplitTunnel({"routes": {"domains": ["a.com"]}}, _FakeReporter())
@@ -481,10 +489,13 @@ class TestSystemNameservers(unittest.TestCase):
             servers = S.system_nameservers()
         self.assertEqual(servers, S.FALLBACK_NAMESERVERS)
 
-    def test_fallback_covers_both_regions(self):
-        # 一份配置两地都能用：国内国外各至少一台，靠 forward() 并行赛跑挑通的那台
-        self.assertIn("223.5.5.5", S.FALLBACK_NAMESERVERS)
-        self.assertIn("1.1.1.1", S.FALLBACK_NAMESERVERS)
+    def test_default_dns_list_is_adguard_cloudflare_aliyun_tencent(self):
+        self.assertEqual(S.FALLBACK_NAMESERVERS, [
+            "94.140.14.14", "94.140.15.15",
+            "1.1.1.1", "1.0.0.1",
+            "223.5.5.5", "223.6.6.6",
+            "119.29.29.29", "182.254.116.116",
+        ])
 
     def test_fallback_list_is_copied_per_call(self):
         with mock.patch.object(pathlib.Path, "read_text", side_effect=OSError):

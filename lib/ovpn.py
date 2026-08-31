@@ -587,8 +587,11 @@ def _connect_once(cfg: dict, reporter, *, verbose: bool = False,
             if use_split and "PUSH_REPLY" in line:
                 pushed = parse_pushed_dns(line)
                 if pushed:
-                    split.note_pushed_dns(pushed)
-                    reporter.info(f"VPN 下发了内部 DNS: {', '.join(pushed)}。分流域名会先问这些 DNS")
+                    kept = split.note_pushed_dns(pushed)
+                    if kept:
+                        reporter.info(f"VPN 下发了内网 DNS: {', '.join(kept)}。分流域名会先问这些 DNS")
+                    else:
+                        reporter.info("VPN 下发的是公网 DNS，已改用默认 DNS: AdGuard、Cloudflare、阿里、腾讯")
             if quiet_log and not any(k in line for k in _LOG_KEEP):
                 continue  # 分流把 verb 提到了 3，非 verbose 时只留关键行，别刷屏
             reporter.output(explain_openvpn_log(line), prefix="  openvpn | ")

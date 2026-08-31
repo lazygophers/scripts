@@ -127,11 +127,24 @@ def parse_answer_ips(msg: bytes) -> list[str]:
     return ips
 
 
-# 兜底上游：既没配 dns_upstream、VPN 也没 push、/etc/resolv.conf 还空的时候用。
-# 国内 + 国外各两台并列 —— forward() 是并行问、先到先用，在中国 1.1.1.1/8.8.8.8
-# 不通只是不答，223.5.5.5 照样秒回；在国外反过来。所以同一份配置两地都能用，
-# 不需要按地区切换。
-FALLBACK_NAMESERVERS = ["223.5.5.5", "119.29.29.29", "1.1.1.1", "8.8.8.8"]
+# 默认上游：没配 dns_upstream、VPN 没 push 内网 DNS、/etc/resolv.conf 还空的时候用。
+# AdGuard + Cloudflare + 阿里 + 腾讯并列 —— forward() 是并行问、先到先用，
+# 某个地区不通的 DNS 只是不答，不会拖慢其它 DNS。
+FALLBACK_NAMESERVERS = [
+    "94.140.14.14", "94.140.15.15",  # AdGuard
+    "1.1.1.1", "1.0.0.1",            # Cloudflare
+    "223.5.5.5", "223.6.6.6",        # AliDNS
+    "119.29.29.29", "182.254.116.116",  # Tencent DNS
+]
+
+
+def is_vpn_internal_dns(server: str) -> bool:
+    """VPN 下发公网 DNS 时不用它；只保留内网 / 链路本地 DNS。"""
+    try:
+        addr = ipaddress.ip_address(server)
+    except ValueError:
+        return False
+    return not addr.is_loopback and (addr.is_private or addr.is_link_local)
 
 
 def system_nameservers() -> list[str]:
@@ -412,11 +425,14 @@ class SplitTunnel:
         self.table: RouteTable | None = None
         self.proxy: DnsProxy | None = None
 
-    def note_pushed_dns(self, servers: list[str]) -> None:
-        """记下服务端 push 的 DNS。命中分流的域名优先问它，未命中的仍走系统 DNS。"""
+    def note_pushed_dns(self, servers: list[str]) -> list[str]:
+        """记下 VPN push 的内网 DNS；公网 DNS 交给默认上游，避免被 VPN 配置覆盖。"""
+        kept = []
         for ip in servers:
-            if ip not in self.pushed_dns:
+            if is_vpn_internal_dns(ip) and ip not in self.pushed_dns:
                 self.pushed_dns.append(ip)
+                kept.append(ip)
+        return kept
 
     @property
     def upstreams(self) -> list[str]:

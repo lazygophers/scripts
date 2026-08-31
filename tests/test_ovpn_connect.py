@@ -777,6 +777,7 @@ class TestConnectOnce(unittest.TestCase):
     def test_log_pump_forwards_pushed_dns_to_the_split_tunnel(self) -> None:
         """抓住喂给日志线程的 stdout，验证 PUSH_REPLY 被解析并转给 SplitTunnel。"""
         self.split.enabled = True
+        self.split.note_pushed_dns.return_value = ["10.8.0.1"]
         proc = FakeProc(returncode=0)
         proc.stdout = iter([
             "PUSH: Received control message: 'PUSH_REPLY,dhcp-option DNS 10.8.0.1'\n",
