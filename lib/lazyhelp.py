@@ -17,10 +17,12 @@ from rich.table import Table
 TOOLS: dict[str, tuple[str, str]] = {
     # git-wf: 批量分支 / 工作流
     "merge_canary": ("git-wf", "批量 merge 当前分支到 origin/canary"),
+    "merge_dev": ("git-wf", "批量 merge 当前分支到 origin/dev"),
     "merge_develop": ("git-wf", "批量 merge 当前分支到 origin/develop"),
     "merge_master": ("git-wf", "批量 merge 当前分支到默认主分支（master/main）"),
     "merge_test": ("git-wf", "批量 merge 当前分支到 origin/test"),
     "push_canary": ("git-wf", "批量 push 当前分支到 origin/canary"),
+    "push_dev": ("git-wf", "批量 push 当前分支到 origin/dev"),
     "push_develop": ("git-wf", "批量 push 当前分支到 origin/develop"),
     "push_master": ("git-wf", "批量 push 当前分支到默认主分支（master/main）"),
     "push_test": ("git-wf", "批量 push 当前分支到 origin/test"),
