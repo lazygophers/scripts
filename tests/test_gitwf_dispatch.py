@@ -16,8 +16,8 @@ _gitwf = SourceFileLoader("_gitwf_test_mod", str(GITWF_PATH)).load_module()
 class TestNameMap(unittest.TestCase):
     def test_all_new_names_present(self):
         expected = {
-            "merge_canary", "merge_develop", "merge_master", "merge_test",
-            "push_canary", "push_develop", "push_master", "push_test",
+            "merge_canary", "merge_dev", "merge_develop", "merge_master", "merge_test",
+            "push_canary", "push_dev", "push_develop", "push_master", "push_test",
         }
         self.assertEqual(set(_gitwf._NAME_MAP), expected)
 
@@ -25,7 +25,9 @@ class TestNameMap(unittest.TestCase):
         cases = {
             "merge_canary": ("merge", "canary"),
             "merge_master": ("merge", "master"),
+            "merge_dev": ("merge", "dev"),
             "push_develop": ("push", "develop"),
+            "push_dev": ("push", "dev"),
             "push_test": ("push", "test"),
         }
         for name, expected in cases.items():
@@ -104,6 +106,7 @@ class TestPushTargetsDispatched(unittest.TestCase):
     @patch("lib.git_workflow.push_to")
     def test_push_targets(self, mock_push):
         for name, target in [("push_canary", "canary"),
+                             ("push_dev", "dev"),
                              ("push_develop", "develop"),
                              ("push_master", "master"),
                              ("push_test", "test")]:

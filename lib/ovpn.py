@@ -646,6 +646,7 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
 
     crv_state: str | None = None
     connected_ever = False
+    reconnecting = False
 
     while True:
         if proc.poll() is not None:
@@ -655,9 +656,9 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
         except socket.timeout:
             continue
         except OSError:
-            break
+            return (1 if reconnecting else 0), connected_ever, last_otp_counter
         if line is None:
-            break
+            return (1 if reconnecting else 0), connected_ever, last_otp_counter
         if verbose and line.startswith(">"):
             reporter.output(line, prefix="  mgmt | ")
 
@@ -700,6 +701,7 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
             name = fields[1] if len(fields) > 1 else "?"
             detail = fields[2] if len(fields) > 2 else ""
             if name == "CONNECTED":
+                reconnecting = False
                 connected_ever = True
                 local_ip = fields[3] if len(fields) > 3 else ""
                 remote = fields[4] if len(fields) > 4 else ""
@@ -709,7 +711,11 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
                     split.start(local_ip)
                 reporter.info("保持这个窗口开着。要断开 VPN，按 Ctrl-C")
             elif name == "RECONNECTING":
+                if connected_ever:
+                    reconnecting = True
                 reporter.warn(f"VPN 网络断了一下，OpenVPN 正在自动重连。原因: {detail or '没有给出原因'}")
+                if connected_ever:
+                    reporter.info("OpenVPN 进程还在，等它自己恢复。恢复后这里会继续出日志")
             elif name == "EXITING":
                 reporter.warn(f"VPN 正在退出。原因: {detail or '没有给出原因'}")
             else:

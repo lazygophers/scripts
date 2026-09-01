@@ -561,6 +561,26 @@ class TestDrive(unittest.TestCase):
         _, rc, _, _ = self._drive([OSError("管理口断了")])
         self.assertEqual(rc, 0)
 
+    def test_reconnecting_then_management_eof_triggers_outer_retry(self) -> None:
+        lines = [
+            ">STATE:1,CONNECTED,SUCCESS,10.8.0.6,203.0.113.1",
+            ">STATE:2,RECONNECTING,server-pushed-connection-reset",
+            None,
+        ]
+        _, rc, connected, _ = self._drive(lines)
+        self.assertEqual(rc, 1)
+        self.assertTrue(connected)
+
+    def test_reconnecting_then_management_error_triggers_outer_retry(self) -> None:
+        lines = [
+            ">STATE:1,CONNECTED,SUCCESS,10.8.0.6,203.0.113.1",
+            ">STATE:2,RECONNECTING,server-pushed-connection-reset",
+            OSError("management socket closed"),
+        ]
+        _, rc, connected, _ = self._drive(lines)
+        self.assertEqual(rc, 1)
+        self.assertTrue(connected)
+
     def test_process_exit_ends_the_loop(self) -> None:
         proc = FakeProc(returncode=3, exit_after=0)
         _, rc, _, _ = self._drive([], proc=proc)
