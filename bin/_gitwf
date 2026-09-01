@@ -20,10 +20,12 @@ from lib.fire_base import BaseCli, run_cli, timed_cli
 
 _NAME_MAP = {
     "merge_canary": ("merge", "canary"),
+    "merge_dev": ("merge", "dev"),
     "merge_develop": ("merge", "develop"),
     "merge_master": ("merge", "master"),
     "merge_test": ("merge", "test"),
     "push_canary": ("push", "canary"),
+    "push_dev": ("push", "dev"),
     "push_develop": ("push", "develop"),
     "push_master": ("push", "master"),
     "push_test": ("push", "test"),
