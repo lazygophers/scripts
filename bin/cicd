@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""cicd — 轮询当前分支 CI/CD，完成后输出最终结果"""
+from __future__ import annotations
+
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cicd import PollConfig, watch_cicd
+from lib.fire_base import BaseCli, run_cli, timed_cli
+
+
+class CicdCli(BaseCli):
+    """轮询当前分支 CI/CD，默认只在完成时输出最终结果"""
+
+    def __call__(
+        self,
+        ref: str | None = None,
+        *,
+        min_interval: float = 5.0,
+        max_interval: float = 30.0,
+        timeout: float | None = None,
+        once: bool = False,
+        verbose: bool = False,
+    ):
+        """裸调用 `cicd [ref]` 等同 `cicd watch [ref]`"""
+        return self.watch(
+            ref,
+            min_interval=min_interval,
+            max_interval=max_interval,
+            timeout=timeout,
+            once=once,
+            verbose=verbose,
+        )
+
+    @timed_cli
+    def watch(
+        self,
+        ref: str | None = None,
+        *,
+        min_interval: float = 5.0,
+        max_interval: float = 30.0,
+        timeout: float | None = None,
+        once: bool = False,
+        verbose: bool = False,
+    ):
+        """轮询 CI/CD 状态
+
+        用法: cicd watch [ref] [--min-interval 5] [--max-interval 30] [--timeout S] [--once] [--verbose]
+        """
+        return watch_cicd(
+            ref,
+            config=PollConfig(
+                min_interval=min_interval,
+                max_interval=max_interval,
+                timeout=timeout,
+                once=once,
+                verbose=verbose,
+            ),
+        )
+
+
+if __name__ == "__main__":
+    run_cli(CicdCli())

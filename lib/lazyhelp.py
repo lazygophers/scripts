@@ -45,6 +45,7 @@ TOOLS: dict[str, tuple[str, str]] = {
     # build/check: 编译 / 复制 / 检测
     "checkwork": ("build/check", "多语言编译检查（Go/Rust/Python/Java/Node）"),
     "check_ai": ("build/check", "AI API 端点连通性检测（空 POST）"),
+    "cicd": ("build/check", "轮询当前分支 CI/CD，完成后输出最终结果"),
     "cpd": ("build/check", "深度覆盖复制（新增/更新/删除可选）"),
     # loop/runtime: 循环执行 / 防休眠
     "loop": ("loop/runtime", "循环执行命令并追踪结果（成功即停或指定次数）"),
