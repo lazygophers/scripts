@@ -435,6 +435,25 @@ def _branch_worktree_path(repo: Path, branch: str) -> str:
     return ""
 
 
+def _branch_worktree_path_live(repo: Path, branch: str) -> str:
+    worktree_path = _branch_worktree_path(repo, branch)
+    if not worktree_path:
+        return ""
+    probe = _run(["git", "-C", worktree_path, "rev-parse", "--is-inside-work-tree"],
+                 cwd=str(repo), check=False, capture_output=True)
+    if probe.returncode == 0:
+        return worktree_path
+    _run(["git", "worktree", "prune"], cwd=str(repo), check=False, capture_output=True)
+    worktree_path = _branch_worktree_path(repo, branch)
+    if not worktree_path:
+        return ""
+    probe = _run(["git", "-C", worktree_path, "rev-parse", "--is-inside-work-tree"],
+                 cwd=str(repo), check=False, capture_output=True)
+    if probe.returncode == 0:
+        return worktree_path
+    return ""
+
+
 def _dirty_detail(repo: Path) -> str:
     """构造「工作区有未提交改动」detail，附前若干个脏文件名（≤200 字符）。"""
     p = _run(["git", "status", "--porcelain"], cwd=str(repo), check=False, capture_output=True)
@@ -1110,7 +1129,7 @@ def _delete_branch_one_factory(target: str, force: bool) -> DetectFn:
     def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
         worktree_path = plan.detail
         if worktree_path:
-            dirty = _run(["git", "status", "--porcelain"], cwd=worktree_path, check=False, capture_output=True)
+            dirty = _run(["git", "-C", worktree_path, "status", "--porcelain"], cwd=str(repo), check=False, capture_output=True)
             if dirty.returncode != 0:
                 return "fail", _extract_error((dirty.stderr or "") + (dirty.stdout or ""), dirty.returncode, "检查 worktree 失败")
             if (dirty.stdout or "").strip():
@@ -1140,9 +1159,9 @@ def _delete_branch_one_factory(target: str, force: bool) -> DetectFn:
         )
         if exists.returncode != 0:
             return RepoPlan(status="skip", detail=f"无本地分支 {target}")
-        worktree_path = _branch_worktree_path(repo, target)
+        worktree_path = _branch_worktree_path_live(repo, target)
         if worktree_path:
-            dirty = _run(["git", "status", "--porcelain"], cwd=worktree_path, check=False, capture_output=True)
+            dirty = _run(["git", "-C", worktree_path, "status", "--porcelain"], cwd=str(repo), check=False, capture_output=True)
             if dirty.returncode != 0:
                 return RepoPlan(status="fail", detail=f"检查 worktree 失败: {worktree_path}")
             if (dirty.stdout or "").strip():

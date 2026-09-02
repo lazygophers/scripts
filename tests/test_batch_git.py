@@ -587,10 +587,11 @@ class TestDeleteBranchFactory(unittest.TestCase):
         mock_run.side_effect = [
             _mock_run(returncode=0),   # show-ref
             _mock_run(stdout="worktree /tmp/wt\nbranch refs/heads/feat\n"),
+            _mock_run(returncode=0),   # git -C worktree rev-parse --is-inside-work-tree
             _mock_run(stdout=""),      # detect status --porcelain
             _mock_run(stdout=""),      # execute status --porcelain
             _mock_run(stdout=""),      # worktree remove
-            _mock_run(returncode=0),    # branch -d
+            _mock_run(returncode=0),   # git branch -d
         ]
         op = _delete_branch_one_factory("feat", force=False)
         r = MagicMock()
@@ -603,18 +604,22 @@ class TestDeleteBranchFactory(unittest.TestCase):
         )
         self.assertEqual(
             mock_run.call_args_list[2].args[0],
-            ["git", "status", "--porcelain"],
+            ["git", "-C", "/tmp/wt", "rev-parse", "--is-inside-work-tree"],
         )
         self.assertEqual(
             mock_run.call_args_list[3].args[0],
-            ["git", "status", "--porcelain"],
+            ["git", "-C", "/tmp/wt", "status", "--porcelain"],
         )
         self.assertEqual(
             mock_run.call_args_list[4].args[0],
-            ["git", "worktree", "remove", "/tmp/wt"],
+            ["git", "-C", "/tmp/wt", "status", "--porcelain"],
         )
         self.assertEqual(
             mock_run.call_args_list[5].args[0],
+            ["git", "worktree", "remove", "/tmp/wt"],
+        )
+        self.assertEqual(
+            mock_run.call_args_list[6].args[0],
             ["git", "branch", "-d", "feat"],
         )
 
@@ -624,6 +629,7 @@ class TestDeleteBranchFactory(unittest.TestCase):
         mock_run.side_effect = [
             _mock_run(returncode=0),   # show-ref
             _mock_run(stdout="worktree /tmp/wt\nbranch refs/heads/feat\n"),
+            _mock_run(returncode=0),   # git -C worktree rev-parse --is-inside-work-tree
             _mock_run(stdout=" M x.py\n"),
         ]
         op = _delete_branch_one_factory("feat", force=False)
@@ -632,24 +638,27 @@ class TestDeleteBranchFactory(unittest.TestCase):
         self.assertEqual(status, "skip")
         self.assertEqual(detail, "feat 被 worktree 使用且有未提交改动: /tmp/wt")
         self.assertEqual(mock_run.call_args_list[1].args[0], ["git", "worktree", "list", "--porcelain"])
-        self.assertEqual(mock_run.call_args_list[2].args[0], ["git", "status", "--porcelain"])
+        self.assertEqual(mock_run.call_args_list[2].args[0], ["git", "-C", "/tmp/wt", "rev-parse", "--is-inside-work-tree"])
+        self.assertEqual(mock_run.call_args_list[3].args[0], ["git", "-C", "/tmp/wt", "status", "--porcelain"])
 
     @patch("lib.batch_git._get_current_branch", return_value="master")
     @patch("lib.batch_git._run")
-    def test_delete_branch_with_worktree_remove_fail(self, mock_run, _mock_br):
+    def test_delete_branch_with_stale_worktree_prunes_then_deletes(self, mock_run, _mock_br):
         mock_run.side_effect = [
             _mock_run(returncode=0),   # show-ref
             _mock_run(stdout="worktree /tmp/wt\nbranch refs/heads/feat\n"),
-            _mock_run(stdout=""),      # detect status --porcelain
-            _mock_run(stdout=""),      # execute status --porcelain
-            _mock_run(returncode=1, stderr="fatal: remove failed"),
+            _mock_run(returncode=1),   # stale path probe
+            _mock_run(returncode=0),   # worktree prune
+            _mock_run(stdout=""),      # worktree list after prune
+            _mock_run(returncode=0),   # branch -d
         ]
         op = _delete_branch_one_factory("feat", force=False)
         r = MagicMock()
         status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
-        self.assertEqual(status, "fail")
-        self.assertIn("删除 worktree 失败", detail)
-        self.assertEqual(mock_run.call_args_list[4].args[0], ["git", "worktree", "remove", "/tmp/wt"])
+        self.assertEqual(status, "ok")
+        self.assertEqual(detail, "已删本地 feat")
+        self.assertEqual(mock_run.call_args_list[3].args[0], ["git", "worktree", "prune"])
+        self.assertEqual(mock_run.call_args_list[5].args[0], ["git", "branch", "-d", "feat"])
 
     @patch("lib.batch_git._get_current_branch", return_value="master")
     @patch("lib.batch_git._run")
