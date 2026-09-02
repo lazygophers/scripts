@@ -439,16 +439,16 @@ def run_merge_workflow(
         if (p.stdout or "").strip() != current_branch:
             _git(["checkout", current_branch], r=r, title="切回当前分支")
 
-        # 步骤4：预演 target → current 冲突，有冲突问用户是否停止
+        # 步骤4：预演 target → current 冲突，若有冲突先问用户是否仍要 merge
         _step(f"预演合并 {target_branch} → {current_branch}（无副作用）", r)
         if _preview_merge_conflicts(current_branch, target_branch, r=r):
             r.warn(f"预演发现合并冲突：{target_branch} → {current_branch}")
-            stop = ask_confirm("存在冲突，是否停止（不 merge）？", default=True)
-            if stop is None or stop:
-                r.err("用户选择停止，未执行 merge")
+            need_merge = ask_confirm("存在冲突，仍然需要 merge 吗？", default=False)
+            if not need_merge:
+                r.err("用户选择结束，未执行 merge")
                 _notify_done("预演发现冲突，用户停止", script_dir=script_dir)
                 raise GitError("预演发现冲突，用户选择停止")
-            r.warn("用户选择继续，将执行 merge（可能产生冲突需手动解决）")
+            r.warn("用户选择继续，将执行 merge 并等待手动解决冲突")
 
         # 步骤5：执行 merge target 到 current
         _step(f"合并 {target_branch} → {current_branch}", r)

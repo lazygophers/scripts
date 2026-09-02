@@ -428,13 +428,13 @@ class TestRunMergeWorkflow(FlowCase):
 
     def test_conflict_preview_user_stops(self) -> None:
         fake = FakeGit({"branch --show-current": _p(0, "feature\n"), "merge-tree": _p(1)})
-        rc = self._run(fake, ["merge_canary"], confirm_stop=True)
+        rc = self._run(fake, ["merge_canary"], confirm_stop=False)
         self.assertEqual(rc, 1)
         self.assertFalse(fake.ran("merge --no-edit"))
 
     def test_conflict_preview_user_continues(self) -> None:
         fake = FakeGit({"branch --show-current": _p(0, "feature\n"), "merge-tree": _p(1)})
-        rc = self._run(fake, ["merge_canary"], confirm_stop=False)
+        rc = self._run(fake, ["merge_canary"], confirm_stop=True)
         self.assertEqual(rc, 0)
         self.assertTrue(fake.ran("merge --no-edit canary"))
 
