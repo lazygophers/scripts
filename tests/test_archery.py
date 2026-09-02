@@ -118,6 +118,11 @@ class FakeArchery(BaseHTTPRequestHandler):
                 st["access"] = st["access"] + "+"
                 return self._json(200, {"access": st["access"]})
             return self._json(401, {"detail": "token_not_valid"})
+        if self.path == "/api/v1/sqlquery/execute/":
+            return self._authed(lambda: self._json(200, {
+                "status": 0, "msg": "ok",
+                "data": {"column_list": ["id", "note"], "rows": [[1, "a\tb"], [2, None]]},
+            }))
         if self.path == "/api/v1/echo/":
             return self._authed(lambda: self._json(200, {"echo": body}))
         return self._json(404, {"detail": "not found"})
@@ -477,6 +482,38 @@ class TestCliSmoke(unittest.TestCase):
                                   capture_output=True, text=True, env=env, timeout=60)
             self.assertEqual(ping.returncode, 0, ping.stderr)
             self.assertEqual(json.loads(ping.stdout), {"pong": "/api/v1/ping/"})
+
+    def test_query_execute_prints_tsv_by_default(self):
+        """默认输出 TSV：首行列名，值里的制表符转义，NULL 变空。"""
+        FakeArchery.state = {"username": "nico", "password": "pw"}
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FakeArchery)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        host, port = server.server_address
+
+        with tempfile.TemporaryDirectory() as home:
+            env = dict(os.environ, HOME=home, SCRIPTS_NO_SAY="1", no_proxy="*", NO_PROXY="*",
+                       PYTHONUSERBASE=str(pathlib.Path.home() / ".local"))
+            archery = [sys.executable, str(REPO_ROOT / "bin" / "archery")]
+            subprocess.run(archery + ["login", "--url", f"http://{host}:{port}",
+                                      "--username", "nico", "--password", "pw"],
+                           capture_output=True, text=True, env=env, timeout=60)
+
+            run = subprocess.run(
+                archery + ["query", "execute", "select 1",
+                           "--instance-name", "ins", "--db-name", "db"],
+                capture_output=True, text=True, env=env, timeout=60)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(run.stdout.splitlines(),
+                             ["id\tnote", "1\ta\\tb", "2\t"])
+
+            as_table = subprocess.run(
+                archery + ["query", "execute", "select 1",
+                           "--instance-name", "ins", "--db-name", "db", "--table"],
+                capture_output=True, text=True, env=env, timeout=60)
+            self.assertEqual(as_table.returncode, 0, as_table.stderr)
+            self.assertIn("│", as_table.stdout)
 
     @unittest.skipIf(os.geteuid() == 0, "已经是 root，不会走 sudo 重跑")
     def test_show_reexecs_through_sudo(self):
