@@ -437,6 +437,16 @@ class InstanceCli(_Group):
 
 # ---------------------------------------------------------------- sqlquery
 
+def _api_or_web(api, web):
+    """先走 REST API；老版本 Archery（1.9.x）没有 sqlquery 那组端点，404 时回落到网页端。"""
+    try:
+        return api()
+    except ArcheryError as e:
+        if "HTTP 404" not in str(e):
+            raise
+        return web()
+
+
 class QueryCli(_Group):
     """SQLQuery：在线查询与历史记录"""
 
@@ -446,7 +456,11 @@ class QueryCli(_Group):
 
         用法: archery query instances --db_type mysql
         """
-        emit(self._client(host).get("v1/sqlquery/instances/", **params))
+        client = self._client(host)
+        emit(_api_or_web(
+            lambda: client.get("v1/sqlquery/instances/", **params),
+            lambda: client.web("POST", "/group/user_all_instances/", form=params),
+        ))
         return 0
 
     @cmd
@@ -460,7 +474,11 @@ class QueryCli(_Group):
                   "db_name": db_name, "schema_name": schema_name, "tb_name": tb_name}
         if instance_id:
             params["instance_id"] = int(instance_id)
-        emit(self._client(host).get("v1/sqlquery/resources/", **params))
+        client = self._client(host)
+        emit(_api_or_web(
+            lambda: client.get("v1/sqlquery/resources/", **params),
+            lambda: client.web("GET", "/instance/instance_resource/", params=params),
+        ))
         return 0
 
     @cmd
@@ -470,18 +488,23 @@ class QueryCli(_Group):
 
         用法: archery query describe prod-mysql orders t_order
         """
-        emit(self._client(host).post("v1/sqlquery/describetable/", {
-            "instance_name": instance_name, "db_name": db_name,
-            "tb_name": tb_name, "schema_name": schema_name,
-        }))
+        body = {"instance_name": instance_name, "db_name": db_name,
+                "tb_name": tb_name, "schema_name": schema_name}
+        client = self._client(host)
+        emit(_api_or_web(
+            lambda: client.post("v1/sqlquery/describetable/", body),
+            lambda: client.web("POST", "/instance/describetable/", form=body),
+        ))
         return 0
 
     @cmd
     def execute(self, sql: str, instance_name: str, db_name: str, schema_name: str = "",
-                tb_name: str = "", limit_num: int = 0, host: str = "", json_out: bool = False):
+                tb_name: str = "", limit_num: int = 0, host: str = "",
+                json_out: bool = False, table: bool = False):
         """执行一条查询。sql 可以写 `@file.sql` 从文件读
 
-        默认把结果渲染成表格；加 --json-out 输出原始 JSON（方便 `| jq`）。
+        默认输出 TSV（首行列名，制表符分隔，方便 `| cut` / 贴表格）；
+        --table 渲染成框线表格，--json-out 输出原始 JSON（方便 `| jq`）。
 
         用法:
           archery query execute 'select 1' --instance-name prod-mysql --db-name orders
@@ -494,11 +517,15 @@ class QueryCli(_Group):
                 raise ArcheryError(f"读不到 SQL 文件: {path}")
             sql_text = path.read_text(encoding="utf-8")
 
-        data = self._client(host).post("v1/sqlquery/execute/", {
-            "instance_name": instance_name, "db_name": db_name, "schema_name": schema_name,
-            "tb_name": tb_name, "sql_content": sql_text, "limit_num": int(limit_num),
-        })
-        if json_out or not _render_rows(data):
+        body = {"instance_name": instance_name, "db_name": db_name, "schema_name": schema_name,
+                "tb_name": tb_name, "sql_content": sql_text, "limit_num": int(limit_num)}
+        client = self._client(host)
+        data = _api_or_web(
+            lambda: client.post("v1/sqlquery/execute/", body),
+            lambda: client.web("POST", "/query/", form=body),
+        )
+        render = _render_table if table else _render_tsv
+        if json_out or not render(data):
             emit(data)
         return 0
 
@@ -508,7 +535,11 @@ class QueryCli(_Group):
 
         用法: archery query logs --limit 20 --search t_order
         """
-        emit(self._client(host).get("v1/sqlquery/logs/", **params))
+        client = self._client(host)
+        emit(_api_or_web(
+            lambda: client.get("v1/sqlquery/logs/", **params),
+            lambda: client.web("GET", "/query/querylog/", params=params),
+        ))
         return 0
 
     @cmd
@@ -519,25 +550,58 @@ class QueryCli(_Group):
           archery query favorite 123 --alias '订单表全量'
           archery query favorite 123 --no-star
         """
-        emit(self._client(host).post("v1/sqlquery/favorites/", {
-            "query_log_id": int(query_log_id),
-            "star": "true" if star else "false",
-            "alias": alias,
-        }))
+        body = {"query_log_id": int(query_log_id),
+                "star": "true" if star else "false",
+                "alias": alias}
+        client = self._client(host)
+        emit(_api_or_web(
+            lambda: client.post("v1/sqlquery/favorites/", body),
+            lambda: client.web("POST", "/query/favorite/", form=body),
+        ))
         return 0
 
 
-def _render_rows(data) -> bool:
-    """查询结果里有 column_list + rows 时渲染成表格，返回是否渲染成功。"""
+def _result_rows(data):
+    """从查询响应里取出 (columns, rows)，形状不对时返回 None。"""
     payload = data.get("data") if isinstance(data, dict) else None
     if not isinstance(payload, dict):
         payload = data if isinstance(data, dict) else None
     if not isinstance(payload, dict):
-        return False
+        return None
     columns = payload.get("column_list")
     rows = payload.get("rows")
     if not isinstance(columns, list) or not isinstance(rows, list):
+        return None
+    values = [row if isinstance(row, (list, tuple)) else [row.get(c) for c in columns]
+              for row in rows]
+    return columns, values
+
+
+def _tsv_cell(value) -> str:
+    """一个单元格转成一行 TSV 里的一段：制表符和换行转义掉，免得撑破行列。"""
+    if value is None:
+        return ""
+    return str(value).replace("\\", "\\\\").replace("\t", "\\t").replace("\r", "\\r").replace("\n", "\\n")
+
+
+def _render_tsv(data) -> bool:
+    """把查询结果按 TSV 打到 stdout（首行列名），返回是否渲染成功。"""
+    got = _result_rows(data)
+    if got is None:
         return False
+    columns, rows = got
+    lines = ["\t".join(_tsv_cell(c) for c in columns)]
+    lines += ["\t".join(_tsv_cell(v) for v in row) for row in rows]
+    print("\n".join(lines))
+    return True
+
+
+def _render_table(data) -> bool:
+    """把查询结果渲染成框线表格，返回是否渲染成功。"""
+    got = _result_rows(data)
+    if got is None:
+        return False
+    columns, rows = got
 
     from rich.console import Console
     from rich.table import Table
@@ -546,8 +610,7 @@ def _render_rows(data) -> bool:
     for col in columns:
         table.add_column(str(col), overflow="fold")
     for row in rows:
-        values = row if isinstance(row, (list, tuple)) else [row.get(c) for c in columns]
-        table.add_row(*["" if v is None else str(v) for v in values])
+        table.add_row(*["" if v is None else str(v) for v in row])
     Console().print(table)
     return True
 

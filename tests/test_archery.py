@@ -13,6 +13,7 @@ import tempfile
 import threading
 import unittest
 import unittest.mock
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -49,10 +50,12 @@ class FakeArchery(BaseHTTPRequestHandler):
     def log_message(self, *args):  # 静音 stderr 噪音
         pass
 
-    def _json(self, code: int, payload: dict):
+    def _json(self, code: int, payload: dict, cookie: str = ""):
         body = json.dumps(payload, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -62,9 +65,46 @@ class FakeArchery(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b""
         return json.loads(raw) if raw else {}
 
+    def _read_form(self) -> dict:
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length).decode() if length else ""
+        return {k: v[0] for k, v in urllib.parse.parse_qs(raw, keep_blank_values=True).items()}
+
+    def _logged_in(self) -> bool:
+        cookie = self.headers.get("Cookie") or ""
+        return f"sessionid={FakeArchery.state.get('sessionid')}" in cookie
+
     def do_POST(self):
         st = FakeArchery.state
         st.setdefault("calls", []).append(("POST", self.path))
+        # 网页端：表单 + CSRF + session cookie，跟 JWT 那套完全不同
+        if self.path == "/authenticate/":
+            form = self._read_form()
+            st["web_forms"] = st.setdefault("web_forms", []) + [form]
+            if form.get("username") != st["username"] or form.get("password") != st["password"]:
+                return self._json(200, {"status": 1, "msg": "用户名或密码错误"})
+            if st.get("twofa"):
+                return self._json(200, {"status": 0, "msg": "ok", "data": "tmp-session"})
+            st["sessionid"] = "web-session"
+            return self._json(200, {"status": 0, "msg": "ok", "data": ""},
+                              cookie=f"sessionid={st['sessionid']}; Path=/")
+        if self.path == "/api/v1/user/2fa/verify/":
+            body = self._read()
+            from lib.ovpn import totp
+
+            if body.get("otp") != totp(st["totp_secret"]):
+                return self._json(200, {"status": 1, "msg": "验证码错误"})
+            # 真实 Archery 是把这个临时 session 提升成登录态，cookie 值不变
+            st["sessionid"] = "tmp-session"
+            return self._json(200, {"status": 0, "msg": "ok"})
+        if self.path == "/query/":
+            form = self._read_form()
+            st["web_forms"] = st.setdefault("web_forms", []) + [form]
+            if not self._logged_in():
+                return self._html(200, "<html>login</html>")
+            return self._json(200, {"status": 0, "msg": "ok",
+                                    "data": {"column_list": ["id"], "rows": [[1]]}})
+
         body = self._read()
         if self.path == "/api/auth/token/":
             if body.get("username") == st["username"] and body.get("password") == st["password"]:
@@ -82,8 +122,22 @@ class FakeArchery(BaseHTTPRequestHandler):
             return self._authed(lambda: self._json(200, {"echo": body}))
         return self._json(404, {"detail": "not found"})
 
+    def _html(self, code: int, text: str):
+        body = text.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         FakeArchery.state.setdefault("calls", []).append(("GET", self.path))
+        if self.path == "/login/":
+            self.send_response(200)
+            self.send_header("Set-Cookie", "csrftoken=csrf-1; Path=/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if self.path.startswith("/api/v1/ping/"):
             return self._authed(lambda: self._json(200, {"pong": self.path}))
         if self.path == "/api/boom":
@@ -331,6 +385,55 @@ class TestClient(ServerCase):
     def test_verify_token(self):
         client = self.client()
         self.assertFalse(client.verify_token())
+
+
+class TestWebFallback(ServerCase):
+    """Archery 1.9.x 没有 sqlquery API 时，查询走网页端 session 的回退路径。"""
+
+    def web_client(self, **overrides) -> ArcheryClient:
+        FakeArchery.state["totp_secret"] = "JBSWY3DPEHPK3PXP"
+        return self.client(totp_secret="JBSWY3DPEHPK3PXP", **overrides)
+
+    def test_web_login_without_2fa(self):
+        client = self.web_client()
+        got = client.web("POST", "/query/", form={"sql_content": "select 1"})
+        self.assertEqual(got["data"]["rows"], [[1]])
+        self.assertNotIn(("POST", "/api/v1/user/2fa/verify/"), FakeArchery.state["calls"])
+
+    def test_web_login_passes_2fa_then_queries(self):
+        FakeArchery.state["twofa"] = True
+        client = self.web_client()
+        got = client.web("POST", "/query/", form={"sql_content": "select 1"})
+        self.assertEqual(got["data"]["column_list"], ["id"])
+        self.assertIn(("POST", "/api/v1/user/2fa/verify/"), FakeArchery.state["calls"])
+
+    def test_web_form_keeps_empty_values(self):
+        """空串字段必须照发：网页视图会把缺的字段写进库，少发一个就 500。"""
+        client = self.web_client()
+        client.web("POST", "/query/", form={"sql_content": "select 1", "alias": "", "x": None})
+        form = FakeArchery.state["web_forms"][-1]
+        self.assertEqual(form.get("alias"), "")
+        self.assertNotIn("x", form)
+
+    def test_web_relogins_when_session_expired(self):
+        client = self.web_client()
+        client.web("POST", "/query/", form={"sql_content": "select 1"})
+        FakeArchery.state["sessionid"] = "rotated-by-server"  # 等于服务端踢掉登录态
+        got = client.web("POST", "/query/", form={"sql_content": "select 1"})
+        self.assertEqual(got["status"], 0)
+
+    def test_web_login_failure_message(self):
+        client = self.web_client(password="wrong")
+        with self.assertRaises(ArcheryError) as ctx:
+            client.web("POST", "/query/", form={})
+        self.assertIn("网页端登录失败", str(ctx.exception))
+
+    def test_web_needs_totp_secret_when_2fa_on(self):
+        FakeArchery.state["twofa"] = True
+        client = self.client()  # 没配 totp_secret
+        with self.assertRaises(ArcheryError) as ctx:
+            client.web("POST", "/query/", form={})
+        self.assertIn("totp_secret", str(ctx.exception))
 
 
 class TestCliSmoke(unittest.TestCase):

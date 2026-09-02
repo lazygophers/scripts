@@ -38,6 +38,11 @@ TOKEN_PATH = "/api/auth/token/"
 TOKEN_REFRESH_PATH = "/api/auth/token/refresh/"
 TOKEN_VERIFY_PATH = "/api/auth/token/verify/"
 
+# 网页端登录（1.9.x 没有查询 API 时的回退，见 ArcheryClient.web_login）
+WEB_LOGIN_PATH = "/login/"
+WEB_AUTH_PATH = "/authenticate/"
+WEB_2FA_PATH = "/api/v1/user/2fa/verify/"
+
 DEFAULT_TIMEOUT = 30
 
 
@@ -242,6 +247,7 @@ class ArcheryClient:
         self._r = reporter
         self.base_url = normalize_url(str(self.profile.get("url") or key))
         self._session = None
+        self._web_ready = False
 
     # -------------------------------------------------------- 内部
 
@@ -345,16 +351,93 @@ class ArcheryClient:
             raise ArcheryError(f"{method.upper()} {url} -> HTTP {resp.status_code}: {_body_text(resp)}")
         return _body_json(resp)
 
-    def _raw(self, method: str, url: str, *, params, json_body, headers):
+    def _raw(self, method: str, url: str, *, params, json_body, headers, data=None):
         import requests
 
         try:
             return self.session.request(
-                method.upper(), url, params=params, json=json_body,
+                method.upper(), url, params=params, json=json_body, data=data,
                 headers=headers, timeout=self.timeout, verify=self.verify,
             )
         except requests.RequestException as e:
             raise ArcheryError(f"{method.upper()} {url} 连不上: {e}") from e
+
+    # -------------------------------------------------------- 网页端回退
+
+    def _csrf(self) -> str:
+        """拿 csrftoken cookie，没有就先访问登录页把它取回来。"""
+        token = self.session.cookies.get("csrftoken")
+        if not token:
+            self._raw("GET", self._url(WEB_LOGIN_PATH), params=None, json_body=None, headers={})
+            token = self.session.cookies.get("csrftoken") or ""
+        return token
+
+    def web_login(self) -> None:
+        """用账号密码（+ TOTP）换一个网页端 session cookie。
+
+        Archery 1.9.x 的 REST API 里没有 sqlquery，查询只能走网页端 `/query/`，
+        而网页视图认的是 Django session + CSRF，JWT 在那边不算登录。
+        """
+        username = str(self.profile.get("username") or "")
+        password = str(self.profile.get("password") or "")
+        if not username or not password:
+            raise ArcheryError(f"{self.key} 缺用户名或密码。跑 `archery login --url {self.key}`")
+
+        resp = self._raw("POST", self._url(WEB_AUTH_PATH), params=None, json_body=None,
+                         headers={"X-CSRFToken": self._csrf(), "Referer": self._url(WEB_LOGIN_PATH)},
+                         data={"username": username, "password": password})
+        body = _body_json(resp)
+        if resp.status_code != 200 or not isinstance(body, dict) or body.get("status") != 0:
+            detail = body.get("msg") if isinstance(body, dict) else _body_text(resp)
+            raise ArcheryError(f"网页端登录失败: {detail}")
+
+        # 开了 2FA 时 data 是一个临时 session_key，要带着它去交验证码
+        session_key = str(body.get("data") or "")
+        if not session_key:
+            self._web_ready = True
+            return
+        secret = str(self.profile.get("totp_secret") or "")
+        if not secret:
+            raise ArcheryError(f"{self.key} 开了 2FA 但配置里没有 totp_secret。跑 `archery login --url {self.key}`")
+
+        from lib.ovpn import totp
+
+        self.session.cookies.set("sessionid", session_key,
+                                 domain=urllib.parse.urlsplit(self.base_url).hostname)
+        resp = self._raw("POST", self._url(WEB_2FA_PATH), params=None,
+                         json_body={"engineer": username, "otp": totp(secret), "auth_type": "totp"},
+                         headers={"X-CSRFToken": self._csrf(),
+                                  "Referer": self._url("/login/2fa/")})
+        body = _body_json(resp)
+        if resp.status_code != 200 or not isinstance(body, dict) or body.get("status") != 0:
+            detail = body.get("msg") if isinstance(body, dict) else _body_text(resp)
+            raise ArcheryError(f"2FA 校验失败: {detail}")
+        self._web_ready = True
+
+    def web(self, method: str, path: str, *, params: dict | None = None,
+            form: dict | None = None):
+        """请求一个网页端接口，返回解析后的 JSON。登录态没了会自动重登一次。"""
+        for attempt in (1, 2):
+            if not self._web_ready:
+                self.web_login()
+            # 表单值不能像查询参数那样清空串：网页视图会把缺字段直接写进库（alias 之类
+            # 是 NOT NULL），少发一个就 500
+            resp = self._raw(method, self._url(path), params=_clean(params or {}) or None,
+                             json_body=None,
+                             data={k: v for k, v in (form or {}).items() if v is not None} or None,
+                             headers={"X-CSRFToken": self._csrf(),
+                                      "Referer": self._url("/sqlquery/")})
+            body = _body_json(resp)
+            if not isinstance(body, dict):
+                # 掉登录态时 Django 会重定向回登录页（HTML），重登一次再试
+                self._web_ready = False
+                if attempt == 1:
+                    continue
+                raise ArcheryError(f"{method.upper()} {path} 返回的不是 JSON: {_body_text(resp)}")
+            if body.get("status") not in (None, 0):
+                raise ArcheryError(f"{path}: {body.get('msg') or body}")
+            return body
+        raise ArcheryError(f"{method.upper()} {path} 反复要求登录")
 
     # -------------------------------------------------------- 便捷方法
 
