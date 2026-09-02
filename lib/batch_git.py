@@ -420,6 +420,21 @@ def _extract_error(out: str, code: int, label: str) -> str:
     return f"{label} 失败 (exit {code})"
 
 
+def _branch_worktree_path(repo: Path, branch: str) -> str:
+    """返回占用 branch 的 linked worktree 路径；未占用返回空字符串。"""
+    p = _run(["git", "worktree", "list", "--porcelain"], cwd=str(repo), check=False, capture_output=True)
+    if p.returncode != 0:
+        return ""
+    current_path = ""
+    target_ref = f"refs/heads/{branch}"
+    for line in (p.stdout or "").splitlines():
+        if line.startswith("worktree "):
+            current_path = line.split(" ", 1)[1]
+        elif line == f"branch {target_ref}" and current_path:
+            return current_path
+    return ""
+
+
 def _dirty_detail(repo: Path) -> str:
     """构造「工作区有未提交改动」detail，附前若干个脏文件名（≤200 字符）。"""
     p = _run(["git", "status", "--porcelain"], cwd=str(repo), check=False, capture_output=True)
@@ -1093,6 +1108,18 @@ def _delete_branch_one_factory(target: str, force: bool) -> DetectFn:
     execute: git branch -d/-D（实时）; not fully merged 且非 force → skip。
     """
     def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
+        worktree_path = plan.detail
+        if worktree_path:
+            dirty = _run(["git", "status", "--porcelain"], cwd=worktree_path, check=False, capture_output=True)
+            if dirty.returncode != 0:
+                return "fail", _extract_error((dirty.stderr or "") + (dirty.stdout or ""), dirty.returncode, "检查 worktree 失败")
+            if (dirty.stdout or "").strip():
+                return "skip", f"{target} 被 worktree 使用且有未提交改动: {worktree_path}"
+            r.step(f"git worktree remove {worktree_path} …")
+            removed = _run(["git", "worktree", "remove", worktree_path],
+                           cwd=str(repo), check=False, capture_output=True)
+            if removed.returncode != 0:
+                return "fail", f"删除 worktree 失败: {_extract_error((removed.stderr or '') + (removed.stdout or ''), removed.returncode, '删除 worktree 失败')}"
         flag = "-D" if force else "-d"
         r.step(f"git branch {flag} {target} …")
         p = _run(["git", "branch", flag, target],
@@ -1113,7 +1140,14 @@ def _delete_branch_one_factory(target: str, force: bool) -> DetectFn:
         )
         if exists.returncode != 0:
             return RepoPlan(status="skip", detail=f"无本地分支 {target}")
-        return RepoPlan(status="ok", execute=_execute)
+        worktree_path = _branch_worktree_path(repo, target)
+        if worktree_path:
+            dirty = _run(["git", "status", "--porcelain"], cwd=worktree_path, check=False, capture_output=True)
+            if dirty.returncode != 0:
+                return RepoPlan(status="fail", detail=f"检查 worktree 失败: {worktree_path}")
+            if (dirty.stdout or "").strip():
+                return RepoPlan(status="skip", detail=f"{target} 被 worktree 使用且有未提交改动: {worktree_path}")
+        return RepoPlan(status="ok", detail=worktree_path, execute=_execute)
 
     return _detect
 

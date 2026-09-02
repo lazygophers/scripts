@@ -570,6 +570,7 @@ class TestDeleteBranchFactory(unittest.TestCase):
         """正常删除 → ok。"""
         mock_run.side_effect = [
             _mock_run(returncode=0),   # show-ref 存在
+            _mock_run(stdout=""),      # worktree list 无占用
             _mock_run(returncode=0),   # git branch -d
         ]
         op = _delete_branch_one_factory("feat", force=False)
@@ -578,7 +579,77 @@ class TestDeleteBranchFactory(unittest.TestCase):
         self.assertEqual(status, "ok")
         self.assertIn("已删本地 feat", detail)
         # 验证用了 -d 而非 -D
-        self.assertEqual(mock_run.call_args_list[1].args[0], ["git", "branch", "-d", "feat"])
+        self.assertEqual(mock_run.call_args_list[2].args[0], ["git", "branch", "-d", "feat"])
+
+    @patch("lib.batch_git._get_current_branch", return_value="master")
+    @patch("lib.batch_git._run")
+    def test_delete_branch_with_worktree_removes_worktree_then_branch(self, mock_run, _mock_br):
+        mock_run.side_effect = [
+            _mock_run(returncode=0),   # show-ref
+            _mock_run(stdout="worktree /tmp/wt\nbranch refs/heads/feat\n"),
+            _mock_run(stdout=""),      # detect status --porcelain
+            _mock_run(stdout=""),      # execute status --porcelain
+            _mock_run(stdout=""),      # worktree remove
+            _mock_run(returncode=0),    # branch -d
+        ]
+        op = _delete_branch_one_factory("feat", force=False)
+        r = MagicMock()
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "ok")
+        self.assertEqual(detail, "已删本地 feat")
+        self.assertEqual(
+            mock_run.call_args_list[1].args[0],
+            ["git", "worktree", "list", "--porcelain"],
+        )
+        self.assertEqual(
+            mock_run.call_args_list[2].args[0],
+            ["git", "status", "--porcelain"],
+        )
+        self.assertEqual(
+            mock_run.call_args_list[3].args[0],
+            ["git", "status", "--porcelain"],
+        )
+        self.assertEqual(
+            mock_run.call_args_list[4].args[0],
+            ["git", "worktree", "remove", "/tmp/wt"],
+        )
+        self.assertEqual(
+            mock_run.call_args_list[5].args[0],
+            ["git", "branch", "-d", "feat"],
+        )
+
+    @patch("lib.batch_git._get_current_branch", return_value="master")
+    @patch("lib.batch_git._run")
+    def test_delete_branch_with_dirty_worktree_skips_branch_delete(self, mock_run, _mock_br):
+        mock_run.side_effect = [
+            _mock_run(returncode=0),   # show-ref
+            _mock_run(stdout="worktree /tmp/wt\nbranch refs/heads/feat\n"),
+            _mock_run(stdout=" M x.py\n"),
+        ]
+        op = _delete_branch_one_factory("feat", force=False)
+        r = MagicMock()
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "skip")
+        self.assertEqual(detail, "feat 被 worktree 使用且有未提交改动: /tmp/wt")
+        self.assertEqual(mock_run.call_args_list[1].args[0], ["git", "worktree", "list", "--porcelain"])
+        self.assertEqual(mock_run.call_args_list[2].args[0], ["git", "status", "--porcelain"])
+
+    @patch("lib.batch_git._get_current_branch", return_value="master")
+    @patch("lib.batch_git._run")
+    def test_delete_branch_with_worktree_remove_fail(self, mock_run, _mock_br):
+        mock_run.side_effect = [
+            _mock_run(returncode=0),   # show-ref
+            _mock_run(stdout="worktree /tmp/wt\nbranch refs/heads/feat\n"),
+            _mock_run(stdout=""),      # detect status --porcelain
+            _mock_run(stdout=""),      # execute status --porcelain
+            _mock_run(returncode=1, stderr="fatal: remove failed"),
+        ]
+        op = _delete_branch_one_factory("feat", force=False)
+        r = MagicMock()
+        status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
+        self.assertEqual(status, "fail")
+        self.assertIn("删除 worktree 失败", detail)
+        self.assertEqual(mock_run.call_args_list[4].args[0], ["git", "worktree", "remove", "/tmp/wt"])
 
     @patch("lib.batch_git._get_current_branch", return_value="master")
     @patch("lib.batch_git._run")
@@ -586,13 +657,14 @@ class TestDeleteBranchFactory(unittest.TestCase):
         """force=True → 用 -D。"""
         mock_run.side_effect = [
             _mock_run(returncode=0),   # show-ref
+            _mock_run(stdout=""),      # worktree list 无占用
             _mock_run(returncode=0),   # git branch -D
         ]
         op = _delete_branch_one_factory("feat", force=True)
         r = MagicMock()
         status, _ = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "ok")
-        self.assertEqual(mock_run.call_args_list[1].args[0], ["git", "branch", "-D", "feat"])
+        self.assertEqual(mock_run.call_args_list[2].args[0], ["git", "branch", "-D", "feat"])
 
     @patch("lib.batch_git._get_current_branch", return_value="master")
     @patch("lib.batch_git._run")
@@ -600,6 +672,7 @@ class TestDeleteBranchFactory(unittest.TestCase):
         """未合并 + 无 force → skip（提示 --force）。"""
         mock_run.side_effect = [
             _mock_run(returncode=0),   # show-ref
+            _mock_run(stdout=""),      # worktree list 无占用
             _mock_run(returncode=1, stderr="error: The branch 'feat' is not fully merged."),
         ]
         op = _delete_branch_one_factory("feat", force=False)

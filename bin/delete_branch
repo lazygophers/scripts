@@ -32,31 +32,43 @@ class DeleteBranchCli(BaseCli):
     """删除本地分支（单仓或批量）"""
 
     def __call__(self, *args: str, force: bool = False, yes: bool = False):
-        """裸调用 `delete_branch <branch>` 等同 `delete_branch here <branch>`（cwd 是 git 仓库时），
-        否则自动转发到 `delete_branch all <branch>`。
+        """裸调用 `delete_branch <branch...>` 等同逐个执行 `delete_branch here <branch>`（cwd 是 git 仓库时），
+        否则自动转发到 `delete_branch all <branch...>`。
         """
         if not args:
             self._r.err("delete_branch: 缺少分支名")
             return 1
-        branch = args[0]
+        branches = list(args)
         if (pathlib.Path.cwd() / ".git").exists():
-            return self.here(branch, force=force)
-        return self.all(branch, force=force, yes=yes)
+            return self.here(*branches, force=force)
+        return self.all(*branches, force=force, yes=yes)
 
     @timed_cli
-    def here(self, branch: str, force: bool = False):
+    def here(self, *branches: str, force: bool = False):
         """仅在当前仓库删除本地分支"""
-        return self._delete_one(branch, force)
+        if not branches:
+            self._r.err("delete_branch: 缺少分支名")
+            return 1
+        rc = 0
+        for branch in branches:
+            rc |= self._delete_one(branch, force)
+        return rc
 
     @timed_cli
-    def all(self, branch: str, force: bool = False, yes: bool = False):
+    def all(self, *branches: str, force: bool = False, yes: bool = False):
         """批量扫描所有 Git 仓库删除指定分支
 
-        用法: delete_branch all <branch> [--force] [-y]
+        用法: delete_branch all <branch...> [--force] [-y]
         """
+        if not branches:
+            self._r.err("delete_branch: 缺少分支名")
+            return 1
         if yes:
             os.environ["BATCH_NO_CONFIRM"] = "1"
-        return delete_branch_all(branch, force=force)
+        rc = 0
+        for branch in branches:
+            rc |= delete_branch_all(branch, force=force)
+        return rc
 
     def _delete_one(self, branch: str, force: bool) -> int:
         r = reporter(stderr=True)
