@@ -184,6 +184,11 @@ class TestRunCli(unittest.TestCase):
         self.assertNotIn("--debug", sys.argv)
         self.assertNotIn("--no-say", sys.argv)
 
+    def test_skills_exits_before_fire(self) -> None:
+        code, fire_fn = self._run(0, argv=["prog", "--skills"])
+        self.assertEqual(code, 0)
+        fire_fn.assert_not_called()
+
     def test_builtins_print_is_restored(self) -> None:
         import builtins
         before = builtins.print

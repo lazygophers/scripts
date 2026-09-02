@@ -2,6 +2,38 @@
 # enable-ipv6.sh — 开启本机所有网络服务的 IPv6（自动模式）
 set -euo pipefail
 
+case " ${*:1} " in
+  *" --skills "*)
+    cat <<'EOF'
+# enable-ipv6 skills
+
+Audience: AI agents using this command.
+Summary: 开启本机所有网络服务的 IPv6（自动模式）。
+
+Use when:
+- Restore automatic IPv6 for all macOS network services via networksetup.
+- Requires sudo/root; changes host network configuration.
+
+Common protocol:
+- Use `--help` for human-facing usage before composing arguments.
+- Confirm with the user before changing host network configuration.
+EOF
+    exit 0
+    ;;
+  *" --help "*|*" -h "*)
+    cat <<'EOF'
+enable-ipv6 — 开启本机所有网络服务的 IPv6（自动模式）
+
+用法: enable-ipv6
+
+选项:
+  -h, --help    显示帮助并退出
+  --skills      显示给 AI 看的命令能力说明并退出
+EOF
+    exit 0
+    ;;
+esac
+
 [[ $EUID -eq 0 ]] || { echo "需 sudo 运行"; exit 1; }
 
 networksetup -listallnetworkservices | tail -n +2 | sed 's/^\*//' | while IFS= read -r svc; do

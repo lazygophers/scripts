@@ -87,8 +87,10 @@ def run_cli(cli: BaseCli) -> None:
     无 Rich 时降级纯文本。
     """
     from lib.notify import consume_debug, consume_dry_run, consume_no_say
+    from lib.skills_help import consume_skills
 
     argv = list(sys.argv)
+    argv = consume_skills(argv, description=cli.__class__.__doc__ or "")
     argv = consume_dry_run(argv, description=cli.__class__.__doc__ or "")
     argv = consume_debug(argv)
     argv = consume_no_say(argv)

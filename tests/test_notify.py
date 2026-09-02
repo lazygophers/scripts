@@ -161,6 +161,7 @@ class TestConsumeHelp(unittest.TestCase):
         self.assertIn("用法: checkwork [选项]", out)
         self.assertIn("--no-say", out)
         self.assertIn("--debug", out)
+        self.assertIn("--skills", out)
 
     def test_custom_usage(self):
         out = self._help(["bin/cpd", "--help"], "复制目录", "cpd <src> <dest>")

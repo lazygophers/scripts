@@ -101,6 +101,7 @@ def consume_help(argv: list[str], description: str, usage: str = "") -> list[str
     lines.append("  --dry-run     预览模式，不执行实际操作")
     lines.append("  --no-say      禁用语音通知")
     lines.append("  --debug       打印成功命令的输出")
+    lines.append("  --skills      显示给 AI 看的命令能力说明并退出")
     print("\n".join(lines))
     raise SystemExit(0)
 
