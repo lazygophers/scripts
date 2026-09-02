@@ -38,6 +38,7 @@ from lib.archery import (
     ArcheryClient,
     ArcheryError,
     client_for,
+    config_lock,
     default_config_path,
     flatten_schema,
     host_key,
@@ -788,7 +789,12 @@ class ArcheryCli(BaseCli):
             cfg["current"] = key
 
         client = ArcheryClient(key, profile, cfg, reporter=self._r)
-        client.login()  # 失败会抛 ArcheryError，配置不落盘
+        client.login()  # 失败会抛 ArcheryError，配置不落盘；成功时它自己把 token 写好了
+        if current:
+            with config_lock():
+                cfg = load_config()
+                cfg["current"] = key
+                save_config(cfg)
         self._r.ok(f"{key} 登录成功，已写入 {CONFIG_PATH}（权限 0600）")
         if not current:
             self._r.info(f"当前默认站点仍是 {cfg.get('current')}；切换用 `archery use {key}`")
@@ -819,10 +825,11 @@ class ArcheryCli(BaseCli):
 
         用法: archery use archery.example.com
         """
-        cfg = load_config()
-        key, _ = resolve_profile(cfg, host)
-        cfg["current"] = key
-        save_config(cfg)
+        with config_lock():
+            cfg = load_config()
+            key, _ = resolve_profile(cfg, host)
+            cfg["current"] = key
+            save_config(cfg)
         self._r.ok(f"默认站点已切到 {key}")
         return 0
 
@@ -851,33 +858,37 @@ class ArcheryCli(BaseCli):
             "TLS 校验": "关（--insecure）" if profile.get("insecure") else "开",
             "access token": str(token.get("access") or "(未设置)"),
             "refresh token": str(token.get("refresh") or "(未设置)"),
+            "网页 sessionid": str((profile.get("web_cookies") or {}).get("sessionid") or "(未设置)"),
             "是否默认站点": "是" if key == str(cfg.get("current") or "") else "否",
         })
         return 0
 
     @cmd
     def logout(self, host: str = "", forget: bool = False):
-        """清掉 token（下次请求会用保存的密码自动重登）；--forget 连账号密码一起删
+        """清掉 token 和网页 cookie（下次请求会用保存的密码自动重登）；--forget 连账号密码一起删
 
         用法:
           archery logout
           archery logout --host archery.example.com --forget
         """
-        cfg = load_config()
-        key, profile = resolve_profile(cfg, host)
-        known = profiles(cfg)
-        if forget:
-            known.pop(key, None)
-            cfg["profiles"] = known
-            if cfg.get("current") == key:
-                cfg["current"] = next(iter(sorted(known)), "")
+        # 读—改—写要拿锁：别的 archery 进程可能正在续 token / 换 cookie
+        with config_lock():
+            cfg = load_config()
+            key, profile = resolve_profile(cfg, host)
+            known = profiles(cfg)
+            if forget:
+                known.pop(key, None)
+                cfg["profiles"] = known
+                if cfg.get("current") == key:
+                    cfg["current"] = next(iter(sorted(known)), "")
+                save_config(cfg)
+                self._r.ok(f"已删除 {key} 的全部配置")
+                return 0
+            profile["token"] = {}
+            profile["web_cookies"] = {}
+            put_profile(cfg, key, profile)
             save_config(cfg)
-            self._r.ok(f"已删除 {key} 的全部配置")
-            return 0
-        profile["token"] = {}
-        put_profile(cfg, key, profile)
-        save_config(cfg)
-        self._r.ok(f"已清掉 {key} 的 token（账号密码保留）")
+        self._r.ok(f"已清掉 {key} 的 token 和网页 cookie（账号密码保留）")
         return 0
 
     @cmd

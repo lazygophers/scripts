@@ -427,6 +427,71 @@ class TestWebFallback(ServerCase):
         got = client.web("POST", "/query/", form={"sql_content": "select 1"})
         self.assertEqual(got["status"], 0)
 
+    def test_web_cookies_are_persisted_and_reused(self):
+        """cookie 落盘：第二个进程（这里换个 client）直接拿去用，不再登录。"""
+        FakeArchery.state["twofa"] = True
+        first = self.web_client()
+        first.web("POST", "/query/", form={"sql_content": "select 1"})
+        saved = load_config(self.config_path)["profiles"][self.key]["web_cookies"]
+        self.assertEqual(saved["sessionid"], "tmp-session")
+
+        second = ArcheryClient(self.key, load_config(self.config_path)["profiles"][self.key],
+                               {}, config_path=self.config_path, timeout=5)
+        FakeArchery.state["calls"] = []
+        second.web("POST", "/query/", form={"sql_content": "select 1"})
+        self.assertNotIn(("POST", "/authenticate/"), FakeArchery.state["calls"])
+
+    def test_stale_cookies_trigger_one_relogin(self):
+        """服务端不认存着的 cookie 时清掉重登，且新 cookie 覆盖写回配置。"""
+        client = self.web_client()
+        client.web("POST", "/query/", form={"sql_content": "select 1"})
+        FakeArchery.state["sessionid"] = "rotated-by-server"
+
+        fresh = ArcheryClient(self.key, load_config(self.config_path)["profiles"][self.key],
+                              {}, config_path=self.config_path, timeout=5)
+        FakeArchery.state["calls"] = []
+        got = fresh.web("POST", "/query/", form={"sql_content": "select 1"})
+        self.assertEqual(got["status"], 0)
+        self.assertIn(("POST", "/authenticate/"), FakeArchery.state["calls"])
+        saved = load_config(self.config_path)["profiles"][self.key]["web_cookies"]
+        self.assertEqual(saved["sessionid"], "web-session")
+
+    def test_concurrent_writers_keep_each_others_fields(self):
+        """两个进程各写一半：一个存 token，一个存 cookie，谁都不该被覆盖掉。"""
+        a = self.web_client()
+        b = ArcheryClient(self.key, dict(a.profile), {},
+                          config_path=self.config_path, timeout=5)
+        a.login()                                              # A 写 token
+        b.web("POST", "/query/", form={"sql_content": "select 1"})  # B 写 cookie
+        disk = load_config(self.config_path)["profiles"][self.key]
+        self.assertTrue(disk["token"]["access"])
+        self.assertTrue(disk["web_cookies"]["sessionid"])
+
+    def test_parallel_writes_never_corrupt_the_file(self):
+        """十个写者同时刷 token：配置文件任何时刻都是完整的，账号密码不丢。"""
+        clients = [ArcheryClient(self.key, {"url": self.url, "username": "nico",
+                                            "password": "pw", "token": {}},
+                                 {}, config_path=self.config_path, timeout=5)
+                   for _ in range(10)]
+        errors: list[Exception] = []
+
+        def hammer(c, i):
+            try:
+                for _ in range(5):
+                    c._store_token(f"access-{i}")
+                    self.assertEqual(load_config(self.config_path)["profiles"][self.key]["password"], "pw")
+            except Exception as e:  # noqa: BLE001 — 线程里的异常要带回主线程断言
+                errors.append(e)
+
+        threads = [threading.Thread(target=hammer, args=(c, i)) for i, c in enumerate(clients)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        disk = load_config(self.config_path)["profiles"][self.key]
+        self.assertTrue(disk["token"]["access"].startswith("access-"))
+
     def test_web_login_failure_message(self):
         client = self.web_client(password="wrong")
         with self.assertRaises(ArcheryError) as ctx:

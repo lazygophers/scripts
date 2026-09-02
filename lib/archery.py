@@ -25,6 +25,7 @@ access 短命，请求收到 401 时先用 refresh 换新的；refresh 也失效
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import pathlib
@@ -44,6 +45,9 @@ WEB_AUTH_PATH = "/authenticate/"
 WEB_2FA_PATH = "/api/v1/user/2fa/verify/"
 
 DEFAULT_TIMEOUT = 30
+
+# 会被并发进程各自改写的字段：落盘时以磁盘上的为准（见 ArcheryClient._persist）
+VOLATILE_KEYS = ("token", "web_cookies")
 
 
 class ArcheryError(Exception):
@@ -68,17 +72,48 @@ def save_config(data: dict, path: pathlib.Path | None = None) -> None:
 
     属主保持调用者自己，不像 ovpn 那样收归 root —— archery 的日常命令（查数据、
     管工单）都是普通用户跑的，配置一旦变成 root 属主它们就全读不了了。
+
+    先写同目录临时文件再 os.replace 换上去：换名是原子的，别的进程要么读到旧的
+    完整内容，要么读到新的完整内容，不会读到写了一半的文件。
     """
     import yaml
 
     target = path or default_config_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     # 先建 0600 再写，避免密码在 umask 宽松时短暂可读
-    fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
     os.chmod(target, 0o600)
+
+
+@contextlib.contextmanager
+def config_lock(path: pathlib.Path | None = None):
+    """跨进程互斥锁，锁住配置文件的「读—改—写」。
+
+    同时跑好几条 archery（并行查询、脚本里 for 循环）时，两个进程都在续 token /
+    换 cookie，谁后写谁就把对方刚存的那份覆盖掉。锁加在同目录的 .lock 文件上，
+    配置本身照旧用 os.replace 原子换名，读的人不需要拿锁。
+    """
+    import fcntl
+
+    target = path or default_config_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = target.with_name(f".{target.name}.lock")
+    fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 def normalize_url(raw: str) -> str:
@@ -276,14 +311,28 @@ class ArcheryClient:
         token = self.profile.get("token") or {}
         return str(token.get(name) or "")
 
+    def _persist(self, **changes) -> None:
+        """把 profile 的某几个字段落盘。
+
+        拿锁 → 重读磁盘上的配置 → 盖上本进程的固定字段（地址 / 账号密码）和这次要改的
+        字段 → 写回。token 和 web_cookies 这两个会被并发进程改的字段，除非正是这次要
+        改的内容，否则一律以磁盘上的为准，免得把别的进程刚续到的凭据覆盖掉。
+        """
+        with config_lock(self.config_path):
+            disk = load_config(self.config_path)
+            merged = dict(profiles(disk).get(self.key) or {})
+            merged.update({k: v for k, v in self.profile.items() if k not in VOLATILE_KEYS})
+            merged.update(changes)
+            self.cfg = put_profile(disk, self.key, merged)
+            self.profile = merged
+            save_config(self.cfg, self.config_path)
+
     def _store_token(self, access: str, refresh: str = "") -> None:
         token = dict(self.profile.get("token") or {})
         token["access"] = access
         if refresh:
             token["refresh"] = refresh
-        self.profile["token"] = token
-        put_profile(self.cfg, self.key, self.profile)
-        save_config(self.cfg, self.config_path)
+        self._persist(token=token)
 
     def _post_json(self, path: str, payload: dict):
         """走 _raw，网络异常同样转成 ArcheryError（而不是甩 traceback）。"""
@@ -372,6 +421,34 @@ class ArcheryClient:
             token = self.session.cookies.get("csrftoken") or ""
         return token
 
+    def _web_domain(self) -> str:
+        return urllib.parse.urlsplit(self.base_url).hostname or ""
+
+    def load_web_cookies(self) -> bool:
+        """把配置里存着的网页 cookie 装回 session，装上了返回 True。
+
+        cookie 有没有过期这里不判断——服务端说了算：用它发请求，被踢回登录页时
+        web() 会清掉重登一次。
+        """
+        saved = self.profile.get("web_cookies")
+        if not isinstance(saved, dict) or not saved.get("sessionid"):
+            return False
+        for name, value in saved.items():
+            if value:
+                self.session.cookies.set(str(name), str(value), domain=self._web_domain())
+        return True
+
+    def _store_web_cookies(self) -> None:
+        jar = self.session.cookies
+        saved = {name: jar.get(name) for name in ("sessionid", "csrftoken") if jar.get(name)}
+        if saved.get("sessionid"):
+            self._persist(web_cookies=saved)
+
+    def _drop_web_cookies(self) -> None:
+        self.session.cookies.clear()
+        if self.profile.get("web_cookies"):
+            self._persist(web_cookies={})
+
     def web_login(self) -> None:
         """用账号密码（+ TOTP）换一个网页端 session cookie。
 
@@ -395,6 +472,7 @@ class ArcheryClient:
         session_key = str(body.get("data") or "")
         if not session_key:
             self._web_ready = True
+            self._store_web_cookies()
             return
         secret = str(self.profile.get("totp_secret") or "")
         if not secret:
@@ -413,11 +491,15 @@ class ArcheryClient:
             detail = body.get("msg") if isinstance(body, dict) else _body_text(resp)
             raise ArcheryError(f"2FA 校验失败: {detail}")
         self._web_ready = True
+        self._store_web_cookies()
 
     def web(self, method: str, path: str, *, params: dict | None = None,
             form: dict | None = None):
         """请求一个网页端接口，返回解析后的 JSON。登录态没了会自动重登一次。"""
         for attempt in (1, 2):
+            if not self._web_ready:
+                # 上次跑剩下的 cookie 先拿来用，只有服务端不认了才重新登录
+                self._web_ready = self.load_web_cookies()
             if not self._web_ready:
                 self.web_login()
             # 表单值不能像查询参数那样清空串：网页视图会把缺字段直接写进库（alias 之类
@@ -429,9 +511,10 @@ class ArcheryClient:
                                       "Referer": self._url("/sqlquery/")})
             body = _body_json(resp)
             if not isinstance(body, dict):
-                # 掉登录态时 Django 会重定向回登录页（HTML），重登一次再试
+                # 掉登录态时 Django 会重定向回登录页（HTML）：扔掉存着的 cookie 重登一次
                 self._web_ready = False
                 if attempt == 1:
+                    self._drop_web_cookies()
                     continue
                 raise ArcheryError(f"{method.upper()} {path} 返回的不是 JSON: {_body_text(resp)}")
             if body.get("status") not in (None, 0):
