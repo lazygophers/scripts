@@ -33,9 +33,11 @@ COMMAND_SKILLS = {
         "Use before commit/push when you need local confidence matching CI build basics.",
     ],
     "cicd": [
-        "Poll current branch or explicit ref CI status through gh/glab CLI.",
-        "Default waits silently and prints only final result; use `--verbose` for each poll.",
-        "Use `--once` for a single status check without polling.",
+        "Use `cicd trigger` to start a GitHub workflow_dispatch run or a GitLab branch pipeline.",
+        "Use `--project` to target another GitHub/GitLab project; without it the current git remote is used.",
+        "Use `cicd status [branch]` to view the latest CI/CD for one branch.",
+        "Use `cicd watch [branch]` or `cicd watch --target <id>` to poll silently until done; only errors print during polling unless `--verbose` is set.",
+        "Use `cicd logs <id>` or `cicd logs <id> --failed` to inspect logs/error output for a specific CI/CD run/job.",
     ],
     "commit": [
         "Create an automated git commit for current repo or scanned child repos.",

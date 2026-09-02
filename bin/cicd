@@ -1,55 +1,79 @@
 #!/usr/bin/env python3
-"""cicd — 轮询当前分支 CI/CD，完成后输出最终结果"""
+"""cicd — 触发、查看、监听 GitHub/GitLab CI/CD"""
 from __future__ import annotations
 
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.cicd import PollConfig, watch_cicd
+from lib.cicd import PollConfig, logs_cicd, status_cicd, trigger_cicd, watch_cicd
 from lib.fire_base import BaseCli, run_cli, timed_cli
 
 
 class CicdCli(BaseCli):
-    """轮询当前分支 CI/CD，默认只在完成时输出最终结果"""
+    """触发、查看、监听 GitHub/GitLab CI/CD"""
 
     def __call__(
         self,
         ref: str | None = None,
         *,
+        project: str = "",
         min_interval: float = 5.0,
         max_interval: float = 30.0,
         timeout: float | None = None,
-        once: bool = False,
         verbose: bool = False,
     ):
         """裸调用 `cicd [ref]` 等同 `cicd watch [ref]`"""
         return self.watch(
             ref,
+            project=project,
             min_interval=min_interval,
             max_interval=max_interval,
             timeout=timeout,
-            once=once,
             verbose=verbose,
         )
+
+    @timed_cli
+    def trigger(self, workflow: str = "", ref: str | None = None, *, project: str = ""):
+        """触发 CI/CD
+
+        用法:
+          cicd trigger <workflow> [ref] [--project owner/repo]
+          cicd trigger [ref] [--project group/repo]  # GitLab
+        """
+        return trigger_cicd(workflow=workflow, ref=ref, project=project)
+
+    @timed_cli
+    def status(self, ref: str | None = None, *, project: str = ""):
+        """查看某个分支的最新 CI/CD
+
+        用法: cicd status [ref] [--project owner/repo]
+        """
+        return status_cicd(ref, project=project)
 
     @timed_cli
     def watch(
         self,
         ref: str | None = None,
         *,
+        target: str = "",
+        project: str = "",
         min_interval: float = 5.0,
         max_interval: float = 30.0,
         timeout: float | None = None,
         once: bool = False,
         verbose: bool = False,
     ):
-        """轮询 CI/CD 状态
+        """监听分支或某个 CI/CD，完成后输出最终结果
 
-        用法: cicd watch [ref] [--min-interval 5] [--max-interval 30] [--timeout S] [--once] [--verbose]
+        用法:
+          cicd watch [ref] [--project owner/repo]
+          cicd watch --target <run-id-or-pipeline-id> [--project owner/repo]
         """
         return watch_cicd(
             ref,
+            target=target,
+            project=project,
             config=PollConfig(
                 min_interval=min_interval,
                 max_interval=max_interval,
@@ -58,6 +82,16 @@ class CicdCli(BaseCli):
                 verbose=verbose,
             ),
         )
+
+    @timed_cli
+    def logs(self, target: str, *, project: str = "", failed: bool = False, job: str = ""):
+        """查看某个 CI/CD 的日志/错误输出
+
+        用法:
+          cicd logs <run-id> [--failed] [--job job-id] [--project owner/repo]
+          cicd logs <job-id> [--project group/repo]
+        """
+        return logs_cicd(target, project=project, failed=failed, job=job)
 
 
 if __name__ == "__main__":

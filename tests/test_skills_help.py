@@ -20,7 +20,8 @@ class TestRenderSkills(unittest.TestCase):
     def test_known_command_includes_ai_audience_and_command_guidance(self) -> None:
         out = render_skills("cicd", "轮询当前分支 CI/CD")
         self.assertIn("Audience: AI agents", out)
-        self.assertIn("Poll current branch", out)
+        self.assertIn("cicd trigger", out)
+        self.assertIn("cicd watch", out)
         self.assertIn("--help", out)
 
     def test_unknown_command_falls_back_to_description(self) -> None:
