@@ -100,6 +100,33 @@ class TestDispatchAuto(unittest.TestCase):
         mock_push_all.assert_called_once()
 
 
+class TestBareCall(unittest.TestCase):
+    """裸调用 `merge_*` 等同 `auto`。"""
+
+    def test_bare_call_delegates_to_auto(self):
+        cli = _gitwf.GitWfCli()
+        with patch.object(cli, "auto", return_value=0) as m_auto:
+            self.assertEqual(cli(auto_commit=True), 0)
+        m_auto.assert_called_once_with(auto_commit=True)
+
+    @patch("lib.git_workflow.merge_to", return_value=0)
+    def test_auto_commit_appends_flag(self, mock_merge):
+        cli = _gitwf.GitWfCli()
+        with patch("sys.argv", ["merge_canary"]):
+            cli.here(auto_commit=True)
+        self.assertIn("--auto-commit", mock_merge.call_args[0][1])
+
+
+class TestUnknownEntryName(unittest.TestCase):
+    def test_unknown_basename_returns_2(self):
+        cli = _gitwf.GitWfCli()
+        with patch("sys.argv", ["totally_unknown"]), \
+             patch.object(cli, "_r") as m_r:
+            self.assertEqual(cli.here(), 2)
+        m_r.err.assert_called_once()
+        self.assertIn("totally_unknown", m_r.err.call_args[0][0])
+
+
 class TestPushTargetsDispatched(unittest.TestCase):
     """验证所有 push_* 入口目标分支正确派发"""
 

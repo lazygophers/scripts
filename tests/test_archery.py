@@ -105,6 +105,9 @@ class FakeArchery(BaseHTTPRequestHandler):
             return self._json(200, {"status": 0, "msg": "ok",
                                     "data": {"column_list": ["id"], "rows": [[1]]}})
 
+        if self.path == "/query/err/":
+            return self._json(200, {"status": 1, "msg": "SQL 语法错误"})
+
         body = self._read()
         if self.path == "/api/auth/token/":
             if body.get("username") == st["username"] and body.get("password") == st["password"]:
@@ -118,6 +121,9 @@ class FakeArchery(BaseHTTPRequestHandler):
                 st["access"] = st["access"] + "+"
                 return self._json(200, {"access": st["access"]})
             return self._json(401, {"detail": "token_not_valid"})
+        if self.path == "/api/auth/token/verify/":
+            ok = body.get("token") and body.get("token") == st.get("access")
+            return self._json(200 if ok else 401, {} if ok else {"detail": "token_not_valid"})
         if self.path == "/api/v1/sqlquery/execute/":
             return self._authed(lambda: self._json(200, {
                 "status": 0, "msg": "ok",
@@ -147,6 +153,13 @@ class FakeArchery(BaseHTTPRequestHandler):
             return self._authed(lambda: self._json(200, {"pong": self.path}))
         if self.path == "/api/boom":
             return self._json(500, {"detail": "炸了"})
+        return self._json(404, {"detail": "not found"})
+
+    def do_PUT(self):
+        FakeArchery.state.setdefault("calls", []).append(("PUT", self.path))
+        body = self._read()
+        if self.path == "/api/v1/echo/":
+            return self._authed(lambda: self._json(200, {"echo": body}))
         return self._json(404, {"detail": "not found"})
 
     def do_DELETE(self):
@@ -237,6 +250,36 @@ class TestConfigHelpers(unittest.TestCase):
             parse_data("not json")
         with self.assertRaises(ArcheryError):
             parse_data("[1,2]")
+
+    def test_normalize_url_empty_is_empty(self):
+        self.assertEqual(normalize_url(""), "")
+        self.assertEqual(normalize_url("   "), "")
+
+    def test_parse_data_missing_file(self):
+        with self.assertRaises(ArcheryError):
+            parse_data("@/definitely/not/here.json")
+
+    def test_parse_data_rejects_other_types(self):
+        with self.assertRaises(ArcheryError):
+            parse_data(123)
+
+    def test_mask(self):
+        from lib.archery import mask
+        self.assertEqual(mask(""), "(未设置)")
+        self.assertEqual(mask("abcd"), "****")
+        self.assertEqual(mask("abcdef"), "ab**ef")
+
+    def test_flatten_schema_skips_non_dict_ops(self):
+        schema = {"paths": {"/a/": "junk", "/b/": {"get": {"summary": "ok"}}}}
+        self.assertEqual(flatten_schema(schema), [("GET", "/b/", "ok")])
+
+    def test_client_for_picks_current_profile(self):
+        from lib.archery import client_for
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "archery.yaml"
+            save_config(put_profile({}, "a.com", {"url": "https://a.com"}), path)
+            c = client_for(config_path=path)
+            self.assertEqual(c.key, "a.com")
 
     def test_flatten_schema(self):
         schema = {"paths": {"/api/v1/user/": {"get": {"summary": "用户清单"},
@@ -391,6 +434,30 @@ class TestClient(ServerCase):
         client = self.client()
         self.assertFalse(client.verify_token())
 
+    def test_verify_token_true_after_login(self):
+        client = self.client()
+        client.login()
+        self.assertTrue(client.verify_token())
+
+    def test_put_sends_json_body(self):
+        client = self.client()
+        self.assertEqual(client.put("v1/echo/", {"a": 2}), {"echo": {"a": 2}})
+
+    def test_login_without_credentials_errors(self):
+        client = self.client(username="", password="")
+        with self.assertRaises(ArcheryError) as ctx:
+            client.login()
+        self.assertIn("缺用户名或密码", str(ctx.exception))
+
+    def test_login_response_without_access_errors(self):
+        client = self.client()
+        fake = unittest.mock.MagicMock(status_code=200)
+        fake.json.return_value = {"refresh": "r"}
+        with unittest.mock.patch.object(client, "_post_json", return_value=fake):
+            with self.assertRaises(ArcheryError) as ctx:
+                client.login()
+        self.assertIn("没有 access token", str(ctx.exception))
+
 
 class TestWebFallback(ServerCase):
     """Archery 1.9.x 没有 sqlquery API 时，查询走网页端 session 的回退路径。"""
@@ -497,6 +564,35 @@ class TestWebFallback(ServerCase):
         with self.assertRaises(ArcheryError) as ctx:
             client.web("POST", "/query/", form={})
         self.assertIn("网页端登录失败", str(ctx.exception))
+
+    def test_web_login_without_credentials_errors(self):
+        client = self.web_client(username="", password="")
+        with self.assertRaises(ArcheryError) as ctx:
+            client.web("POST", "/query/", form={})
+        self.assertIn("缺用户名或密码", str(ctx.exception))
+
+    def test_2fa_wrong_code_reports_server_message(self):
+        FakeArchery.state["twofa"] = True
+        self.web_client()  # 先让服务端持有正确密钥
+        client = self.client(totp_secret="JBSWY3DPEHPK3PXQ")  # 客户端拿的是另一个
+        with self.assertRaises(ArcheryError) as ctx:
+            client.web("POST", "/query/", form={})
+        self.assertIn("2FA 校验失败", str(ctx.exception))
+        self.assertIn("验证码错误", str(ctx.exception))
+
+    def test_web_error_status_raises_with_message(self):
+        client = self.web_client()
+        with self.assertRaises(ArcheryError) as ctx:
+            client.web("POST", "/query/err/", form={})
+        self.assertIn("SQL 语法错误", str(ctx.exception))
+
+    def test_web_html_twice_gives_up(self):
+        """登录动作没生效时（页面一直重定向回登录页），重试一次后报错。"""
+        client = self.web_client()
+        with unittest.mock.patch.object(ArcheryClient, "web_login", lambda self: None):
+            with self.assertRaises(ArcheryError) as ctx:
+                client.web("POST", "/query/", form={})
+        self.assertIn("返回的不是 JSON", str(ctx.exception))
 
     def test_web_needs_totp_secret_when_2fa_on(self):
         FakeArchery.state["twofa"] = True

@@ -124,7 +124,37 @@ class TestProbeOnce(unittest.TestCase):
         self.assertNotIn("x-api-key", joined.lower())
 
 
+    def test_extra_headers_appended(self):
+        with patch("lib.check_ai.run", return_value=_FakeProc()) as mock_run:
+            probe_once("https://x", timeout=5, proxy=None, headers={"x-trace": "1"})
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("x-trace: 1", cmd)
+
+    def test_command_timeout_recorded_as_error(self):
+        from lib.exec import CommandTimeout
+        with patch("lib.check_ai.run", side_effect=CommandTimeout("curl 超时 20s")):
+            res = probe_once("https://x", timeout=15, proxy=None)
+        self.assertFalse(res["ok"])
+        self.assertIn("超时", res["error"])
+
+
 class TestMain(unittest.TestCase):
+    def test_keyboard_interrupt_summarizes_and_exits_1(self):
+        """Ctrl+C 中断 → 打印已完成部分并以 1 退出。"""
+        calls = {"n": 0}
+
+        def _probe(*a, **k):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise KeyboardInterrupt
+            return {"ok": True, "http_code": "401", "ttfb": 0.1,
+                    "total": 0.2, "connects": 1, "size": 25, "error": ""}
+
+        with patch("lib.check_ai.probe_once", side_effect=_probe), patch("time.sleep"):
+            rc = main(["check_ai", "claude", "-i", "--interval", "0"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(calls["n"], 2)
+
     def test_unknown_target_exit_2(self):
         self.assertEqual(main(["check_ai", "no-such-provider"]), 2)
 

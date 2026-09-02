@@ -48,6 +48,23 @@ class TestMrCli(unittest.TestCase):
         self.assertEqual(mock_run_mr.call_args.args[0], "develop")
 
 
+    @patch.object(_mr_bin, "run_mr", return_value=0)
+    def test_bare_call_without_args_uses_default_base(self, mock_run_mr):
+        """`mr` 裸调用 → base=None，默认走 draft。"""
+        cli = _mr_bin.MrCli()
+        self.assertEqual(cli(), 0)
+        self.assertIsNone(mock_run_mr.call_args.args[0])
+        self.assertTrue(mock_run_mr.call_args.kwargs["draft"])
+
+    @patch.object(_mr_bin, "run_mr", return_value=0)
+    def test_bare_call_passes_positional_base_and_flags(self, mock_run_mr):
+        cli = _mr_bin.MrCli()
+        self.assertEqual(cli("develop", publish=True, labels="bug"), 0)
+        self.assertEqual(mock_run_mr.call_args.args[0], "develop")
+        self.assertFalse(mock_run_mr.call_args.kwargs["draft"])
+        self.assertEqual(mock_run_mr.call_args.kwargs["labels"], "bug")
+
+
 class TestFindExistingPrGh(unittest.TestCase):
     @patch("lib.mr_wf.run")
     def test_existing_open_pr_returns_url(self, mock_run):

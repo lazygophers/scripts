@@ -76,6 +76,17 @@ class TestShowFull(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("未在 bin/ 中找到", err.getvalue())
 
+    def test_exec_failure_returns_1(self) -> None:
+        """bin 存在但起不来（例如缺解释器）→ 报错并返回 1。"""
+        import contextlib
+        from unittest.mock import patch
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+             patch("lib.lazyhelp.subprocess.call", side_effect=FileNotFoundError):
+            rc = show_full("cpd")
+        self.assertEqual(rc, 1)
+        self.assertIn("无法执行", err.getvalue())
+
     def test_known_bin_invokes_help(self) -> None:
         # 真实调 bin/cpd --help，应成功退出
         rc = show_full("cpd")

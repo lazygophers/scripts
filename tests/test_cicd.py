@@ -11,10 +11,15 @@ from lib.ai_workflow import ProviderInfo
 from lib.cicd import (
     CiStatus,
     PollConfig,
+    _extract_glab_status,
+    _run_status,
+    _validate_config,
     build_logs_command,
     build_run_status_command,
     build_status_command,
     build_trigger_command,
+    check_once,
+    check_run_once,
     classify_status,
     logs_cicd,
     resolve_provider,
@@ -22,6 +27,7 @@ from lib.cicd import (
     trigger_cicd,
     watch_cicd,
 )
+from lib.exec import CommandTimeout
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 _cicd_bin = SourceFileLoader("cicd_bin_test_mod", str(REPO_ROOT / "bin" / "cicd")).load_module()
@@ -56,6 +62,26 @@ class TestResolveProvider(unittest.TestCase):
         info = resolve_provider("https://gitlab.example.com/owner/repo.git")
         self.assertEqual(info.provider, "glab")
         self.assertEqual(info.repo, "owner/repo")
+
+    def test_bare_github_path(self):
+        info = resolve_provider("github.com/owner/repo")
+        self.assertEqual((info.provider, info.host, info.repo), ("gh", "github.com", "owner/repo"))
+
+    def test_github_prefix_without_repo_path(self):
+        """`github.com/` 解析不出 repo，但仍应认成 GitHub 而不是 GitLab。"""
+        info = resolve_provider("github.com/")
+        self.assertEqual((info.provider, info.host, info.repo), ("gh", "github.com", ""))
+
+    def test_repo_less_provider_adds_no_repo_flag(self):
+        info = ProviderInfo(provider="gh", host="github.com", repo="", remote="", remote_url="")
+        self.assertEqual(build_status_command(info, ref="feat")[-1],
+                         "conclusion,databaseId,displayTitle,status,url,workflowName")
+
+    def test_glab_logs_with_job(self):
+        self.assertEqual(
+            build_logs_command(_glab_info(), "456", job="789")[-2:],
+            ["--job", "789"],
+        )
 
 
 class TestBuildCommands(unittest.TestCase):
@@ -253,6 +279,249 @@ class TestWatchCicd(unittest.TestCase):
         rc = watch_cicd("feat", config=PollConfig(min_interval=8.0, max_interval=5.0))
         self.assertEqual(rc, 2)
         fake.err.assert_called_once()
+
+
+class TestGlabClassifyFallbacks(unittest.TestCase):
+    """glab 输出里没有可解析的 status 字段时，只能靠文本关键字和退出码判断。"""
+
+    def classify(self, stdout: str, stderr: str = "", code: int = 0) -> str:
+        return classify_status(_glab_info(), stdout, stderr, code)
+
+    def test_status_from_detailed_status_text(self):
+        self.assertEqual(_extract_glab_status('{"detailed_status":{"text":"Passed"}}'), "passed")
+
+    def test_status_from_broken_json_is_empty(self):
+        self.assertEqual(_extract_glab_status("not json"), "")
+
+    def test_status_from_json_list_is_empty(self):
+        self.assertEqual(_extract_glab_status("[1,2]"), "")
+
+    def test_success_exit_with_failure_text(self):
+        self.assertEqual(self.classify("pipeline failed for branch"), "fail")
+
+    def test_success_exit_with_pending_text(self):
+        self.assertEqual(self.classify("job is running"), "running")
+
+    def test_success_exit_without_output_is_no_checks(self):
+        self.assertEqual(self.classify(""), "no-checks")
+
+    def test_success_exit_with_unknown_text_is_pass(self):
+        self.assertEqual(self.classify("everything nominal"), "pass")
+
+    def test_failure_exit_with_pending_text(self):
+        self.assertEqual(self.classify("", "pipeline pending", 1), "running")
+
+    def test_failure_exit_with_failure_text(self):
+        self.assertEqual(self.classify("", "pipeline canceled", 1), "fail")
+
+    def test_failure_exit_without_markers_is_error(self):
+        self.assertEqual(self.classify("", "permission denied", 1), "error")
+
+    def test_gh_broken_json_with_failure_exit_is_error(self):
+        self.assertEqual(classify_status(_gh_info(), "<html>", "", 1), "error")
+
+    def test_gh_broken_json_with_success_exit_is_pass(self):
+        self.assertEqual(classify_status(_gh_info(), "<html>", "", 0), "pass")
+
+    def test_gh_non_dict_row_is_error(self):
+        self.assertEqual(classify_status(_gh_info(), '["nope"]', "", 0), "error")
+
+    def test_gh_unknown_conclusion_still_running(self):
+        self.assertEqual(classify_status(_gh_info(), '[{"status":"x","conclusion":"y"}]', "", 0), "running")
+
+    def test_gh_no_workflow_runs_text(self):
+        self.assertEqual(classify_status(_gh_info(), "", "no workflow runs found", 1), "no-checks")
+
+
+class TestRunStatus(unittest.TestCase):
+    @patch("lib.cicd.run")
+    def test_timeout_becomes_error_status(self, mock_run):
+        mock_run.side_effect = CommandTimeout("超时了")
+        status = _run_status(["gh", "run", "list"], _gh_info())
+        self.assertEqual((status.state, status.returncode), ("error", 124))
+
+    @patch("lib.cicd.run")
+    def test_detail_falls_back_to_command_line(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=3, stdout="", stderr="")
+        status = _run_status(["gh", "run", "list"], _gh_info())
+        self.assertIn("exit 3", status.detail)
+
+    @patch("lib.cicd.run")
+    def test_check_once_builds_branch_command(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="[]", stderr="")
+        status = check_once(_gh_info(), ref="feat")
+        self.assertEqual(status.state, "no-checks")
+        self.assertIn("--branch", mock_run.call_args.args[0])
+
+    @patch("lib.cicd.run")
+    def test_check_run_once_builds_view_command(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="[]", stderr="")
+        check_run_once(_gh_info(), "123")
+        self.assertIn("view", mock_run.call_args.args[0])
+
+
+class TestValidateConfig(unittest.TestCase):
+    def test_negative_interval(self):
+        self.assertEqual(_validate_config(PollConfig(min_interval=-1)), "间隔不能小于 0")
+
+    def test_min_over_max(self):
+        self.assertEqual(_validate_config(PollConfig(min_interval=9, max_interval=1)), "最小间隔不能大于最大间隔")
+
+    def test_non_positive_timeout(self):
+        self.assertEqual(_validate_config(PollConfig(timeout=0)), "timeout 必须大于 0")
+
+    def test_valid_config(self):
+        self.assertIsNone(_validate_config(PollConfig(timeout=10)))
+
+
+class TestActionGuards(unittest.TestCase):
+    """没有 provider、不在普通分支、命令失败这三类早退路径。"""
+
+    def setUp(self):
+        self.fake = MagicMock()
+        patcher = patch("lib.cicd.reporter", return_value=self.fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @patch("lib.cicd.resolve_provider", return_value=None)
+    def test_status_without_provider(self, _mock):
+        self.assertEqual(status_cicd("feat"), 2)
+        self.fake.err.assert_called_once()
+
+    @patch("lib.cicd.resolve_provider", return_value=None)
+    def test_trigger_without_provider(self, _mock):
+        self.assertEqual(trigger_cicd("ci.yml", "feat"), 2)
+
+    @patch("lib.cicd.resolve_provider", return_value=None)
+    def test_logs_without_provider(self, _mock):
+        self.assertEqual(logs_cicd("123"), 2)
+
+    @patch("lib.cicd.resolve_provider", return_value=None)
+    def test_watch_without_provider(self, _mock):
+        self.assertEqual(watch_cicd("feat"), 2)
+
+    @patch("lib.cicd.current_branch", return_value="detached")
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_status_on_detached_head(self, _mock_provider, _mock_branch):
+        self.assertEqual(status_cicd(), 2)
+
+    @patch("lib.cicd.current_branch", return_value="detached")
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_trigger_on_detached_head(self, _mock_provider, _mock_branch):
+        self.assertEqual(trigger_cicd("ci.yml"), 2)
+
+    @patch("lib.cicd.current_branch", return_value="detached")
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_watch_on_detached_head(self, _mock_provider, _mock_branch):
+        self.assertEqual(watch_cicd(), 2)
+
+    @patch("lib.cicd.run")
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_trigger_reports_command_failure(self, _mock_provider, mock_run):
+        mock_run.return_value = MagicMock(returncode=7, stdout="", stderr="boom")
+        self.assertEqual(trigger_cicd("ci.yml", "feat"), 7)
+        self.fake.err.assert_called_once_with("CI/CD 触发失败")
+        self.fake.output.assert_called_once()
+
+    @patch("lib.cicd.run")
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_trigger_success_without_output(self, _mock_provider, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        self.assertEqual(trigger_cicd("ci.yml", "feat"), 0)
+        self.fake.output.assert_not_called()
+
+    @patch("lib.cicd.run")
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_logs_silent_when_no_output(self, _mock_provider, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        self.assertEqual(logs_cicd("123"), 0)
+        self.fake.output.assert_not_called()
+
+    @patch("lib.cicd.check_once", return_value=CiStatus("fail", "boom", ["cmd"]))
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_status_failure_returns_one(self, _mock_provider, _mock_check):
+        self.assertEqual(status_cicd("feat"), 1)
+
+
+class TestWatchEdges(unittest.TestCase):
+    def setUp(self):
+        self.fake = MagicMock()
+        for target, kwargs in (("lib.cicd.reporter", {"return_value": self.fake}),
+                               ("lib.cicd.notify", {}),
+                               ("lib.cicd.time.sleep", {}),
+                               ("lib.cicd.random.uniform", {"return_value": 0.0})):
+            patcher = patch(target, **kwargs)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    @patch("lib.cicd.check_once")
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_verbose_prints_each_attempt(self, _mock_provider, mock_check):
+        mock_check.side_effect = [CiStatus("running", "…", ["cmd"]), CiStatus("pass", "ok", ["cmd"])]
+        rc = watch_cicd("feat", config=PollConfig(min_interval=0, max_interval=0, verbose=True))
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.fake.info.call_count, 2)
+
+    @patch("lib.cicd.check_once")
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_error_state_is_reported_but_keeps_polling(self, _mock_provider, mock_check):
+        mock_check.side_effect = [CiStatus("error", "api down", ["cmd"]), CiStatus("fail", "bad", ["cmd"])]
+        rc = watch_cicd("feat", config=PollConfig(min_interval=0, max_interval=0))
+        self.assertEqual(rc, 1)
+        self.fake.err.assert_called_once_with("api down")
+
+    @patch("lib.cicd.check_once", return_value=CiStatus("running", "…", ["cmd"]))
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_once_stops_after_first_poll(self, _mock_provider, mock_check):
+        rc = watch_cicd("feat", config=PollConfig(min_interval=0, max_interval=0, once=True))
+        self.assertEqual(rc, 1)
+        mock_check.assert_called_once()
+
+    @patch("lib.cicd.check_once", return_value=CiStatus("running", "…", ["cmd"]))
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_timeout_returns_one(self, _mock_provider, _mock_check):
+        rc = watch_cicd("feat", config=PollConfig(min_interval=0, max_interval=0, timeout=0.001))
+        self.assertEqual(rc, 1)
+        self.fake.rule.assert_called_once()
+
+    @patch("lib.cicd.check_once", side_effect=KeyboardInterrupt)
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_interrupt_before_first_result(self, _mock_provider, _mock_check):
+        rc = watch_cicd("feat", config=PollConfig(min_interval=0, max_interval=0))
+        self.assertEqual(rc, 130)
+        self.fake.warn.assert_called_once()
+
+    @patch("lib.cicd.check_once")
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_interrupt_after_a_result_prints_last_status(self, _mock_provider, mock_check):
+        mock_check.side_effect = [CiStatus("running", "…", ["cmd"]), KeyboardInterrupt]
+        rc = watch_cicd("feat", config=PollConfig(min_interval=0, max_interval=0))
+        self.assertEqual(rc, 130)
+        self.fake.rule.assert_called_once()
+
+
+class TestPrintFinal(unittest.TestCase):
+    """收尾输出走真实 Reporter，验证状态、耗时、命令都打出来了。"""
+
+    @patch("lib.cicd.notify")
+    @patch("lib.cicd.check_once", return_value=CiStatus("fail", "boom", ["gh", "run", "list"]))
+    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
+    def test_summary_contains_state_and_command(self, _mock_provider, _mock_check, _mock_notify):
+        import io
+
+        from rich.console import Console
+
+        from lib.ui import Reporter
+
+        buf = io.StringIO()
+        real = Reporter()
+        real.console = Console(file=buf, width=200, force_terminal=False)
+        with patch("lib.cicd.reporter", return_value=real):
+            rc = watch_cicd("feat", config=PollConfig(min_interval=0, max_interval=0, once=True))
+        self.assertEqual(rc, 1)
+        text = buf.getvalue()
+        self.assertIn("fail", text)
+        self.assertIn("gh run list", text)
 
 
 class TestCicdCli(unittest.TestCase):
