@@ -21,6 +21,13 @@ from lib.ui import reporter
 _STATUS_EXIT = {"ok": 0, "skip": 0, "fail": 1}
 
 
+def _consume_yes(argv: list[str]) -> list[str]:
+    if "-y" not in argv[1:] and "--yes" not in argv[1:]:
+        return argv
+    os.environ["BATCH_NO_CONFIRM"] = "1"
+    return [argv[0]] + [a for a in argv[1:] if a not in {"-y", "--yes"}]
+
+
 class DeleteBranchCli(BaseCli):
     """删除本地分支（单仓或批量）"""
 
@@ -61,4 +68,5 @@ class DeleteBranchCli(BaseCli):
 
 
 if __name__ == "__main__":
+    sys.argv = _consume_yes(sys.argv)
     run_cli(DeleteBranchCli())
