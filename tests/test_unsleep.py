@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """测试 lib.system.prevent_sleep 功能"""
 
 import subprocess
@@ -8,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import lib.system as system
 
 
+@patch("lib.system.sys.platform", "darwin")
 class TestPreventSleepCommandMode(unittest.TestCase):
     """测试命令跟随模式"""
 
@@ -133,6 +133,7 @@ class TestPreventSleepCommandMode(unittest.TestCase):
         self.assertEqual(result, -15)
 
 
+@patch("lib.system.sys.platform", "darwin")
 class TestPreventSleepDurationMode(unittest.TestCase):
     """测试时长模式"""
 
@@ -224,6 +225,7 @@ class TestPreventSleepDurationMode(unittest.TestCase):
         self.assertEqual(result, 1)
 
 
+@patch("lib.system.sys.platform", "darwin")
 class TestPreventSleepUnlimitedMode(unittest.TestCase):
     """测试无限制模式"""
 
@@ -271,6 +273,36 @@ class TestPreventSleepUnlimitedMode(unittest.TestCase):
         self.assertEqual(result, 1)
 
 
+@patch("lib.system.sys.platform", "linux")
+class TestPreventSleepLinuxMode(unittest.TestCase):
+    def setUp(self):
+        self.mock_reporter = MagicMock()
+
+    @patch("lib.system.shutil.which", return_value="/usr/bin/systemd-inhibit")
+    @patch("lib.system.subprocess.Popen")
+    def test_linux_duration_uses_systemd_inhibit(self, mock_popen, mock_which):
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.wait.return_value = 0
+        mock_popen.return_value = mock_proc
+
+        with patch("lib.system.reporter", return_value=self.mock_reporter):
+            result = system.prevent_sleep(duration=60)
+
+        self.assertEqual(result, 0)
+        args, kwargs = mock_popen.call_args
+        self.assertEqual(args[0], ["systemd-inhibit", "--what=sleep", "--why=unsleep", "--", "sleep", "60"])
+
+    @patch("lib.system.shutil.which", return_value=None)
+    def test_linux_without_systemd_inhibit_is_unsupported(self, _mock_which):
+        with patch("lib.system.reporter", return_value=self.mock_reporter):
+            result = system.prevent_sleep(duration=60)
+
+        self.assertEqual(result, 1)
+        self.mock_reporter.err.assert_called()
+
+
+@patch("lib.system.sys.platform", "darwin")
 class TestCaffeinateFailuresInCommandMode(unittest.TestCase):
     """命令跟随模式下 caffeinate 本身启动失败：命令进程必须被回收。"""
 
@@ -299,6 +331,7 @@ class TestCaffeinateFailuresInCommandMode(unittest.TestCase):
         cmd_proc.terminate.assert_called_once()
 
 
+@patch("lib.system.sys.platform", "darwin")
 class TestRemainingSystemBranches(unittest.TestCase):
     def setUp(self):
         self.mock_reporter = MagicMock()
