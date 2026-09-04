@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""inject — 把当前仓库 bin/ 注入 shell PATH（fire 重构）
+"""inject — 把当前仓库 bin/ 注入 shell PATH，并安装 zsh/bash/fish completion（fire 重构）
 
 生成独立文件 ~/.config/lazygophers/scripts/scripts.sh:
     export PATH="/abs/path/to/bin:$PATH"
@@ -59,9 +59,9 @@ def _read_existing_ai_config() -> tuple[str, str]:
     if not _SCRIPTS_SH.exists():
         return "", ""
     text = _SCRIPTS_SH.read_text(encoding="utf-8")
-    url_m = re.search(r'export\s+LAZYGOPHERS_SCRIPTS_BASE_URL="([^"]*)"', text)
-    tok_m = re.search(r'export\s+LAZYGOPHERS_SCRIPTS_TOKEN="([^"]*)"', text)
-    return (url_m.group(1) if url_m else ""), (tok_m.group(1) if tok_m else "")
+    url_m = re.search(r'export\s+LAZYGOPHERS_SCRIPTS_BASE_URL=(["\']?)([^"\'\n]*)\1', text)
+    tok_m = re.search(r'export\s+LAZYGOPHERS_SCRIPTS_TOKEN=(["\']?)([^"\'\n]*)\1', text)
+    return (url_m.group(2) if url_m else ""), (tok_m.group(2) if tok_m else "")
 
 
 def _prompt_ai_config(r) -> tuple[str | None, str | None]:
@@ -81,14 +81,17 @@ def _prompt_ai_config(r) -> tuple[str | None, str | None]:
 
     has_existing = bool(cur_url or cur_tok)
     enable = ask_confirm("是否配置?", default=has_existing)
-    if enable is None or not enable:
-        r.step("跳过 AI 配置（保留现有）" if has_existing else "跳过 AI 配置（可后续手填 scripts.sh）")
-        return (cur_url or None), (cur_tok or None)
+    if enable is None:
+        r.step("输入取消，保留现有 AI 配置")
+        return cur_url or None, cur_tok or None
+    if not enable:
+        r.step("跳过 AI 配置（保留现有）")
+        return cur_url or None, cur_tok or None
     base_url = ask_text("LAZYGOPHERS_SCRIPTS_BASE_URL", default=cur_url)
     token = ask_text("LAZYGOPHERS_SCRIPTS_TOKEN", default=cur_tok)
     if base_url is None or token is None:
-        r.step("输入取消，跳过 AI 配置")
-        return None, None
+        r.step("输入取消，保留现有 AI 配置")
+        return cur_url or None, cur_tok or None
     return (base_url.strip() or None), (token.strip() or None)
 
 

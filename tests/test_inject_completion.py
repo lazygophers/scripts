@@ -7,6 +7,7 @@ import importlib.util
 import pathlib
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 class ReporterStub:
@@ -14,6 +15,9 @@ class ReporterStub:
         pass
 
     def step(self, *_args, **_kwargs) -> None:
+        pass
+
+    def panel(self, *_args, **_kwargs) -> None:
         pass
 
 
@@ -35,6 +39,28 @@ class TestInjectCompletion(unittest.TestCase):
         self.assertIn('export PATH="/tmp/bin:$PATH"', content)
         self.assertIn("completions.sh", content)
 
+    def test_prompt_keeps_existing_config_on_skip(self) -> None:
+        inject = load_inject()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            inject._SCRIPTS_SH = root / "scripts.sh"
+            inject._SCRIPTS_SH.write_text('export LAZYGOPHERS_SCRIPTS_BASE_URL="http://old"\nexport LAZYGOPHERS_SCRIPTS_TOKEN="abc"\n', encoding="utf-8")
+            with patch("lib.ui.ask_confirm", return_value=False), patch("lib.ui.ask_text") as ask_text:
+                url, token = inject._prompt_ai_config(ReporterStub())
+            self.assertEqual((url, token), ("http://old", "abc"))
+            ask_text.assert_not_called()
+
+    def test_prompt_keeps_existing_config_on_cancel(self) -> None:
+        inject = load_inject()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            inject._SCRIPTS_SH = root / "scripts.sh"
+            inject._SCRIPTS_SH.write_text('export LAZYGOPHERS_SCRIPTS_BASE_URL=http://old\nexport LAZYGOPHERS_SCRIPTS_TOKEN=abc\n', encoding="utf-8")
+            with patch("lib.ui.ask_confirm", return_value=None), patch("lib.ui.ask_text") as ask_text:
+                url, token = inject._prompt_ai_config(ReporterStub())
+            self.assertEqual((url, token), ("http://old", "abc"))
+            ask_text.assert_not_called()
+
     def test_write_completion_files_writes_bash_zsh_and_fish(self) -> None:
         inject = load_inject()
         with tempfile.TemporaryDirectory() as tmp:
@@ -47,9 +73,9 @@ class TestInjectCompletion(unittest.TestCase):
             inject._write_completion_files(ReporterStub())
 
             self.assertIn("complete -F _lazygophers_scripts_complete", inject._COMPLETIONS_SH.read_text())
+            self.assertIn("compinit", inject._COMPLETIONS_SH.read_text())
             self.assertIn("complete -c inject -f -a run", (inject._FISH_COMPLETIONS_DIR / "inject.fish").read_text())
             self.assertIn("complete -c unsleep", (inject._FISH_COMPLETIONS_DIR / "unsleep.fish").read_text())
-
 
 if __name__ == "__main__":
     unittest.main()

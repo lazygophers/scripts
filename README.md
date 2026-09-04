@@ -9,12 +9,12 @@
 ## 安装: 把 bin/ 注入 PATH
 
 ```bash
-./bin/inject            # 生成 ~/.scripts.sh 并 source 到所有 rc (~/.bashrc / ~/.zshrc / ~/.profile / ~/.bash_profile)
+./bin/inject            # 生成 ~/.scripts.sh + completion，并 source 到所有 rc (~/.bashrc / ~/.zshrc / ~/.profile / ~/.bash_profile)
 ./bin/inject --show     # 预览将写入的内容
 ./bin/inject --uninstall  # 卸载
 ```
 
-inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.zshrc` 即可在任意目录直接调用 `checkwork` / `merge_canary` / ...。
+inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.zshrc` 即可在任意目录直接调用 `checkwork` / `merge_canary` / ...；同时会装好 zsh/bash/fish completion。
 
 ---
 

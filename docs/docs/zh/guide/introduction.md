@@ -12,9 +12,9 @@
 ## 上手
 
 ```bash
-./bin/inject            # 把 bin/ 注入 shell PATH
+./bin/inject            # 把 bin/ 注入 shell PATH，并安装 zsh/bash/fish completion
 ```
 
-完成后重启 shell，即可在任意目录直接调用 `checkwork` / `merge_canary` / ...。
+完成后重启 shell，即可在任意目录直接调用 `checkwork` / `merge_canary` / ...，并用 Tab 补全工具名和常见子命令。
 
 详见 [脚本功能](./scripts.md) 与 GitHub 仓库 [lazygophers/scripts](https://github.com/lazygophers/scripts)。

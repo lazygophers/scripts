@@ -31,6 +31,7 @@ class TestCompletions(unittest.TestCase):
         sh = bash_zsh_completion(data)
         fish = fish_completion(data)
         self.assertIn("complete -F _lazygophers_scripts_complete", sh)
+        self.assertLess(sh.index("compinit"), sh.index("bashcompinit"))
         self.assertLess(sh.index("bashcompinit"), sh.index("complete -F"))
         self.assertIn("inject) opts='run show'", sh)
         self.assertIn("complete -c inject -f -a run", fish)
