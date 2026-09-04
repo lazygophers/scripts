@@ -58,6 +58,7 @@ TOOLS: dict[str, tuple[str, str]] = {
     "vpn-prio": ("system", "调整 macOS 网络服务优先级（压低 OpenVPN default 路由）"),
     "ovpn": ("system", "连 OpenVPN，自动填账号密码与二步验证码"),
     "archery": ("system", "Archery SQL 平台命令行客户端（按域名分别登录）"),
+    "grafana": ("system", "Grafana HTTP API 命令行客户端（按域名分别登录）"),
     "inject": ("system", "把 bin/ 注入 shell PATH（写入 ~/.zshrc 等）"),
 }
 

@@ -24,6 +24,10 @@ COMMAND_SKILLS = {
         "Use `login` before API commands when credentials are missing or expired.",
         "Commands exposing secrets (`show`, `code`) require root and may re-exec via sudo.",
     ],
+    "grafana": [
+        "Operate Grafana HTTP API by host profile; stdout is JSON for piping to tools like jq.",
+        "Use `login` before API commands when credentials are missing or expired.",
+    ],
     "check_ai": [
         "Probe configured AI API endpoint connectivity with a minimal request.",
         "Use to distinguish endpoint/auth/network failures before running AI workflows.",
