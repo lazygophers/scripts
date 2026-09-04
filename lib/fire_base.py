@@ -72,20 +72,7 @@ def timed_cli(method: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def run_cli(cli: BaseCli) -> None:
-    """fire 入口：把 sys.argv 喂给 fire.Fire(cli)，并把方法返回值转成 exit code。
-
-    fire 把 BaseCli 实例属性视作 values/flags；为符合现有
-    `--no-say` / `--debug` / `--dry-run` 协议，预先从 argv 剥除这三个
-    flag 并设置到环境变量，再调 fire.Fire。
-
-    方法返回 int 时，fire 不会自动转 exit code（fire 本身把返回值当字符串打印）；
-    这里显式 sys.exit 把 int 转成退出码。None 当作 0。
-
-    PAGER=- + monkey-patch fire.console.console_io.More 直出，避免 pager。
-    fire.core.Display 被替换为 _render_help：识别 fire help 文本 → rich
-    Panel 高亮（保留 fire 原段落结构，仅替换标题色 + 整体加框）。
-    无 Rich 时降级纯文本。
-    """
+    """fire 入口：把 sys.argv 喂给 fire.Fire(cli)，并把方法返回值转成 exit code。"""
     from lib.notify import consume_debug, consume_dry_run, consume_no_say
     from lib.skills_help import consume_skills
 
@@ -97,24 +84,19 @@ def run_cli(cli: BaseCli) -> None:
     sys.argv = argv
     os.environ.setdefault("PAGER", "-")
 
-    # 禁用 pager
     import fire.console.console_io as _cio
     _cio.More = lambda contents, out, prompt=None, check_pager=True: out.write(contents)
 
-    # 拦截 fire.core.Display：help 文本走 rich 美化（只着色 + Panel 边框，不重排内容）
     import fire.core as _fc
     _fc.Display = lambda lines, out: _render_fire_help(lines, out)
 
-    # 静音 fire 内部的 "INFO: Showing help ..." 噪音（fire.core._GetHelpCmd 内部 print）
     import builtins as _bi
     _real_print = _bi.print
     _bi.print = lambda *a, **kw: (_render_fire_info(a, kw) if a and isinstance(a[0], str) and a[0].startswith("INFO: ") else _real_print(*a, **kw))
 
-    # 拦截 _PrintResult：避免 fire 把子命令返回值（int/None/str）打到 stdout
     _fc._PrintResult = lambda component_trace, verbose=False, serialize=None: _handle_fire_result(component_trace)
 
     result = fire.Fire(cli)
-    # 还原 builtins.print（避免污染同进程后续代码）
     _bi.print = _real_print
     if isinstance(result, int):
         sys.exit(result)
@@ -122,11 +104,7 @@ def run_cli(cli: BaseCli) -> None:
 
 
 def _handle_fire_result(component_trace) -> None:
-    """吞掉 fire._PrintResult：返回值由 run_cli 末尾的 sys.exit 决定。
-
-    原始 fire._PrintResult 会 print(value) 到 stdout，导致 CLI 返回 int 0 时多出一个
-    '0' 行。我们不输出值，退出码由 run_cli 统一处理。
-    """
+    """吞掉 fire._PrintResult：返回值由 run_cli 末尾的 sys.exit 决定。"""
 
 
 def _render_fire_info(args, kwargs) -> None:
@@ -137,56 +115,97 @@ def _render_fire_info(args, kwargs) -> None:
 
 
 def _render_fire_help(lines, out) -> None:
-    """接管 fire.core.Display：用 rich 渲染 help 文本。
-
-    fire help 是 `\\n\\n` 分隔的多段，每段首行是大写标题（NAME/SYNOPSIS/
-    DESCRIPTION/POSITIONAL ARGUMENTS/FLAGS/COMMANDS/VALUES/GROUPS/INDEXES/
-    NOTES），后跟缩进的 body。策略：
-      - 标题行 → 加粗青色
-      - 其它行 → 原样输出，保留缩进
-      - 整体放进 Panel（标题 = 命令名）
-    """
+    """接管 fire.core.Display：把 Fire help 压成彩色短版。"""
     text = "\n".join(lines).strip("\n")
     from rich.console import Console
-    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
 
-    # 保留 fire 输出语义：stderr（fire 默认 Display(... out=sys.stderr)）
     console = Console(file=out, force_terminal=True, highlight=False)
+    name, desc = _help_name(text)
+    synopsis = _help_section(text, "SYNOPSIS").strip().splitlines()
+    description = _help_section(text, "DESCRIPTION").strip().splitlines()
+    groups = _help_choices(text, "GROUPS")
+    commands = _help_choices(text, "COMMANDS")
 
-    # 逐段渲染：fire 用 _CreateOutputSection(name, content) = bold(name) +
-    # indented(content)，再用 \n\n 拼。每段首行是大写无空格标题（NAME/
-    # SYNOPSIS/DESCRIPTION/POSITIONAL ARGUMENTS/FLAGS/COMMANDS/VALUES/
-    # GROUPS/INDEXES/NOTES），body 由 fire 内部 SECTION_INDENTATION=4 起缩进。
-    # 但 fire 内部 _NewChoicesSection 会再开一段（"    X is one of the
-    # following:" + 列表），首行 4 空格起 → 续段。
-    #
-    # 渲染策略：每段首行 = 大写标题；其余行按原缩进输出（在 fire 已加
-    # SECTION_INDENTATION 的基础上 +2 列偏移，让 body 视觉上缩进于标题）。
-    chunks = text.split("\n\n")
-    for chunk in chunks:
-        lines_in = chunk.splitlines()
-        if not lines_in:
+    head = Text()
+    head.append(name or "help", style="bold cyan")
+    if desc:
+        head.append(f" — {desc}", style="dim")
+    console.print(head)
+
+    if synopsis:
+        console.print(f"[bold green]用法[/bold green] {synopsis[0].strip()}")
+
+    common = [line.strip() for line in description if line.strip() and line.strip() != desc]
+    if common:
+        for line in common[:8]:
+            console.print(f"[dim]{line}[/dim]")
+
+    _render_help_table(console, "命令组", groups)
+    _render_help_table(console, "命令", commands)
+
+
+def _help_section(text: str, name: str) -> str:
+    marker = f"\n{name}\n"
+    start = text.find(marker)
+    if start == -1:
+        start = 0 if text.startswith(name + "\n") else -1
+    if start == -1:
+        return ""
+    start += len(marker) if start else len(name) + 1
+    next_pos = len(text)
+    for title in ("NAME", "SYNOPSIS", "DESCRIPTION", "POSITIONAL ARGUMENTS", "ARGUMENTS", "FLAGS", "GROUPS", "COMMANDS", "VALUES", "INDEXES", "NOTES"):
+        if title == name:
             continue
-        first = lines_in[0]
-        first_stripped = first.strip()
-        is_title = (
-            first_stripped
-            and first_stripped == first_stripped.upper()
-            and " " not in first_stripped
-        )
-        if is_title:
-            console.print(f"[bold cyan]{first_stripped}[/bold cyan]")
-            for line in lines_in[1:]:
-                if not line.strip():
-                    console.print()
-                else:
-                    # 保留原缩进（fire SECTION_INDENTATION=4 已加）+ 头部额外 2 空格
-                    console.print(f"  {line}")
-        else:
-            # 续段：原缩进 + 头部 2 空格
-            for line in lines_in:
-                if not line.strip():
-                    console.print()
-                else:
-                    console.print(f"  {line}")
-        console.print()  # 段间空行
+        pos = text.find(f"\n{title}\n", start)
+        if pos != -1:
+            next_pos = min(next_pos, pos)
+    return text[start:next_pos]
+
+
+def _help_name(text: str) -> tuple[str, str]:
+    first = _help_section(text, "NAME").strip().splitlines()
+    if not first:
+        return "", ""
+    raw = first[0].strip()
+    if " - " in raw:
+        name, desc = raw.split(" - ", 1)
+        return name.strip(), desc.strip()
+    return raw, ""
+
+
+def _help_choices(text: str, section: str) -> list[tuple[str, str]]:
+    body = _help_section(text, section).splitlines()
+    choices: list[tuple[str, str]] = []
+    i = 0
+    while i < len(body):
+        line = body[i]
+        stripped = line.strip()
+        if not stripped or stripped.endswith("is one of the following:"):
+            i += 1
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= 6:
+            desc = ""
+            if i + 1 < len(body):
+                next_line = body[i + 1]
+                next_stripped = next_line.strip()
+                next_indent = len(next_line) - len(next_line.lstrip())
+                if next_stripped and next_indent > indent:
+                    desc = next_stripped
+                    i += 1
+            choices.append((stripped, desc))
+        i += 1
+    return choices
+
+
+def _render_help_table(console, title: str, rows: list[tuple[str, str]]) -> None:
+    if not rows:
+        return
+    for name, desc in rows:
+        console.print(f"  [bold blue]{name:<10}[/bold blue] [white]{_clip(desc, 52)}[/white]")
+
+
+def _clip(text: str, width: int) -> str:
+    return text if len(text) <= width else text[:width - 1] + "…"

@@ -106,7 +106,7 @@ class TestRenderFireInfo(unittest.TestCase):
 
 class TestRenderFireHelp(unittest.TestCase):
     def _render(self, lines: list[str]) -> list[str]:
-        printed: list[str] = []
+        printed: list[object] = []
 
         class FakeConsole:
             def __init__(self, *a, **kw) -> None:
@@ -119,27 +119,27 @@ class TestRenderFireHelp(unittest.TestCase):
             fb._render_fire_help(lines, io.StringIO())
         return printed
 
-    def test_section_titles_are_highlighted(self) -> None:
-        out = self._render(["NAME", "    ovpn - VPN 客户端"])
-        self.assertIn("[bold cyan]NAME[/bold cyan]", out)
-        self.assertIn("      ovpn - VPN 客户端", out)
+    def test_compact_help_shows_name_usage_and_choices(self) -> None:
+        out = self._render([
+            "NAME", "    cicd - CI 工具", "",
+            "SYNOPSIS", "    cicd COMMAND | <flags>", "",
+            "DESCRIPTION", "    常用：", "      cicd now", "",
+            "COMMANDS", "    COMMAND is one of the following:", "", "     now", "       查看状态",
+        ])
+        joined = "\n".join(str(item) for item in out)
+        self.assertIn("cicd", joined)
+        self.assertIn("用法", joined)
+        self.assertIn("cicd now", joined)
+        self.assertIn("查看状态", joined)
 
-    def test_multi_word_titles_are_kept_as_titles(self) -> None:
-        out = self._render(["POSITIONAL ARGUMENTS", "    HOST"])
-        # 含空格 → 不当标题，按续段原样缩进输出
-        self.assertNotIn("[bold cyan]POSITIONAL ARGUMENTS[/bold cyan]", out)
-        self.assertIn("  POSITIONAL ARGUMENTS", out)
+    def test_empty_input_prints_minimal_head(self) -> None:
+        self.assertEqual([str(item) for item in self._render([])], ["help"])
 
-    def test_continuation_chunks_are_indented(self) -> None:
-        out = self._render(["    X is one of the following:", "        a"])
-        self.assertIn("      X is one of the following:", out)
 
-    def test_blank_lines_inside_a_section_survive(self) -> None:
-        out = self._render(["NAME", "    a", "", "    b"])
-        self.assertIn("", out)
-
-    def test_empty_input_prints_nothing(self) -> None:
-        self.assertEqual(self._render([]), [])
+class TestHelpParsers(unittest.TestCase):
+    def test_help_choices_extracts_command_descriptions(self) -> None:
+        text = "COMMANDS\n    COMMAND is one of the following:\n\n     now\n       查看状态\n\n     run\n       触发 CI"
+        self.assertEqual(fb._help_choices(text, "COMMANDS"), [("now", "查看状态"), ("run", "触发 CI")])
 
 
 class TestRunCli(unittest.TestCase):
