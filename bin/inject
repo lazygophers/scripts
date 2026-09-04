@@ -3,6 +3,7 @@
 
 生成独立文件 ~/.config/lazygophers/scripts/scripts.sh:
     export PATH="/abs/path/to/bin:$PATH"
+    source completions for bash/zsh/fish
 
 并把 `source ~/.config/lazygophers/scripts/scripts.sh` 加到所有存在的 rc 文件:
     ~/.bashrc / ~/.zshrc / ~/.profile / ~/.bash_profile
@@ -24,6 +25,9 @@ from lib.ui import reporter, timed
 _RC_CANDIDATES = (".bashrc", ".zshrc", ".profile", ".bash_profile")
 _SCRIPTS_DIR = pathlib.Path.home() / ".config" / "lazygophers" / "scripts"
 _SCRIPTS_SH = _SCRIPTS_DIR / "scripts.sh"
+_COMPLETIONS_SH = _SCRIPTS_DIR / "completions.sh"
+_FISH_CONFIG_DIR = pathlib.Path.home() / ".config" / "fish"
+_FISH_COMPLETIONS_DIR = _FISH_CONFIG_DIR / "completions"
 _SOURCE_LINE_TMPL = '[ -f "$HOME/.config/lazygophers/scripts/scripts.sh" ] && source "$HOME/.config/lazygophers/scripts/scripts.sh"'
 _MARKER_BEGIN = "# >>> scripts bin inject >>>"
 _MARKER_END = "# <<< scripts bin inject <<<"
@@ -35,7 +39,10 @@ def _bin_dir() -> pathlib.Path:
 
 def _build_scripts_sh(bin_dir: pathlib.Path, *, ai_base_url: str | None = None,
                       ai_token: str | None = None) -> str:
-    lines = [f'export PATH="{bin_dir}:$PATH"']
+    lines = [
+        f'export PATH="{bin_dir}:$PATH"',
+        f'[ -f "{_COMPLETIONS_SH}" ] && source "{_COMPLETIONS_SH}"',
+    ]
     if ai_base_url:
         lines.append(f'export LAZYGOPHERS_SCRIPTS_BASE_URL="{ai_base_url}"')
     if ai_token:
@@ -96,6 +103,29 @@ def _write_scripts_sh(r, *, ai_base_url: str | None = None,
     r.ok(f"写入 {_SCRIPTS_SH}")
 
 
+def _write_completion_files(r) -> None:
+    from lib.completions import bash_zsh_completion, completion_map, fish_completion_for
+    data = completion_map(_bin_dir())
+    _SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    sh_content = bash_zsh_completion(data)
+    if _COMPLETIONS_SH.exists() and _COMPLETIONS_SH.read_text(encoding="utf-8") == sh_content:
+        r.step(f"{_COMPLETIONS_SH} 已是最新, 跳过")
+    else:
+        _COMPLETIONS_SH.write_text(sh_content, encoding="utf-8")
+        r.ok(f"写入 {_COMPLETIONS_SH}")
+
+    _FISH_COMPLETIONS_DIR.mkdir(parents=True, exist_ok=True)
+    wrote_fish = 0
+    for tool, commands in sorted(data.items()):
+        path = _FISH_COMPLETIONS_DIR / f"{tool}.fish"
+        content = fish_completion_for(tool, commands)
+        if path.exists() and path.read_text(encoding="utf-8") == content:
+            continue
+        path.write_text(content, encoding="utf-8")
+        wrote_fish += 1
+    r.ok(f"写入 {_FISH_COMPLETIONS_DIR}/*.fish" if wrote_fish else f"{_FISH_COMPLETIONS_DIR}/*.fish 已是最新")
+
+
 def _inject_rc(rc: pathlib.Path, block: str, r) -> str:
     if not rc.exists():
         return "missing"
@@ -144,6 +174,13 @@ def _uninstall(r) -> int:
     if _SCRIPTS_SH.exists():
         _SCRIPTS_SH.unlink()
         r.ok(f"删除 {_SCRIPTS_SH}")
+    if _COMPLETIONS_SH.exists():
+        _COMPLETIONS_SH.unlink()
+        r.ok(f"删除 {_COMPLETIONS_SH}")
+    if _FISH_CONFIG_DIR.exists():
+        for path in _FISH_COMPLETIONS_DIR.glob("*.fish"):
+            path.unlink()
+            r.ok(f"删除 {path}")
     r.kv("卸载完成", {"下一步": "重启 shell 或 `source` 你的 rc"})
     return 0
 
@@ -165,6 +202,7 @@ class InjectCli(BaseCli):
         r.rule("inject bin/ → PATH", style="blue")
         r.kv("bin 目录", {"路径": str(bin_dir)})
         ai_base_url, ai_token = _prompt_ai_config(r)
+        _write_completion_files(r)
         _write_scripts_sh(r, ai_base_url=ai_base_url, ai_token=ai_token)
         results = {"wrote": [], "skipped": [], "missing": []}
         for name in _RC_CANDIDATES:
@@ -190,6 +228,8 @@ class InjectCli(BaseCli):
         block = _build_rc_block()
         print(f"{_SCRIPTS_SH} 内容:")
         print(scripts_sh)
+        print(f"{_COMPLETIONS_SH} 内容: 自动生成 bash/zsh completion")
+        print(f"{_FISH_COMPLETIONS_DIR}/*.fish 内容: 自动生成 fish completion")
         print("rc 文件将追加的块:")
         print(block)
         print("目标 rc 候选:")
