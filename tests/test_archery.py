@@ -694,11 +694,13 @@ class TestCliSmoke(unittest.TestCase):
             self.assertIn("--config", proc.stdout)
             self.assertIn(str(pathlib.Path(home) / ".config"), proc.stdout)
 
-    def test_help_lists_all_groups(self):
+    def test_help_lists_common_sql_and_workflow_examples(self):
         proc = subprocess.run([sys.executable, str(REPO_ROOT / "bin" / "archery"), "--", "--help"],
                               capture_output=True, text=True, timeout=60)
-        for name in ("user", "instance", "query", "workflow", "schema", "api"):
-            self.assertIn(name, proc.stderr + proc.stdout)
+        out = proc.stderr + proc.stdout
+        self.assertIn("archery query execute 'select 1'", out)
+        self.assertIn("archery workflow check", out)
+        self.assertIn("archery workflow submit", out)
 
 
 if __name__ == "__main__":

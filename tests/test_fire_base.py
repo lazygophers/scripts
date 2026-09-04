@@ -127,8 +127,7 @@ class TestRenderFireHelp(unittest.TestCase):
             "COMMANDS", "    COMMAND is one of the following:", "", "     now", "       查看状态",
         ])
         joined = "\n".join(str(item) for item in out)
-        self.assertIn("cicd", joined)
-        self.assertIn("用法", joined)
+        self.assertIn("命令", joined)
         self.assertIn("cicd now", joined)
         self.assertIn("查看状态", joined)
 

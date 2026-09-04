@@ -7,16 +7,16 @@ case " ${*:1} " in
     cat <<'EOF'
 # enable-ipv6 skills
 
-Audience: AI agents using this command.
-Summary: 开启本机所有网络服务的 IPv6（自动模式）。
+受众：使用本命令的 AI agent。
+概述：开启本机所有网络服务的 IPv6（自动模式）。
 
-Use when:
-- Restore automatic IPv6 for all macOS network services via networksetup.
-- Requires sudo/root; changes host network configuration.
+何时用：
+- 用 networksetup 恢复本机所有 macOS 网络服务的 IPv6 自动模式。
+- 需要 sudo/root；改主机网络配置。
 
-Common protocol:
-- Use `--help` for human-facing usage before composing arguments.
-- Confirm with the user before changing host network configuration.
+通用约定：
+- 组参前先跑 `--help` 看人类可读用法。
+- 改主机网络配置前先和用户确认。
 EOF
     exit 0
     ;;

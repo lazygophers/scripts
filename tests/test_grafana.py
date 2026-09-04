@@ -205,12 +205,15 @@ class TestCliSmoke(ServerCase):
             cfg = load_config(pathlib.Path(home) / ".config" / "lazygophers" / "scripts" / "grafana.yaml")
             self.assertEqual(cfg["profiles"]["127.0.0.1:3000"]["token"], "tok")
 
-    def test_bare_command_shows_skills(self):
-        proc = subprocess.run([str(REPO_ROOT / "bin" / "grafana")], capture_output=True, text=True, timeout=60)
+    def test_help_uses_compact_colorized_output(self):
+        proc = subprocess.run([str(REPO_ROOT / "bin" / "grafana"), "--help"],
+                              capture_output=True, text=True, timeout=60)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         out = proc.stderr + proc.stdout
-        self.assertIn("# grafana skills", out)
-        self.assertIn("Grafana HTTP API", out)
+        self.assertIn("Grafana HTTP API 客户端", out)
+        self.assertIn("常用", out)
+        self.assertIn("login", out)
+        self.assertNotIn("help\n", out)
 
 
 if __name__ == "__main__":

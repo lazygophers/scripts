@@ -19,7 +19,7 @@ BIN_DIR = REPO_ROOT / "bin"
 class TestRenderSkills(unittest.TestCase):
     def test_known_command_includes_ai_audience_and_command_guidance(self) -> None:
         out = render_skills("cicd", "轮询当前分支 CI/CD")
-        self.assertIn("Audience: AI agents", out)
+        self.assertIn("受众：使用本命令的 AI agent。", out)
         self.assertIn("cicd run", out)
         self.assertIn("cicd id", out)
         self.assertIn("cicd fail", out)
@@ -73,7 +73,7 @@ class TestAllBinsSkillsFlag(unittest.TestCase):
             with self.subTest(shell=p.name):
                 run = self._run_shell(p.name)
                 out = run.stdout + run.stderr
-                if run.returncode != 0 or "Audience: AI agents" not in out:
+                if run.returncode != 0 or "受众：使用本命令的 AI agent。" not in out:
                     failures.append((p.name, run.returncode, out[:200]))
         if failures:
             msg = "\n".join(f"{name}: exit={code} output={out}" for name, code, out in failures)

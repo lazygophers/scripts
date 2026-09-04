@@ -711,7 +711,17 @@ class WorkflowCli(_Group):
 # ---------------------------------------------------------------- 顶层
 
 class ArcheryCli(BaseCli):
-    """archery — Archery 的命令行客户端，按域名分别保存登录"""
+    """archery — Archery 的命令行客户端，按域名分别保存登录
+
+    常用：
+      archery query execute 'select 1' --instance-name prod-mysql --db-name orders
+      archery query execute @query.sql --instance-name prod-mysql --db-name orders --limit-num 100
+      archery workflow check 5 orders @change.sql
+      archery workflow submit --data @workflow.json
+      archery workflow list --workflow__status waiting --size 20
+      archery workflow audit nico 42 '看过了' --audit-type pass
+      archery workflow execute 42 --engineer nico
+    """
 
     def __init__(self) -> None:
         super().__init__()

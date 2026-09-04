@@ -27,7 +27,19 @@ from lib.grafana import (
 from lib.ui import Reporter, ask_text, reporter, timed
 
 
-SCRIPT_PATH = pathlib.Path(__file__).resolve()
+def _print_help() -> None:
+    r = reporter(stderr=True)
+    r.rule("grafana", style="blue")
+    r.step("Grafana HTTP API 客户端")
+    r.step("用法: grafana <command> [flags]")
+    r.summary("常用", [
+        ("login", "录入一个 Grafana 站点", "blue"),
+        ("hosts", "列出已配置站点", "blue"),
+        ("health", "查看 Grafana 健康状态", "blue"),
+        ("search", "搜索仪表盘", "blue"),
+        ("api", "直接调用任意 Grafana API", "blue"),
+    ])
+    r.step("提示: 裸跑 `grafana` 会显示 `--skills`。")
 
 
 def emit(data) -> None:
@@ -61,6 +73,8 @@ class _Group:
 
 
 class AuthCli(_Group):
+    """认证状态"""
+
     @cmd
     def state(self, host: str = ""):
         """查看当前 token 是否可用。"""
@@ -160,6 +174,9 @@ class GrafanaCli(_Group):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 2 and sys.argv[1] in {"-h", "--help"}:
+        _print_help()
+        raise SystemExit(0)
     if len(sys.argv) <= 1:
         sys.argv.append("--skills")
     timed(run_cli, label="grafana")(GrafanaCli())

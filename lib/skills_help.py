@@ -6,159 +6,159 @@ import os
 
 
 COMMON_SKILLS = [
-    "Use `--help` for human-facing usage before composing arguments.",
-    "Use `--dry-run` when available to preview side effects without changing state.",
-    "Use `--no-say` or `SCRIPTS_NO_SAY=1` to suppress voice notification noise.",
-    "Use `--debug` or `SCRIPTS_DEBUG=1` when command output is needed for diagnosis.",
+    "组参前先跑 `--help` 看人类可读用法。",
+    "有 `--dry-run` 就先预览，不改状态。",
+    "用 `--no-say` 或 `SCRIPTS_NO_SAY=1` 关语音通知。",
+    "诊断时用 `--debug` 或 `SCRIPTS_DEBUG=1` 看成功命令的输出。",
 ]
 
 
 COMMAND_SKILLS = {
     "_gitwf": [
-        "Internal entry for merge_*/push_* symlinks; prefer invoking the public symlink name.",
-        "Dispatches action and target branch from argv[0].",
-        "Auto mode runs single-repo here when cwd is a git repo, otherwise batch all.",
+        "merge_*/push_* symlink 的内部入口；优先用公开的 symlink 名调用。",
+        "action 和目标分支由 argv[0] 的文件名解析。",
+        "auto 模式：cwd 是 git 仓库走单仓 here，否则批量 all。",
     ],
     "archery": [
-        "Use `archery query execute 'select 1' --instance-name prod-mysql --db-name orders` for the common SQL query path; stdout is TSV by default.",
-        "Use `archery query execute @query.sql --instance-name prod-mysql --db-name orders --limit-num 100` for larger SQL files.",
-        "Use `archery workflow check 5 orders @change.sql` before creating a SQL上线工单.",
-        "Use `archery workflow submit --data @workflow.json` to create a SQL上线工单.",
-        "Use `archery workflow list --workflow__status waiting --size 20` to find pending工单, then `archery workflow audit <engineer> <workflow-id> '看过了'` or `archery workflow execute <workflow-id> --engineer <engineer>`.",
-        "Use `archery login` only when credentials are missing or expired; commands exposing secrets (`show`, `code`) require root and may re-exec via sudo.",
+        "常规 SQL 查询走 `archery query execute 'select 1' --instance-name prod-mysql --db-name orders`；stdout 默认 TSV。",
+        "大 SQL 文件走 `archery query execute @query.sql --instance-name prod-mysql --db-name orders --limit-num 100`。",
+        "建 SQL 上线工单前先 `archery workflow check 5 orders @change.sql`。",
+        "用 `archery workflow submit --data @workflow.json` 创建 SQL 上线工单。",
+        "用 `archery workflow list --workflow__status waiting --size 20` 找待审工单，再 `archery workflow audit <engineer> <workflow-id> '看过了'` 或 `archery workflow execute <workflow-id> --engineer <engineer>`。",
+        "凭据缺失或过期才 `archery login`；暴露密钥的命令（`show`、`code`）需要 root，可能经 sudo 重启自身。",
     ],
     "grafana": [
-        "Operate Grafana HTTP API by host profile; stdout is JSON for piping to tools like jq.",
-        "Use `login` before API commands when credentials are missing or expired.",
+        "按 host profile 操作 Grafana HTTP API；stdout 是 JSON，可接 jq。",
+        "凭据缺失或过期时先 `login` 再调 API 命令。",
     ],
     "check_ai": [
-        "Probe configured AI API endpoint connectivity with a minimal request.",
-        "Use to distinguish endpoint/auth/network failures before running AI workflows.",
+        "用最小请求探测配置的 AI API 端点连通性。",
+        "跑 AI 工作流前用它区分端点/鉴权/网络故障。",
     ],
     "checkwork": [
-        "Run multi-language build/type checks for current repo or child repos.",
-        "Use before commit/push when you need local confidence matching CI build basics.",
+        "对当前仓库或子仓库跑多语言编译/类型检查。",
+        "commit/push 前跑它，拿到对齐 CI 基础构建的本地信心。",
     ],
     "cicd": [
-        "Use `cicd` to wait for the current branch CI/CD to finish.",
-        "Use `cicd now [branch]` to view the latest CI/CD status.",
-        "Use `cicd run ci.yml [branch]` to trigger a GitHub workflow; use `cicd run [branch]` for GitLab.",
-        "Use `cicd id <run-id-or-pipeline-id>` to wait for one CI/CD run/pipeline.",
-        "Use `cicd fail <run-id> [--job job-id]` to inspect failed logs; use `cicd log <id>` for full logs.",
-        "Use `--project owner/repo` to target another GitHub/GitLab project; without it the current git remote is used.",
+        "用 `cicd` 等当前分支 CI/CD 跑完。",
+        "用 `cicd now [branch]` 看当前分支最新 CI/CD 状态。",
+        "用 `cicd run ci.yml [branch]` 触发 GitHub workflow；GitLab 用 `cicd run [branch]`。",
+        "用 `cicd id <run-id-or-pipeline-id>` 等某个 run/pipeline 跑完。",
+        "用 `cicd fail <run-id> [--job job-id]` 看失败日志；完整日志用 `cicd log <id>`。",
+        "用 `--project owner/repo` 指定别的 GitHub/GitLab 项目；不指定则用当前 git remote。",
     ],
     "commit": [
-        "Create an automated git commit for current repo or scanned child repos.",
-        "Use after local checks pass and only when commit authorization exists.",
+        "对当前仓库或扫描到的子仓库做自动 git commit。",
+        "本地检查通过且有 commit 授权后才用。",
     ],
     "cpd": [
-        "Deep-copy one or more sources into a destination with update/delete semantics.",
-        "Treat last argument as destination and all previous arguments as sources.",
-        "Use dry-run first for destructive sync/delete modes.",
+        "把一个或多个源深度复制进目标，带更新/删除语义。",
+        "最后一个参数当目标，之前的全是源。",
+        "破坏性的 sync/delete 模式先跑 dry-run。",
     ],
     "delete_branch": [
-        "Delete local branches in one repo or across child repos.",
-        "Check current branch and worktree cleanliness before invoking.",
+        "在单仓或跨子仓库删本地分支。",
+        "调用前确认当前分支和工作区干净。",
     ],
     "delete_branch_remote": [
-        "Delete remote branches in one repo or across child repos.",
-        "Treat as outward-facing and confirm intended remote/branch before invoking.",
+        "在单仓或跨子仓库删远端分支。",
+        "对外可见的操作：调用前确认 remote/branch 无误。",
     ],
     "disable-ipv6": [
-        "Disable IPv6 for all macOS network services via networksetup.",
-        "Requires sudo/root; changes host network configuration.",
+        "用 networksetup 关闭本机所有 macOS 网络服务的 IPv6。",
+        "需要 sudo/root；改主机网络配置。",
     ],
     "enable-ipv6": [
-        "Restore automatic IPv6 for all macOS network services via networksetup.",
-        "Requires sudo/root; changes host network configuration.",
+        "用 networksetup 恢复本机所有 macOS 网络服务的 IPv6 自动模式。",
+        "需要 sudo/root；改主机网络配置。",
     ],
     "fetch_all": [
-        "Fetch remote updates for all discovered git repositories.",
-        "Use to refresh refs before branch sync/merge/push workflows.",
+        "为发现的所有 git 仓库 fetch 远程更新。",
+        "分支同步/合并/推送工作流前刷新 refs 用。",
     ],
     "inject": [
-        "Install or show shell PATH injection for this scripts bin directory.",
-        "Use `show` for no-write inspection before modifying shell rc files.",
+        "安装或展示本 scripts bin 目录的 shell PATH 注入。",
+        "改 rc 前先 `show` 无写入地查看。",
     ],
     "ipinfo": [
-        "Show local network/IP information and hotspot/VPN clues.",
-        "Use for diagnosing network environment before connectivity-sensitive commands.",
+        "展示本地网络/IP 信息和热点/VPN 线索。",
+        "跑对连通性敏感的命令前用它诊断网络环境。",
     ],
     "issue": [
-        "Create an issue with AI-generated title/body from local context.",
-        "Requires detected gh/glab provider and external publication confirmation.",
+        "用本地上下文 + AI 生成标题/正文创建 issue。",
+        "需要检测到的 gh/glab 提供方，并向外发布前确认。",
     ],
     "kk": [
-        "Find and terminate processes by name pattern.",
-        "Review listed processes before confirming termination.",
+        "按名字模式查找并终止进程。",
+        "确认终止前先过一遍列出的进程。",
     ],
     "kkp": [
-        "Find and terminate processes listening on a port.",
-        "Use when freeing a local development port; review process list first.",
+        "查找并终止监听某端口的进程。",
+        "释放本地开发端口用；先看进程列表。",
     ],
     "lazyhelp": [
-        "Human-facing command catalog; default output is command list and user descriptions.",
-        "Use `lazyhelp help <tool>` for that tool's human-facing help.",
-        "Use target tool `--skills` for AI-facing command guidance.",
+        "人类可读命令目录；默认输出命令清单和用户描述。",
+        "用 `lazyhelp help <tool>` 看那个工具的人类帮助。",
+        "用目标工具 `--skills` 看 AI 向命令指引。",
     ],
     "list_branch": [
-        "List local branches across repositories.",
-        "Use before batch branch cleanup or synchronization.",
+        "跨仓库列出本地分支。",
+        "批量分支清理或同步前用。",
     ],
     "loop": [
-        "Repeat a command until success, forever, or for a forced count.",
-        "Place global flags before the wrapped command to avoid consuming command flags.",
+        "重复执行命令直到成功、永久或强制次数。",
+        "全局 flag 放在被包裹命令前面，避免吞掉命令自己的 flag。",
     ],
-    "merge_canary": ["Merge current branch into canary using safe git workflow checks."],
-    "merge_dev": ["Merge current branch into dev using safe git workflow checks."],
-    "merge_develop": ["Merge current branch into develop using safe git workflow checks."],
-    "merge_master": ["Merge current branch into detected default branch using safe git workflow checks."],
-    "merge_test": ["Merge current branch into test using safe git workflow checks."],
+    "merge_canary": ["用安全 git 工作流检查把当前分支合入 canary。"],
+    "merge_dev": ["用安全 git 工作流检查把当前分支合入 dev。"],
+    "merge_develop": ["用安全 git 工作流检查把当前分支合入 develop。"],
+    "merge_master": ["用安全 git 工作流检查把当前分支合入自动识别的默认分支。"],
+    "merge_test": ["用安全 git 工作流检查把当前分支合入 test。"],
     "mr": [
-        "Create a PR/MR with AI-generated title/body from local diff context.",
-        "Requires detected gh/glab provider and external publication confirmation.",
+        "用本地 diff 上下文 + AI 生成标题/正文创建 PR/MR。",
+        "需要检测到的 gh/glab 提供方，并向外发布前确认。",
     ],
     "n": [
-        "Speak a short macOS voice notification with `say`.",
-        "Rejects dangerous shell characters and overlong content.",
+        "用 macOS `say` 播报短语音通知。",
+        "拒绝危险 shell 字符和超长内容。",
     ],
     "ovpn": [
-        "Connect/disconnect/status/login for OpenVPN with stored credentials and TOTP.",
-        "Config-touching commands require root and may re-exec via sudo.",
-        "Use `status` for unprivileged inspection.",
+        "OpenVPN 连接/断开/状态/登录，凭据和 TOTP 已存好。",
+        "碰配置的命令需要 root，可能经 sudo 重启自身。",
+        "无特权查看用 `status`。",
     ],
     "push_branch": [
-        "Push current branch to same-name remote branch across repositories.",
-        "Use after local checks pass; this publishes commits to remotes.",
+        "跨仓库把当前分支推到远端同名分支。",
+        "本地检查通过后用；这会把 commit 发布到远端。",
     ],
-    "push_canary": ["Push current branch into canary using safe git workflow checks."],
-    "push_dev": ["Push current branch into dev using safe git workflow checks."],
-    "push_develop": ["Push current branch into develop using safe git workflow checks."],
-    "push_master": ["Push current branch into detected default branch using safe git workflow checks."],
-    "push_test": ["Push current branch into test using safe git workflow checks."],
+    "push_canary": ["用安全 git 工作流检查把当前分支推入 canary。"],
+    "push_dev": ["用安全 git 工作流检查把当前分支推入 dev。"],
+    "push_develop": ["用安全 git 工作流检查把当前分支推入 develop。"],
+    "push_master": ["用安全 git 工作流检查把当前分支推入自动识别的默认分支。"],
+    "push_test": ["用安全 git 工作流检查把当前分支推入 test。"],
     "squash_pr": [
-        "Squash source branch changes into one commit and create or update a PR.",
-        "May force-push the PR branch; confirm branch impact before use.",
+        "把 source 分支改动压成单个 commit，创建或更新 PR。",
+        "可能 force-push PR 分支；用前确认分支影响面。",
     ],
     "switch_branch": [
-        "Switch all repositories to a target branch, creating/tracking when needed.",
-        "Uses remote default branch detection instead of hardcoding master/main.",
+        "把所有仓库切到目标分支，不存在则创建并跟踪。",
+        "用远端默认分支探测，不硬编码 master/main。",
     ],
     "sync_branch": [
-        "Synchronize repositories to origin/<branch>.",
-        "Use before batch work that assumes every repo is on the same branch.",
+        "把各仓库同步到 origin/<branch>。",
+        "批量开工前让所有仓库停在同一分支时用。",
     ],
     "sync_master": [
-        "Synchronize repositories to each repo's detected remote default branch.",
-        "Use to refresh default branches before creating feature branches.",
+        "把各仓库同步到各自识别出的远端默认分支。",
+        "开 feature 分支前刷新默认分支用。",
     ],
     "unsleep": [
-        "Prevent macOS sleep forever, for seconds, or while a command runs.",
-        "Use `with_command` to keep machine awake only for wrapped command duration.",
+        "永久、按时长或跟随命令阻止 macOS 休眠。",
+        "用 `with_command` 只在被包裹命令运行期间保持唤醒。",
     ],
     "vpn-prio": [
-        "Adjust macOS network service priority to reduce VPN default route problems.",
-        "Use when OpenVPN routing interferes with normal network access.",
+        "调 macOS 网络服务优先级，缓解 VPN 默认路由问题。",
+        "OpenVPN 路由干扰正常上网时用。",
     ],
 }
 
@@ -172,15 +172,15 @@ def render_skills(name: str, description: str = "") -> str:
     skills = COMMAND_SKILLS.get(name, [])
     if not skills and description:
         skills = [description.strip()]
-    lines = [f"# {name} skills", "", "Audience: AI agents using this command."]
+    lines = [f"# {name} skills", "", "受众：使用本命令的 AI agent。"]
     if description.strip():
-        lines.extend(["", "Summary:", description.strip()])
-    lines.extend(["", "Use when:"])
+        lines.extend(["", "概述：", description.strip()])
+    lines.extend(["", "何时用："])
     if skills:
         lines.extend(f"- {skill}" for skill in skills)
     else:
-        lines.append("- Need this command's documented behavior; inspect `--help` for human usage details.")
-    lines.extend(["", "Common protocol:"])
+        lines.append("- 需要本命令的文档化行为；人类用法细节看 `--help`。")
+    lines.extend(["", "通用约定："])
     lines.extend(f"- {skill}" for skill in COMMON_SKILLS)
     return "\n".join(lines) + "\n"
 

@@ -203,6 +203,7 @@ def _help_choices(text: str, section: str) -> list[tuple[str, str]]:
 def _render_help_table(console, title: str, rows: list[tuple[str, str]]) -> None:
     if not rows:
         return
+    console.print(f"[bold blue]{title}[/bold blue]")
     for name, desc in rows:
         console.print(f"  [bold blue]{name:<10}[/bold blue] [white]{_clip(desc, 52)}[/white]")
 
