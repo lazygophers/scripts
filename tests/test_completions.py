@@ -6,7 +6,7 @@ import pathlib
 import tempfile
 import unittest
 
-from lib.completions import bash_zsh_completion, completion_map, fish_completion, fish_completion_for, subcommands, tool_names
+from lib.completions import bash_completion, completion_map, fish_completion, fish_completion_for, subcommands, tool_names, zsh_completion
 
 
 class TestCompletions(unittest.TestCase):
@@ -28,12 +28,13 @@ class TestCompletions(unittest.TestCase):
 
     def test_completion_scripts_include_shell_commands(self) -> None:
         data = {"inject": ["run", "show"], "unsleep": ["timed", "with-command", "with_command"]}
-        sh = bash_zsh_completion(data)
+        bash = bash_completion(data)
+        zsh = zsh_completion(data)
         fish = fish_completion(data)
-        self.assertIn("complete -F _lazygophers_scripts_complete", sh)
-        self.assertLess(sh.index("compinit"), sh.index("bashcompinit"))
-        self.assertLess(sh.index("bashcompinit"), sh.index("complete -F"))
-        self.assertIn("inject) opts='run show'", sh)
+        self.assertIn("complete -F _lazygophers_scripts_complete", bash)
+        self.assertIn("inject) opts='run show'", bash)
+        self.assertIn("compdef _lazygophers_inject_complete inject", zsh)
+        self.assertIn("compadd -- \"${completions[@]}\"", zsh)
         self.assertIn("complete -c inject -f -a run", fish)
         self.assertIn("complete -c unsleep -f -a with-command", fish)
         self.assertIn("complete -c inject -l dry-run", fish_completion_for("inject", []))

@@ -37,7 +37,8 @@ class TestInjectCompletion(unittest.TestCase):
         inject = load_inject()
         content = inject._build_scripts_sh(pathlib.Path("/tmp/bin"))
         self.assertIn('export PATH="/tmp/bin:$PATH"', content)
-        self.assertIn("completions.sh", content)
+        self.assertIn("completions.bash", content)
+        self.assertIn("completions.zsh", content)
 
     def test_prompt_keeps_existing_config_on_skip(self) -> None:
         inject = load_inject()
@@ -65,15 +66,16 @@ class TestInjectCompletion(unittest.TestCase):
         inject = load_inject()
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            inject._SCRIPTS_DIR = root / "scripts"
-            inject._COMPLETIONS_SH = inject._SCRIPTS_DIR / "completions.sh"
+            inject._COMPLETIONS_BASH = inject._SCRIPTS_DIR / "completions.bash"
+            inject._COMPLETIONS_ZSH = inject._SCRIPTS_DIR / "completions.zsh"
             inject._FISH_CONFIG_DIR = root / "fish"
             inject._FISH_COMPLETIONS_DIR = inject._FISH_CONFIG_DIR / "completions"
 
             inject._write_completion_files(ReporterStub())
 
-            self.assertIn("complete -F _lazygophers_scripts_complete", inject._COMPLETIONS_SH.read_text())
-            self.assertIn("compinit", inject._COMPLETIONS_SH.read_text())
+            self.assertIn("complete -F _lazygophers_scripts_complete", inject._COMPLETIONS_BASH.read_text())
+            self.assertIn("compdef _lazygophers_lazyhelp_complete lazyhelp", inject._COMPLETIONS_ZSH.read_text())
+            self.assertIn("compadd -- \"${completions[@]}\"", inject._COMPLETIONS_ZSH.read_text())
             self.assertIn("complete -c inject -f -a run", (inject._FISH_COMPLETIONS_DIR / "inject.fish").read_text())
             self.assertIn("complete -c unsleep", (inject._FISH_COMPLETIONS_DIR / "unsleep.fish").read_text())
 
