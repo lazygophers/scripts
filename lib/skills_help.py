@@ -20,9 +20,12 @@ COMMAND_SKILLS = {
         "Auto mode runs single-repo here when cwd is a git repo, otherwise batch all.",
     ],
     "archery": [
-        "Operate Archery API by host profile; stdout is JSON for piping to tools like jq.",
-        "Use `login` before API commands when credentials are missing or expired.",
-        "Commands exposing secrets (`show`, `code`) require root and may re-exec via sudo.",
+        "Use `archery query execute 'select 1' --instance-name prod-mysql --db-name orders` for the common SQL query path; stdout is TSV by default.",
+        "Use `archery query execute @query.sql --instance-name prod-mysql --db-name orders --limit-num 100` for larger SQL files.",
+        "Use `archery workflow check 5 orders @change.sql` before creating a SQL上线工单.",
+        "Use `archery workflow submit --data @workflow.json` to create a SQL上线工单.",
+        "Use `archery workflow list --workflow__status waiting --size 20` to find pending工单, then `archery workflow audit <engineer> <workflow-id> '看过了'` or `archery workflow execute <workflow-id> --engineer <engineer>`.",
+        "Use `archery login` only when credentials are missing or expired; commands exposing secrets (`show`, `code`) require root and may re-exec via sudo.",
     ],
     "grafana": [
         "Operate Grafana HTTP API by host profile; stdout is JSON for piping to tools like jq.",
@@ -37,11 +40,12 @@ COMMAND_SKILLS = {
         "Use before commit/push when you need local confidence matching CI build basics.",
     ],
     "cicd": [
-        "Use `cicd trigger` to start a GitHub workflow_dispatch run or a GitLab branch pipeline.",
-        "Use `--project` to target another GitHub/GitLab project; without it the current git remote is used.",
-        "Use `cicd status [branch]` to view the latest CI/CD for one branch.",
-        "Use `cicd watch [branch]` or `cicd watch --target <id>` to poll silently until done; only errors print during polling unless `--verbose` is set.",
-        "Use `cicd logs <id>` or `cicd logs <id> --failed` to inspect logs/error output for a specific CI/CD run/job.",
+        "Use `cicd` to wait for the current branch CI/CD to finish.",
+        "Use `cicd now [branch]` to view the latest CI/CD status.",
+        "Use `cicd run ci.yml [branch]` to trigger a GitHub workflow; use `cicd run [branch]` for GitLab.",
+        "Use `cicd id <run-id-or-pipeline-id>` to wait for one CI/CD run/pipeline.",
+        "Use `cicd fail <run-id> [--job job-id]` to inspect failed logs; use `cicd log <id>` for full logs.",
+        "Use `--project owner/repo` to target another GitHub/GitLab project; without it the current git remote is used.",
     ],
     "commit": [
         "Create an automated git commit for current repo or scanned child repos.",

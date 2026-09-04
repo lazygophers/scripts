@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Tests for lib.cicd / bin.cicd."""
+import subprocess
 import sys
 import unittest
 from importlib.machinery import SourceFileLoader
@@ -525,6 +526,13 @@ class TestPrintFinal(unittest.TestCase):
 
 
 class TestCicdCli(unittest.TestCase):
+    def test_bare_command_shows_skills(self):
+        proc = subprocess.run([str(REPO_ROOT / "bin" / "cicd")], capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = proc.stderr + proc.stdout
+        self.assertIn("# cicd skills", out)
+        self.assertIn("cicd run", out)
+
     @patch.object(_cicd_bin, "watch_cicd", return_value=0)
     def test_call_aliases_watch(self, mock_watch):
         cli = _cicd_bin.CicdCli()
@@ -548,6 +556,42 @@ class TestCicdCli(unittest.TestCase):
         rc = cli.status("feat", project="owner/repo")
         self.assertEqual(rc, 0)
         mock_status.assert_called_once_with("feat", project="owner/repo")
+
+    @patch.object(_cicd_bin, "status_cicd", return_value=0)
+    def test_now_aliases_status(self, mock_status):
+        cli = _cicd_bin.CicdCli()
+        rc = cli.now("feat", project="owner/repo")
+        self.assertEqual(rc, 0)
+        mock_status.assert_called_once_with("feat", project="owner/repo")
+
+    @patch.object(_cicd_bin, "trigger_cicd", return_value=0)
+    def test_run_aliases_trigger(self, mock_trigger):
+        cli = _cicd_bin.CicdCli()
+        rc = cli.run("ci.yml", "feat", project="owner/repo")
+        self.assertEqual(rc, 0)
+        mock_trigger.assert_called_once_with(workflow="ci.yml", ref="feat", project="owner/repo")
+
+    @patch.object(_cicd_bin, "watch_cicd", return_value=0)
+    def test_id_aliases_watch_target(self, mock_watch):
+        cli = _cicd_bin.CicdCli()
+        rc = cli.id("123", project="owner/repo", once=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_watch.call_args.kwargs["target"], "123")
+        self.assertTrue(mock_watch.call_args.kwargs["config"].once)
+
+    @patch.object(_cicd_bin, "logs_cicd", return_value=0)
+    def test_log_aliases_logs(self, mock_logs):
+        cli = _cicd_bin.CicdCli()
+        rc = cli.log("123", project="owner/repo")
+        self.assertEqual(rc, 0)
+        mock_logs.assert_called_once_with("123", project="owner/repo", failed=False, job="")
+
+    @patch.object(_cicd_bin, "logs_cicd", return_value=0)
+    def test_fail_aliases_failed_logs(self, mock_logs):
+        cli = _cicd_bin.CicdCli()
+        rc = cli.fail("123", project="owner/repo", job="456")
+        self.assertEqual(rc, 0)
+        mock_logs.assert_called_once_with("123", project="owner/repo", failed=True, job="456")
 
     @patch.object(_cicd_bin, "logs_cicd", return_value=0)
     def test_logs_subcommand(self, mock_logs):

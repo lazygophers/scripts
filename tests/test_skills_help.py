@@ -20,14 +20,16 @@ class TestRenderSkills(unittest.TestCase):
     def test_known_command_includes_ai_audience_and_command_guidance(self) -> None:
         out = render_skills("cicd", "轮询当前分支 CI/CD")
         self.assertIn("Audience: AI agents", out)
-        self.assertIn("cicd trigger", out)
-        self.assertIn("cicd watch", out)
+        self.assertIn("cicd run", out)
+        self.assertIn("cicd id", out)
+        self.assertIn("cicd fail", out)
         self.assertIn("--help", out)
 
-    def test_unknown_command_falls_back_to_description(self) -> None:
-        out = render_skills("x", "做一件事")
-        self.assertIn("# x skills", out)
-        self.assertIn("做一件事", out)
+    def test_archery_guidance_prioritizes_common_sql_and_workflow_examples(self) -> None:
+        out = render_skills("archery", "Archery SQL 平台命令行客户端")
+        self.assertIn("archery query execute 'select 1'", out)
+        self.assertIn("archery workflow check", out)
+        self.assertIn("archery workflow submit", out)
 
 
 class TestConsumeSkills(unittest.TestCase):

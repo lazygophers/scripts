@@ -188,11 +188,29 @@ class TestCliSmoke(ServerCase):
             self.assertEqual(health.returncode, 0, health.stderr)
             self.assertEqual(json.loads(health.stdout)["database"], "ok")
 
-    def test_help_lists_core_commands(self):
-        proc = subprocess.run([str(REPO_ROOT / "bin" / "grafana"), "--", "--help"],
-                              capture_output=True, text=True, timeout=60)
-        for name in ("login", "hosts", "health", "search", "api"):
-            self.assertIn(name, proc.stderr + proc.stdout)
+    def test_login_prompts_for_url_when_missing(self):
+        with tempfile.TemporaryDirectory() as home:
+            env = dict(os.environ, HOME=home, SCRIPTS_NO_SAY="1", no_proxy="*", NO_PROXY="*",
+                       PYTHONUSERBASE=str(pathlib.Path.home() / ".local"))
+            proc = subprocess.run(
+                [str(REPO_ROOT / "bin" / "grafana"), "login"],
+                input="http://127.0.0.1:3000\ntok\n",
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=60,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("Grafana 站点地址", proc.stderr + proc.stdout)
+            cfg = load_config(pathlib.Path(home) / ".config" / "lazygophers" / "scripts" / "grafana.yaml")
+            self.assertEqual(cfg["profiles"]["127.0.0.1:3000"]["token"], "tok")
+
+    def test_bare_command_shows_skills(self):
+        proc = subprocess.run([str(REPO_ROOT / "bin" / "grafana")], capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = proc.stderr + proc.stdout
+        self.assertIn("# grafana skills", out)
+        self.assertIn("Grafana HTTP API", out)
 
 
 if __name__ == "__main__":

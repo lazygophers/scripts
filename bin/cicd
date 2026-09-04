@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""cicd — 触发、查看、监听 GitHub/GitLab CI/CD"""
+"""cicd — 触发、查看、监听 GitHub/GitLab CI/CD
+
+常用：
+  cicd                  # 等 CI/CD 跑完
+  cicd now              # 看当前状态
+  cicd run ci.yml       # 触发 GitHub workflow
+  cicd id 123           # 等某个 run/pipeline
+  cicd fail 123         # 看失败日志
+"""
 from __future__ import annotations
 
 import pathlib
@@ -11,7 +19,15 @@ from lib.fire_base import BaseCli, run_cli, timed_cli
 
 
 class CicdCli(BaseCli):
-    """触发、查看、监听 GitHub/GitLab CI/CD"""
+    """触发、查看、监听 GitHub/GitLab CI/CD
+
+    常用：
+      cicd                  # 等当前分支 CI/CD 跑完
+      cicd now              # 看当前分支最新状态
+      cicd run ci.yml       # 触发 GitHub workflow
+      cicd id 123           # 等某个 run/pipeline 跑完
+      cicd fail 123         # 看失败日志
+    """
 
     def __call__(
         self,
@@ -32,6 +48,69 @@ class CicdCli(BaseCli):
             timeout=timeout,
             verbose=verbose,
         )
+
+    @timed_cli
+    def now(self, ref: str | None = None, *, project: str = ""):
+        """查看当前分支的最新 CI/CD（短命令）。
+
+        用法: cicd now [ref] [--project owner/repo]
+        """
+        return status_cicd(ref, project=project)
+
+    @timed_cli
+    def run(self, workflow: str = "", ref: str | None = None, *, project: str = ""):
+        """触发 CI/CD（短命令）。
+
+        用法:
+          cicd run ci.yml
+          cicd run feat                 # GitLab
+        """
+        return trigger_cicd(workflow=workflow, ref=ref, project=project)
+
+    @timed_cli
+    def id(
+        self,
+        target: str,
+        *,
+        project: str = "",
+        min_interval: float = 5.0,
+        max_interval: float = 30.0,
+        timeout: float | None = None,
+        once: bool = False,
+        verbose: bool = False,
+    ):
+        """监听某个 CI/CD ID（短命令）。
+
+        用法: cicd id <run-id-or-pipeline-id>
+        """
+        return watch_cicd(
+            None,
+            target=target,
+            project=project,
+            config=PollConfig(
+                min_interval=min_interval,
+                max_interval=max_interval,
+                timeout=timeout,
+                once=once,
+                verbose=verbose,
+            ),
+        )
+
+    @timed_cli
+    def log(self, target: str, *, project: str = "", job: str = ""):
+        """看日志（默认不过滤失败）。
+
+        用法: cicd log <run-id-or-job-id>
+        """
+        return logs_cicd(target, project=project, failed=False, job=job)
+
+    @timed_cli
+    def fail(self, target: str, *, project: str = "", job: str = ""):
+        """看失败日志（短命令）。
+
+        用法: cicd fail <run-id> [--job job-id]
+        """
+        return logs_cicd(target, project=project, failed=True, job=job)
 
     @timed_cli
     def trigger(self, workflow: str = "", ref: str | None = None, *, project: str = ""):
@@ -95,4 +174,6 @@ class CicdCli(BaseCli):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) <= 1:
+        sys.argv.append("--skills")
     run_cli(CicdCli())

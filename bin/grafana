@@ -24,7 +24,7 @@ from lib.grafana import (
     save_config,
     resolve_profile,
 )
-from lib.ui import Reporter, reporter, timed
+from lib.ui import Reporter, ask_text, reporter, timed
 
 
 SCRIPT_PATH = pathlib.Path(__file__).resolve()
@@ -108,7 +108,22 @@ class GrafanaCli(_Group):
         if host:
             url = host
         if not url:
-            raise GrafanaError("缺站点地址。跑 `grafana login --url https://grafana.example.com`")
+            url = ask_text("Grafana 站点地址", default="") or ""
+            if not url.strip():
+                self._r.err("已取消")
+                return 1
+        if not token and not username:
+            token = ask_text("Grafana token（没有就回车用用户名密码）", default="") or ""
+        if not token and not username:
+            username = ask_text("Grafana 用户名", default="") or ""
+            if not username.strip():
+                self._r.err("已取消")
+                return 1
+        if not token and not password:
+            password = ask_text("Grafana 密码", default="") or ""
+            if not password:
+                self._r.err("已取消")
+                return 1
         profile = {
             "url": normalize_url(url),
             "token": token,
@@ -145,4 +160,6 @@ class GrafanaCli(_Group):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) <= 1:
+        sys.argv.append("--skills")
     timed(run_cli, label="grafana")(GrafanaCli())

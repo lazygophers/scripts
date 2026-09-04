@@ -605,12 +605,13 @@ class TestWebFallback(ServerCase):
 class TestCliSmoke(unittest.TestCase):
     """bin/archery 黑盒：没有配置时给出下一步动作，退出码非 0。"""
 
-    def test_bare_command_shows_help(self):
+    def test_bare_command_shows_skills(self):
         with tempfile.TemporaryDirectory() as home:
             env = dict(os.environ, HOME=home, SCRIPTS_NO_SAY="1", PYTHONUSERBASE=str(pathlib.Path.home() / ".local"))
             proc = subprocess.run([str(REPO_ROOT / "bin" / "archery")], capture_output=True, text=True, env=env, timeout=60)
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertIn("archery", proc.stderr + proc.stdout)
+            self.assertIn("# archery skills", proc.stderr + proc.stdout)
+            self.assertIn("archery query execute", proc.stderr + proc.stdout)
 
     def test_login_then_api_end_to_end(self):
         """login 写配置 → api 用配置里的凭据取 token 并发请求，全程非交互。"""
