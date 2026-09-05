@@ -1,6 +1,7 @@
 """websearch 单元测试:解析器、去重、引擎合并、CLI 输出。"""
 
 import io
+import pathlib
 import json
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
@@ -115,6 +116,28 @@ CROSSREF_JSON = {
     }
 }
 
+SEARX_JSON = {
+    "results": [
+        {"url": "https://example.com/s1", "title": " Searx  One ", "content": "  content  one "},
+        {"url": "javascript:alert(1) dropped", "title": "x", "content": ""},
+    ]
+}
+
+SEARX_INSTANCES_JSON = {
+    "instances": {
+        "https://fast.example/": {"http": {"status_code": 200},
+                                  "timing": {"search": {"success_percentage": 100, "all": 0.5}}},
+        "https://slow.example/": {"http": {"status_code": 200},
+                                  "timing": {"search": {"success_percentage": 90, "all": 2.0}}},
+        "http://insecure.example/": {"http": {"status_code": 200},
+                                     "timing": {"search": {"success_percentage": 100}}},
+        "https://down.example/": {"http": {"status_code": 502},
+                                  "timing": {"search": {"success_percentage": 100}}},
+        "https://flaky.example/": {"http": {"status_code": 200},
+                                   "timing": {"search": {"success_percentage": 60}}},
+    }
+}
+
 
 class TestParsers(unittest.TestCase):
     def test_parse_ddg_unwraps_redirect_and_drops_non_http(self):
@@ -197,6 +220,84 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(items[0]["url"], "https://doi.org/10.1/one")
         self.assertEqual(items[0]["title"], "Paper One")
         self.assertEqual(items[0]["snippet"], "Paper abstract")
+
+    def test_parse_searx(self):
+        items = websearch.parse_searx(SEARX_JSON)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["url"], "https://example.com/s1")
+        self.assertEqual(items[0]["title"], "Searx One")
+        self.assertEqual(items[0]["snippet"], "content one")
+
+
+class TestSearxInstances(unittest.TestCase):
+    """searx.space 实例缓存策略:tmp 目录当缓存,不打真网。"""
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.cache = pathlib.Path(self._tmp.name) / "searx.json"
+        patcher = mock.patch.object(websearch, "SEARX_CACHE", self.cache)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self._tmp.cleanup)
+
+    def _write_cache(self, age_days):
+        import json
+        import time
+
+        self.cache.write_text(json.dumps(
+            {"fetched_at": time.time() - age_days * 86400,
+             "instances": ["https://cached.example/"]}))
+
+    def _mock_source(self):
+        return mock.patch.object(websearch, "_fetch_json",
+                                 return_value=SEARX_INSTANCES_JSON)
+
+    def test_fresh_cache_used_no_refresh(self):
+        self._write_cache(3)
+        with self._mock_source() as src:
+            got = websearch.load_searx_instances()
+        src.assert_not_called()
+        self.assertEqual(got, ["https://cached.example/"])
+
+    def test_over_week_non_metered_refreshes(self):
+        self._write_cache(8)
+        with mock.patch.object(websearch, "_metered", return_value=False), self._mock_source() as src:
+            got = websearch.load_searx_instances()
+        src.assert_called_once()
+        self.assertEqual(got, ["https://fast.example/", "https://slow.example/"])
+
+    def test_over_week_metered_keeps_cache(self):
+        self._write_cache(8)
+        with mock.patch.object(websearch, "_metered", return_value=True), self._mock_source() as src:
+            got = websearch.load_searx_instances()
+        src.assert_not_called()
+        self.assertEqual(got, ["https://cached.example/"])
+
+    def test_over_month_force_refresh_even_metered(self):
+        self._write_cache(31)
+        with mock.patch.object(websearch, "_metered", return_value=True), self._mock_source() as src:
+            got = websearch.load_searx_instances()
+        src.assert_called_once()
+        self.assertEqual(got, ["https://fast.example/", "https://slow.example/"])
+
+    def test_refresh_failure_falls_back_to_stale_cache(self):
+        self._write_cache(40)
+        with mock.patch.object(websearch, "_fetch_json", side_effect=OSError("net down")):
+            got = websearch.load_searx_instances()
+        self.assertEqual(got, ["https://cached.example/"])
+
+    def test_promote_moves_winner_to_front(self):
+        import json
+        import time
+
+        self.cache.write_text(json.dumps(
+            {"fetched_at": time.time(),
+             "instances": ["https://a/", "https://b/", "https://c/"]}))
+        websearch._promote_searx("https://c/", ["https://a/", "https://b/", "https://c/"])
+        self.assertEqual(json.loads(self.cache.read_text())["instances"],
+                         ["https://c/", "https://a/", "https://b/"])
 
 
 class TestSearch(unittest.TestCase):

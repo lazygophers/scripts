@@ -2,16 +2,19 @@
 
 引擎全部免 key:DDG / DDG-lite / Bing / Google / Yandex / 搜狗 / 360 爬网页,
 GitHub 爬仓库搜索页,Wikipedia / arXiv / Crossref / PubMed 用官方免 key API
-(wikipedia zh 查空回退 en)。并行查询后按 URL 合并去重。curl_cffi 指纹直抓
-(与 webgrab 同源),单引擎被拦或失败只跳过该引擎,不影响其他。结尾提示用
-`webgrab <url>` 抓正文。
+(wikipedia zh 查空回退 en),SearXNG 实例列表来自 searx.space(本地缓存
+一个月,超一周且非计费网络自动更新,超一个月强制更新)。并行查询后按 URL
+合并去重。curl_cffi 指纹直抓(与 webgrab 同源),单引擎被拦或失败只跳过该
+引擎,不影响其他。结尾提示用 `webgrab <url>` 抓正文。
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import os
 import sys
+from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 EXTRA_HEADERS = {
@@ -33,6 +36,17 @@ def _fetch(url: str, timeout: float) -> str:
         if r.status_code != 200:
             raise SearchError(f"HTTP {r.status_code}")
         return r.text
+
+
+def _fetch_json(url: str, params: dict, timeout: float, headers: dict | None = None) -> dict:
+    """curl_cffi GET JSON,非 200 时抛出。"""
+    from curl_cffi import requests
+
+    with requests.Session(impersonate="chrome", timeout=timeout) as s:
+        r = s.get(url, params=params, headers=headers or {})
+        if r.status_code != 200:
+            raise SearchError(f"HTTP {r.status_code}")
+        return r.json()
 
 
 def _unwrap_ddg(href: str) -> str:
@@ -281,6 +295,91 @@ def parse_crossref(data: dict) -> list[dict]:
     return out
 
 
+def parse_searx(data: dict) -> list[dict]:
+    """解析 SearXNG /search?format=json 响应(results[].url/title/content)。"""
+    out = []
+    for r in data.get("results", []):
+        if str(r.get("url", "")).startswith("http"):
+            out.append({"url": r["url"], "title": " ".join(r.get("title", "").split()),
+                        "snippet": " ".join(str(r.get("content", "")).split())})
+    return out
+
+
+# searx.space 实例列表缓存:搜索成功率高 + https 的实例,按搜索耗时排序。
+# 刷新策略:<7d 用缓存;>7d 且非计费网络(热点)自动刷;>30d 强制刷(计费也刷)。
+SEARX_INSTANCES_URL = "https://searx.space/data/instances.json"
+SEARX_CACHE = Path(
+    os.environ.get("WEBSEARCH_SEARX_CACHE")
+    or Path.home() / ".cache/lazygophers/scripts/searx-instances.json"
+)
+SEARX_MAX_ATTEMPTS = 12  # 单次搜索最多试几个实例(都是公益实例,省着用)
+
+
+def _metered() -> bool:
+    """计费网络 = 热点(iPhone/Android 共享,典型按流量计费)。"""
+    try:
+        from lib.ipinfo import is_hotspot_wifi
+        return is_hotspot_wifi()
+    except Exception:
+        return False
+
+
+def _searx_healthy(d: dict) -> list[str]:
+    """instances.json → 健康 https 实例 URL 列表(按 searx.space 实测搜索耗时排序)。"""
+    scored = []
+    for url, info in d.get("instances", {}).items():
+        if not url.startswith("https://"):
+            continue
+        if (info.get("http") or {}).get("status_code") != 200:
+            continue
+        search = (info.get("timing") or {}).get("search") or {}
+        if search.get("success_percentage", 0) < 80:
+            continue
+        t = search.get("all")
+        t = t.get("value") if isinstance(t, dict) else t
+        scored.append((url, t if isinstance(t, (int, float)) else 9999))
+    return [u for u, _t in sorted(scored, key=lambda x: x[1])]
+
+
+def load_searx_instances(timeout: float = 15) -> list[str]:
+    """读实例列表,按缓存策略决定是否重新拉 searx.space。"""
+    import json
+    import time
+
+    cache = None
+    if SEARX_CACHE.exists():
+        try:
+            cache = json.loads(SEARX_CACHE.read_text())
+        except ValueError:
+            cache = None
+    age_days = (time.time() - cache["fetched_at"]) / 86400 if cache else None
+
+    def refresh() -> list[str]:
+        data = _fetch_json(SEARX_INSTANCES_URL, {}, timeout)
+        urls = _searx_healthy(data)
+        if not urls:
+            raise SearchError("searx.space 无健康实例")
+        SEARX_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SEARX_CACHE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"fetched_at": time.time(), "instances": urls}))
+        tmp.replace(SEARX_CACHE)
+        return urls
+
+    if cache is None:
+        return refresh()
+    if age_days > 30:
+        print(f"[websearch] searx.space 缓存 {age_days:.0f} 天,超过一个月,强制更新", file=sys.stderr)
+    elif age_days > 7 and not _metered():
+        print(f"[websearch] searx.space 缓存 {age_days:.0f} 天,超过一周且非计费网络,自动更新", file=sys.stderr)
+    else:
+        return cache["instances"]
+    try:
+        return refresh()
+    except Exception as e:  # 刷新失败(网络),有旧缓存就用旧的
+        print(f"[websearch] searx.space 更新失败({e}),用旧缓存", file=sys.stderr)
+        return cache["instances"]
+
+
 # 引擎定义:(名称, 取结果函数名, 签名 (query, timeout))。
 # 存函数名而非引用,调用时经模块属性解析 —— 方便测试 mock.patch。
 # 单引擎失败(被拦/网络)只跳过,不影响其余引擎;并行查询。
@@ -408,6 +507,39 @@ def _e_pubmed(query, timeout):
         return out
 
 
+def _promote_searx(url: str, instances: list[str]) -> None:
+    """把刚成功的实例挪到缓存列表最前(下次优先用),原地更新缓存文件。"""
+    import json
+
+    if not SEARX_CACHE.exists() or (instances and instances[0] == url):
+        return
+    try:
+        cache = json.loads(SEARX_CACHE.read_text())
+    except ValueError:
+        return
+    insts = [u for u in cache.get("instances", []) if u != url]
+    cache["instances"] = [url] + insts
+    SEARX_CACHE.write_text(json.dumps(cache))
+
+
+def _e_searx(query, timeout):
+    """SearXNG 元搜索:实例列表来自 searx.space(本地缓存),逐个试到出结果。"""
+    instances = load_searx_instances(timeout)
+    errors = []
+    for url in instances[:SEARX_MAX_ATTEMPTS]:
+        try:
+            data = _fetch_json(url.rstrip("/") + "/search",
+                               {"q": query, "format": "json", "language": "auto"},
+                               min(timeout, 6), {"Accept": "application/json"})
+            items = parse_searx(data)
+            if items:
+                _promote_searx(url, instances)
+                return items
+        except Exception as e:  # 403/429/慢,换下一个实例
+            errors.append(f"{url}: {e}")
+    raise SearchError("; ".join(errors[-2:]) or "无可用实例")
+
+
 ENGINES: list[tuple[str, str]] = [
     ("ddg", "_e_ddg"),
     ("ddg-lite", "_e_ddg_lite"),
@@ -419,6 +551,7 @@ ENGINES: list[tuple[str, str]] = [
     ("arxiv", "_e_arxiv"),
     ("crossref", "_e_crossref"),
     ("pubmed", "_e_pubmed"),
+    ("searx", "_e_searx"),
     ("wikipedia", "_e_wikipedia"),
     ("github", "_e_github"),
 ]
