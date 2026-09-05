@@ -1,3 +1,5 @@
+## 编译检查 checkwork / AI 端点探测 check_ai
+
 `checkwork`：多语言编译检查（CI/CD 前置拦截器），零产物。
 
 - **Go**: `go build -v -o /dev/null`，覆盖 `cmd/`/`app/` 子目录 main 包 + 根目录，排除 `pay-core`/`*dao-*`

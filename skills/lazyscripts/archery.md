@@ -1,3 +1,5 @@
+## Archery 数据库平台 CLI
+
 Archery 的命令行客户端。配置 `~/.config/lazygophers/scripts/archery.yaml`（0600），**按域名**存多站点登录；子命令都接受 `--host <domain>` 指定站点。
 
 ```bash

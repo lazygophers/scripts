@@ -1,3 +1,5 @@
+## git 工作流：合并 / 推送 / 分支管理
+
 `bin/` 下的 git 工作流脚本（须已 `./bin/inject` 注入 PATH，或直接 `./bin/<name>` 运行）。
 
 ## 合并与推送
@@ -30,7 +32,3 @@ fetch_all                   # 批量 fetch 所有 git 仓库
 ```
 
 批量操作并发上限：`BATCH_CONCURRENCY=8 push_canary`（默认 4）。
-
-## 通用选项
-
-所有 `bin/*` 支持 `--no-say`（静音 macOS 语音）与 `--debug`（打印成功命令输出）。

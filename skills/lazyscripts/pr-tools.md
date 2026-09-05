@@ -1,3 +1,5 @@
+## PR / Issue 工具：commit / issue / mr / squash_pr
+
 四个薄壳脚本，内部调 `claude` 生成 title/body 文案。
 
 ```bash
