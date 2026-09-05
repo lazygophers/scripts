@@ -117,7 +117,7 @@ class TestBuildCommands(unittest.TestCase):
     def test_glab_run_status(self):
         self.assertEqual(
             build_run_status_command(_glab_info(), "123"),
-            ["glab", "ci", "view", "123", "--repo", "git@gitlab.example.com:owner/repo.git"],
+            ["glab", "api", "projects/owner%2Frepo/pipelines/123"],
         )
 
     def test_glab_play_encodes_project_path(self):

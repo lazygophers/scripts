@@ -89,7 +89,11 @@ def build_run_status_command(info: ProviderInfo, target: str) -> list[str]:
             "--json", "conclusion,databaseId,displayTitle,status,url,workflowName",
             *_repo_args(info),
         ]
-    return ["glab", "ci", "view", target, *_repo_args(info)]
+    # glab ci view 需要交互终端，非 TTY 下退出非 0 会被误判成 fail；
+    # 改走 pipelines API，返回的 {"status": ...} 由 _extract_glab_status 解析。
+    from urllib.parse import quote
+
+    return ["glab", "api", f"projects/{quote(info.repo, safe='')}/pipelines/{target}"]
 
 
 def build_play_command(info: ProviderInfo, job_id: str, *, project: str = "") -> list[str]:
