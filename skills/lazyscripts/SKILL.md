@@ -23,6 +23,15 @@ description: 本仓库（lazygophers scripts）bin/ 下全部常用脚本的合�
 
 查目录：`lazyhelp`（人类速查表）；`<工具> --skills`（AI 向指引，含可照抄示例）；`lazyhelp help <工具>`（完整 --help）。
 
+## 失败分支（如果 X 失败 → 做 Y）
+
+| 症状 | 一线修复 | 仍失败兜底 |
+|------|---------|-----------|
+| `command not found: merge_master` 等 | `./bin/inject` 注入 PATH，或直接 `./bin/<name>` 运行 | `inject show` 预览将写入的内容，确认后 `inject run` |
+| 工具行为和分文件描述不一致 | 重跑并加 `--debug`（打印成功命令的完整输出） | `lazyhelp help <工具>` 看当前版本的完整 --help |
+| 批量脚本卡在某个仓库 | 进那个仓库单独跑单仓子命令（多为 `here`） | 查对应分文件「要点」段的回滚说明 |
+| push/fetch 类网络超时 | 直接重跑（内置指数退避重试） | `ipinfo` 查网络；VPN 干扰路由用 `vpn-prio` |
+
 ## 通用约定（全部 bin/*）
 
 - `--no-say` / `SCRIPTS_NO_SAY=1` 静音 macOS 语音通知。
