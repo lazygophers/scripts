@@ -15,4 +15,4 @@ squash_pr [source] <target>  # 压 source 自分叉以来的改动为单 commit 
 
 - 都支持 `--dry-run` 预览。
 - `mr` 支持 `--publish`（非 draft）、`--reviews`、`--labels`、`--assignee`。
-- `squash_pr` PR 分支已存在时复用并 force push，保持同一 PR；`--push_only` 只推不开 PR。
+- 🔴 `squash_pr` PR 分支已存在时复用并 force push，保持同一 PR；`--push_only` 只推不开 PR。

@@ -26,7 +26,7 @@ switch_branch <branch>      # 批量切换（不存在则从主分支创建）�
 sync_branch [branch] [--force]  # 批量同步到 origin/<branch>
 sync_master                 # = sync_branch master
 delete_branch <name> [--force] [-y]     # 删本地分支；非 git 目录时批量
-delete_branch_remote <name> [--remote <r>] [-y]  # 删远端分支
+delete_branch_remote <name> [--remote <r>] [-y]  # 🔴 删远端分支（对外可见，删前确认）
 list_branch                 # 列出本地分支（单仓或扫描所有仓库，跨仓同名标 ⟱）
 fetch_all                   # 批量 fetch 所有 git 仓库
 ```
