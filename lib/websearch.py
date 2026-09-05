@@ -733,9 +733,67 @@ def build_parser() -> argparse.ArgumentParser:
                    help="每个引擎抓几条(默认 10;合并去重后可能少于引擎总数)")
     p.add_argument("--engine", choices=[n for n, _ in ENGINES],
                    help="只用指定引擎(默认全部引擎)")
-    p.add_argument("--json", action="store_true", help="输出 JSON(管道给 jq 用)")
+    p.add_argument("-f", "--format", choices=list(FORMATTERS), default="plain",
+                   help="输出格式(默认 plain;tsv/csv 适合管道,table 用 Rich 表格)")
+    p.add_argument("--json", action="store_true",
+                   help="等价 --format json(管道给 jq 用)")
     p.add_argument("--timeout", type=float, default=15, help="单引擎超时秒数(默认 15)")
     return p
+
+
+def _fmt_plain(results: list[dict]) -> None:
+    for i, r in enumerate(results, 1):
+        print(f"{i}. {r['title']}")
+        print(f"   {r['url']}")
+        if r["snippet"]:
+            print(f"   {r['snippet']}")
+
+
+def _fmt_json(results: list[dict]) -> None:
+    import json
+
+    print(json.dumps(results, ensure_ascii=False, indent=2))
+
+
+def _fmt_tsv(results: list[dict]) -> None:
+    def esc(s: str) -> str:
+        return s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
+
+    print("index\turl\ttitle\tsnippet")
+    for i, r in enumerate(results, 1):
+        print(f"{i}\t{esc(r['url'])}\t{esc(r['title'])}\t{esc(r['snippet'])}")
+
+
+def _fmt_csv(results: list[dict]) -> None:
+    import csv
+    import io
+
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(["index", "url", "title", "snippet"])
+    for i, r in enumerate(results, 1):
+        w.writerow([i, r["url"], r["title"], r["snippet"]])
+    print(buf.getvalue(), end="")
+
+
+def _fmt_table(results: list[dict]) -> None:
+    from rich.box import ROUNDED
+    from rich.table import Table
+
+    from lib.ui import Reporter
+
+    table = Table(box=ROUNDED, title_justify="left")
+    table.add_column("#", justify="right", style="dim", no_wrap=True)
+    table.add_column("标题", ratio=2, overflow="fold")
+    table.add_column("URL", ratio=2, overflow="fold", style="cyan")
+    table.add_column("摘要", ratio=3, overflow="fold")
+    for i, r in enumerate(results, 1):
+        table.add_row(str(i), r["title"], r["url"], r["snippet"])
+    Reporter(stderr=False).console.print(table)  # 表格是结果,走 stdout
+
+
+FORMATTERS = {"plain": _fmt_plain, "json": _fmt_json, "tsv": _fmt_tsv,
+              "csv": _fmt_csv, "table": _fmt_table}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -757,14 +815,6 @@ def main(argv: list[str] | None = None) -> int:
     except SearchError as e:
         print(f"[websearch] 检索失败: {e}", file=sys.stderr)
         return 1
-    if args.json:
-        import json
-        print(json.dumps(results, ensure_ascii=False, indent=2))
-        return 0
-    for i, r in enumerate(results, 1):
-        print(f"{i}. {r['title']}")
-        print(f"   {r['url']}")
-        if r["snippet"]:
-            print(f"   {r['snippet']}")
+    FORMATTERS["json" if args.json else args.format](results)
     print("[websearch] 看正文: webgrab <url>", file=sys.stderr)
     return 0

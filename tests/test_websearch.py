@@ -467,6 +467,43 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(buf.getvalue()), fake)
 
+    def test_main_tsv_escapes_tabs_and_newlines(self):
+        fake = [{"url": "https://example.com/x", "title": "a\tb", "snippet": "c\nd"}]
+        buf = io.StringIO()
+        with mock.patch.object(websearch, "search", return_value=fake):
+            with redirect_stdout(buf), redirect_stderr(io.StringIO()):
+                rc = websearch.main(["websearch", "-f", "tsv", "q"])
+        self.assertEqual(rc, 0)
+        lines = buf.getvalue().splitlines()
+        self.assertEqual(lines[0], "index\turl\ttitle\tsnippet")
+        self.assertEqual(len(lines), 2)  # 换行被转义,一行一条
+        self.assertIn("a\\tb", lines[1])
+        self.assertIn("c\\nd", lines[1])
+
+    def test_main_csv_output(self):
+        import csv as csv_mod
+
+        fake = [{"url": "https://example.com/x", "title": "T, comma", "snippet": "S"}]
+        buf = io.StringIO()
+        with mock.patch.object(websearch, "search", return_value=fake):
+            with redirect_stdout(buf), redirect_stderr(io.StringIO()):
+                rc = websearch.main(["websearch", "--format", "csv", "q"])
+        self.assertEqual(rc, 0)
+        rows = list(csv_mod.reader(buf.getvalue().splitlines()))
+        self.assertEqual(rows[0], ["index", "url", "title", "snippet"])
+        self.assertEqual(rows[1][2], "T, comma")  # 逗号正确加引号还原
+
+    def test_main_table_output(self):
+        fake = [{"url": "https://example.com/x", "title": "T", "snippet": "S"}]
+        buf = io.StringIO()
+        with mock.patch.object(websearch, "search", return_value=fake):
+            with redirect_stdout(buf), redirect_stderr(io.StringIO()):
+                rc = websearch.main(["websearch", "-f", "table", "q"])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("标题", out)
+        self.assertIn("https://example.com/x", out)
+
     def test_main_no_args_prints_skills(self):
         buf = io.StringIO()
         with mock.patch.object(websearch, "search") as s:
