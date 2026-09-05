@@ -91,6 +91,30 @@ SO360_HTML = """
 </li>
 """
 
+ARXIV_XML = """<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+<entry>
+  <id>http://arxiv.org/abs/2401.00001v1</id>
+  <title>Attention Paper  Title</title>
+  <summary>  We study  attention.  </summary>
+</entry>
+<entry>
+  <id>not-a-url dropped</id>
+  <title>dropped</title>
+</entry>
+</feed>
+"""
+
+CROSSREF_JSON = {
+    "message": {
+        "items": [
+            {"title": ["Paper One"], "URL": "https://doi.org/10.1/one",
+             "abstract": "<jats:p>Paper abstract</jats:p>"},
+            {"title": ["No URL dropped"], "URL": ""},
+        ]
+    }
+}
+
 
 class TestParsers(unittest.TestCase):
     def test_parse_ddg_unwraps_redirect_and_drops_non_http(self):
@@ -159,6 +183,20 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["url"], "https://example.com/real")
         self.assertEqual(items[0]["snippet"], "360 摘要文本")
+
+    def test_parse_arxiv(self):
+        items = websearch.parse_arxiv(ARXIV_XML)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["url"], "http://arxiv.org/abs/2401.00001v1")
+        self.assertEqual(items[0]["title"], "Attention Paper Title")
+        self.assertEqual(items[0]["snippet"], "We study attention.")
+
+    def test_parse_crossref(self):
+        items = websearch.parse_crossref(CROSSREF_JSON)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["url"], "https://doi.org/10.1/one")
+        self.assertEqual(items[0]["title"], "Paper One")
+        self.assertEqual(items[0]["snippet"], "Paper abstract")
 
 
 class TestSearch(unittest.TestCase):

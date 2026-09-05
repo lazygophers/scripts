@@ -1,9 +1,10 @@
 """websearch — 多引擎网页检索,输出 标题 / URL / 摘要。
 
-引擎全部免 key:DDG / DDG-lite / Bing / Google / Yandex 爬网页,
-GitHub 爬仓库搜索页,Wikipedia 用官方免 key API(zh 查空回退 en)。
-并行查询后按 URL 合并去重。curl_cffi 指纹直抓(与 webgrab 同源),单引擎
-被拦或失败只跳过该引擎,不影响其他。结尾提示用 `webgrab <url>` 抓正文。
+引擎全部免 key:DDG / DDG-lite / Bing / Google / Yandex / 搜狗 / 360 爬网页,
+GitHub 爬仓库搜索页,Wikipedia / arXiv / Crossref / PubMed 用官方免 key API
+(wikipedia zh 查空回退 en)。并行查询后按 URL 合并去重。curl_cffi 指纹直抓
+(与 webgrab 同源),单引擎被拦或失败只跳过该引擎,不影响其他。结尾提示用
+`webgrab <url>` 抓正文。
 """
 
 from __future__ import annotations
@@ -250,6 +251,36 @@ def parse_360(html: str) -> list[dict]:
     return out
 
 
+def parse_arxiv(xml: str) -> list[dict]:
+    """解析 arXiv API 的 Atom 响应(entry[].title/summary/id)。"""
+    import re
+
+    out = []
+    for entry in re.findall(r"<entry>(.*?)</entry>", xml, re.S):
+        def tag(name):
+            m = re.search(rf"<{name}[^>]*>(.*?)</{name}>", entry, re.S)
+            return " ".join(m.group(1).split()) if m else ""
+        url = tag("id")
+        if url.startswith("http"):
+            out.append({"url": url, "title": tag("title"), "snippet": tag("summary")[:300]})
+    return out
+
+
+def parse_crossref(data: dict) -> list[dict]:
+    """解析 Crossref works 响应(items[].title/URL/abstract)。"""
+    import re
+
+    out = []
+    for it in data.get("message", {}).get("items", []):
+        title = (it.get("title") or [""])[0]
+        url = it.get("URL", "")
+        # abstract 是 JATS XML 片段,去标签
+        abstract = re.sub(r"<[^>]+>", "", it.get("abstract", "")).strip()
+        if url.startswith("http"):
+            out.append({"url": url, "title": title, "snippet": abstract[:300]})
+    return out
+
+
 # 引擎定义:(名称, 取结果函数名, 签名 (query, timeout))。
 # 存函数名而非引用,调用时经模块属性解析 —— 方便测试 mock.patch。
 # 单引擎失败(被拦/网络)只跳过,不影响其余引擎;并行查询。
@@ -322,6 +353,61 @@ def _e_360(query, timeout):
     return parse_360(_fetch("https://www.so.com/s?q=" + quote_plus(query), timeout))
 
 
+def _e_arxiv(query, timeout):
+    """arXiv 官方免 key API(Atom XML)。"""
+    from curl_cffi import requests
+
+    with requests.Session(impersonate="chrome", timeout=timeout) as s:
+        r = s.get("https://export.arxiv.org/api/query",
+                  params={"search_query": "all:" + query, "max_results": 5})
+        if r.status_code != 200:
+            raise SearchError(f"HTTP {r.status_code}")
+        return parse_arxiv(r.text)
+
+
+def _e_crossref(query, timeout):
+    """Crossref 官方免 key API(跨库论文 DOI 元数据)。"""
+    from curl_cffi import requests
+
+    with requests.Session(impersonate="chrome", timeout=timeout) as s:
+        r = s.get("https://api.crossref.org/works",
+                  params={"query": query, "rows": 5,
+                          "select": "title,URL,abstract"})
+        if r.status_code != 200:
+            raise SearchError(f"HTTP {r.status_code}")
+        return parse_crossref(r.json())
+
+
+def _e_pubmed(query, timeout):
+    """PubMed 官方免 key API(esearch 拿 id → esummary 拿标题)。
+
+    eutils 对 chrome TLS 指纹直接 reset,这里用朴素请求。
+    """
+    from curl_cffi import requests
+
+    with requests.Session(timeout=timeout) as s:
+        r = s.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+                  params={"db": "pubmed", "term": query, "retmode": "json", "retmax": 5})
+        if r.status_code != 200:
+            raise SearchError(f"HTTP {r.status_code}")
+        ids = r.json().get("esearchresult", {}).get("idlist", [])
+        if not ids:
+            return []
+        r = s.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+                  params={"db": "pubmed", "id": ",".join(ids), "retmode": "json"})
+        if r.status_code != 200:
+            raise SearchError(f"HTTP {r.status_code}")
+        out = []
+        for pid in ids:
+            item = r.json().get("result", {}).get(pid, {})
+            title = " ".join(item.get("title", "").split())
+            if title:
+                out.append({"url": f"https://pubmed.ncbi.nlm.nih.gov/{pid}/",
+                            "title": title.rstrip("."),
+                            "snippet": item.get("source", "")})
+        return out
+
+
 ENGINES: list[tuple[str, str]] = [
     ("ddg", "_e_ddg"),
     ("ddg-lite", "_e_ddg_lite"),
@@ -330,6 +416,9 @@ ENGINES: list[tuple[str, str]] = [
     ("yandex", "_e_yandex"),
     ("sogou", "_e_sogou"),
     ("360", "_e_360"),
+    ("arxiv", "_e_arxiv"),
+    ("crossref", "_e_crossref"),
+    ("pubmed", "_e_pubmed"),
     ("wikipedia", "_e_wikipedia"),
     ("github", "_e_github"),
 ]
@@ -381,7 +470,7 @@ def list_engines() -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="websearch",
-        description="多引擎网页检索(DDG/Bing/Google/Yandex/GitHub/Wikipedia 全免 key,并行+按 URL 合并去重),输出 标题 / URL / 摘要",
+        description="多引擎网页检索(DDG/Bing/Google/Yandex/GitHub/Wikipedia 全免 key,并行+按 URL 合并去重,含 arXiv/Crossref/PubMed 学术源),输出 标题 / URL / 摘要",
         epilog="结果只有摘要,要看正文用: webgrab <url>\n"
                "列出引擎: websearch engines",
     )
