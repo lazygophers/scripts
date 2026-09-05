@@ -17,15 +17,15 @@ from lib.cicd import (
     _validate_config,
     build_logs_command,
     build_run_status_command,
+    build_play_command,
     build_status_command,
-    build_trigger_command,
     check_once,
     check_run_once,
     classify_status,
     logs_cicd,
     resolve_provider,
+    play_cicd,
     status_cicd,
-    trigger_cicd,
     watch_cicd,
 )
 from lib.exec import CommandTimeout
@@ -120,16 +120,16 @@ class TestBuildCommands(unittest.TestCase):
             ["glab", "ci", "view", "123", "--repo", "git@gitlab.example.com:owner/repo.git"],
         )
 
-    def test_gh_trigger(self):
+    def test_glab_play_encodes_project_path(self):
         self.assertEqual(
-            build_trigger_command(_gh_info(), workflow="ci.yml", ref="feat"),
-            ["gh", "workflow", "run", "ci.yml", "--ref", "feat", "--repo", "owner/repo"],
+            build_play_command(_glab_info(), "90947"),
+            ["glab", "api", "projects/owner%2Frepo/jobs/90947/play", "-X", "POST"],
         )
 
-    def test_glab_trigger(self):
+    def test_glab_play_explicit_project_verbatim(self):
         self.assertEqual(
-            build_trigger_command(_glab_info(), workflow="", ref="feat"),
-            ["glab", "ci", "run", "--branch", "feat", "--repo", "git@gitlab.example.com:owner/repo.git"],
+            build_play_command(_glab_info(), "90947", project="overseas/tmtc_console"),
+            ["glab", "api", "projects/overseas%2Ftmtc_console/jobs/90947/play", "-X", "POST"],
         )
 
     def test_gh_logs_failed_with_job(self):
@@ -173,33 +173,24 @@ class TestClassifyStatus(unittest.TestCase):
 
 class TestCicdActions(unittest.TestCase):
     @patch("lib.cicd.reporter")
-    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
-    @patch("lib.cicd.current_branch", return_value="feat")
+    @patch("lib.cicd.resolve_provider", return_value=_glab_info())
     @patch("lib.cicd.run")
-    def test_trigger_runs_command(self, mock_run, _mock_branch, _mock_provider, mock_reporter):
+    def test_play_runs_command(self, mock_run, _mock_provider, mock_reporter):
         fake = MagicMock()
         mock_reporter.return_value = fake
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-        rc = trigger_cicd("ci.yml")
+        rc = play_cicd("90947")
         self.assertEqual(rc, 0)
         mock_run.assert_called_once()
-        self.assertIn("workflow", mock_run.call_args.args[0])
+        self.assertIn("/play", " ".join(mock_run.call_args.args[0]))
         fake.ok.assert_called_once()
-
-    @patch("lib.cicd.resolve_provider", return_value=_glab_info())
-    @patch("lib.cicd.run")
-    def test_glab_trigger_treats_first_arg_as_ref(self, mock_run, _mock_provider):
-        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-        rc = trigger_cicd("feat")
-        self.assertEqual(rc, 0)
-        self.assertEqual(mock_run.call_args.args[0][4], "feat")
 
     @patch("lib.cicd.reporter")
     @patch("lib.cicd.resolve_provider", return_value=_gh_info())
-    def test_gh_trigger_requires_workflow(self, _mock_provider, mock_reporter):
+    def test_play_rejects_github(self, _mock_provider, mock_reporter):
         fake = MagicMock()
         mock_reporter.return_value = fake
-        rc = trigger_cicd("", "feat")
+        rc = play_cicd("90947")
         self.assertEqual(rc, 2)
         fake.err.assert_called_once()
 
@@ -390,8 +381,8 @@ class TestActionGuards(unittest.TestCase):
         self.fake.err.assert_called_once()
 
     @patch("lib.cicd.resolve_provider", return_value=None)
-    def test_trigger_without_provider(self, _mock):
-        self.assertEqual(trigger_cicd("ci.yml", "feat"), 2)
+    def test_play_without_provider(self, _mock):
+        self.assertEqual(play_cicd("90947"), 2)
 
     @patch("lib.cicd.resolve_provider", return_value=None)
     def test_logs_without_provider(self, _mock):
@@ -408,27 +399,22 @@ class TestActionGuards(unittest.TestCase):
 
     @patch("lib.cicd.current_branch", return_value="detached")
     @patch("lib.cicd.resolve_provider", return_value=_gh_info())
-    def test_trigger_on_detached_head(self, _mock_provider, _mock_branch):
-        self.assertEqual(trigger_cicd("ci.yml"), 2)
-
-    @patch("lib.cicd.current_branch", return_value="detached")
-    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
     def test_watch_on_detached_head(self, _mock_provider, _mock_branch):
         self.assertEqual(watch_cicd(), 2)
 
     @patch("lib.cicd.run")
-    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
-    def test_trigger_reports_command_failure(self, _mock_provider, mock_run):
+    @patch("lib.cicd.resolve_provider", return_value=_glab_info())
+    def test_play_reports_command_failure(self, _mock_provider, mock_run):
         mock_run.return_value = MagicMock(returncode=7, stdout="", stderr="boom")
-        self.assertEqual(trigger_cicd("ci.yml", "feat"), 7)
-        self.fake.err.assert_called_once_with("CI/CD 触发失败")
+        self.assertEqual(play_cicd("90947"), 7)
+        self.fake.err.assert_called_once_with("启用失败")
         self.fake.output.assert_called_once()
 
     @patch("lib.cicd.run")
-    @patch("lib.cicd.resolve_provider", return_value=_gh_info())
-    def test_trigger_success_without_output(self, _mock_provider, mock_run):
+    @patch("lib.cicd.resolve_provider", return_value=_glab_info())
+    def test_play_success_without_output(self, _mock_provider, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        self.assertEqual(trigger_cicd("ci.yml", "feat"), 0)
+        self.assertEqual(play_cicd("90947"), 0)
         self.fake.output.assert_not_called()
 
     @patch("lib.cicd.run")
@@ -531,7 +517,7 @@ class TestCicdCli(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         out = proc.stderr + proc.stdout
         self.assertIn("# cicd skills", out)
-        self.assertIn("cicd run", out)
+        self.assertIn("cicd play", out)
 
     @patch.object(_cicd_bin, "watch_cicd", return_value=0)
     def test_call_aliases_watch(self, mock_watch):
@@ -543,12 +529,12 @@ class TestCicdCli(unittest.TestCase):
         config = mock_watch.call_args.kwargs["config"]
         self.assertEqual(config.min_interval, 1.0)
 
-    @patch.object(_cicd_bin, "trigger_cicd", return_value=0)
-    def test_trigger_subcommand(self, mock_trigger):
+    @patch.object(_cicd_bin, "play_cicd", return_value=0)
+    def test_play_subcommand(self, mock_play):
         cli = _cicd_bin.CicdCli()
-        rc = cli.trigger("ci.yml", "feat", project="owner/repo")
+        rc = cli.play("90947", project="owner/repo")
         self.assertEqual(rc, 0)
-        mock_trigger.assert_called_once_with(workflow="ci.yml", ref="feat", project="owner/repo")
+        mock_play.assert_called_once_with("90947", project="owner/repo")
 
     @patch.object(_cicd_bin, "status_cicd", return_value=0)
     def test_status_subcommand(self, mock_status):
@@ -563,13 +549,6 @@ class TestCicdCli(unittest.TestCase):
         rc = cli.now("feat", project="owner/repo")
         self.assertEqual(rc, 0)
         mock_status.assert_called_once_with("feat", project="owner/repo")
-
-    @patch.object(_cicd_bin, "trigger_cicd", return_value=0)
-    def test_run_aliases_trigger(self, mock_trigger):
-        cli = _cicd_bin.CicdCli()
-        rc = cli.run("ci.yml", "feat", project="owner/repo")
-        self.assertEqual(rc, 0)
-        mock_trigger.assert_called_once_with(workflow="ci.yml", ref="feat", project="owner/repo")
 
     @patch.object(_cicd_bin, "watch_cicd", return_value=0)
     def test_id_aliases_watch_target(self, mock_watch):

@@ -42,7 +42,7 @@ COMMAND_SKILLS = {
     "cicd": [
         "用 `cicd` 等当前分支 CI/CD 跑完。",
         "用 `cicd now [branch]` 看当前分支最新 CI/CD 状态。",
-        "用 `cicd run ci.yml [branch]` 触发 GitHub workflow；GitLab 用 `cicd run [branch]`。",
+        "流水线由 push 自动创建，禁止手动触发；只可用 `cicd play <job-id>` 启用 manual job。",
         "用 `cicd id <run-id-or-pipeline-id>` 等某个 run/pipeline 跑完。",
         "用 `cicd fail <run-id> [--job job-id]` 看失败日志；完整日志用 `cicd log <id>`。",
         "用 `--project owner/repo` 指定别的 GitHub/GitLab 项目；不指定则用当前 git remote。",

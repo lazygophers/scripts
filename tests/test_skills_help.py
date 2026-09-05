@@ -20,7 +20,7 @@ class TestRenderSkills(unittest.TestCase):
     def test_known_command_includes_ai_audience_and_command_guidance(self) -> None:
         out = render_skills("cicd", "轮询当前分支 CI/CD")
         self.assertIn("受众：使用本命令的 AI agent。", out)
-        self.assertIn("cicd run", out)
+        self.assertIn("cicd play", out)
         self.assertIn("cicd id", out)
         self.assertIn("cicd fail", out)
         self.assertIn("--help", out)

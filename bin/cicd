@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""cicd — 触发、查看、监听 GitHub/GitLab CI/CD
+"""cicd — 查看、监听、启用 GitHub/GitLab CI/CD
 
 常用：
-  cicd                  # 等 CI/CD 跑完
+  cicd                  # 等 CI/CD 跑完（流水线由 push 自动创建，不手动触发）
   cicd now              # 看当前状态
-  cicd run ci.yml       # 触发 GitHub workflow
+  cicd play 90947       # 启用 GitLab manual job
   cicd id 123           # 等某个 run/pipeline
   cicd fail 123         # 看失败日志
 """
@@ -14,17 +14,17 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.cicd import PollConfig, logs_cicd, status_cicd, trigger_cicd, watch_cicd
+from lib.cicd import PollConfig, logs_cicd, play_cicd, status_cicd, watch_cicd
 from lib.fire_base import BaseCli, run_cli, timed_cli
 
 
 class CicdCli(BaseCli):
-    """触发、查看、监听 GitHub/GitLab CI/CD
+    """查看、监听、启用 GitHub/GitLab CI/CD
 
     常用：
-      cicd                  # 等当前分支 CI/CD 跑完
+      cicd                  # 等当前分支 CI/CD 跑完（流水线由 push 自动创建）
       cicd now              # 看当前分支最新状态
-      cicd run ci.yml       # 触发 GitHub workflow
+      cicd play 90947       # 启用 GitLab manual job
       cicd id 123           # 等某个 run/pipeline 跑完
       cicd fail 123         # 看失败日志
     """
@@ -56,16 +56,6 @@ class CicdCli(BaseCli):
         用法: cicd now [ref] [--project owner/repo]
         """
         return status_cicd(ref, project=project)
-
-    @timed_cli
-    def run(self, workflow: str = "", ref: str | None = None, *, project: str = ""):
-        """触发 CI/CD（短命令）。
-
-        用法:
-          cicd run ci.yml
-          cicd run feat                 # GitLab
-        """
-        return trigger_cicd(workflow=workflow, ref=ref, project=project)
 
     @timed_cli
     def id(
@@ -113,14 +103,12 @@ class CicdCli(BaseCli):
         return logs_cicd(target, project=project, failed=True, job=job)
 
     @timed_cli
-    def trigger(self, workflow: str = "", ref: str | None = None, *, project: str = ""):
-        """触发 CI/CD
+    def play(self, job_id: str, *, project: str = ""):
+        """启用 manual job（只点掉已有流水线里的手动任务，不新建流水线）。
 
-        用法:
-          cicd trigger <workflow> [ref] [--project owner/repo]
-          cicd trigger [ref] [--project group/repo]  # GitLab
+        用法: cicd play <job-id> [--project group/repo]
         """
-        return trigger_cicd(workflow=workflow, ref=ref, project=project)
+        return play_cicd(job_id, project=project)
 
     @timed_cli
     def status(self, ref: str | None = None, *, project: str = ""):

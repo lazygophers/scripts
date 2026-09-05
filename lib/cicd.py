@@ -1,4 +1,4 @@
-"""CI/CD 状态查询、触发与轮询。"""
+"""CI/CD 状态查询、manual job 启用与轮询。流水线只由 push 等事件创建，不提供手动触发。"""
 
 from __future__ import annotations
 
@@ -92,11 +92,15 @@ def build_run_status_command(info: ProviderInfo, target: str) -> list[str]:
     return ["glab", "ci", "view", target, *_repo_args(info)]
 
 
-def build_trigger_command(info: ProviderInfo, *, workflow: str, ref: str) -> list[str]:
-    """按 provider 生成触发 CI/CD 命令。"""
-    if info.provider == "gh":
-        return ["gh", "workflow", "run", workflow, "--ref", ref, *_repo_args(info)]
-    return ["glab", "ci", "run", "--branch", ref, *_repo_args(info)]
+def build_play_command(info: ProviderInfo, job_id: str, *, project: str = "") -> list[str]:
+    """生成启用 GitLab manual job 的命令（不新建 pipeline）。"""
+    from urllib.parse import quote
+
+    # 显式 --project 原样使用（owner/repo 已是完整路径）；
+    # 未指定时 info.repo 从当前 git remote 解析，同为完整路径。
+    # info.host 不可用：parse_remote_url 会把 "owner/repo" 误拆成 host="owner"。
+    repo_path = project or info.repo
+    return ["glab", "api", f"projects/{quote(repo_path, safe='')}/jobs/{job_id}/play", "-X", "POST"]
 
 
 def build_logs_command(info: ProviderInfo, target: str, *, failed: bool = False, job: str = "") -> list[str]:
@@ -259,34 +263,28 @@ def status_cicd(ref: str | None = None, *, project: str = "") -> int:
     return 0 if status.state == "pass" else 1
 
 
-def trigger_cicd(workflow: str = "", ref: str | None = None, *, project: str = "") -> int:
-    """触发一次 CI/CD。GitHub 需要 workflow 名或 yml 文件；GitLab 触发分支 pipeline。"""
+def play_cicd(job_id: str, *, project: str = "") -> int:
+    """启用一个 manual job。流水线由 push 等事件自动创建，此处只点掉已有的手动任务，不新建流水线。"""
     info = _resolve_or_report(project)
     if info is None:
         return 2
-    if info.provider == "glab" and ref is None and workflow:
-        ref = workflow
-        workflow = ""
-    target_ref = _resolve_ref(ref)
-    if target_ref is None:
-        reporter(stderr=True).err("错误: 当前不是普通分支，请显式传 ref")
+    r = reporter(stderr=True)
+    if info.provider != "glab":
+        r.err("错误: play 仅支持 GitLab manual job")
         return 2
-    if info.provider == "gh" and not workflow:
-        reporter(stderr=True).err("错误: GitHub 触发 CI/CD 需要 workflow 名或文件，例如 cicd trigger ci.yml")
-        return 2
-    cmd = build_trigger_command(info, workflow=workflow, ref=target_ref)
+    cmd = build_play_command(info, job_id, project=project)
     p = run(cmd, check=False, capture_output=True)
     detail = (p.stdout or "").strip() or (p.stderr or "").strip()
-    r = reporter(stderr=True)
     if p.returncode == 0:
-        r.ok("CI/CD 已触发")
+        r.ok("manual job 已启用")
         if detail:
             r.output(detail, max_lines=80, prefix="")
         return 0
-    r.err("CI/CD 触发失败")
+    r.err("启用失败")
     if detail:
         r.output(detail, max_lines=80, prefix="")
     return p.returncode or 1
+
 
 
 def logs_cicd(target: str, *, project: str = "", failed: bool = False, job: str = "") -> int:
