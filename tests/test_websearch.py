@@ -74,6 +74,23 @@ WIKI_JSON = {
     }
 }
 
+SOGOU_HTML = """
+<div class="vrwrap"><h3><a href="/link?url=abc">知乎结果</a></h3>
+  <div class="text-layout">搜狗摘要文本</div></div>
+<div class="rb"><h3><a href="https://mp.weixin.qq.com/s?x=1">微信结果</a></h3></div>
+<div class="vrwrap"><span>无标题 dropped</span></div>
+"""
+
+SO360_HTML = """
+<li class="res-list">
+  <h3><a data-mdurl="https://example.com/real" href="https://www.so.com/link?m=x">真实链接结果</a></h3>
+  <div class="res-rich">360 摘要文本</div>
+</li>
+<li class="res-list">
+  <h3><a href="https://www.so.com/link?m=y">无 mdurl 跳转链 dropped</a></h3>
+</li>
+"""
+
 
 class TestParsers(unittest.TestCase):
     def test_parse_ddg_unwraps_redirect_and_drops_non_http(self):
@@ -129,6 +146,19 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(items[0]["snippet"], "Python is a language")
         en = websearch.parse_wikipedia(WIKI_JSON, lang="en")
         self.assertEqual(en[0]["url"], "https://en.wikipedia.org/wiki/Python_%28lang%29")
+
+    def test_parse_sogou_keeps_link_for_engine_to_resolve(self):
+        items = websearch.parse_sogou(SOGOU_HTML)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["url"], "/link?url=abc")  # 解真 URL 是 _e_sogou 的活
+        self.assertEqual(items[0]["snippet"], "搜狗摘要文本")
+        self.assertEqual(items[1]["url"], "https://mp.weixin.qq.com/s?x=1")
+
+    def test_parse_360_uses_mdurl(self):
+        items = websearch.parse_360(SO360_HTML)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["url"], "https://example.com/real")
+        self.assertEqual(items[0]["snippet"], "360 摘要文本")
 
 
 class TestSearch(unittest.TestCase):

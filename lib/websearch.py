@@ -214,6 +214,42 @@ def parse_wikipedia(data: dict, lang: str = "zh") -> list[dict]:
     return out
 
 
+def parse_sogou(html: str) -> list[dict]:
+    """解析搜狗结果页(vrwrap/rb 块;知乎类结果只有 /link 跳转,由引擎函数解真 URL)。"""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for b in soup.select("div.vrwrap, div.rb"):
+        a = b.select_one("h3 a[href]")
+        if not a:
+            continue
+        sn = b.select_one(".text-layout")
+        out.append({"url": a["href"], "title": _text(a), "snippet": _text(sn)})
+    return out
+
+
+def parse_360(html: str) -> list[dict]:
+    """解析 360 搜索结果页(li.res-list;真 URL 在 h3 a 的 data-mdurl 属性)。"""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for li in soup.select("li.res-list"):
+        a = li.select_one("h3 a")
+        if not a:
+            continue
+        url = a.get("data-mdurl") or a.get("href") or ""
+        if not url.startswith("http"):
+            continue
+        # href 会退到会话跳转链 so.com/link?m=...,只认 data-mdurl
+        if url.startswith("https://www.so.com/link"):
+            continue
+        sn = li.select_one("div.res-rich")
+        out.append({"url": url, "title": _text(a), "snippet": _text(sn)})
+    return out
+
+
 # 引擎定义:(名称, 取结果函数名, 签名 (query, timeout))。
 # 存函数名而非引用,调用时经模块属性解析 —— 方便测试 mock.patch。
 # 单引擎失败(被拦/网络)只跳过,不影响其余引擎;并行查询。
@@ -261,12 +297,39 @@ def _e_wikipedia(query, timeout):
     return []
 
 
+def _e_sogou(query, timeout):
+    """搜狗;结果页部分链接是 /link 跳转,GET 一次解 meta refresh 里的真 URL。"""
+    import re
+
+    from curl_cffi import requests
+
+    items = parse_sogou(_fetch(
+        "https://www.sogou.com/web?query=" + quote_plus(query), timeout))
+    with requests.Session(impersonate="chrome", timeout=timeout) as s:
+        for it in items:
+            if it["url"].startswith("/link"):
+                link = "https://www.sogou.com" + it["url"]
+                r = s.get(link, allow_redirects=False, headers={"Referer": "https://www.sogou.com/"})
+                # 跳转页是 meta refresh: URL='真链接'
+                m = re.search(r"URL='?([^'\">]+)", r.text[:500])
+                real = r.headers.get("Location") or (m.group(1) if m else "")
+                if real.startswith("http"):
+                    it["url"] = real
+    return [it for it in items if it["url"].startswith("http")]
+
+
+def _e_360(query, timeout):
+    return parse_360(_fetch("https://www.so.com/s?q=" + quote_plus(query), timeout))
+
+
 ENGINES: list[tuple[str, str]] = [
     ("ddg", "_e_ddg"),
     ("ddg-lite", "_e_ddg_lite"),
     ("bing", "_e_bing"),
     ("google", "_e_google"),
     ("yandex", "_e_yandex"),
+    ("sogou", "_e_sogou"),
+    ("360", "_e_360"),
     ("wikipedia", "_e_wikipedia"),
     ("github", "_e_github"),
 ]
