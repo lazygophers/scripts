@@ -48,6 +48,7 @@ TOOLS: dict[str, tuple[str, str]] = {
     "cicd": ("build/check", "轮询当前分支 CI/CD，完成后输出最终结果"),
     "cpd": ("build/check", "深度覆盖复制（新增/更新/删除可选）"),
     "webgrab": ("build/check", "抓网页转 Markdown（反爬直抓 + Playwright 渲染 + 34 站点适配 + 登录态持久化）"),
+    "websearch": ("build/check", "多引擎网页检索（DuckDuckGo→Bing 链式免 key），输出标题/URL/摘要"),
     # loop/runtime: 循环执行 / 防休眠
     "loop": ("loop/runtime", "循环执行命令并追踪结果（成功即停或指定次数）"),
     "unsleep": ("loop/runtime", "防止 macOS 系统休眠（指定时长或跟随命令）"),
