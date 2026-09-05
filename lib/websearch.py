@@ -1,7 +1,8 @@
 """websearch — 多引擎网页检索,输出 标题 / URL / 摘要。
 
-引擎全部爬网页免 key:DuckDuckGo HTML / DuckDuckGo Lite / Bing / Google。
-全部查询后按 URL 合并去重。curl_cffi 指纹直抓(与 webgrab 同源),单引擎
+引擎全部免 key:DDG / DDG-lite / Bing / Google / Yandex 爬网页,
+GitHub 爬仓库搜索页,Wikipedia 用官方免 key API(zh 查空回退 en)。
+并行查询后按 URL 合并去重。curl_cffi 指纹直抓(与 webgrab 同源),单引擎
 被拦或失败只跳过该引擎,不影响其他。结尾提示用 `webgrab <url>` 抓正文。
 """
 
@@ -155,10 +156,67 @@ def parse_google(html: str) -> list[dict]:
     return out
 
 
-# 引擎定义:(名称, 请求地址模板, 解析函数)。
+def parse_yandex(html: str) -> list[dict]:
+    """解析 Yandex 结果页(li.serp-item;链接已是真 URL 不带跳转)。"""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for li in soup.select("li.serp-item"):
+        a = li.select_one("a.Link[href]")
+        if not a or not a.get("href", "").startswith("http"):
+            continue
+        h2 = li.find("h2")
+        sn = li.select_one(".OrganicTextContentSpan, .TextContainer, "
+                           ".organic__content-wrapper")
+        out.append({"url": a["href"], "title": _text(h2) or _text(a),
+                    "snippet": _text(sn)})
+    return out
+
+
+def parse_github(html: str) -> list[dict]:
+    """解析 GitHub 仓库搜索页(div[data-testid=results-list] 下的条目)。"""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    lst = soup.select_one("div[data-testid='results-list']")
+    for item in (lst.select(":scope > div") if lst else []):
+        a = item.select_one("div.search-title a[href]")
+        if not a:
+            continue
+        href = a["href"]
+        url = ("https://github.com" + href) if href.startswith("/") else href
+        title = _text(a)
+        # 候选摘要里第一个与标题不同的(第一个 search-match 是高亮重复的仓库名)
+        snippet = ""
+        for cand in item.select("span.line-clamp-2, .search-match"):
+            txt = _text(cand)
+            if txt and txt != title:
+                snippet = txt
+                break
+        out.append({"url": url, "title": title, "snippet": snippet})
+    return out
+
+
+def parse_wikipedia(data: dict, lang: str = "zh") -> list[dict]:
+    """解析 Wikipedia query=search API 响应(search[].title/snippet)。"""
+    import re
+
+    wiki = data.get("query", {}).get("search", [])
+    out = []
+    for hit in wiki:
+        title = hit.get("title", "")
+        # snippet 是 HTML 片段,去标签
+        snippet = re.sub(r"<[^>]+>", "", hit.get("snippet", "")).strip()
+        out.append({"url": f"https://{lang}.wikipedia.org/wiki/" + quote_plus(title.replace(" ", "_")),
+                    "title": title, "snippet": snippet})
+    return out
+
+
+# 引擎定义:(名称, 取结果函数名, 签名 (query, timeout))。
 # 存函数名而非引用,调用时经模块属性解析 —— 方便测试 mock.patch。
-# 单引擎失败(被拦/网络)只跳过,不影响其余引擎。
-# ponytail: 串行抓 4 个引擎约 5-8s,嫌慢再并行化
+# 单引擎失败(被拦/网络)只跳过,不影响其余引擎;并行查询。
 def _e_ddg(query, timeout):
     return parse_ddg(_fetch("https://html.duckduckgo.com/html/?q=" + quote_plus(query), timeout))
 
@@ -177,27 +235,67 @@ def _e_google(query, timeout):
     return parse_google(_fetch("https://www.google.com/search?q=" + quote_plus(query), timeout))
 
 
+def _e_yandex(query, timeout):
+    return parse_yandex(_fetch("https://yandex.com/search/?text=" + quote_plus(query), timeout))
+
+
+def _e_github(query, timeout):
+    return parse_github(_fetch("https://github.com/search?type=repositories&q=" + quote_plus(query),
+                               timeout))
+
+
+def _e_wikipedia(query, timeout):
+    """Wikipedia 免 key 官方 API;zh 查空回退 en。"""
+    from curl_cffi import requests
+
+    params = {"action": "query", "list": "search", "format": "json", "srlimit": 5}
+    with requests.Session(impersonate="chrome", timeout=timeout) as s:
+        for lang in ("zh", "en"):
+            r = s.get(f"https://{lang}.wikipedia.org/w/api.php",
+                      params={**params, "srsearch": query}, headers=EXTRA_HEADERS)
+            if r.status_code != 200:
+                raise SearchError(f"HTTP {r.status_code}")
+            items = parse_wikipedia(r.json(), lang)
+            if items:
+                return items
+    return []
+
+
 ENGINES: list[tuple[str, str]] = [
     ("ddg", "_e_ddg"),
     ("ddg-lite", "_e_ddg_lite"),
     ("bing", "_e_bing"),
     ("google", "_e_google"),
+    ("yandex", "_e_yandex"),
+    ("wikipedia", "_e_wikipedia"),
+    ("github", "_e_github"),
 ]
 
 
 def search(query: str, limit: int = 10, engine: str | None = None,
            timeout: float = 15) -> list[dict]:
-    """检索所有引擎并按 URL 合并去重,返回最多 limit 条(首见顺序保留)。"""
+    """并行检索所有引擎,按 URL 合并去重,返回最多 limit 条(首见顺序保留)。"""
+    from concurrent.futures import ThreadPoolExecutor
+
     mod = sys.modules[__name__]
     chain = [(n, getattr(mod, fn)) for n, fn in ENGINES if not engine or n == engine]
     if not chain:
         raise SearchError(f"未知引擎: {engine}(可选: {', '.join(n for n, _ in ENGINES)})")
-    seen, results, errors = set(), [], []
-    for name, fn in chain:
+
+    def _run(nf):
+        name, fn = nf
         try:
-            items = fn(query, timeout)
-        except Exception as e:  # 网络错 / 反爬拦 / 解析空,跳过该引擎继续合并其他
-            errors.append(f"{name}: {e}")
+            return name, fn(query, timeout), ""
+        except Exception as e:  # 网络错 / 反爬拦,该引擎记错继续
+            return name, [], str(e)
+
+    with ThreadPoolExecutor(max_workers=len(chain)) as ex:
+        outcomes = dict(zip((n for n, _ in chain), ex.map(_run, chain)))
+    seen, results, errors = set(), [], []
+    for name, _fn in chain:  # 按 ENGINES 静态序合并,顺序稳定可测
+        _, items, err = outcomes[name]
+        if err:
+            errors.append(f"{name}: {err}")
             continue
         print(f"[websearch] {name} 返回 {len(items)} 条", file=sys.stderr)
         for it in items:
@@ -220,7 +318,7 @@ def list_engines() -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="websearch",
-        description="多引擎网页检索(DDG/Bing/Google 爬虫免 key,按 URL 合并去重),输出 标题 / URL / 摘要",
+        description="多引擎网页检索(DDG/Bing/Google/Yandex/GitHub/Wikipedia 全免 key,并行+按 URL 合并去重),输出 标题 / URL / 摘要",
         epilog="结果只有摘要,要看正文用: webgrab <url>\n"
                "列出引擎: websearch engines",
     )

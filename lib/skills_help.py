@@ -171,8 +171,8 @@ COMMAND_SKILLS: dict[str, list[str]] = {
     "websearch": [
         "多引擎检索并按 URL 合并去重，输出标题/URL/摘要: `websearch rust async runtime`。",
         "限条数: `websearch -n 5 <query>`；管道处理用 `websearch --json <query> | jq .[0].url`。",
-        "只用单个引擎: `websearch --engine google <query>`；看引擎列表: `websearch engines`。",
-        "全部引擎爬网页免 key（DDG/Bing/Google），单引擎被拦自动跳过。",
+        "只用单个引擎: `websearch --engine github <query>`；看引擎列表: `websearch engines`。",
+        "全部引擎免 key（DDG/Bing/Google/Yandex/GitHub/Wikipedia），并行查询，单引擎被拦自动跳过。",
         "结果只有摘要，要看正文接 `webgrab <url>`。",
     ],
     "webgrab": [

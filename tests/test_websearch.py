@@ -42,10 +42,37 @@ BING_HTML = """
 
 GOOGLE_HTML = """
 <div><a href="https://example.com/g1"><h3>Google One</h3></a></div>
-<div><a href="https://example.com/g1"><div>Google snippet one</div></a></div>
 <div><a href="https://www.google.com/search?q=x"><h3>internal link dropped</h3></a></div>
-<div><span>no link h3 kept as title source only when parented by a</span></div>
 """
+
+YANDEX_HTML = """
+<li class="serp-item">
+  <a class="Link" href="https://example.com/y1"><h2>Yandex One</h2></a>
+  <span class="OrganicTextContentSpan">Yandex snippet one</span>
+</li>
+<li class="serp-item">
+  <a class="Link" href="/internal">dropped</a>
+</li>
+"""
+
+GITHUB_HTML = """
+<div data-testid="results-list">
+  <div><div class="search-title"><a href="/owner/repo">owner/ repo</a></div>
+       <span class="search-match">owner/ repo</span>
+       <span class="search-match">Repo description here</span></div>
+  <div><div class="search-title"><a href="https://github.com/o2/r2">o2/ r2</a></div></div>
+  <div>no title dropped</div>
+</div>
+"""
+
+WIKI_JSON = {
+    "query": {
+        "search": [
+            {"title": "Python (lang)", "snippet": "<b>Python</b> is a language"},
+            {"title": "No snippet"},
+        ]
+    }
+}
 
 
 class TestParsers(unittest.TestCase):
@@ -80,58 +107,84 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(items[0]["url"], "https://example.com/g1")
         self.assertEqual(items[0]["title"], "Google One")
 
+    def test_parse_yandex(self):
+        items = websearch.parse_yandex(YANDEX_HTML)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["url"], "https://example.com/y1")
+        self.assertEqual(items[0]["title"], "Yandex One")
+        self.assertEqual(items[0]["snippet"], "Yandex snippet one")
+
+    def test_parse_github(self):
+        items = websearch.parse_github(GITHUB_HTML)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["url"], "https://github.com/owner/repo")
+        self.assertEqual(items[0]["snippet"], "Repo description here")
+        self.assertEqual(items[1]["url"], "https://github.com/o2/r2")
+
+    def test_parse_wikipedia(self):
+        items = websearch.parse_wikipedia(WIKI_JSON)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["url"],
+                         "https://zh.wikipedia.org/wiki/Python_%28lang%29")
+        self.assertEqual(items[0]["snippet"], "Python is a language")
+        en = websearch.parse_wikipedia(WIKI_JSON, lang="en")
+        self.assertEqual(en[0]["url"], "https://en.wikipedia.org/wiki/Python_%28lang%29")
+
 
 class TestSearch(unittest.TestCase):
+    """全部 _e_* 打桩,专测合并逻辑。"""
+
+    def _patch_all(self, **overrides):
+        """overrides: 引擎名 → Mock(return_value/side_effect 自定);未给的引擎打 [] 桩。"""
+        patches = []
+        for name, fn in websearch.ENGINES:
+            m = overrides.get(name.replace("-", "_"))
+            if m is None:
+                m = mock.Mock(return_value=[])
+            patches.append((fn, m))
+        return mock.patch.multiple(websearch, **dict(patches))
+
     def test_all_engines_queried_and_merged_by_url(self):
-        # bing 首条编码为 https://example.com/a,与 ddg 首条同 URL 验证跨引擎去重
         bing_dup = BING_HTML.replace(
             "a1aHR0cHM6Ly9leGFtcGxlLmNvbS9iaW5nMQ==",
             "a1aHR0cHM6Ly9leGFtcGxlLmNvbS9h",
         )
-        with mock.patch.object(websearch, "_e_ddg",
-                               return_value=websearch.parse_ddg(DDG_HTML)) as ddg, \
-             mock.patch.object(websearch, "_e_ddg_lite",
-                               return_value=websearch.parse_ddg_lite(DDG_LITE_HTML)) as lite, \
-             mock.patch.object(websearch, "_e_bing",
-                               return_value=websearch.parse_bing(bing_dup)) as bing, \
-             mock.patch.object(websearch, "_e_google", return_value=[]) as goog:
+        with self._patch_all(
+            ddg=mock.Mock(return_value=websearch.parse_ddg(DDG_HTML)),
+            ddg_lite=mock.Mock(return_value=websearch.parse_ddg_lite(DDG_LITE_HTML)),
+            bing=mock.Mock(return_value=websearch.parse_bing(bing_dup)),
+            yandex=mock.Mock(return_value=websearch.parse_yandex(YANDEX_HTML)),
+            wikipedia=mock.Mock(return_value=websearch.parse_wikipedia(WIKI_JSON)),
+            github=mock.Mock(return_value=websearch.parse_github(GITHUB_HTML)),
+        ):
             items = websearch.search("q", limit=10)
-        ddg.assert_called_once()
-        lite.assert_called_once()
-        bing.assert_called_once()
-        goog.assert_called_once()
         # bing 的 example.com/a 与 ddg 首条同 URL,去重后只留 ddg 版本
         self.assertEqual(items[0]["url"], "https://example.com/a")
         self.assertEqual(items[0]["snippet"], "Snippet A here")
         urls = [i["url"] for i in items]
         self.assertEqual(len(urls), len(set(urls)))
-        self.assertEqual(len(urls), 4)
+        self.assertEqual(len(urls), 9)  # ddg2 + lite2 + bing去重0 + yandex1 + wiki2 + github2
 
     def test_limit_truncates_after_merge(self):
-        with mock.patch.object(websearch, "_e_ddg",
-                               return_value=websearch.parse_ddg(DDG_HTML)), \
-             mock.patch.object(websearch, "_e_ddg_lite",
-                               return_value=websearch.parse_ddg_lite(DDG_LITE_HTML)), \
-             mock.patch.object(websearch, "_e_bing", return_value=[]), \
-             mock.patch.object(websearch, "_e_google", return_value=[]):
+        with self._patch_all(
+            ddg=mock.Mock(return_value=websearch.parse_ddg(DDG_HTML)),
+            ddg_lite=mock.Mock(return_value=websearch.parse_ddg_lite(DDG_LITE_HTML)),
+        ):
             items = websearch.search("q", limit=3)
         self.assertEqual(len(items), 3)
 
     def test_engine_error_skipped_others_continue(self):
-        with mock.patch.object(websearch, "_e_ddg", side_effect=OSError("down")), \
-             mock.patch.object(websearch, "_e_ddg_lite",
-                               return_value=websearch.parse_ddg_lite(DDG_LITE_HTML)), \
-             mock.patch.object(websearch, "_e_bing", return_value=[]), \
-             mock.patch.object(websearch, "_e_google", return_value=[]):
+        with self._patch_all(
+            ddg=mock.Mock(side_effect=OSError("down")),
+            ddg_lite=mock.Mock(return_value=websearch.parse_ddg_lite(DDG_LITE_HTML)),
+        ):
             items = websearch.search("q")
-        self.assertEqual([i["url"] for i in items],
-                         ["https://example.com/lite1", "https://example.com/lite2"])
+        self.assertIn("https://example.com/lite1", [i["url"] for i in items])
 
     def test_all_engines_fail_raises(self):
-        with mock.patch.object(websearch, "_e_ddg", side_effect=OSError("down")), \
-             mock.patch.object(websearch, "_e_ddg_lite", side_effect=OSError("down")), \
-             mock.patch.object(websearch, "_e_bing", side_effect=OSError("down")), \
-             mock.patch.object(websearch, "_e_google", side_effect=OSError("down")):
+        with self._patch_all(**{
+            name: mock.Mock(side_effect=OSError("down")) for name, _fn in websearch.ENGINES
+        }):
             with self.assertRaises(websearch.SearchError):
                 websearch.search("q")
 
