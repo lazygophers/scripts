@@ -1,8 +1,8 @@
 """websearch — 多引擎网页检索,输出 标题 / URL / 摘要。
 
-引擎链:DuckDuckGo HTML → DuckDuckGo Lite → Bing,依次尝试直到取够 N 条
-(全部免 key)。curl_cffi 指纹直抓(与 webgrab 同源)。结果按 URL 去重。
-结尾提示用 `webgrab <url>` 抓正文。
+引擎:DuckDuckGo HTML / DuckDuckGo Lite / Bing,全部查询后按 URL 合并去重
+(免 key)。curl_cffi 指纹直抓(与 webgrab 同源)。结尾提示用 `webgrab <url>`
+抓正文。
 """
 
 from __future__ import annotations
@@ -106,7 +106,7 @@ def parse_bing(html: str) -> list[dict]:
     return out
 
 
-# 引擎链:依次尝试直到取够 limit 条。全挂才落到下一个。
+# 引擎列表:全部查询,结果按 URL 合并去重。
 ENGINES: list[tuple[str, str, object]] = [
     ("ddg", "https://html.duckduckgo.com/html/?q=", parse_ddg),
     ("ddg-lite", "https://lite.duckduckgo.com/lite/?q=", parse_ddg_lite),
@@ -116,7 +116,7 @@ ENGINES: list[tuple[str, str, object]] = [
 
 def search(query: str, limit: int = 10, engine: str | None = None,
            timeout: float = 15) -> list[dict]:
-    """检索,返回去重后的 [{url, title, snippet}],最多 limit 条。"""
+    """检索所有引擎并按 URL 合并去重,返回最多 limit 条(首次出现顺序保留)。"""
     chain = [(n, u, p) for n, u, p in ENGINES if not engine or n == engine]
     if not chain:
         raise SearchError(f"未知引擎: {engine}(可选: {', '.join(n for n, _, _ in ENGINES)})")
@@ -124,33 +124,29 @@ def search(query: str, limit: int = 10, engine: str | None = None,
     for name, base, parser in chain:
         try:
             items = parser(_fetch(base + quote_plus(query), timeout))
-        except Exception as e:  # 网络错 / 反爬拦 / 解析空都换下一个引擎
+        except Exception as e:  # 网络错 / 反爬拦 / 解析空,跳过该引擎继续合并其他
             errors.append(f"{name}: {e}")
             continue
+        print(f"[websearch] {name} 返回 {len(items)} 条", file=sys.stderr)
         for it in items:
-            if it["url"] in seen:
-                continue
-            seen.add(it["url"])
-            results.append(it)
-            if len(results) >= limit:
-                return results
-        if items:
-            print(f"[websearch] {name} 只返回 {len(items)} 条,不够 {limit},换下一个引擎", file=sys.stderr)
+            if it["url"] not in seen:
+                seen.add(it["url"])
+                results.append(it)
     if not results:
         raise SearchError("所有引擎都没有结果: " + "; ".join(errors or ["解析到 0 条"]))
-    return results
+    return results[:limit]
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="websearch",
-        description="多引擎网页检索(DuckDuckGo → Bing 链式,免 key),输出 标题 / URL / 摘要",
+        description="多引擎网页检索(全部引擎都查,按 URL 合并去重,免 key),输出 标题 / URL / 摘要",
         epilog="结果只有摘要,要看正文用: webgrab <url>\n"
                "列出引擎: websearch engines",
     )
     p.add_argument("query", nargs="+", help="搜索词(多词直接跟在后面)")
     p.add_argument("-n", "--limit", type=int, default=10, help="最多返回几条(默认 10)")
-    p.add_argument("--engine", choices=[n for n, _, _ in ENGINES], help="只用指定引擎(默认链式全试)")
+    p.add_argument("--engine", choices=[n for n, _, _ in ENGINES], help="只用指定引擎(默认全部查询后合并)")
     p.add_argument("--json", action="store_true", help="输出 JSON(管道给 jq 用)")
     p.add_argument("--timeout", type=float, default=15, help="单引擎超时秒数(默认 15)")
     return p
@@ -160,7 +156,7 @@ def list_engines() -> int:
     """打印引擎链(名称 + 请求地址 + 顺序)。"""
     for i, (name, base, _parser) in enumerate(ENGINES, 1):
         print(f"{i}. {name}  {base}<query>")
-    print("[websearch] 默认按上面顺序链式尝试,--engine <名称> 可指定单个", file=sys.stderr)
+    print("[websearch] 默认全部查询后合并,--engine <名称> 可指定单个", file=sys.stderr)
     return 0
 
 

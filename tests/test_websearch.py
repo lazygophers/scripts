@@ -84,11 +84,32 @@ class TestSearch(unittest.TestCase):
         self.assertEqual(len(urls), len(set(urls)))
         self.assertEqual(len(urls), 2)
 
-    def test_limit_stops_early(self):
+    def test_all_engines_queried_and_merged_by_url(self):
+        bing = """
+        <li class="b_algo"><h2><a href="https://example.com/a">Example A(bing)</a></h2>
+        <div class="b_caption"><p>Bing snippet</p></div></li>
+        <li class="b_algo"><h2><a href="https://example.com/c">Example C</a></h2></li>
+        """
         with mock.patch.object(websearch, "_fetch") as fetch:
-            fetch.side_effect = [DDG_HTML]
-            items = websearch.search("q", limit=1)
-        self.assertEqual(len(items), 1)
+            fetch.side_effect = [DDG_HTML, DDG_LITE_HTML, bing]
+            items = websearch.search("q", limit=10)
+        # 三个引擎都查了;首见顺序保留,重复 URL 只留第一条(ddg 的版本)
+        self.assertEqual(
+            [i["url"] for i in items],
+            ["https://example.com/a", "https://example.com/b",
+             "https://example.com/lite1", "https://example.com/lite2",
+             "https://example.com/c"],
+        )
+        first = next(i for i in items if i["url"] == "https://example.com/a")
+        self.assertEqual(first["title"], "Example A")
+        self.assertEqual(fetch.call_count, 3)
+
+    def test_limit_truncates_after_merge(self):
+        with mock.patch.object(websearch, "_fetch") as fetch:
+            fetch.side_effect = [DDG_HTML, DDG_LITE_HTML, ""]
+            items = websearch.search("q", limit=3)
+        self.assertEqual(len(items), 3)
+        self.assertEqual(fetch.call_count, 3)  # limit 不提前截断引擎查询
 
     def test_all_engines_fail_raises(self):
         with mock.patch.object(websearch, "_fetch", side_effect=OSError("down")):
