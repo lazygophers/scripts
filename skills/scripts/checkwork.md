@@ -1,10 +1,3 @@
----
-name: checkwork
-description: 使用本仓库的 checkwork 脚本做多语言编译检查（Go/Rust/Python/Java/Node/C/C++）。当任务需要在提交或 push 前验证代码能否编译通过时使用。
----
-
-# checkwork
-
 `checkwork`：多语言编译检查（CI/CD 前置拦截器），零产物。
 
 - **Go**: `go build -v -o /dev/null`，覆盖 `cmd/`/`app/` 子目录 main 包 + 根目录，排除 `pay-core`/`*dao-*`
@@ -23,3 +16,11 @@ CHECKWORK_PARALLEL=1 checkwork   # 多语言检查点并行
 ```
 
 push_* 脚本默认在合并前后各跑一次 checkwork，`--no-check` 跳过。
+
+## check_ai
+
+探测配置的 AI API 端点连通性（最小空请求）。
+
+```bash
+check_ai probe    # 跑 AI 工作流前区分端点/鉴权/网络故障
+```

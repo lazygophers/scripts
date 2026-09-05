@@ -1,10 +1,3 @@
----
-name: pr-tools
-description: 使用本仓库的 commit / issue / mr / squash_pr 脚本自动提交、建 Issue、开 PR/MR、压缩提交。当任务涉及提交变更、创建 issue、创建合并请求或 squash PR 时使用，代替手写 git/gh 命令。
----
-
-# pr-tools
-
 四个薄壳脚本，内部调 `claude` 生成 title/body 文案。
 
 ```bash

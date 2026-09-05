@@ -1,10 +1,3 @@
----
-name: archery
-description: 使用本仓库的 archery CLI 操作 hhyo/Archery（数据库审计平台）：查实例、跑 SQL 查询、管工单、管用户。当任务涉及查数据库实例信息、在线执行 SQL 查询、提交 SQL 上线工单时使用。
----
-
-# archery
-
 Archery 的命令行客户端。配置 `~/.config/lazygophers/scripts/archery.yaml`（0600），**按域名**存多站点登录；子命令都接受 `--host <domain>` 指定站点。
 
 ```bash

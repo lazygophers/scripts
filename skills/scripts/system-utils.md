@@ -1,10 +1,3 @@
----
-name: system-utils
-description: 使用本仓库的系统/文件工具：kk（按名杀进程）、kkp（按端口杀进程）、cpd（深度覆盖复制）、loop（循环执行命令）、unsleep（防休眠）、n（语音播报）、ipinfo（内网 IP）、inject（注入 PATH）、enable/disable-ipv6。当任务涉及终止进程、目录同步复制、命令循环重试时使用。
----
-
-# system-utils
-
 ```bash
 kk <pattern>          # 按进程名（正则）终止进程，先列进程再确认
 kkp <port>            # 按端口终止进程

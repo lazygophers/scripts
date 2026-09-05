@@ -1,10 +1,3 @@
----
-name: git-workflow
-description: 使用本仓库的 merge_* / push_* / switch_branch / sync_branch / delete_branch / list_branch / fetch_all 脚本做分支合并、推送与批量分支操作。当任务涉及合并当前分支到 canary/develop/test/master、批量推送/切换/删除分支时使用，代替手写 git 命令。
----
-
-# git-workflow
-
 `bin/` 下的 git 工作流脚本（须已 `./bin/inject` 注入 PATH，或直接 `./bin/<name>` 运行）。
 
 ## 合并与推送
