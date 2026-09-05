@@ -118,7 +118,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    # argv 传 sys.argv 全量（与 cpd 约定一致），None 时 argparse 自取
+    args = build_parser().parse_args(argv[1:] if argv is not None else None)
     try:
         html, source = grab(args.url, timeout=args.timeout, force_render=args.render)
     except GrabError as e:

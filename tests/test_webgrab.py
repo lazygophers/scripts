@@ -57,18 +57,20 @@ class TestGrab(unittest.TestCase):
 
 class TestCli(unittest.TestCase):
     def test_writes_default_output(self):
-        with tempfile.TemporaryDirectory() as td:
-            with patch.object(webgrab, "fetch_direct", return_value=(200, "<html>body</html>")):
-                rc = webgrab.main(["https://example.com/page"])
-            out = Path(td) / "unused"
+        with tempfile.TemporaryDirectory() as td, \
+             patch.object(webgrab, "fetch_direct", return_value=(200, "<html>body</html>")), \
+             patch("lib.webgrab.default_output", return_value=Path(td) / "example.com.html"):
+            rc = webgrab.main(["webgrab", "https://example.com/page"])
+            written = (Path(td) / "example.com.html").read_text()
         self.assertEqual(rc, 0)
+        self.assertEqual(written, "<html>body</html>")
 
     def test_stdout_mode(self):
         import io
         buf = io.StringIO()
         with patch.object(webgrab, "fetch_direct", return_value=(200, "CONTENT")), \
              patch.object(sys, "stdout", buf):
-            rc = webgrab.main(["https://example.com", "--stdout"])
+            rc = webgrab.main(["webgrab", "https://example.com", "--stdout"])
         self.assertEqual(rc, 0)
         self.assertEqual(buf.getvalue(), "CONTENT")
 
@@ -76,7 +78,7 @@ class TestCli(unittest.TestCase):
         direct = patch.object(webgrab, "fetch_direct", return_value=(403, "nope"))
         render = patch.object(webgrab, "fetch_render", return_value="Verify you are human")
         with direct, render:
-            rc = webgrab.main(["https://example.com", "--stdout"])
+            rc = webgrab.main(["webgrab", "https://example.com", "--stdout"])
         self.assertEqual(rc, 1)
 
 
