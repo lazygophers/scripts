@@ -1,19 +1,15 @@
 """websearch — 多引擎网页检索,输出 标题 / URL / 摘要。
 
-免 key 引擎:DuckDuckGo HTML / DuckDuckGo Lite / Bing 网页版。
-API-key 引擎:Google Custom Search(key+cx)/ Brave Search(key),配置在
-~/.config/lazygophers/scripts/websearch.yaml,配了自动启用并排前面
-(去重时优先保留)。
-全部查询后按 URL 合并去重。curl_cffi 指纹直抓(与 webgrab 同源)。
-结尾提示用 `webgrab <url>` 抓正文。
+引擎全部爬网页免 key:DuckDuckGo HTML / DuckDuckGo Lite / Bing / Google。
+全部查询后按 URL 合并去重。curl_cffi 指纹直抓(与 webgrab 同源),单引擎
+被拦或失败只跳过该引擎,不影响其他。结尾提示用 `webgrab <url>` 抓正文。
 """
 
 from __future__ import annotations
 
 import argparse
-import os
+import base64
 import sys
-from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 EXTRA_HEADERS = {
@@ -21,25 +17,9 @@ EXTRA_HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
 
-CONFIG_PATH = Path(
-    os.environ.get("WEBSEARCH_CONFIG")
-    or Path.home() / ".config/lazygophers/scripts/websearch.yaml"
-)
-
 
 class SearchError(RuntimeError):
     pass
-
-
-def load_keys() -> dict:
-    """读 key 配置,文件不存在返回空 dict。"""
-    import yaml
-
-    try:
-        data = yaml.safe_load(CONFIG_PATH.read_text()) or {}
-    except FileNotFoundError:
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 def _fetch(url: str, timeout: float) -> str:
@@ -51,22 +31,6 @@ def _fetch(url: str, timeout: float) -> str:
         if r.status_code != 200:
             raise SearchError(f"HTTP {r.status_code}")
         return r.text
-
-
-def _fetch_json(url: str, params: dict, timeout: float, headers: dict | None = None) -> dict:
-    """curl_cffi GET JSON,非 200 时带服务端错误消息抛出。"""
-    from curl_cffi import requests
-
-    with requests.Session(impersonate="chrome", timeout=timeout) as s:
-        r = s.get(url, params=params, headers=headers or {})
-        if r.status_code != 200:
-            msg = ""
-            try:
-                msg = r.json().get("error", {}).get("message", "")
-            except Exception:
-                pass
-            raise SearchError(f"HTTP {r.status_code} {msg}".strip())
-        return r.json()
 
 
 def _unwrap_ddg(href: str) -> str:
@@ -82,8 +46,6 @@ def _unwrap_ddg(href: str) -> str:
 
 def _unwrap_bing(href: str) -> str:
     """Bing 结果链接是 bing.com/ck/a?...&u=a1<base64>,解出真 URL。"""
-    import base64
-
     parsed = urlparse(href)
     if parsed.netloc.endswith("bing.com") and parsed.path.startswith("/ck/"):
         u = parse_qs(parsed.query).get("u", [""])[0]
@@ -154,10 +116,7 @@ def parse_bing(html: str) -> list[dict]:
         a = li.select_one("h2 a")
         if not a or not a.get("href"):
             continue
-        url = a["href"]
-        if not url.startswith("http"):
-            continue
-        url = _unwrap_bing(url)
+        url = _unwrap_bing(a["href"])
         if not url.startswith("http"):
             continue
         cap = li.select_one(".b_caption p, .b_caption")
@@ -165,97 +124,79 @@ def parse_bing(html: str) -> list[dict]:
     return out
 
 
-def parse_google(data: dict) -> list[dict]:
-    """解析 Google Custom Search JSON API 响应(items[].link/title/snippet)。"""
-    return [
-        {"url": i.get("link", ""), "title": i.get("title", ""), "snippet": i.get("snippet", "")}
-        for i in data.get("items", [])
-        if i.get("link")
-    ]
+def parse_google(html: str) -> list[dict]:
+    """解析 Google 结果页(含 h3 标题的非站内链接)。
+
+    Google 的结果容器 class 常变,锚点是「<a href> 里套 <h3>」这个稳定结构;
+    摘要类名 VwiC3b 同样不稳,取不到就空,不猜。
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for h3 in soup.find_all("h3"):
+        a = h3.find_parent("a", href=True)
+        if not a:
+            continue
+        parsed = urlparse(a["href"])
+        host = parsed.netloc.lower()
+        if not host or host.endswith("google.com"):
+            continue
+        # 摘要:结果容器(a 的祖先 div)里的文本块,标题除外
+        snippet = ""
+        container = a.find_parent("div")
+        if container:
+            for div in container.find_all("div", recursive=False):
+                txt = _text(div)
+                if txt and txt != _text(h3):
+                    snippet = txt
+                    break
+        out.append({"url": a["href"], "title": _text(h3), "snippet": snippet})
+    return out
 
 
-def parse_brave(data: dict) -> list[dict]:
-    """解析 Brave Search API 响应(web.results[].url/title/description)。"""
-    results = (data.get("web") or {}).get("results") or []
-    return [
-        {"url": r.get("url", ""), "title": r.get("title", ""), "snippet": r.get("description", "")}
-        for r in results
-        if r.get("url")
-    ]
-
-
-# 引擎定义:(名称, 取结果函数名(签名 (query, timeout, cfg)), 是否需要 key)。
+# 引擎定义:(名称, 请求地址模板, 解析函数)。
 # 存函数名而非引用,调用时经模块属性解析 —— 方便测试 mock.patch。
-# key 引擎配置了才参与;参与时排免 key 引擎前面(质量优先,去重先保留)。
-# ponytail: 引擎顺序 = 静态声明序,6 个以上再抽 priority 字段
-def _e_ddg(query, timeout, cfg):
+# 单引擎失败(被拦/网络)只跳过,不影响其余引擎。
+# ponytail: 串行抓 4 个引擎约 5-8s,嫌慢再并行化
+def _e_ddg(query, timeout):
     return parse_ddg(_fetch("https://html.duckduckgo.com/html/?q=" + quote_plus(query), timeout))
 
 
-def _e_ddg_lite(query, timeout, cfg):
+def _e_ddg_lite(query, timeout):
     return parse_ddg_lite(_fetch("https://lite.duckduckgo.com/lite/?q=" + quote_plus(query), timeout))
 
 
-def _e_bing(query, timeout, cfg):
+def _e_bing(query, timeout):
     return parse_bing(_fetch("https://www.bing.com/search?q=" + quote_plus(query), timeout))
 
 
-def _e_google(query, timeout, cfg):
-    data = _fetch_json("https://www.googleapis.com/customsearch/v1", {
-        "key": cfg["api_key"], "cx": cfg["cx"], "q": query, "num": 10,
-    }, timeout)
-    return parse_google(data)
+def _e_google(query, timeout):
+    # 注意: Google 按出口 IP 风控,被标记的 IP 会拿到「请启用 JS」/ reCAPTCHA
+    # 中间页(解析为 0 条,自动跳过该引擎);渲染也过不了 reCAPTCHA,不做回退
+    return parse_google(_fetch("https://www.google.com/search?q=" + quote_plus(query), timeout))
 
 
-def _e_brave(query, timeout, cfg):
-    data = _fetch_json("https://api.search.brave.com/res/v1/web/search",
-                       {"q": query, "count": 10}, timeout,
-                       {"X-Subscription-Token": cfg["api_key"], "Accept": "application/json"})
-    return parse_brave(data)
-
-
-ENGINES: list[tuple[str, str, bool]] = [
-    ("google", "_e_google", True),
-    ("brave", "_e_brave", True),
-    ("ddg", "_e_ddg", False),
-    ("ddg-lite", "_e_ddg_lite", False),
-    ("bing", "_e_bing", False),
+ENGINES: list[tuple[str, str]] = [
+    ("ddg", "_e_ddg"),
+    ("ddg-lite", "_e_ddg_lite"),
+    ("bing", "_e_bing"),
+    ("google", "_e_google"),
 ]
-
-# Google Custom Search 官方要求 cx;Brave 只要 api_key
-_ENGINE_KEYS: dict[str, tuple[str, ...]] = {
-    "google": ("api_key", "cx"),
-    "brave": ("api_key",),
-}
-
-
-def _ready(cfg: dict, name: str) -> bool:
-    """key 引擎配置齐了没(google 要 api_key+cx,brave 要 api_key)。"""
-    return all(cfg.get(k) for k in _ENGINE_KEYS.get(name, ()))
 
 
 def search(query: str, limit: int = 10, engine: str | None = None,
            timeout: float = 15) -> list[dict]:
-    """检索所有参与引擎并按 URL 合并去重,返回最多 limit 条(首见顺序保留)。
-
-    key 引擎配好 key 才参与;--engine 指定未配置的 key 引擎时报错。
-    """
-    keys = load_keys()
+    """检索所有引擎并按 URL 合并去重,返回最多 limit 条(首见顺序保留)。"""
     mod = sys.modules[__name__]
-    chain = [(n, getattr(mod, fn)) for n, fn, _keyed in ENGINES if not engine or n == engine]
+    chain = [(n, getattr(mod, fn)) for n, fn in ENGINES if not engine or n == engine]
     if not chain:
-        raise SearchError(f"未知引擎: {engine}(可选: {', '.join(n for n, _, _ in ENGINES)})")
+        raise SearchError(f"未知引擎: {engine}(可选: {', '.join(n for n, _ in ENGINES)})")
     seen, results, errors = set(), [], []
     for name, fn in chain:
-        cfg = keys.get(name) or {}
-        if name in _ENGINE_KEYS and not _ready(cfg, name):
-            if engine == name:
-                raise SearchError(
-                    f"引擎 {name} 未配置 key,在 {CONFIG_PATH} 填 {list(_ENGINE_KEYS[name])}")
-            continue
         try:
-            items = fn(query, timeout, cfg)
-        except Exception as e:  # 网络错 / 反爬拦 / key 无效,跳过该引擎继续合并其他
+            items = fn(query, timeout)
+        except Exception as e:  # 网络错 / 反爬拦 / 解析空,跳过该引擎继续合并其他
             errors.append(f"{name}: {e}")
             continue
         print(f"[websearch] {name} 返回 {len(items)} 条", file=sys.stderr)
@@ -268,40 +209,25 @@ def search(query: str, limit: int = 10, engine: str | None = None,
     return results[:limit]
 
 
-def _mask(v: str) -> str:
-    """key 预览:前 4 位 + ***。"""
-    return (v[:4] + "***") if v else "(空)"
-
-
 def list_engines() -> int:
-    """打印全部引擎 + key 配置状态。"""
-    keys = load_keys()
-    print(f"配置文件: {CONFIG_PATH}")
-    for i, (name, _fn, keyed) in enumerate(ENGINES, 1):
-        if not keyed:
-            print(f"{i}. {name}  免key")
-        else:
-            cfg = keys.get(name) or {}
-            fields = ", ".join(
-                f"{k}={_mask(str(cfg.get(k) or ''))}" for k in _ENGINE_KEYS[name]
-            )
-            state = "已配置" if _ready(cfg, name) else "未配置(跳过)"
-            print(f"{i}. {name}  需key: {fields}  {state}")
-    print("[websearch] 已配置的 key 引擎自动参与并排前面,--engine <名称> 可指定单个", file=sys.stderr)
+    """打印全部引擎。"""
+    for i, (name, _fn) in enumerate(ENGINES, 1):
+        print(f"{i}. {name}")
+    print("[websearch] 默认全部查询后按 URL 合并,--engine <名称> 可指定单个", file=sys.stderr)
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="websearch",
-        description="多引擎网页检索(全部参与引擎都查,按 URL 合并去重),输出 标题 / URL / 摘要",
+        description="多引擎网页检索(DDG/Bing/Google 爬虫免 key,按 URL 合并去重),输出 标题 / URL / 摘要",
         epilog="结果只有摘要,要看正文用: webgrab <url>\n"
-               "列出引擎与 key 状态: websearch engines",
+               "列出引擎: websearch engines",
     )
     p.add_argument("query", nargs="+", help="搜索词(多词直接跟在后面)")
     p.add_argument("-n", "--limit", type=int, default=10, help="最多返回几条(默认 10)")
-    p.add_argument("--engine", choices=[n for n, _, _ in ENGINES],
-                   help="只用指定引擎(默认全部参与引擎)")
+    p.add_argument("--engine", choices=[n for n, _ in ENGINES],
+                   help="只用指定引擎(默认全部引擎)")
     p.add_argument("--json", action="store_true", help="输出 JSON(管道给 jq 用)")
     p.add_argument("--timeout", type=float, default=15, help="单引擎超时秒数(默认 15)")
     return p
@@ -314,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
         from lib.skills_help import command_name, render_skills
         print(render_skills(command_name(argv[0]), __doc__))
         return 0
-    # engines 子命令直接列出引擎与配置状态,不进 argparse
+    # engines 子命令直接列出引擎,不进 argparse
     if rest[0] == "engines":
         return list_engines()
     args = build_parser().parse_args(rest)
