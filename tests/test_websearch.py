@@ -1,8 +1,7 @@
-"""websearch 单元测试:解析器、去重、引擎链回退、CLI 输出。"""
+"""websearch 单元测试:解析器、去重、引擎合并、key 引擎、CLI 输出。"""
 
 import io
 import json
-import sys
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from unittest import mock
@@ -41,6 +40,23 @@ BING_HTML = """
 </li>
 """
 
+GOOGLE_JSON = {
+    "items": [
+        {"link": "https://example.com/a", "title": "Example A", "snippet": "Google snippet"},
+        {"link": "https://example.com/g2", "title": "G Two", "snippet": ""},
+        {"title": "no link dropped"},
+    ]
+}
+
+BRAVE_JSON = {
+    "web": {
+        "results": [
+            {"url": "https://example.com/br1", "title": "Brave One", "description": "Brave snippet"},
+            {"url": "", "title": "no url dropped"},
+        ]
+    }
+}
+
 
 class TestParsers(unittest.TestCase):
     def test_parse_ddg_unwraps_redirect_and_drops_non_http(self):
@@ -64,61 +80,94 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(items[0]["url"], "https://example.com/bing1")
         self.assertEqual(items[0]["snippet"], "Bing snippet one")
 
+    def test_parse_google(self):
+        items = websearch.parse_google(GOOGLE_JSON)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["url"], "https://example.com/a")
+        self.assertEqual(items[0]["snippet"], "Google snippet")
+
+    def test_parse_brave(self):
+        items = websearch.parse_brave(BRAVE_JSON)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["url"], "https://example.com/br1")
+        self.assertEqual(items[0]["snippet"], "Brave snippet")
+
 
 class TestSearch(unittest.TestCase):
-    def test_chain_falls_through_on_error(self):
-        with mock.patch.object(websearch, "_fetch", side_effect=OSError("boom")) as fetch:
-            fetch.side_effect = [
-                OSError("ddg down"),
-                DDG_LITE_HTML,
-            ]
-            items = websearch.search("q", limit=5)
-        self.assertEqual([i["url"] for i in items],
-                         ["https://example.com/lite1", "https://example.com/lite2"])
+    def _no_keys(self):
+        return mock.patch.object(websearch, "load_keys", return_value={})
 
-    def test_dedupe_across_engines(self):
-        with mock.patch.object(websearch, "_fetch") as fetch:
-            fetch.side_effect = [DDG_HTML, DDG_HTML]  # 同一批结果出现两次
-            items = websearch.search("q", limit=10)
-        urls = [i["url"] for i in items]
-        self.assertEqual(len(urls), len(set(urls)))
-        self.assertEqual(len(urls), 2)
+    def test_keyless_only_when_no_config(self):
+        with self._no_keys():
+            # google/brave 没配置被跳过: 三个免 key 引擎取数函数被各调一次
+            with mock.patch.object(websearch, "_e_ddg",
+                                   return_value=websearch.parse_ddg(DDG_HTML)) as ddg, \
+                 mock.patch.object(websearch, "_e_ddg_lite", return_value=[]) as lite, \
+                 mock.patch.object(websearch, "_e_bing", return_value=[]) as bing:
+                websearch.search("q")
+        ddg.assert_called_once()
+        lite.assert_called_once()
+        bing.assert_called_once()
 
     def test_all_engines_queried_and_merged_by_url(self):
-        bing = """
-        <li class="b_algo"><h2><a href="https://example.com/a">Example A(bing)</a></h2>
-        <div class="b_caption"><p>Bing snippet</p></div></li>
-        <li class="b_algo"><h2><a href="https://example.com/c">Example C</a></h2></li>
-        """
-        with mock.patch.object(websearch, "_fetch") as fetch:
-            fetch.side_effect = [DDG_HTML, DDG_LITE_HTML, bing]
-            items = websearch.search("q", limit=10)
-        # 三个引擎都查了;首见顺序保留,重复 URL 只留第一条(ddg 的版本)
-        self.assertEqual(
-            [i["url"] for i in items],
-            ["https://example.com/a", "https://example.com/b",
-             "https://example.com/lite1", "https://example.com/lite2",
-             "https://example.com/c"],
-        )
-        first = next(i for i in items if i["url"] == "https://example.com/a")
-        self.assertEqual(first["title"], "Example A")
-        self.assertEqual(fetch.call_count, 3)
+        bing = BING_HTML.replace("https://example.com/bing1", "https://example.com/a")
+        google_items = websearch.parse_google(GOOGLE_JSON)
+        keys = {"google": {"api_key": "k", "cx": "c"}, "brave": {"api_key": "b"}}
+        with mock.patch.object(websearch, "load_keys", return_value=keys):
+            with mock.patch.object(websearch, "_e_google", return_value=google_items) as g, \
+                 mock.patch.object(websearch, "_e_brave",
+                                   mock.Mock(return_value=[{"url": "https://example.com/br1",
+                                                            "title": "Brave One",
+                                                            "snippet": "s"}])) as b, \
+                 mock.patch.object(websearch, "_e_ddg", return_value=websearch.parse_ddg(DDG_HTML)), \
+                 mock.patch.object(websearch, "_e_ddg_lite",
+                                   return_value=websearch.parse_ddg_lite(DDG_LITE_HTML)), \
+                 mock.patch.object(websearch, "_e_bing",
+                                   mock.Mock(return_value=websearch.parse_bing(bing))):
+                items = websearch.search("q", limit=10)
+        g.assert_called_once()
+        b.assert_called_once()
+        # google 排最前,其 Example A 先占位;bing 的同 URL 版本被去重
+        self.assertEqual(items[0]["url"], "https://example.com/a")
+        self.assertEqual(items[0]["snippet"], "Google snippet")
+        urls = [i["url"] for i in items]
+        self.assertEqual(len(urls), len(set(urls)))
+        self.assertIn("https://example.com/br1", urls)
 
     def test_limit_truncates_after_merge(self):
-        with mock.patch.object(websearch, "_fetch") as fetch:
-            fetch.side_effect = [DDG_HTML, DDG_LITE_HTML, ""]
-            items = websearch.search("q", limit=3)
+        with self._no_keys():
+            with mock.patch.object(websearch, "_e_ddg", return_value=websearch.parse_ddg(DDG_HTML)), \
+                 mock.patch.object(websearch, "_e_ddg_lite",
+                                   return_value=websearch.parse_ddg_lite(DDG_LITE_HTML)), \
+                 mock.patch.object(websearch, "_e_bing", return_value=[]):
+                items = websearch.search("q", limit=3)
         self.assertEqual(len(items), 3)
-        self.assertEqual(fetch.call_count, 3)  # limit 不提前截断引擎查询
+
+    def test_engine_not_configured_raises_when_forced(self):
+        with self._no_keys():
+            with self.assertRaises(websearch.SearchError) as cm:
+                websearch.search("q", engine="google")
+        self.assertIn("未配置", str(cm.exception))
+
+    def test_engine_not_configured_skipped_when_default(self):
+        with self._no_keys():
+            with mock.patch.object(websearch, "_e_ddg", return_value=websearch.parse_ddg(DDG_HTML)), \
+                 mock.patch.object(websearch, "_e_ddg_lite", return_value=[]), \
+                 mock.patch.object(websearch, "_e_bing", return_value=[]):
+                items = websearch.search("q")
+        self.assertEqual(len(items), 2)  # 正常返回,key 引擎静默跳过
 
     def test_all_engines_fail_raises(self):
-        with mock.patch.object(websearch, "_fetch", side_effect=OSError("down")):
-            with self.assertRaises(websearch.SearchError):
-                websearch.search("q")
+        with self._no_keys():
+            with mock.patch.object(websearch, "_e_ddg", side_effect=OSError("down")), \
+                 mock.patch.object(websearch, "_e_ddg_lite", side_effect=OSError("down")), \
+                 mock.patch.object(websearch, "_e_bing", side_effect=OSError("down")):
+                with self.assertRaises(websearch.SearchError):
+                    websearch.search("q")
 
     def test_unknown_engine_raises(self):
         with self.assertRaises(websearch.SearchError):
-            websearch.search("q", engine="google")
+            websearch.search("q", engine="google-x")
 
 
 class TestCli(unittest.TestCase):
@@ -153,14 +202,19 @@ class TestCli(unittest.TestCase):
         self.assertIn("# websearch skills", buf.getvalue())
         s.assert_not_called()
 
-    def test_main_engines_lists_all(self):
-        buf, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(buf), redirect_stderr(err):
-            rc = websearch.main(["websearch", "engines"])
+    def test_main_engines_lists_all_and_key_status(self):
+        buf = io.StringIO()
+        with mock.patch.object(websearch, "load_keys",
+                               return_value={"google": {"api_key": "abcd1234", "cx": "cx1"}}):
+            with redirect_stdout(buf), redirect_stderr(io.StringIO()):
+                rc = websearch.main(["websearch", "engines"])
         self.assertEqual(rc, 0)
         out = buf.getvalue()
         for name, _, _ in websearch.ENGINES:
             self.assertIn(name, out)
+        self.assertIn("abcd***", out)
+        self.assertIn("已配置", out)
+        self.assertIn("未配置(跳过)", out)
 
     def test_main_failure_exit_1(self):
         err = io.StringIO()

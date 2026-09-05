@@ -171,7 +171,8 @@ COMMAND_SKILLS: dict[str, list[str]] = {
     "websearch": [
         "多引擎检索并按 URL 合并去重，输出标题/URL/摘要: `websearch rust async runtime`。",
         "限条数: `websearch -n 5 <query>`；管道处理用 `websearch --json <query> | jq .[0].url`。",
-        "只用单个引擎: `websearch --engine bing <query>`；看引擎列表: `websearch engines`。",
+        "只用单个引擎: `websearch --engine bing <query>`；看引擎与 key 状态: `websearch engines`。",
+        "Google/Brave API-key 引擎: 在 ~/.config/lazygophers/scripts/websearch.yaml 配 api_key（google 另需 cx），配好自动参与。",
         "结果只有摘要，要看正文接 `webgrab <url>`。",
     ],
     "webgrab": [
