@@ -22,6 +22,11 @@ EXTRA_HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
 
+CONFIG_PATH = Path(
+    os.environ.get("WEBSEARCH_CONFIG")
+    or Path.home() / ".config/lazygophers/scripts/websearch.yaml"
+)
+
 
 class SearchError(RuntimeError):
     pass
@@ -383,38 +388,38 @@ def load_searx_instances(timeout: float = 15) -> list[str]:
 # 引擎定义:(名称, 取结果函数名, 签名 (query, timeout))。
 # 存函数名而非引用,调用时经模块属性解析 —— 方便测试 mock.patch。
 # 单引擎失败(被拦/网络)只跳过,不影响其余引擎;并行查询。
-def _e_ddg(query, timeout):
+def _e_ddg(query, timeout, limit):
     return parse_ddg(_fetch("https://html.duckduckgo.com/html/?q=" + quote_plus(query), timeout))
 
 
-def _e_ddg_lite(query, timeout):
+def _e_ddg_lite(query, timeout, limit):
     return parse_ddg_lite(_fetch("https://lite.duckduckgo.com/lite/?q=" + quote_plus(query), timeout))
 
 
-def _e_bing(query, timeout):
+def _e_bing(query, timeout, limit):
     return parse_bing(_fetch("https://www.bing.com/search?q=" + quote_plus(query), timeout))
 
 
-def _e_google(query, timeout):
+def _e_google(query, timeout, limit):
     # 注意: Google 按出口 IP 风控,被标记的 IP 会拿到「请启用 JS」/ reCAPTCHA
     # 中间页(解析为 0 条,自动跳过该引擎);渲染也过不了 reCAPTCHA,不做回退
     return parse_google(_fetch("https://www.google.com/search?q=" + quote_plus(query), timeout))
 
 
-def _e_yandex(query, timeout):
+def _e_yandex(query, timeout, limit):
     return parse_yandex(_fetch("https://yandex.com/search/?text=" + quote_plus(query), timeout))
 
 
-def _e_github(query, timeout):
+def _e_github(query, timeout, limit):
     return parse_github(_fetch("https://github.com/search?type=repositories&q=" + quote_plus(query),
                                timeout))
 
 
-def _e_wikipedia(query, timeout):
+def _e_wikipedia(query, timeout, limit):
     """Wikipedia 免 key 官方 API;zh 查空回退 en。"""
     from curl_cffi import requests
 
-    params = {"action": "query", "list": "search", "format": "json", "srlimit": 5}
+    params = {"action": "query", "list": "search", "format": "json", "srlimit": limit}
     with requests.Session(impersonate="chrome", timeout=timeout) as s:
         for lang in ("zh", "en"):
             r = s.get(f"https://{lang}.wikipedia.org/w/api.php",
@@ -427,7 +432,7 @@ def _e_wikipedia(query, timeout):
     return []
 
 
-def _e_sogou(query, timeout):
+def _e_sogou(query, timeout, limit):
     """搜狗;结果页部分链接是 /link 跳转,GET 一次解 meta refresh 里的真 URL。"""
     import re
 
@@ -448,36 +453,36 @@ def _e_sogou(query, timeout):
     return [it for it in items if it["url"].startswith("http")]
 
 
-def _e_360(query, timeout):
+def _e_360(query, timeout, limit):
     return parse_360(_fetch("https://www.so.com/s?q=" + quote_plus(query), timeout))
 
 
-def _e_arxiv(query, timeout):
+def _e_arxiv(query, timeout, limit):
     """arXiv 官方免 key API(Atom XML)。"""
     from curl_cffi import requests
 
     with requests.Session(impersonate="chrome", timeout=timeout) as s:
         r = s.get("https://export.arxiv.org/api/query",
-                  params={"search_query": "all:" + query, "max_results": 5})
+                  params={"search_query": "all:" + query, "max_results": limit})
         if r.status_code != 200:
             raise SearchError(f"HTTP {r.status_code}")
         return parse_arxiv(r.text)
 
 
-def _e_crossref(query, timeout):
+def _e_crossref(query, timeout, limit):
     """Crossref 官方免 key API(跨库论文 DOI 元数据)。"""
     from curl_cffi import requests
 
     with requests.Session(impersonate="chrome", timeout=timeout) as s:
         r = s.get("https://api.crossref.org/works",
-                  params={"query": query, "rows": 5,
+                  params={"query": query, "rows": limit,
                           "select": "title,URL,abstract"})
         if r.status_code != 200:
             raise SearchError(f"HTTP {r.status_code}")
         return parse_crossref(r.json())
 
 
-def _e_pubmed(query, timeout):
+def _e_pubmed(query, timeout, limit):
     """PubMed 官方免 key API(esearch 拿 id → esummary 拿标题)。
 
     eutils 对 chrome TLS 指纹直接 reset,这里用朴素请求。
@@ -486,7 +491,7 @@ def _e_pubmed(query, timeout):
 
     with requests.Session(timeout=timeout) as s:
         r = s.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-                  params={"db": "pubmed", "term": query, "retmode": "json", "retmax": 5})
+                  params={"db": "pubmed", "term": query, "retmode": "json", "retmax": limit})
         if r.status_code != 200:
             raise SearchError(f"HTTP {r.status_code}")
         ids = r.json().get("esearchresult", {}).get("idlist", [])
@@ -522,7 +527,7 @@ def _promote_searx(url: str, instances: list[str]) -> None:
     SEARX_CACHE.write_text(json.dumps(cache))
 
 
-def _e_searx(query, timeout):
+def _e_searx(query, timeout, limit):
     """SearXNG 元搜索:实例列表来自 searx.space(本地缓存),逐个试到出结果。"""
     instances = load_searx_instances(timeout)
     errors = []
@@ -557,20 +562,50 @@ ENGINES: list[tuple[str, str]] = [
 ]
 
 
+# 默认只启用这些引擎;其余(ddg-lite/yandex/搜狗/360/crossref/pubmed)要
+# --engine 指定或在配置文件 engines: 里列出才参与。
+DEFAULT_ENGINES = ["ddg", "bing", "google", "searx", "wikipedia", "github", "arxiv"]
+
+
+def load_config() -> dict:
+    """读 ~/.config/lazygophers/scripts/websearch.yaml(可被 WEBSEARCH_CONFIG 覆盖)。"""
+    import yaml
+
+    try:
+        data = yaml.safe_load(CONFIG_PATH.read_text()) or {}
+    except FileNotFoundError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _active_engines(engine: str | None) -> list[str]:
+    """本次参与的引擎:--engine 指定 > 配置文件 engines: > DEFAULT_ENGINES。"""
+    if engine:
+        names = [engine]
+    else:
+        cfg = load_config().get("engines")
+        names = [e.strip() for e in cfg if str(e).strip()] if isinstance(cfg, list) else DEFAULT_ENGINES
+    known = {n for n, _ in ENGINES}
+    unknown = [n for n in names if n not in known]
+    if unknown:
+        raise SearchError(f"未知引擎: {', '.join(unknown)}(可选: {', '.join(n for n, _ in ENGINES)})")
+    return names
+
+
 def search(query: str, limit: int = 10, engine: str | None = None,
            timeout: float = 15) -> list[dict]:
-    """并行检索所有引擎,按 URL 合并去重,返回最多 limit 条(首见顺序保留)。"""
+    """并行检索参与引擎(limit = 每引擎抓取条数),按 URL 合并去重,
+    返回全部去重结果(首见顺序保留)。"""
     from concurrent.futures import ThreadPoolExecutor
 
     mod = sys.modules[__name__]
-    chain = [(n, getattr(mod, fn)) for n, fn in ENGINES if not engine or n == engine]
-    if not chain:
-        raise SearchError(f"未知引擎: {engine}(可选: {', '.join(n for n, _ in ENGINES)})")
+    names = _active_engines(engine)
+    chain = [(n, getattr(mod, fn)) for n, fn in ENGINES if n in names]
 
     def _run(nf):
         name, fn = nf
         try:
-            return name, fn(query, timeout), ""
+            return name, fn(query, timeout, limit), ""
         except Exception as e:  # 网络错 / 反爬拦,该引擎记错继续
             return name, [], str(e)
 
@@ -584,31 +619,37 @@ def search(query: str, limit: int = 10, engine: str | None = None,
             continue
         print(f"[websearch] {name} 返回 {len(items)} 条", file=sys.stderr)
         for it in items:
-            if it["url"] not in seen:
-                seen.add(it["url"])
+            # 去重键做归一化:百分号解码 + 去尾斜杠,同页不同写法算同一条
+            key = unquote(it["url"]).rstrip("/")
+            if key not in seen:
+                seen.add(key)
                 results.append(it)
     if not results:
         raise SearchError("所有引擎都没有结果: " + "; ".join(errors or ["解析到 0 条"]))
-    return results[:limit]
+    return results
 
 
 def list_engines() -> int:
-    """打印全部引擎。"""
+    """打印全部引擎 + 默认启用状态。"""
+    active = set(_active_engines(None))
     for i, (name, _fn) in enumerate(ENGINES, 1):
-        print(f"{i}. {name}")
-    print("[websearch] 默认全部查询后按 URL 合并,--engine <名称> 可指定单个", file=sys.stderr)
+        mark = "*" if name in active else " "
+        print(f"{mark}{i}. {name}")
+    print("[websearch] * = 默认启用;--engine <名称> 单独指定,或配置文件 engines: 改默认集", file=sys.stderr)
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="websearch",
-        description="多引擎网页检索(DDG/Bing/Google/Yandex/GitHub/Wikipedia 全免 key,并行+按 URL 合并去重,含 arXiv/Crossref/PubMed 学术源),输出 标题 / URL / 摘要",
+        description="多引擎网页检索(全免 key,每引擎抓 limit 条后按 URL 合并去重),输出 标题 / URL / 摘要",
         epilog="结果只有摘要,要看正文用: webgrab <url>\n"
-               "列出引擎: websearch engines",
+               "列出引擎(*=默认启用): websearch engines\n"
+               "默认引擎集可在 ~/.config/lazygophers/scripts/websearch.yaml 配 engines: [..]",
     )
     p.add_argument("query", nargs="+", help="搜索词(多词直接跟在后面)")
-    p.add_argument("-n", "--limit", type=int, default=10, help="最多返回几条(默认 10)")
+    p.add_argument("-n", "--limit", type=int, default=10,
+                   help="每个引擎抓几条(默认 10;合并去重后可能少于引擎总数)")
     p.add_argument("--engine", choices=[n for n, _ in ENGINES],
                    help="只用指定引擎(默认全部引擎)")
     p.add_argument("--json", action="store_true", help="输出 JSON(管道给 jq 用)")

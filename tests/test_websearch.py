@@ -318,7 +318,9 @@ class TestSearch(unittest.TestCase):
             "a1aHR0cHM6Ly9leGFtcGxlLmNvbS9iaW5nMQ==",
             "a1aHR0cHM6Ly9leGFtcGxlLmNvbS9h",
         )
-        with self._patch_all(
+        with mock.patch.object(websearch, "_active_engines",
+                               return_value=[n for n, _ in websearch.ENGINES]), \
+             self._patch_all(
             ddg=mock.Mock(return_value=websearch.parse_ddg(DDG_HTML)),
             ddg_lite=mock.Mock(return_value=websearch.parse_ddg_lite(DDG_LITE_HTML)),
             bing=mock.Mock(return_value=websearch.parse_bing(bing_dup)),
@@ -334,16 +336,58 @@ class TestSearch(unittest.TestCase):
         self.assertEqual(len(urls), len(set(urls)))
         self.assertEqual(len(urls), 9)  # ddg2 + lite2 + bing去重0 + yandex1 + wiki2 + github2
 
-    def test_limit_truncates_after_merge(self):
-        with self._patch_all(
-            ddg=mock.Mock(return_value=websearch.parse_ddg(DDG_HTML)),
-            ddg_lite=mock.Mock(return_value=websearch.parse_ddg_lite(DDG_LITE_HTML)),
+    def test_limit_is_per_engine_not_output_cap(self):
+        # limit 传给每个引擎;合并结果不再截断
+        seen = {}
+
+        def fake(name, n):
+            def fn(query, timeout, limit):
+                seen[name] = limit
+                return [{"url": f"https://example.com/{name}{i}"} for i in range(n)]
+            return fn
+
+        with mock.patch.multiple(
+            websearch,
+            _e_ddg=mock.MagicMock(side_effect=fake("ddg", 10)),
+            _e_bing=mock.MagicMock(side_effect=fake("bing", 8)),
+            _e_wikipedia=mock.MagicMock(return_value=[]),
+            _e_google=mock.MagicMock(return_value=[]),
+            _e_searx=mock.MagicMock(return_value=[]),
+            _e_github=mock.MagicMock(return_value=[]),
+            _e_arxiv=mock.MagicMock(return_value=[]),
         ):
-            items = websearch.search("q", limit=3)
-        self.assertEqual(len(items), 3)
+            items = websearch.search("q", limit=8)
+        self.assertEqual(seen, {"ddg": 8, "bing": 8})  # 每引擎都拿到 limit
+        self.assertEqual(len(items), 18)  # 合并后不截断
+
+    def test_default_engines_exclude_slow_set(self):
+        names = set(websearch.DEFAULT_ENGINES)
+        self.assertIn("ddg", names)
+        for excluded in ("ddg-lite", "yandex", "sogou", "360", "crossref", "pubmed"):
+            self.assertNotIn(excluded, names)
+
+    def test_config_engines_overrides_default(self):
+        cfg = mock.patch.object(websearch, "load_config",
+                                return_value={"engines": ["yandex", "360"]})
+        with cfg:
+            self.assertEqual(websearch._active_engines(None), ["yandex", "360"])
+
+    def test_engine_flag_overrides_config(self):
+        cfg = mock.patch.object(websearch, "load_config",
+                                return_value={"engines": ["yandex"]})
+        with cfg:
+            self.assertEqual(websearch._active_engines("bing"), ["bing"])
+
+    def test_active_engines_unknown_raises(self):
+        with mock.patch.object(websearch, "load_config",
+                               return_value={"engines": ["bogus"]}):
+            with self.assertRaises(websearch.SearchError):
+                websearch._active_engines(None)
 
     def test_engine_error_skipped_others_continue(self):
-        with self._patch_all(
+        with mock.patch.object(websearch, "_active_engines",
+                               return_value=[n for n, _ in websearch.ENGINES]), \
+             self._patch_all(
             ddg=mock.Mock(side_effect=OSError("down")),
             ddg_lite=mock.Mock(return_value=websearch.parse_ddg_lite(DDG_LITE_HTML)),
         ):
@@ -360,6 +404,17 @@ class TestSearch(unittest.TestCase):
     def test_unknown_engine_raises(self):
         with self.assertRaises(websearch.SearchError):
             websearch.search("q", engine="google-x")
+
+    def test_dedupe_normalizes_percent_encoding(self):
+        a = {"url": "https://zh.wikipedia.org/wiki/%E4%B8%AD%E5%9B%BD", "title": "A", "snippet": ""}
+        b = {"url": "https://zh.wikipedia.org/wiki/中国", "title": "B", "snippet": ""}
+        with self._patch_all(
+            ddg=mock.Mock(return_value=[a]),
+            bing=mock.Mock(return_value=[b]),
+        ):
+            items = websearch.search("q")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["title"], "A")
 
 
 class TestCli(unittest.TestCase):
