@@ -92,6 +92,13 @@ SO360_HTML = """
 </li>
 """
 
+BAIDU_HTML = """
+<div class="result"><h3><a href="http://www.baidu.com/link?url=x1">百度结果一</a></h3>
+  <div>摘要文本</div></div>
+<div class="c-container"><h3><a href="https://example.com/direct">直链结果</a></h3></div>
+<div class="result"><span>无标题 dropped</span></div>
+"""
+
 ARXIV_XML = """<?xml version="1.0"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
 <entry>
@@ -206,6 +213,26 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["url"], "https://example.com/real")
         self.assertEqual(items[0]["snippet"], "360 摘要文本")
+
+    def test_parse_baidu_keeps_link_for_engine_to_resolve(self):
+        items = websearch.parse_baidu(BAIDU_HTML)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["url"], "http://www.baidu.com/link?url=x1")  # 解真 URL 是 _e_baidu 的活
+        self.assertEqual(items[0]["snippet"], "摘要文本")
+        self.assertEqual(items[1]["url"], "https://example.com/direct")
+
+    def test_e_baidu_resolves_link_redirects(self):
+        resp = mock.Mock(status_code=302)
+        resp.headers = {"Location": "https://example.com/real"}
+        sess = mock.MagicMock()
+        sess.__enter__.return_value.get.return_value = resp
+        with mock.patch.object(websearch, "_fetch", return_value=BAIDU_HTML), \
+             mock.patch("curl_cffi.requests.Session", return_value=sess):
+            items = websearch._e_baidu("q", 5, 10)
+        urls = [i["url"] for i in items]
+        self.assertIn("https://example.com/real", urls)
+        self.assertIn("https://example.com/direct", urls)
+        self.assertNotIn("http://www.baidu.com/link?url=x1", urls)
 
     def test_parse_arxiv(self):
         items = websearch.parse_arxiv(ARXIV_XML)
@@ -363,7 +390,7 @@ class TestSearch(unittest.TestCase):
     def test_default_engines_exclude_slow_set(self):
         names = set(websearch.DEFAULT_ENGINES)
         self.assertIn("ddg", names)
-        for excluded in ("ddg-lite", "yandex", "sogou", "360", "crossref", "pubmed"):
+        for excluded in ("ddg-lite", "yandex", "sogou", "360", "crossref", "pubmed", "baidu"):
             self.assertNotIn(excluded, names)
 
     def test_config_engines_overrides_default(self):

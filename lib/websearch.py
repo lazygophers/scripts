@@ -270,6 +270,27 @@ def parse_360(html: str) -> list[dict]:
     return out
 
 
+def parse_baidu(html: str) -> list[dict]:
+    """解析百度结果页(result/c-container 块)。
+
+    链接全是 baidu.com/link?url= 会话跳转,真 URL 由引擎函数逐条 302 解出。
+    摘要容器 class 按模板乱变,取整块文本去掉标题前缀。
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for b in soup.select("div.result, div.c-container"):
+        a = b.select_one("h3 a[href]")
+        if not a:
+            continue
+        title = _text(a)
+        body = _text(b)
+        snippet = body[len(title):].strip()[:250] if body.startswith(title) else body[:250]
+        out.append({"url": a["href"], "title": title, "snippet": snippet})
+    return out
+
+
 def parse_arxiv(xml: str) -> list[dict]:
     """解析 arXiv API 的 Atom 响应(entry[].title/summary/id)。"""
     import re
@@ -453,6 +474,21 @@ def _e_sogou(query, timeout, limit):
     return [it for it in items if it["url"].startswith("http")]
 
 
+def _e_baidu(query, timeout, limit):
+    """百度;结果链接是 baidu.com/link?url= 302 跳转,逐条解出真 URL(约 40ms/条)。"""
+    from curl_cffi import requests
+
+    items = parse_baidu(_fetch("https://www.baidu.com/s?wd=" + quote_plus(query), timeout))[:limit]
+    with requests.Session(impersonate="chrome", timeout=timeout) as s:
+        for it in items:
+            if "baidu.com/link?" in it["url"]:
+                r = s.get(it["url"], allow_redirects=False)
+                real = r.headers.get("Location", "")
+                if real.startswith("http"):
+                    it["url"] = real
+    return [it for it in items if it["url"].startswith("http")]
+
+
 def _e_360(query, timeout, limit):
     return parse_360(_fetch("https://www.so.com/s?q=" + quote_plus(query), timeout))
 
@@ -553,6 +589,7 @@ ENGINES: list[tuple[str, str]] = [
     ("google", "_e_google"),
     ("yandex", "_e_yandex"),
     ("sogou", "_e_sogou"),
+    ("baidu", "_e_baidu"),
     ("360", "_e_360"),
     ("arxiv", "_e_arxiv"),
     ("crossref", "_e_crossref"),
