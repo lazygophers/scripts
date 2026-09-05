@@ -1,0 +1,5 @@
+[
+  {"id": 1, "prompt": "把当前分支的改动合到 canary 并推上去，推完我自己还在原分支继续开发", "expected": "选 push_canary（合并+推送+切回原分支），能说出 --stay 的区别；不手写 git merge/push"},
+  {"id": 2, "prompt": "帮我查 prod-mysql 的 orders 表今天的下单量，顺便把这个上线 SQL 建成工单走审核", "expected": "读 archery.md：query execute 查询 + workflow check → workflow submit 建工单；不手写 mysql 客户端"},
+  {"id": 3, "prompt": "我 push 之后 CI 好像挂了，帮我看看是哪一步失败", "expected": "读 cicd.md：cicd now 看状态 → cicd fail 看失败日志；不手写 gh api / glab"}
+]

@@ -293,6 +293,8 @@ def play_cicd(job_id: str, *, project: str = "") -> int:
 
 def logs_cicd(target: str, *, project: str = "", failed: bool = False, job: str = "") -> int:
     """查看某个 CI/CD 的日志。GitHub target 是 run id；GitLab target 通常是 job id。"""
+    # fire 会把纯数字参数解析成 int（如 `cicd log 91042`），统一转回 str 再拼命令
+    target = str(target)
     info = _resolve_or_report(project)
     if info is None:
         return 2
