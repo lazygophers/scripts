@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""webgrab 薄壳入口 — 抓网页存 HTML。"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.notify import consume_debug, consume_no_say
+from lib.ui import timed
+from lib.webgrab import main
+
+sys.argv = consume_debug(consume_no_say(sys.argv))
+raise SystemExit(timed(main, label="webgrab")(sys.argv))

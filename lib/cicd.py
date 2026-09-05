@@ -308,6 +308,9 @@ def watch_cicd(
     config: PollConfig | None = None,
 ) -> int:
     """轮询分支或指定 CI/CD，完成后输出最终结果并退出。"""
+    # fire 会把纯数字参数解析成 int（如 `cicd id 29405`），统一转回 str 再拼命令
+    if target is not None and target != "":
+        target = str(target)
     config = config or PollConfig()
     err = _validate_config(config)
     r = reporter(stderr=True)
