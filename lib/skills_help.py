@@ -168,6 +168,12 @@ COMMAND_SKILLS: dict[str, list[str]] = {
         "调 macOS 网络服务优先级，缓解 VPN 默认路由问题。",
         "OpenVPN 路由干扰正常上网时用；具体子命令看 `vpn-prio --help`。",
     ],
+    "websearch": [
+        "多引擎检索并按 URL 合并去重，输出标题/URL/摘要: `websearch rust async runtime`。",
+        "限条数: `websearch -n 5 <query>`；管道处理用 `websearch --json <query> | jq .[0].url`。",
+        "只用单个引擎: `websearch --engine bing <query>`；看引擎列表: `websearch engines`。",
+        "结果只有摘要，要看正文接 `webgrab <url>`。",
+    ],
     "webgrab": [
         "抓网页转 Markdown 打 stdout（默认不落盘）: `webgrab https://example.com`。",
         "存文件: `webgrab <url> -o page.md`；要原始 HTML 加 `--html`。",

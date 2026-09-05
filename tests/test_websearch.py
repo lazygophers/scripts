@@ -144,6 +144,15 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(buf.getvalue()), fake)
 
+    def test_main_no_args_prints_skills(self):
+        buf = io.StringIO()
+        with mock.patch.object(websearch, "search") as s:
+            with redirect_stdout(buf):
+                rc = websearch.main(["websearch"])
+        self.assertEqual(rc, 0)
+        self.assertIn("# websearch skills", buf.getvalue())
+        s.assert_not_called()
+
     def test_main_engines_lists_all(self):
         buf, err = io.StringIO(), io.StringIO()
         with redirect_stdout(buf), redirect_stderr(err):

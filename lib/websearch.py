@@ -162,8 +162,13 @@ def list_engines() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     rest = argv[1:] if argv is not None else None
+    if not rest:
+        # 裸跑默认打 AI 向 skills 说明(--skills 同款)
+        from lib.skills_help import command_name, render_skills
+        print(render_skills(command_name(argv[0]), __doc__))
+        return 0
     # engines 子命令直接列出引擎链,不进 argparse
-    if rest and rest[0] == "engines":
+    if rest[0] == "engines":
         return list_engines()
     args = build_parser().parse_args(rest)
     try:
