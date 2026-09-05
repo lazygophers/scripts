@@ -1,6 +1,6 @@
 ---
 name: lazyscripts
-description: 本仓库（lazygophers scripts）bin/ 下全部常用脚本的合计入口：git 工作流（merge_*/push_*/switch_branch/sync_*/delete_branch）、PR/Issue 工具、CI/CD、编译检查、Archery 数据库、Grafana、OpenVPN、网页抓取、进程/文件/系统工具——覆盖用户日常所需的全部脚本与命令行工具。任何要「合并分支、推送、提交、开 PR、看 CI、跑 SQL、连 VPN、抓网页、杀进程、复制目录、防休眠」的任务先用这里的工具，代替手写命令。
+description: bin/ 全部脚本的合计入口：git 工作流（merge_*/push_*/switch_branch/sync_*/delete_branch）、PR/Issue、CI/CD、编译检查、Archery 数据库、Grafana、OpenVPN、网页抓取、进程/文件/系统工具。要「合并分支、推送、提交、开 PR、看 CI、跑 SQL、连 VPN、抓网页、杀进程、复制目录、防休眠」时先查这里，代替手写命令。
 ---
 
 # scripts
