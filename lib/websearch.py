@@ -539,6 +539,7 @@ def _e_searx(query, timeout, limit):
             items = parse_searx(data)
             if items:
                 _promote_searx(url, instances)
+                print(f"[websearch] searx 命中实例 {url}", file=sys.stderr)
                 return items
         except Exception as e:  # 403/429/慢,换下一个实例
             errors.append(f"{url}: {e}")
@@ -630,12 +631,51 @@ def search(query: str, limit: int = 10, engine: str | None = None,
 
 
 def list_engines() -> int:
-    """打印全部引擎 + 默认启用状态。"""
+    """打印全部引擎 + 默认启用状态 + searx 当前实例列表。"""
     active = set(_active_engines(None))
     for i, (name, _fn) in enumerate(ENGINES, 1):
         mark = "*" if name in active else " "
         print(f"{mark}{i}. {name}")
-    print("[websearch] * = 默认启用;--engine <名称> 单独指定,或配置文件 engines: 改默认集", file=sys.stderr)
+    print(f"\nsearx 当前实例(缓存 {SEARX_CACHE},前 {SEARX_MAX_ATTEMPTS} 个生效):")
+    try:
+        for u in load_searx_instances()[:SEARX_MAX_ATTEMPTS]:
+            print(f"  {u}")
+    except Exception as e:
+        print(f"  (读取失败: {e})", file=sys.stderr)
+    print("[websearch] * = 默认启用;--engine <名称> 单独指定,或 `websearch set engines <名称...>` 改默认集", file=sys.stderr)
+    return 0
+
+
+def set_engines(rest: list[str]) -> int:
+    """`websearch set engines <名称...> [--reset]`:写配置文件的 engines: 列表。"""
+    import yaml
+
+    if rest[:1] != ["engines"]:
+        print("用法: websearch set engines <名称...> | websearch set engines --reset", file=sys.stderr)
+        return 2
+    args = rest[1:]
+    if not args:
+        # 不带参数 = 打印当前生效的引擎集
+        print("当前默认引擎:", " ".join(_active_engines(None)))
+        print(f"配置文件: {CONFIG_PATH}", file=sys.stderr)
+        return 0
+    cfg = load_config()
+    if "--reset" in args:
+        cfg.pop("engines", None)  # 回到内置 DEFAULT_ENGINES
+        note = "已删除 engines 配置,恢复内置默认集"
+    else:
+        unknown = [a for a in args if a not in {n for n, _ in ENGINES}]
+        if unknown:
+            print(f"未知引擎: {', '.join(unknown)}(可选: {', '.join(n for n, _ in ENGINES)})",
+                  file=sys.stderr)
+            return 2
+        cfg["engines"] = args
+        note = f"默认引擎集已写入 {CONFIG_PATH}: {' '.join(args)}"
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG_PATH.with_suffix(".tmp")
+    tmp.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False))
+    tmp.replace(CONFIG_PATH)
+    print(note)
     return 0
 
 
@@ -643,9 +683,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="websearch",
         description="多引擎网页检索(全免 key,每引擎抓 limit 条后按 URL 合并去重),输出 标题 / URL / 摘要",
-        epilog="结果只有摘要,要看正文用: webgrab <url>\n"
-               "列出引擎(*=默认启用): websearch engines\n"
-               "默认引擎集可在 ~/.config/lazygophers/scripts/websearch.yaml 配 engines: [..]",
+        epilog="子命令:\n"
+               "  websearch engines                  列出全部引擎(* = 默认启用)\n"
+               "  websearch set engines <名称...>    改默认引擎集(写配置文件)\n"
+               "  websearch set engines --reset      恢复内置默认引擎集\n"
+               "\n"
+               "结果只有摘要,要看正文用: webgrab <url>",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("query", nargs="+", help="搜索词(多词直接跟在后面)")
     p.add_argument("-n", "--limit", type=int, default=10,
@@ -664,9 +708,11 @@ def main(argv: list[str] | None = None) -> int:
         from lib.skills_help import command_name, render_skills
         print(render_skills(command_name(argv[0]), __doc__))
         return 0
-    # engines 子命令直接列出引擎,不进 argparse
+    # engines / set 子命令直接处理,不进 argparse
     if rest[0] == "engines":
         return list_engines()
+    if rest[0] == "set":
+        return set_engines(rest[1:])
     args = build_parser().parse_args(rest)
     try:
         results = search(" ".join(args.query), limit=args.limit,

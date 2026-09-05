@@ -449,14 +449,46 @@ class TestCli(unittest.TestCase):
         self.assertIn("# websearch skills", buf.getvalue())
         s.assert_not_called()
 
-    def test_main_engines_lists_all(self):
-        buf, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(buf), redirect_stderr(err):
-            rc = websearch.main(["websearch", "engines"])
+    def test_main_engines_lists_all_and_searx_instances(self):
+        buf = io.StringIO()
+        with mock.patch.object(websearch, "_active_engines", return_value=["ddg"]):
+            with mock.patch.object(websearch, "load_searx_instances",
+                                   return_value=["https://s1.example/", "https://s2.example/"]):
+                with redirect_stdout(buf), redirect_stderr(io.StringIO()):
+                    rc = websearch.main(["websearch", "engines"])
         self.assertEqual(rc, 0)
         out = buf.getvalue()
-        for name, _fn in websearch.ENGINES:
-            self.assertIn(name, out)
+        self.assertIn("*1. ddg", out)
+        self.assertIn(" 3. bing", out)  # 非默认集不打 *
+        self.assertIn("https://s1.example/", out)
+
+    def test_set_engines_writes_config(self):
+        import yaml
+
+        buf, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(websearch, "CONFIG_PATH",
+                               pathlib.Path(self.id() + ".yaml")) as cfg_path:
+            self.addCleanup(lambda: cfg_path.unlink(missing_ok=True))
+            with redirect_stdout(buf), redirect_stderr(err):
+                rc = websearch.main(["websearch", "set", "engines", "ddg", "yandex"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(yaml.safe_load(cfg_path.read_text())["engines"], ["ddg", "yandex"])
+            # 重置后回默认集
+            with redirect_stdout(buf), redirect_stderr(err):
+                rc = websearch.main(["websearch", "set", "engines", "--reset"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(websearch.load_config(), {})
+
+    def test_set_engines_unknown_rejected(self):
+        with mock.patch.object(websearch, "CONFIG_PATH",
+                               pathlib.Path(self.id() + ".yaml")) as cfg_path:
+            self.addCleanup(lambda: cfg_path.unlink(missing_ok=True))
+            err = io.StringIO()
+            with redirect_stderr(err):
+                rc = websearch.main(["websearch", "set", "engines", "bogus"])
+        self.assertEqual(rc, 2)
+        self.assertIn("未知引擎", err.getvalue())
+        self.assertFalse(cfg_path.exists())  # 拒绝时不落盘
 
     def test_main_failure_exit_1(self):
         err = io.StringIO()
