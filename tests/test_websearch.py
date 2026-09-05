@@ -123,6 +123,15 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(buf.getvalue()), fake)
 
+    def test_main_engines_lists_all(self):
+        buf, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(err):
+            rc = websearch.main(["websearch", "engines"])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        for name, _, _ in websearch.ENGINES:
+            self.assertIn(name, out)
+
     def test_main_failure_exit_1(self):
         err = io.StringIO()
         with mock.patch.object(websearch, "search",

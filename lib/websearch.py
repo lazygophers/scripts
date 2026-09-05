@@ -145,7 +145,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="websearch",
         description="多引擎网页检索(DuckDuckGo → Bing 链式,免 key),输出 标题 / URL / 摘要",
-        epilog="结果只有摘要,要看正文用: webgrab <url>",
+        epilog="结果只有摘要,要看正文用: webgrab <url>\n"
+               "列出引擎: websearch engines",
     )
     p.add_argument("query", nargs="+", help="搜索词(多词直接跟在后面)")
     p.add_argument("-n", "--limit", type=int, default=10, help="最多返回几条(默认 10)")
@@ -155,8 +156,20 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def list_engines() -> int:
+    """打印引擎链(名称 + 请求地址 + 顺序)。"""
+    for i, (name, base, _parser) in enumerate(ENGINES, 1):
+        print(f"{i}. {name}  {base}<query>")
+    print("[websearch] 默认按上面顺序链式尝试,--engine <名称> 可指定单个", file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv[1:] if argv is not None else None)
+    rest = argv[1:] if argv is not None else None
+    # engines 子命令直接列出引擎链,不进 argparse
+    if rest and rest[0] == "engines":
+        return list_engines()
+    args = build_parser().parse_args(rest)
     try:
         results = search(" ".join(args.query), limit=args.limit,
                          engine=args.engine, timeout=args.timeout)
