@@ -32,7 +32,7 @@ DDG_LITE_HTML = """
 
 BING_HTML = """
 <li class="b_algo">
-  <h2><a href="https://example.com/bing1">Bing One</a></h2>
+  <h2><a href="https://www.bing.com/ck/a?!&&p=x&u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS9iaW5nMQ==&ntb=1">Bing One</a></h2>
   <div class="b_caption"><p>Bing snippet one</p></div>
 </li>
 <li class="b_algo">
@@ -79,6 +79,10 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["url"], "https://example.com/bing1")
         self.assertEqual(items[0]["snippet"], "Bing snippet one")
+
+    def test_unwrap_bing_invalid_base64_keeps_original(self):
+        href = "https://www.bing.com/ck/a?u=a1###not-b64"
+        self.assertEqual(websearch._unwrap_bing(href), href)
 
     def test_parse_google(self):
         items = websearch.parse_google(GOOGLE_JSON)

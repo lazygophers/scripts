@@ -80,6 +80,25 @@ def _unwrap_ddg(href: str) -> str:
     return href
 
 
+def _unwrap_bing(href: str) -> str:
+    """Bing 结果链接是 bing.com/ck/a?...&u=a1<base64>,解出真 URL。"""
+    import base64
+
+    parsed = urlparse(href)
+    if parsed.netloc.endswith("bing.com") and parsed.path.startswith("/ck/"):
+        u = parse_qs(parsed.query).get("u", [""])[0]
+        if u.startswith("a1"):
+            body = u[2:]
+            body += "=" * (-len(body) % 4)
+            try:
+                real = base64.urlsafe_b64decode(body).decode("utf-8", "replace")
+            except ValueError:
+                return href
+            if real.startswith("http"):
+                return real
+    return href
+
+
 def _text(node) -> str:
     """节点文本:压空白、去零宽字符。"""
     return " ".join(node.get_text(" ", strip=True).split()) if node else ""
@@ -136,6 +155,9 @@ def parse_bing(html: str) -> list[dict]:
         if not a or not a.get("href"):
             continue
         url = a["href"]
+        if not url.startswith("http"):
+            continue
+        url = _unwrap_bing(url)
         if not url.startswith("http"):
             continue
         cap = li.select_one(".b_caption p, .b_caption")
