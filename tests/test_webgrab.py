@@ -56,35 +56,43 @@ class TestGrab(unittest.TestCase):
 
 
 class TestCli(unittest.TestCase):
-    def test_writes_default_output(self):
+    def test_writes_md_to_output(self):
         with tempfile.TemporaryDirectory() as td, \
-             patch.object(webgrab, "fetch_direct", return_value=(200, "<html>body</html>")), \
-             patch("lib.webgrab.default_output", return_value=Path(td) / "example.com.html"):
-            rc = webgrab.main(["webgrab", "https://example.com/page"])
-            written = (Path(td) / "example.com.html").read_text()
+             patch.object(webgrab, "fetch_direct", return_value=(200, "<h1>标题</h1>")):
+            rc = webgrab.main(["webgrab", "https://example.com/page", "-o", str(Path(td) / "out.md")])
+            written = (Path(td) / "out.md").read_text()
         self.assertEqual(rc, 0)
-        self.assertEqual(written, "<html>body</html>")
+        self.assertEqual(written, "# 标题\n")
+
+    def test_html_flag_keeps_raw(self):
+        import io
+        buf = io.StringIO()
+        with patch.object(webgrab, "fetch_direct", return_value=(200, "<h1>x</h1>")), \
+             patch.object(sys, "stdout", buf):
+            rc = webgrab.main(["webgrab", "https://example.com", "--html"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(buf.getvalue(), "<h1>x</h1>")
 
     def test_stdout_mode(self):
         import io
         buf = io.StringIO()
         with patch.object(webgrab, "fetch_direct", return_value=(200, "CONTENT")), \
              patch.object(sys, "stdout", buf):
-            rc = webgrab.main(["webgrab", "https://example.com", "--stdout"])
+            rc = webgrab.main(["webgrab", "https://example.com"])
         self.assertEqual(rc, 0)
-        self.assertEqual(buf.getvalue(), "CONTENT")
+        self.assertEqual(buf.getvalue(), "CONTENT\n")
 
     def test_grab_error_returns_1(self):
         direct = patch.object(webgrab, "fetch_direct", return_value=(403, "nope"))
         render = patch.object(webgrab, "fetch_render", return_value="Verify you are human")
         with direct, render:
-            rc = webgrab.main(["webgrab", "https://example.com", "--stdout"])
+            rc = webgrab.main(["webgrab", "https://example.com"])
         self.assertEqual(rc, 1)
 
 
 class TestDefaultOutput(unittest.TestCase):
     def test_domain_name(self):
-        self.assertEqual(webgrab.default_output("https://a.b.com/x?y=1"), Path("a.b.com.html"))
+        self.assertEqual(webgrab.default_output("https://a.b.com/x?y=1", "md"), Path("a.b.com.md"))
 
     def test_no_host_fallback(self):
-        self.assertEqual(webgrab.default_output("not-a-url"), Path("page.html"))
+        self.assertEqual(webgrab.default_output("not-a-url", "html"), Path("page.html"))

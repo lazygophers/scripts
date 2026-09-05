@@ -1,7 +1,8 @@
-"""webgrab — 抓网页存成 HTML 文件。
+"""webgrab — 抓网页转 Markdown 打到 stdout（-o 才落盘）。
 
 curl_cffi 模拟浏览器 TLS 指纹直抓（过大部分基础反爬 / CF 静态拦截）；
 被拦时自动换指纹重试，仍被拦则回退 Playwright 真浏览器渲染拿最终 DOM。
+默认 HTML 转 Markdown（markdownify）；--html 保留原始 HTML。
 交互式 Turnstile / 人机验证不会自动点过，只如实报错。
 """
 
@@ -53,11 +54,14 @@ def fetch_direct(url: str, timeout: float, impersonate: str) -> tuple[int, str]:
 
 
 def fetch_render(url: str, timeout: float) -> str:
-    """Playwright 无头 Chromium 渲染，返回最终 DOM HTML。"""
+    """Playwright 无头 Chromium 渲染，返回最终 DOM HTML。
+
+    channel="chromium" 用完整版浏览器的 new headless，无需额外下载 headless shell。
+    """
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=True, channel="chromium")
         try:
             page = browser.new_page()
             page.goto(url, timeout=timeout * 1000, wait_until="domcontentloaded")
@@ -97,21 +101,32 @@ class GrabError(RuntimeError):
     pass
 
 
-def default_output(url: str) -> Path:
-    """默认输出文件名：<域名>.html，存当前目录。"""
+def to_markdown(html: str) -> str:
+    """HTML → Markdown：先删 script/style 等非正文元素（连内容），再转换。"""
+    from bs4 import BeautifulSoup
+    from markdownify import markdownify as md
+
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["head", "script", "style", "noscript", "template"]):
+        tag.decompose()
+    return md(str(soup), heading_style="ATX").strip() + "\n"
+
+
+def default_output(url: str, suffix: str) -> Path:
+    """默认输出文件名：<域名>.<suffix>，存当前目录。"""
     host = urlparse(url).netloc or "page"
-    return Path(f"{host}.html")
+    return Path(f"{host}.{suffix}")
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="webgrab",
-        description="抓网页存成 HTML 文件（curl_cffi 指纹直抓，被拦自动回退 Playwright 渲染）",
+        description="抓网页转 Markdown 打 stdout（curl_cffi 指纹直抓，被拦自动回退 Playwright 渲染）",
         epilog="交互式 Turnstile / 人机验证不会自动点过，只如实报错。",
     )
     p.add_argument("url", help="要抓的网址")
-    p.add_argument("-o", "--output", help="输出文件（默认 <域名>.html 存当前目录）")
-    p.add_argument("--stdout", action="store_true", help="打到 stdout 而不是写文件")
+    p.add_argument("-o", "--output", help="写文件而不是打 stdout（默认 <域名>.md / --html 时 <域名>.html）")
+    p.add_argument("--html", action="store_true", help="保留原始 HTML，不转 Markdown")
     p.add_argument("--render", action="store_true", help="跳过直抓，强制 Playwright 渲染（JS 渲染页用）")
     p.add_argument("--timeout", type=float, default=30, help="超时秒数（默认 30）")
     return p
@@ -126,10 +141,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[webgrab] 抓取失败: {e}", file=sys.stderr)
         return 1
 
-    if args.stdout:
-        sys.stdout.write(html)
+    if args.html:
+        content = html
+        suffix = "html"
     else:
-        out = Path(args.output) if args.output else default_output(args.url)
-        out.write_text(html, encoding="utf-8")
-        print(f"[webgrab] {len(html)} 字节 ← {source} → {out}", file=sys.stderr)
+        content = to_markdown(html)
+        suffix = "md"
+
+    if args.output:
+        out = Path(args.output)
+        out.write_text(content, encoding="utf-8")
+        print(f"[webgrab] {len(content)} 字节 ← {source} → {out}", file=sys.stderr)
+    else:
+        sys.stdout.write(content)
     return 0

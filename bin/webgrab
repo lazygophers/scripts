@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""webgrab 薄壳入口 — 抓网页存 HTML。"""
+"""webgrab 薄壳入口 — 抓网页转 Markdown 打 stdout。"""
 import pathlib
 import sys
 
