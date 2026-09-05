@@ -47,7 +47,7 @@ TOOLS: dict[str, tuple[str, str]] = {
     "check_ai": ("build/check", "AI API 端点连通性检测（空 POST）"),
     "cicd": ("build/check", "轮询当前分支 CI/CD，完成后输出最终结果"),
     "cpd": ("build/check", "深度覆盖复制（新增/更新/删除可选）"),
-    "webgrab": ("build/check", "抓网页转 Markdown（反爬指纹直抓 + Playwright 渲染兜底）"),
+    "webgrab": ("build/check", "抓网页转 Markdown（反爬直抓 + Playwright 渲染 + 34 站点适配 + 登录态持久化）"),
     # loop/runtime: 循环执行 / 防休眠
     "loop": ("loop/runtime", "循环执行命令并追踪结果（成功即停或指定次数）"),
     "unsleep": ("loop/runtime", "防止 macOS 系统休眠（指定时长或跟随命令）"),

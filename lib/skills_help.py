@@ -172,6 +172,8 @@ COMMAND_SKILLS: dict[str, list[str]] = {
         "抓网页转 Markdown 打 stdout（默认不落盘）: `webgrab https://example.com`。",
         "存文件: `webgrab <url> -o page.md`；要原始 HTML 加 `--html`。",
         "反爬处理：curl_cffi 浏览器指纹直抓 → 被拦换指纹 → 仍被拦自动回退 Playwright 渲染；JS 页强制渲染加 `--render`。",
+        "登录墙站点（小红书/B站/知乎等 34 个内置站点）自动走渲染+懒加载；要登录态先 `webgrab login <url>` 在弹出的浏览器里登录一次，cookie 持久复用。",
+        "要手动过滑块验证加 `--headed`（显示浏览器窗口）。",
         "交互式 Turnstile/人机验证不会自动点过，如实报错退出。",
     ],
 }

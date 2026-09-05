@@ -96,3 +96,45 @@ class TestDefaultOutput(unittest.TestCase):
 
     def test_no_host_fallback(self):
         self.assertEqual(webgrab.default_output("not-a-url", "html"), Path("page.html"))
+
+
+class TestSiteConfig(unittest.TestCase):
+    def test_exact_and_subdomain_match(self):
+        from lib.webgrab import site_config
+        self.assertEqual(site_config("https://www.xiaohongshu.com/x")["scroll"], 3)
+        self.assertTrue(site_config("https://t.bilibili.com/x")["render"])
+
+    def test_longest_suffix_wins(self):
+        from lib.webgrab import site_config
+        self.assertEqual(site_config("https://zhuanlan.zhihu.com/p/1"), site_config("https://www.zhihu.com/question/1"))
+
+    def test_unknown_site_empty(self):
+        from lib.webgrab import site_config
+        self.assertEqual(site_config("https://example.com/x"), {})
+
+
+class TestLoginCli(unittest.TestCase):
+    def test_login_dispatch(self):
+        with patch.object(webgrab, "login", return_value=0) as lg:
+            rc = webgrab.main(["webgrab", "login", "https://www.xiaohongshu.com"])
+        lg.assert_called_once_with("https://www.xiaohongshu.com")
+        self.assertEqual(rc, 0)
+
+    def test_login_missing_url(self):
+        rc = webgrab.main(["webgrab", "login"])
+        self.assertEqual(rc, 2)
+
+
+class TestSiteMergeCli(unittest.TestCase):
+    def test_site_forces_render(self):
+        import io
+        buf = io.StringIO()
+        with patch.object(webgrab, "fetch_render", return_value="<html>x</html>") as fr, \
+             patch.object(webgrab, "fetch_direct") as fd, \
+             patch.object(sys, "stdout", buf), patch.object(sys, "stderr", io.StringIO()):
+            rc = webgrab.main(["webgrab", "https://t.bilibili.com/1"])
+        fd.assert_not_called()
+        fr.assert_called_once()
+        self.assertIn("scroll", fr.call_args.kwargs)
+        self.assertEqual(rc, 0)
+
