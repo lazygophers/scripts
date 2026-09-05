@@ -37,3 +37,12 @@ description: 本仓库（lazygophers scripts）bin/ 下全部常用脚本的合�
 - `--no-say` / `SCRIPTS_NO_SAY=1` 静音 macOS 语音通知。
 - `--debug` / `SCRIPTS_DEBUG=1` 打印成功命令的输出（默认只显示失败）。
 - 有 `--dry-run` 的工具先预览再执行。
+
+## 不要做（反例黑名单）
+
+- **别为分支合并/推送手写 git 命令**——工作流脚本自带冲突干跑、checkwork 闸门、失败回滚，手写全部绕过。
+- **别在目标分支上跑 `merge_*` / `push_*`**（在 canary 上跑 `push_canary`）——脚本会拦，别试图绕。
+- **破坏性操作别跳过预览**：`delete_branch_remote`、`squash_pr`（可能 force-push）、`cpd -f`（删目标多余文件）——先 dry-run / 列出影响面。
+- **`archery show` / `archery code` / `ovpn show` 输出密钥**——别原样贴进对话、日志或工单。
+- **cicd 禁止手动触发流水线**——只能 `cicd play` 点已有流水线里的 manual job。
+- **webgrab 遇到交互式人机验证/Turnstile**——不会自动过，如实报错，别反复重试硬闯。
