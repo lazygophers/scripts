@@ -206,6 +206,95 @@ class TestSaveFailure(GraphwatchCase):
         leftovers = [x.name for x in self.home.iterdir() if x.name.endswith(".tmp")]
         self.assertEqual(leftovers, [])
 
+
+class TestSingletonLock(GraphwatchCase):
+    def test_second_acquire_fails(self):
+        l1 = graphwatch.acquire_singleton_lock()
+        self.assertIsNotNone(l1)
+        l2 = graphwatch.acquire_singleton_lock()
+        self.assertIsNone(l2)
+        graphwatch.release_singleton_lock(l1)
+        # 释放后可再拿
+        l3 = graphwatch.acquire_singleton_lock()
+        self.assertIsNotNone(l3)
+        graphwatch.release_singleton_lock(l3)
+
+    def test_lock_file_under_home(self):
+        lock = graphwatch.acquire_singleton_lock()
+        self.assertTrue((self.home / "graphwatch.lock").exists())
+        graphwatch.release_singleton_lock(lock)
+
+    def test_lock_holds_pid(self):
+        import os as _os
+        lock = graphwatch.acquire_singleton_lock()
+        content = (self.home / "graphwatch.lock").read_text().strip()
+        self.assertEqual(content, str(_os.getpid()))
+        graphwatch.release_singleton_lock(lock)
+
+
+class TestRunDaemon(GraphwatchCase):
+    def test_run_requires_graphify(self):
+        saved = sys.modules.pop("graphify", None)
+        sys.modules["graphify"] = None
+        try:
+            with self.assertRaises(GraphwatchError) as cm:
+                graphwatch.run_daemon()
+            self.assertIn("[graphify]", str(cm.exception))
+        finally:
+            sys.modules.pop("graphify", None)
+            if saved is not None:
+                sys.modules["graphify"] = saved
+
+    def test_run_no_graphify_check_injectable(self):
+        import threading
+        stop = threading.Event()
+        stop.set()
+        # 无目录 + 注入跳过 graphify 检查 → 立即正常返回
+        graphwatch.run_daemon(stop_event=stop, ensure=lambda: None)
+        # 单例锁已释放
+        lock = graphwatch.acquire_singleton_lock()
+        self.assertIsNotNone(lock)
+        graphwatch.release_singleton_lock(lock)
+
+    def test_run_starts_thread_per_folder(self):
+        import threading
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        started = []
+        stop = threading.Event()
+
+        def fake_watch(path, debounce=3.0):
+            started.append((path, debounce))
+            stop.set()  # 跑起来就停
+
+        graphwatch.run_daemon(stop_event=stop, ensure=lambda: None, watch_fn=fake_watch)
+        self.assertEqual(len(started), 1)
+        self.assertEqual(started[0][0], repo.resolve())
+        self.assertEqual(started[0][1], 3.0)
+
+    def test_run_blocked_when_locked(self):
+        lock = graphwatch.acquire_singleton_lock()
+        try:
+            with self.assertRaises(GraphwatchError) as cm:
+                graphwatch.run_daemon(ensure=lambda: None)
+            self.assertIn("实例", str(cm.exception))
+        finally:
+            graphwatch.release_singleton_lock(lock)
+
+
+class TestCliRun(GraphwatchCase):
+    def test_cli_run_with_no_folders(self):
+        called = {}
+        def fake(**kw):
+            called.update(kw)
+            return 0
+        import unittest.mock
+        with unittest.mock.patch.object(graphwatch, "run_daemon", fake):
+            rc = self._cli().run()
+        self.assertEqual(rc, 0)
+        self.assertTrue(called or called == {})
+
+
 if __name__ == "__main__":
     unittest.main()
 

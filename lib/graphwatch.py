@@ -222,6 +222,96 @@ def run_wizard(input_fn=None) -> dict:
     return cfg
 
 
+def lock_path() -> Path:
+    return config_home() / "graphwatch.lock"
+
+
+def acquire_singleton_lock():
+    """拿全局单例锁（非阻塞）。成功返回 fd，已被占返回 None。
+
+    锁内容写 PID，方便排障；进程退出 fd 自动关闭、锁自动释放。
+    """
+    p = lock_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(p, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    os.truncate(fd, 0)
+    os.write(fd, str(os.getpid()).encode())
+    os.fsync(fd)
+    return fd
+
+
+def release_singleton_lock(fd) -> None:
+    """释放单例锁并关闭 fd。"""
+    if fd is None:
+        return
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def run_daemon(stop_event=None, ensure=None, watch_fn=None, poll_interval: float = 2.0) -> None:
+    """前台守护进程：每目录一线程复用 graphify watch，单例锁防双开。
+
+    stop_event 主要给测试用；正常路径靠 KeyboardInterrupt 退出。
+    poll_interval 是主循环醒来的间隔（04 票热加载在此基础上检测配置变化）。
+    """
+    import threading
+
+    if stop_event is None:
+        stop_event = threading.Event()
+    (ensure or ensure_graphify)()
+
+    lock = acquire_singleton_lock()
+    if lock is None:
+        try:
+            pid = lock_path().read_text(encoding="utf-8").strip()
+        except OSError:
+            pid = "?"
+        raise GraphwatchError(f"已有 graphwatch 实例在运行（PID {pid}，锁: {lock_path()}）")
+
+    if watch_fn is None:
+        from graphify.watch import watch as watch_fn
+
+    cfg = load_config()
+    debounce = float(cfg["debounce"])
+    folders = [str(f) for f in cfg["folders"]]
+    if folders:
+        print(f"graphwatch daemon：监听 {len(folders)} 个目录（debounce {debounce}s）", file=sys.stderr)
+    else:
+        print("graphwatch daemon：暂无注册目录，等待 add（Ctrl-C 退出）", file=sys.stderr)
+
+    threads: list[threading.Thread] = []
+    for folder in folders:
+        t = threading.Thread(target=watch_fn, args=(Path(folder), debounce),
+                             name=f"graphwatch:{folder}", daemon=True)
+        t.start()
+        threads.append(t)
+
+    try:
+        while not stop_event.wait(poll_interval):
+            pass
+    finally:
+        release_singleton_lock(lock)
+        print("graphwatch daemon：已退出，锁已释放", file=sys.stderr)
+
+
 def _cmd(method):
     """子命令装饰器：计时 + GraphwatchError 转一行人话（同 archery 的 cmd）。"""
 
@@ -278,6 +368,18 @@ class GraphwatchCli(BaseCli):
         for f in folders:
             table.add_row(f)
         self._r.console.print(table)
+        return 0
+
+    @_cmd
+    def run(self) -> int:
+        """前台运行守护进程（全局单例，Ctrl-C 退出）。
+
+        用法: graphwatch run
+        """
+        try:
+            run_daemon()
+        except KeyboardInterrupt:
+            pass
         return 0
 
     @_cmd
