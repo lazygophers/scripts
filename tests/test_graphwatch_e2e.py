@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 try:
     import graphify  # noqa: F401
+    import watchdog  # noqa: F401  # graphify watch 的硬依赖，缺了子进程起不来
     HAS_GRAPHIFY = True
 except ImportError:
     HAS_GRAPHIFY = False
