@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 from lib.fire_base import BaseCli, timed_cli
@@ -266,6 +267,77 @@ def release_singleton_lock(fd) -> None:
         os.close(fd)
 
 
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUPS = 3
+NOTIFY_THROTTLE_SECS = 300
+
+
+def log_path() -> Path:
+    return config_home() / "logs" / "graphwatch.log"
+
+
+def rotate_log() -> None:
+    """按大小轮转 daemon 日志：graphwatch.log → .1 → … → .3。
+
+    ponytail: 轮转后仍存活的监听子进程 fd 指向旧 inode，继续写进 .1，
+    直到该目录重启才切回新文件；watch 日志量小，可接受。
+    """
+    p = log_path()
+    if not p.is_file() or p.stat().st_size < LOG_MAX_BYTES:
+        return
+    for i in range(LOG_BACKUPS - 1, 0, -1):
+        src = p.with_suffix(f".log.{i}")
+        if src.exists():
+            src.replace(p.with_suffix(f".log.{i + 1}"))
+    p.replace(p.with_suffix(".log.1"))
+    p.touch()
+
+
+def notify(title: str, message: str, runner=None) -> bool:
+    """系统弹窗通知（无语音）。失败返回 False，不抛——通知是尽力而为。"""
+    import subprocess
+
+    if runner is None:
+        runner = subprocess.run
+    quoted = message.replace('"', "'")
+    tquoted = title.replace('"', "'")
+    if sys.platform == "darwin":
+        cmd = ["osascript", "-e", f'display notification "{quoted}" with title "{tquoted}"']
+    elif sys.platform.startswith("linux"):
+        cmd = ["notify-send", title, message]
+    else:
+        # win32：PowerShell 气泡通知，无需额外安装
+        ps = (
+            "Add-Type -AssemblyName System.Windows.Forms;"
+            "$n = New-Object System.Windows.Forms.NotifyIcon;"
+            "$n.Icon = [System.Drawing.SystemIcons]::Warning;"
+            f"$n.Visible = $true; $n.ShowBalloonTip(5000, '{tquoted}', '{quoted}', 'Warning');"
+            "Start-Sleep -Seconds 6; $n.Dispose()"
+        )
+        cmd = ["powershell", "-NoProfile", "-Command", ps]
+    try:
+        return runner(cmd, check=False, capture_output=True, timeout=15).returncode == 0
+    except Exception:
+        return False
+
+
+class Notifier:
+    """带节流的失败通知：同目录 throttle_secs 内只发一次，成功不通知。"""
+
+    def __init__(self, throttle_secs: float = NOTIFY_THROTTLE_SECS, sender=None):
+        self._throttle = throttle_secs
+        self._last: dict[str, float] = {}
+        self._sender = sender or (lambda folder, title, msg: notify(title, msg))
+
+    def fire(self, folder: str, title: str, message: str) -> bool:
+        now = time.monotonic()
+        last = self._last.get(folder)
+        if last is not None and now - last < self._throttle:
+            return False
+        self._last[folder] = now
+        return bool(self._sender(folder, title, message))
+
+
 def _spawn_watcher_factory(debounce: float):
     """默认 watch 工厂：每目录起一个 `python -m graphify watch` 子进程。
 
@@ -278,7 +350,8 @@ def _spawn_watcher_factory(debounce: float):
     def start(folder: Path):
         return subprocess.Popen(
             [sys.executable, "-m", "graphify", "watch", str(folder), "--debounce", str(debounce)],
-            stdout=sys.stderr, stderr=sys.stderr,
+            stdout=getattr(run_daemon, "_log_file", None) or sys.stderr,
+            stderr=getattr(run_daemon, "_log_file", None) or sys.stderr,
         )
 
     return start
@@ -296,7 +369,7 @@ def _stop_child(proc, folder: str) -> None:
 
 
 def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: float = 2.0,
-               on_started=None) -> None:
+               on_started=None, notifier=None) -> None:
     """前台守护进程：监督每目录一个监听子进程，全局单例锁防双开。
 
     主循环每 poll_interval 醒一次：读配置（坏 YAML 跳过本轮不崩），
@@ -319,6 +392,21 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
 
     if watch_factory is None:
         watch_factory = _spawn_watcher_factory
+    if notifier is None:
+        notifier = Notifier()
+
+    log_path().parent.mkdir(parents=True, exist_ok=True)
+    log_file = open(log_path(), "a", encoding="utf-8")
+    run_daemon._log_file = log_file
+
+    def _dlog(msg: str) -> None:
+        import datetime
+
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{stamp}] {msg}"
+        print(line, file=sys.stderr)
+        log_file.write(line + "\n")
+        log_file.flush()
 
     children: dict[str, object] = {}
     last_sig: tuple[tuple[str, ...], float] | None = None
@@ -332,8 +420,10 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
         if sig == last_sig:
             # 无配置变化：只处理崩溃重启
             for f, proc in list(children.items()):
-                if proc.poll() is not None:
-                    print(f"[graphwatch] 监听进程退出（rc={proc.poll()}），重启 {f}", file=sys.stderr)
+                rc = proc.poll()
+                if rc is not None:
+                    _dlog(f"监听进程退出（rc={rc}），重启 {f}")
+                    notifier.fire(f, "graphwatch 重建失败", f"{f}\n监听进程退出（rc={rc}），已自动重启")
                     children[f] = watch_factory(debounce)(Path(f))
             return
         desired = set(folders)
@@ -344,31 +434,33 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
             children.clear()
         for f in list(children):
             if f not in desired:
-                print(f"[graphwatch] 停止监听 {f}", file=sys.stderr)
+                _dlog(f"停止监听 {f}")
                 _stop_child(children.pop(f), f)
         start_fn = watch_factory(debounce)
         for f in folders:
             if f not in children:
-                print(f"[graphwatch] 开始监听 {f}", file=sys.stderr)
+                _dlog(f"开始监听 {f}")
                 children[f] = start_fn(Path(f))
         last_sig = sig
 
     try:
         _reconcile()
-        print(f"graphwatch daemon：{len(children)} 个目录在监听（Ctrl-C 退出）", file=sys.stderr)
+        _dlog(f"graphwatch daemon：{len(children)} 个目录在监听（Ctrl-C 退出）")
         if on_started is not None:
             on_started()
         while not stop_event.wait(poll_interval):
+            rotate_log()
             try:
                 _reconcile()
             except GraphwatchError as e:
                 # 配置短暂非法（写坏 YAML / 写到一半）：不崩，等下一轮
-                print(f"[graphwatch] 配置暂不可读，跳过本轮: {e}", file=sys.stderr)
+                _dlog(f"配置暂不可读，跳过本轮: {e}")
     finally:
         for f, proc in children.items():
             _stop_child(proc, f)
         release_singleton_lock(lock)
-        print("graphwatch daemon：已退出，监听子进程已停，锁已释放", file=sys.stderr)
+        _dlog("graphwatch daemon：已退出，监听子进程已停，锁已释放")
+        log_file.close()
 
 
 def _cmd(method):

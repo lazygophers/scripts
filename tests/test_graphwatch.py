@@ -510,3 +510,113 @@ class TestCliConfig(GraphwatchCase):
             builtins.input = real_input
         self.assertEqual(rc, 0)
         self.assertEqual(graphwatch.load_config()["backend"], "kimi")
+
+
+class TestRotateLog(GraphwatchCase):
+    def test_rotate_creates_backup_and_fresh_file(self):
+        p = graphwatch.log_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x" * (graphwatch.LOG_MAX_BYTES + 1), encoding="utf-8")
+        graphwatch.rotate_log()
+        self.assertTrue(p.with_suffix(".log.1").exists())
+        self.assertLess(p.stat().st_size, graphwatch.LOG_MAX_BYTES)
+
+    def test_no_rotate_under_threshold(self):
+        p = graphwatch.log_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("small", encoding="utf-8")
+        graphwatch.rotate_log()
+        self.assertFalse(p.with_suffix(".log.1").exists())
+
+    def test_rotation_shifts_backups(self):
+        p = graphwatch.log_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.with_suffix(".log.2").write_text("old2", encoding="utf-8")
+        p.write_text("x" * (graphwatch.LOG_MAX_BYTES + 1), encoding="utf-8")
+        graphwatch.rotate_log()
+        self.assertTrue(p.with_suffix(".log.3").exists())  # old2 → .3
+        self.assertTrue(p.with_suffix(".log.1").exists())
+
+
+class TestNotify(GraphwatchCase):
+    def test_darwin_uses_osascript(self):
+        import unittest.mock
+        cmds = []
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return type("R", (), {"returncode": 0})()
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+            ok = graphwatch.notify("标题", "内容", runner=fake_run)
+        self.assertTrue(ok)
+        self.assertIn("osascript", " ".join(cmds[0]))
+        self.assertIn("标题", " ".join(cmds[0]))
+
+    def test_linux_uses_notify_send(self):
+        import unittest.mock
+        cmds = []
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return type("R", (), {"returncode": 0})()
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"):
+            graphwatch.notify("t", "m", runner=fake_run)
+        self.assertEqual(cmds[0][0], "notify-send")
+
+    def test_notify_failure_returns_false(self):
+        import unittest.mock
+        def fake_run(cmd, **kw):
+            return type("R", (), {"returncode": 1})()
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+            self.assertFalse(graphwatch.notify("t", "m", runner=fake_run))
+
+
+class TestThrottle(GraphwatchCase):
+    def test_same_folder_throttled(self):
+        sent = []
+        notifier = graphwatch.Notifier(throttle_secs=300, sender=lambda f, t, m: sent.append(f))
+        notifier.fire("/a", "t", "m")
+        notifier.fire("/a", "t", "m")
+        self.assertEqual(len(sent), 1)
+
+    def test_different_folders_not_throttled(self):
+        sent = []
+        notifier = graphwatch.Notifier(throttle_secs=300, sender=lambda f, t, m: sent.append(f))
+        notifier.fire("/a", "t", "m")
+        notifier.fire("/b", "t", "m")
+        self.assertEqual(len(sent), 2)
+
+    def test_throttle_expires(self):
+        import unittest.mock
+        sent = []
+        notifier = graphwatch.Notifier(throttle_secs=300, sender=lambda f, t, m: sent.append(f))
+        notifier.fire("/a", "t", "m")
+        with unittest.mock.patch.object(graphwatch.time, "monotonic", return_value=graphwatch.time.monotonic() + 301):
+            notifier.fire("/a", "t", "m")
+        self.assertEqual(len(sent), 2)
+
+
+class TestDaemonNotifiesOnCrash(GraphwatchCase):
+    def test_crash_fires_notification(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        fac = FakeFactory()
+        notified = []
+
+        import threading
+        stop = threading.Event()
+        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
+            stop_event=stop, ensure=lambda: None, watch_factory=fac, poll_interval=0.05,
+            notifier=graphwatch.Notifier(throttle_secs=300, sender=lambda f, t, m: notified.append((f, t)))), daemon=True)
+        thread.start()
+        # 等 watcher 起来，然后注入崩溃
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not fac.procs:
+            time.sleep(0.02)
+        if fac.procs:
+            fac.crash(repo.resolve())
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not notified and thread.is_alive():
+            time.sleep(0.02)
+        stop.set()
+        thread.join(timeout=5)
+        self.assertEqual(len(notified), 1, f"notified={notified}")
+        self.assertIn(str(repo.resolve()), notified[0][0])
