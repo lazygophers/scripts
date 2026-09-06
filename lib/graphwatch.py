@@ -266,11 +266,42 @@ def release_singleton_lock(fd) -> None:
         os.close(fd)
 
 
-def run_daemon(stop_event=None, ensure=None, watch_fn=None, poll_interval: float = 2.0) -> None:
-    """前台守护进程：每目录一线程复用 graphify watch，单例锁防双开。
+def _spawn_watcher_factory(debounce: float):
+    """默认 watch 工厂：每目录起一个 `python -m graphify watch` 子进程。
 
+    走公共 CLI 而不是 import graphify 内部函数（watch() 的循环只认
+    KeyboardInterrupt，线程停不掉）；子进程 terminate 即干净停监听，
+    崩溃由 daemon 主循环拉起。
+    """
+    import subprocess
+
+    def start(folder: Path):
+        return subprocess.Popen(
+            [sys.executable, "-m", "graphify", "watch", str(folder), "--debounce", str(debounce)],
+            stdout=sys.stderr, stderr=sys.stderr,
+        )
+
+    return start
+
+
+def _stop_child(proc, folder: str) -> None:
+    """停一个监听子进程：terminate → 等 5s → kill。"""
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        proc.kill()
+
+
+def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: float = 2.0,
+               on_started=None) -> None:
+    """前台守护进程：监督每目录一个监听子进程，全局单例锁防双开。
+
+    主循环每 poll_interval 醒一次：读配置（坏 YAML 跳过本轮不崩），
+    目录列表或 debounce 变化时增删/重启子进程，子进程崩溃自动拉起。
     stop_event 主要给测试用；正常路径靠 KeyboardInterrupt 退出。
-    poll_interval 是主循环醒来的间隔（04 票热加载在此基础上检测配置变化）。
     """
     import threading
 
@@ -286,30 +317,58 @@ def run_daemon(stop_event=None, ensure=None, watch_fn=None, poll_interval: float
             pid = "?"
         raise GraphwatchError(f"已有 graphwatch 实例在运行（PID {pid}，锁: {lock_path()}）")
 
-    if watch_fn is None:
-        from graphify.watch import watch as watch_fn
+    if watch_factory is None:
+        watch_factory = _spawn_watcher_factory
 
-    cfg = load_config()
-    debounce = float(cfg["debounce"])
-    folders = [str(f) for f in cfg["folders"]]
-    if folders:
-        print(f"graphwatch daemon：监听 {len(folders)} 个目录（debounce {debounce}s）", file=sys.stderr)
-    else:
-        print("graphwatch daemon：暂无注册目录，等待 add（Ctrl-C 退出）", file=sys.stderr)
+    children: dict[str, object] = {}
+    last_sig: tuple[tuple[str, ...], float] | None = None
 
-    threads: list[threading.Thread] = []
-    for folder in folders:
-        t = threading.Thread(target=watch_fn, args=(Path(folder), debounce),
-                             name=f"graphwatch:{folder}", daemon=True)
-        t.start()
-        threads.append(t)
+    def _reconcile() -> None:
+        nonlocal last_sig
+        cfg = load_config()
+        debounce = float(cfg["debounce"])
+        folders = [str(f) for f in cfg["folders"]]
+        sig = (tuple(folders), debounce)
+        if sig == last_sig:
+            # 无配置变化：只处理崩溃重启
+            for f, proc in list(children.items()):
+                if proc.poll() is not None:
+                    print(f"[graphwatch] 监听进程退出（rc={proc.poll()}），重启 {f}", file=sys.stderr)
+                    children[f] = watch_factory(debounce)(Path(f))
+            return
+        desired = set(folders)
+        if last_sig is not None and last_sig[1] != debounce:
+            # debounce 变了：所有子进程按旧参数起的，全部重启
+            for f, proc in children.items():
+                _stop_child(proc, f)
+            children.clear()
+        for f in list(children):
+            if f not in desired:
+                print(f"[graphwatch] 停止监听 {f}", file=sys.stderr)
+                _stop_child(children.pop(f), f)
+        start_fn = watch_factory(debounce)
+        for f in folders:
+            if f not in children:
+                print(f"[graphwatch] 开始监听 {f}", file=sys.stderr)
+                children[f] = start_fn(Path(f))
+        last_sig = sig
 
     try:
+        _reconcile()
+        print(f"graphwatch daemon：{len(children)} 个目录在监听（Ctrl-C 退出）", file=sys.stderr)
+        if on_started is not None:
+            on_started()
         while not stop_event.wait(poll_interval):
-            pass
+            try:
+                _reconcile()
+            except GraphwatchError as e:
+                # 配置短暂非法（写坏 YAML / 写到一半）：不崩，等下一轮
+                print(f"[graphwatch] 配置暂不可读，跳过本轮: {e}", file=sys.stderr)
     finally:
+        for f, proc in children.items():
+            _stop_child(proc, f)
         release_singleton_lock(lock)
-        print("graphwatch daemon：已退出，锁已释放", file=sys.stderr)
+        print("graphwatch daemon：已退出，监听子进程已停，锁已释放", file=sys.stderr)
 
 
 def _cmd(method):

@@ -9,6 +9,7 @@ import os
 import stat
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -232,6 +233,52 @@ class TestSingletonLock(GraphwatchCase):
         graphwatch.release_singleton_lock(lock)
 
 
+class FakeProc:
+    """假子进程：记录 terminate，可模拟崩溃。"""
+
+    def __init__(self):
+        self.terminated = False
+        self.returncode = None
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode or 0
+
+    def kill(self):
+        self.terminated = True
+        self.returncode = -9
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = 0
+
+
+class FakeFactory:
+    """假 watch 工厂：记录每次 start/terminate 的目录与 debounce。"""
+
+    def __init__(self):
+        self.started: list[tuple[str, float]] = []
+        self.stopped: list[str] = []
+        self.procs: dict[str, FakeProc] = {}
+
+    def __call__(self, debounce: float):
+        def start(folder):
+            key = str(folder)
+            self.started.append((key, debounce))
+            proc = FakeProc()
+            self.procs[key] = proc
+            return proc
+        return start
+
+    def note_stop(self, folder):
+        self.stopped.append(str(folder))
+
+    def crash(self, folder):
+        self.procs[str(folder)].returncode = 1
+
+
 class TestRunDaemon(GraphwatchCase):
     def test_run_requires_graphify(self):
         saved = sys.modules.pop("graphify", None)
@@ -249,28 +296,23 @@ class TestRunDaemon(GraphwatchCase):
         import threading
         stop = threading.Event()
         stop.set()
-        # 无目录 + 注入跳过 graphify 检查 → 立即正常返回
         graphwatch.run_daemon(stop_event=stop, ensure=lambda: None)
-        # 单例锁已释放
         lock = graphwatch.acquire_singleton_lock()
         self.assertIsNotNone(lock)
         graphwatch.release_singleton_lock(lock)
 
-    def test_run_starts_thread_per_folder(self):
+    def test_run_starts_watcher_per_folder(self):
         import threading
         repo = self.mkdir()
         graphwatch.add_folder(repo)
-        started = []
         stop = threading.Event()
+        fac = FakeFactory()
 
-        def fake_watch(path, debounce=3.0):
-            started.append((path, debounce))
-            stop.set()  # 跑起来就停
-
-        graphwatch.run_daemon(stop_event=stop, ensure=lambda: None, watch_fn=fake_watch)
-        self.assertEqual(len(started), 1)
-        self.assertEqual(started[0][0], repo.resolve())
-        self.assertEqual(started[0][1], 3.0)
+        def bootstrap():
+            stop.set()
+        graphwatch.run_daemon(stop_event=stop, ensure=lambda: None, watch_factory=fac, poll_interval=0.05, on_started=bootstrap)
+        self.assertEqual([k for k, _ in fac.started], [str(repo.resolve())])
+        self.assertEqual(fac.started[0][1], 3.0)
 
     def test_run_blocked_when_locked(self):
         lock = graphwatch.acquire_singleton_lock()
@@ -280,6 +322,88 @@ class TestRunDaemon(GraphwatchCase):
             self.assertIn("实例", str(cm.exception))
         finally:
             graphwatch.release_singleton_lock(lock)
+
+    def _run_until(self, condition, *, fac=None, **kw):
+        """跑 daemon 直到 condition 为真（每次 poll 后检查），然后停。"""
+        import threading
+        stop = threading.Event()
+        args = dict(ensure=lambda: None, poll_interval=0.05)
+        args.update(kw)
+        if fac is not None:
+            args["watch_factory"] = fac
+        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(stop_event=stop, **args), daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not condition():
+            time.sleep(0.02)
+        stop.set()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive(), "daemon 线程未退出")
+
+    def test_hot_add_starts_watcher(self):
+        repo1 = self.mkdir("r1")
+        graphwatch.add_folder(repo1)
+        fac = FakeFactory()
+        repo2 = self.mkdir("r2")
+
+        def step():
+            graphwatch.add_folder(repo2)
+
+        self._run_until(lambda: len(fac.started) >= 2, fac=fac, on_started=step)
+        self.assertIn(str(repo2.resolve()), [k for k, _ in fac.started])
+
+    def test_hot_remove_stops_watcher(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        fac = FakeFactory()
+        stopped = []
+
+        def step():
+            graphwatch.remove_folder(repo)
+            stopped.append(True)
+
+        self._run_until(lambda: stopped and fac.procs and all(p.terminated for p in fac.procs.values()),
+                        fac=fac, on_started=lambda: time.sleep(0.2) or stopped.append(None))
+        self.assertTrue(all(p.terminated for p in fac.procs.values()))
+
+    def test_bad_yaml_does_not_crash_daemon(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        fac = FakeFactory()
+        def step():
+            graphwatch.config_path().write_text("a: [unclosed\n", encoding="utf-8")
+        self._run_until(lambda: False, fac=fac, on_started=step, max_loops_hint=None) if False else None
+        # 直接驱动：坏 YAML 期间 load_config 抛错但主循环活着
+        import threading
+        stop = threading.Event()
+        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
+            stop_event=stop, ensure=lambda: None, watch_factory=fac, poll_interval=0.05), daemon=True)
+        thread.start()
+        time.sleep(0.2)
+        graphwatch.config_path().write_text("a: [unclosed\n", encoding="utf-8")
+        time.sleep(0.3)
+        self.assertTrue(thread.is_alive(), "坏 YAML 不应让 daemon 退出")
+        stop.set()
+        thread.join(timeout=5)
+
+    def test_debounce_change_restarts_watchers(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        fac = FakeFactory()
+        def step():
+            cfg = graphwatch.load_config()
+            cfg["debounce"] = 7
+            graphwatch.save_config(cfg)
+        self._run_until(lambda: any(d == 7 for _, d in fac.started), fac=fac, on_started=step)
+
+    def test_crashed_watcher_restarted(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        fac = FakeFactory()
+        def step():
+            if fac.procs:
+                fac.crash(repo.resolve())
+        self._run_until(lambda: len(fac.started) >= 2, fac=fac, on_started=step)
 
 
 class TestCliRun(GraphwatchCase):

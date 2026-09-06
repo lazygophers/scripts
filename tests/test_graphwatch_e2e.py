@@ -59,16 +59,18 @@ class TestEndToEnd(unittest.TestCase):
         try:
             # graphify watch 没有首轮构建——首个 graph.json 也靠变更事件触发
             graph_json = repo / "graphify-out" / "graph.json"
-            time.sleep(1)  # 让 observer 挂好
-            # 只写一次：反复写会不断重置 3s debounce，永远不触发
-            (repo / "app.py").write_text(
-                "def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n",
-                encoding="utf-8",
-            )
+            # 子进程启动要几秒；写入间隔 15s（> debounce 3s），单次写完等一轮，
+            # 没触发再写——连续快速写会不断重置 debounce 永不触发
+            nudge = "def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n"
+            (repo / "app.py").write_text(nudge, encoding="utf-8")
             deadline = time.monotonic() + 90
+            next_nudge = time.monotonic() + 15
             while time.monotonic() < deadline:
                 if graph_json.is_file():
                     break
+                if time.monotonic() > next_nudge:
+                    (repo / "app.py").write_text(nudge + "\n# nudge\n", encoding="utf-8")
+                    next_nudge = time.monotonic() + 15
                 time.sleep(1)
             self.assertTrue(graph_json.is_file(), "变更未触发首次构建")
             mtime_before = graph_json.stat().st_mtime
