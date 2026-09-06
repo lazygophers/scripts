@@ -423,6 +423,12 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
 
     if stop_event is None:
         stop_event = threading.Event()
+    try:
+        import signal
+
+        signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
+    except ValueError:
+        pass  # 非主线程（测试）：stop_event 已够用
     (ensure or ensure_graphify)()
 
     lock = acquire_singleton_lock()
@@ -717,7 +723,10 @@ def launchd_plist() -> str:
     <string>{exe}</string>
     <string>run</string>
   </array>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>Crashed</key><true/>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>{log}</string>
   <key>StandardErrorPath</key><string>{log}</string>
@@ -768,6 +777,50 @@ def _launchd_domain() -> str:
     return f"gui/{os.getuid()}"
 
 
+def _sh(*cmd: str) -> list[str]:
+    """命令包一层 zsh -c。launchctl 直接作为 python 子进程跑时 bootout/bootstrap
+    稳定报 'I/O error 5'（macOS 对 python 父进程的 XPC 判定），隔层 shell 即正常。"""
+    import shlex
+
+    return ["/bin/zsh", "-c", " ".join(shlex.quote(c) for c in cmd)]
+
+
+def _launchd_gone(runner) -> bool:
+    r = runner(_sh("launchctl", "print", f"{_launchd_domain()}/{LAUNCHD_LABEL}"), check=False)
+    return getattr(r, "returncode", 1) != 0
+
+
+def _launchd_stop(runner) -> None:
+    """停掉服务并从 domain 卸载：kill SIGTERM（daemon 优雅退出）→ 等消失
+    → bootout。直接 bootout 会在 daemon 退出期间报 'I/O error 5'；
+    plist 的 KeepAlive 只在崩溃时拉起，正常退出不复活，kill 后即静止。"""
+    domain = _launchd_domain()
+    runner(_sh("launchctl", "kill", "SIGTERM", f"{domain}/{LAUNCHD_LABEL}"), check=False)
+    for _ in range(10):
+        if _launchd_gone(runner):
+            return
+        time.sleep(0.5)
+    runner(_sh("launchctl", "bootout", f"{domain}/{LAUNCHD_LABEL}"), check=False)
+    for _ in range(10):
+        if _launchd_gone(runner):
+            return
+        time.sleep(0.5)
+
+
+def _launchd_start(runner, plist: str) -> None:
+    """bootstrap（带重试防 launchd 清理竞态）。"""
+    domain = _launchd_domain()
+    last = None
+    for _ in range(3):
+        try:
+            runner(_sh("launchctl", "bootstrap", domain, plist))
+            return
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(1)
+    raise last
+
+
 def install_service(runner=None) -> None:
     """注册为用户级服务并立即启动。按平台走 launchd / systemd / schtasks。"""
     if runner is None:
@@ -777,8 +830,8 @@ def install_service(runner=None) -> None:
         p = launchd_plist_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(launchd_plist(), encoding="utf-8")
-        runner(["launchctl", "bootout", _launchd_domain(), LAUNCHD_LABEL], check=False)
-        runner(["launchctl", "bootstrap", _launchd_domain(), str(p)])
+        _launchd_stop(runner)
+        _launchd_start(runner, str(p))
     elif plat.startswith("linux"):
         unit_dir = Path.home() / ".config" / "systemd" / "user"
         unit_dir.mkdir(parents=True, exist_ok=True)
@@ -802,9 +855,9 @@ def service_control(action: str, runner=None) -> None:
         # 现代 launchd API：bootstrap/bootout（旧 load/unload 会 "Unload failed: 5"）
         p = str(launchd_plist_path())
         if action in ("stop", "restart"):
-            runner(["launchctl", "bootout", _launchd_domain(), LAUNCHD_LABEL], check=False)
+            _launchd_stop(runner)
         if action in ("start", "restart"):
-            runner(["launchctl", "bootstrap", _launchd_domain(), p])
+            _launchd_start(runner, p)
     elif plat.startswith("linux"):
         runner(["systemctl", "--user", action, "graphwatch.service"])
     else:
@@ -821,7 +874,7 @@ def uninstall_service(runner=None) -> None:
     plat = sys.platform
     if plat == "darwin":
         p = launchd_plist_path()
-        runner(["launchctl", "bootout", _launchd_domain(), LAUNCHD_LABEL], check=False)
+        _launchd_stop(runner)
         if p.exists():
             p.unlink()
     elif plat.startswith("linux"):
@@ -832,17 +885,20 @@ def uninstall_service(runner=None) -> None:
 
 
 def service_registered(runner=None) -> bool:
-    """服务注册态探测：launchctl / systemctl / schtasks 各查各的。"""
+    """服务注册态探测。
+
+    macOS 注册态 = plist 文件存在（stop 会 bootout 出 domain，但注册保留、
+    start 可重新 bootstrap）；systemd 的 is-enabled / schtasks 的 Query 本身
+    就是磁盘态，无此问题。
+    """
+    if sys.platform == "darwin":
+        return launchd_plist_path().is_file()
     import subprocess
 
     if runner is None:
         def runner(cmd, **kw):
             return subprocess.run(cmd, check=False, capture_output=True, **kw)
-    plat = sys.platform
-    if plat == "darwin":
-        r = runner(["launchctl", "print", f"{_launchd_domain()}/{LAUNCHD_LABEL}"])
-        return r.returncode == 0
-    if plat.startswith("linux"):
+    if sys.platform.startswith("linux"):
         r = runner(["systemctl", "--user", "is-enabled", "graphwatch.service"])
         return r.returncode == 0
     r = runner(["schtasks", "/Query", "/TN", "graphwatch"])

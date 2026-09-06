@@ -488,6 +488,7 @@ class TestService(GraphwatchCase):
         self.assertIn(str(graphwatch.script_path()), plist)
         self.assertIn("<string>run</string>", plist)
         self.assertIn("<key>KeepAlive</key>", plist)
+        self.assertIn("<key>Crashed</key><true/>", plist)
         self.assertIn("<key>RunAtLoad</key>", plist)
 
     def test_systemd_unit_content(self):
@@ -508,10 +509,13 @@ class TestService(GraphwatchCase):
         cmds = []
         def fake_run(cmd, **kw):
             cmds.append(cmd)
-            return type("R", (), {"returncode": 0})()
+            rc = 1 if "print" in " ".join(cmd) else 0
+            return type("R", (), {"returncode": rc})()
         with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
             graphwatch.install_service(runner=fake_run)
-        self.assertIn(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(graphwatch.launchd_plist_path())], cmds)
+        boot = graphwatch._sh("launchctl", "bootstrap", f"gui/{os.getuid()}", str(graphwatch.launchd_plist_path()))
+        self.assertIn(boot, cmds)
+        self.assertEqual(boot[0], "/bin/zsh")
         self.assertTrue(graphwatch.launchd_plist_path().exists())
         self.assertIn(str(graphwatch.script_path()), graphwatch.launchd_plist_path().read_text())
 
@@ -535,11 +539,13 @@ class TestService(GraphwatchCase):
         cmds = []
         def fake_run(cmd, **kw):
             cmds.append(cmd)
-            return type("R", (), {"returncode": 0})()
+            rc = 1 if "print" in " ".join(cmd) else 0
+            return type("R", (), {"returncode": rc})()
         with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
             graphwatch.uninstall_service(runner=fake_run)
         self.assertFalse(p.exists())
-        self.assertIn(["launchctl", "bootout", f"gui/{os.getuid()}", graphwatch.LAUNCHD_LABEL], cmds)
+        joined = [" ".join(c) for c in cmds]
+        self.assertTrue(any("kill SIGTERM" in j for j in joined))
 
     def test_uninstall_windows_deletes_task(self):
         import unittest.mock
@@ -551,13 +557,13 @@ class TestService(GraphwatchCase):
             graphwatch.uninstall_service(runner=fake_run)
         self.assertEqual(cmds[0][:4], ["schtasks", "/Delete", "/F", "/TN"])
 
-    def test_service_registered_queries_platform(self):
+    def test_service_registered_is_plist_on_darwin(self):
         import unittest.mock
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
-            ok = graphwatch.service_registered(runner=lambda cmd, **kw: type("R", (), {"returncode": 0})())
-            no = graphwatch.service_registered(runner=lambda cmd, **kw: type("R", (), {"returncode": 1})())
-        self.assertTrue(ok)
-        self.assertFalse(no)
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"), \
+             unittest.mock.patch.object(graphwatch, "launchd_plist_path", return_value=self.home / "x.plist"):
+            self.assertFalse(graphwatch.service_registered())
+            (self.home / "x.plist").write_text("x")
+            self.assertTrue(graphwatch.service_registered())
 
     def test_daemon_alive_false_when_free(self):
         self.assertFalse(graphwatch.daemon_alive())
@@ -599,7 +605,8 @@ class TestServiceControl(GraphwatchCase):
         cmds = []
         def fake_run(cmd, **kw):
             cmds.append(cmd)
-            return type("R", (), {"returncode": 0})()
+            rc = 1 if "print" in " ".join(cmd) else 0
+            return type("R", (), {"returncode": rc})()
         return cmds, fake_run
 
     def test_unknown_action_raises(self):
@@ -619,7 +626,9 @@ class TestServiceControl(GraphwatchCase):
         with unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
              unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
             graphwatch.service_control("restart", runner=fake)
-        self.assertEqual([c[1] for c in cmds], ["bootout", "bootstrap"])
+        joined = [" ".join(c) for c in cmds]
+        self.assertTrue(any("kill SIGTERM" in j for j in joined))
+        self.assertTrue(any("bootstrap" in j for j in joined))
 
     def test_macos_stop_only_unload(self):
         import unittest.mock
@@ -627,7 +636,9 @@ class TestServiceControl(GraphwatchCase):
         with unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
              unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
             graphwatch.service_control("stop", runner=fake)
-        self.assertEqual([c[1] for c in cmds], ["bootout"])
+        joined = [" ".join(c) for c in cmds]
+        self.assertTrue(any("kill SIGTERM" in j for j in joined))
+        self.assertFalse(any("bootstrap" in j for j in joined))
 
     def test_linux_restart_maps_to_systemctl(self):
         import unittest.mock
