@@ -336,6 +336,16 @@ class TestMergeFactory(unittest.TestCase):
         self.assertEqual(plan.status, "skip")
         self.assertIn("detached", plan.detail)
 
+    def test_plan_carries_original_branch(self) -> None:
+        """detect 拿到当前分支后，plan 带上原始分支名（汇总表新列的数据源）。"""
+        fake = FakeRun({
+            "git show-ref": _cp(1),  # 远端 canary 不存在 → 可合并
+        })
+        with mock.patch.object(bg, "_run", fake), \
+             mock.patch.object(bg, "_get_current_branch", return_value="feat/x"):
+            plan = _plan_of(bg._merge_one_factory("canary", False, False, []))
+        self.assertEqual(plan.branch, "feat/x")
+
     def test_already_on_target_is_skipped(self) -> None:
         with mock.patch.object(bg, "_run", FakeRun()), \
              mock.patch.object(bg, "_get_current_branch", return_value="canary"):

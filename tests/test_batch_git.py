@@ -176,6 +176,30 @@ class TestPrintSummary(unittest.TestCase):
         self.assertNotIn("跳过", out)
         self.assertIn("1/1", out)
 
+    def test_branch_column_when_present(self):
+        """任一 RepoResult 带原始分支名 → 汇总表多一列「分支」。"""
+        r = self._make_reporter()
+        result = BatchResult(total=2)
+        result.succeeded.append(RepoResult("a", "/a", "ok", branch="feature/x"))
+        result.skipped.append(RepoResult("b", "/b", "skip", "已在 master"))
+        buf, redir = self._capture()
+        with redir:
+            print_summary(r, "汇总", result)
+        out = buf.getvalue()
+        self.assertIn("分支", out)
+        self.assertIn("feature/x", out)
+
+    def test_no_branch_column_when_absent(self):
+        """全部无分支 → 维持三列，不出现「分支」表头。"""
+        r = self._make_reporter()
+        result = BatchResult(total=1)
+        result.succeeded.append(RepoResult("a", "/a", "ok"))
+        buf, redir = self._capture()
+        with redir:
+            print_summary(r, "汇总", result)
+        out = buf.getvalue()
+        self.assertNotIn("分支", out)
+
     def test_failed_without_detail(self):
         r = self._make_reporter()
         result = BatchResult(total=1)
@@ -233,6 +257,18 @@ class TestPushFactory(unittest.TestCase):
         status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
         self.assertIn("dry-run", detail)
+
+    @patch("lib.batch_git._run")
+    @patch("lib.batch_git._get_current_branch", return_value="feat")
+    def test_plan_carries_original_branch(self, _mock_br, mock_run):
+        mock_run.side_effect = [
+            _mock_run(returncode=0),   # fetch
+            _mock_run(returncode=1),   # show-ref remote target (不存在)
+            _mock_run(returncode=1),   # show-ref local target (不存在)
+        ]
+        op = _push_one_factory(target="canary", dry_run=True, auto_commit=False, extra=[])
+        plan = op(Path("/repo"), MagicMock(), Path("/root"))
+        self.assertEqual(plan.branch, "feat")
 
     @patch("lib.batch_git._run")
     def test_detached_skips(self, mock_run):

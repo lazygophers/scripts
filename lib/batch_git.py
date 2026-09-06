@@ -25,6 +25,7 @@ class RepoResult:
     path: str
     status: str  # "ok" | "skip" | "fail"
     detail: str = ""
+    branch: str = ""  # 原始分支名（merge/push 的源分支，其他操作留空）
 
 
 @dataclass
@@ -37,7 +38,8 @@ class RepoPlan:
     """
     status: str  # "ok" | "skip" | "fail"
     detail: str = ""
-    execute: Callable[[Path, "RepoPlan", Reporter, Path], tuple[str, str]] | None = None
+    branch: str = ""  # 原始分支名：detect 捕获，随 plan 落进 RepoResult
+    execute: Callable[[Path, RepoPlan, Reporter, Path], tuple[str, str]] | None = None
 
 
 @dataclass
@@ -165,12 +167,16 @@ def print_summary(
     result: BatchResult,
 ) -> None:
     """打印批量操作汇总（紧凑 Table：仓库/状态/详情 + 单行 footer 统计）。"""
-    items: list[tuple[str, str, str]] = (
-        [(x.name, "ok", x.detail) for x in result.succeeded]
-        + [(x.name, "skip", x.detail) for x in result.skipped]
-        + [(x.name, "fail", x.detail) for x in result.failed]
+    grouped = (
+        [(x, "ok") for x in result.succeeded]
+        + [(x, "skip") for x in result.skipped]
+        + [(x, "fail") for x in result.failed]
     )
-    r.status_table(title, items)
+    if any(x.branch for x, _ in grouped):
+        r.status_table(title, [(x.name, x.branch, st, x.detail) for x, st in grouped],
+                       columns=("仓库", "分支", "状态", "详情"), status_idx=2)
+    else:
+        r.status_table(title, [(x.name, st, x.detail) for x, st in grouped])
     # 单行 footer：失败(红) · 成功(绿) · 跳过(黄)，各数字按状态色
     parts: list[tuple[str, str]] = []
     if result.failed:
@@ -275,7 +281,7 @@ class BatchRunner:
             except Exception as e:
                 rr_per_repo.err(f"检测异常: {e}")
                 plan = RepoPlan(status="fail", detail=str(e))
-            rr = RepoResult(name=str(rel), path=str(repo), status=plan.status, detail=plan.detail)
+            rr = RepoResult(name=str(rel), path=str(repo), status=plan.status, detail=plan.detail, branch=plan.branch)
             return idx, buf.getvalue(), plan, rr
 
         prog = progress(r.console)
@@ -516,6 +522,9 @@ def _push_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list
             return RepoPlan(status="skip", detail="无法获取当前分支（detached HEAD）")
         r.info(f"当前分支: {current_branch}")
 
+        def _p(**kw):
+            return RepoPlan(branch=current_branch, **kw)
+
         # 条件1：当前分支相对远端 target 有新 commit
         cond1 = False
         cond1_reason = ""
@@ -577,12 +586,12 @@ def _push_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list
             if not cond2_reason and local_target.returncode != 0:
                 cond2_reason = f"无本地 {target} 分支"
             reasons = [r for r in (cond1_reason, cond2_reason) if r]
-            return RepoPlan(status="skip", detail="；".join(reasons) or "两个条件均不满足")
+            return _p(status="skip", detail="；".join(reasons) or "两个条件均不满足")
 
         if dry_run:
-            return RepoPlan(status="skip", detail=f"条件满足（dry-run 模式，不执行 push_{target}）")
+            return _p(status="skip", detail=f"条件满足（dry-run 模式，不执行 push_{target}）")
 
-        return RepoPlan(status="ok", execute=_execute)
+        return _p(status="ok", execute=_execute)
 
     return _detect
 
@@ -657,8 +666,11 @@ def _merge_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: lis
             return RepoPlan(status="skip", detail="无法获取当前分支（detached HEAD）")
         r.info(f"当前分支: {current_branch}")
 
+        def _p(**kw):
+            return RepoPlan(branch=current_branch, **kw)
+
         if current_branch == target:
-            return RepoPlan(status="skip", detail=f"已在 {target}")
+            return _p(status="skip", detail=f"已在 {target}")
 
         # target 哨兵 "master" 语义=主分支, 逐仓探真实主分支再判远端存在性
         effective_target = (
@@ -669,14 +681,14 @@ def _merge_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: lis
             cwd=str(repo), check=False, capture_output=True,
         )
         if ref_check.returncode != 0:
-            return RepoPlan(status="skip", detail=f"无远端 {effective_target}（merge 需源分支存在）")
+            return _p(status="skip", detail=f"无远端 {effective_target}（merge 需源分支存在）")
 
         r.ok(f"可合并 origin/{effective_target} → {current_branch}")
 
         if dry_run:
-            return RepoPlan(status="skip", detail=f"条件满足（dry-run 模式，不执行 merge_{target}）")
+            return _p(status="skip", detail=f"条件满足（dry-run 模式，不执行 merge_{target}）")
 
-        return RepoPlan(status="ok", execute=_execute)
+        return _p(status="ok", execute=_execute)
 
     return _detect
 

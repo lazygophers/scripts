@@ -129,20 +129,23 @@ class Reporter:
     def status_table(
         self,
         title: str,
-        items: Sequence[tuple[str, str, str]],
+        items: Sequence[tuple],
         *,
         columns: Sequence[str] = ("仓库", "状态", "详情"),
+        status_idx: int = 1,
     ) -> None:
-        """状态汇总表：items 为 (name, status, detail) 三元组列表，状态列按状态着色。"""
+        """状态汇总表：items 行与 columns 同宽，状态列（status_idx）按状态着色。"""
         table = Table(title=title, show_header=True, box=ROUNDED, border_style="blue",
                       title_style="bold", header_style="bold cyan")
         table.add_column(columns[0], style="bold")
-        table.add_column(columns[1])
-        table.add_column(columns[2])
-        for name, status, detail in items:
+        for c in columns[1:]:
+            table.add_column(c)
+        for item in items:
+            status = item[status_idx]
             color = STATUS_STYLE.get(status, ("", "white"))[1]
             label = STATUS_LABEL.get(status, status)
-            table.add_row(name, f"[{color}]{label}[/{color}]", detail)
+            table.add_row(*[f"[{color}]{label}[/{color}]" if i == status_idx else v
+                            for i, v in enumerate(item)])
         self.console.print(table)
 
     def status_footer(self, parts: Sequence[tuple[str, str]]) -> None:
