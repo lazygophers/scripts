@@ -449,13 +449,12 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
     run_daemon._log_file = log_file
 
     def _dlog(msg: str) -> None:
+        # 只走 stderr：服务模式 launchd 的 StandardErrorPath 重定向进日志文件，
+        # 再写 log_file 会同一条记两遍；前台跑则直接给用户看
         import datetime
 
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        line = f"[{stamp}] {msg}"
-        print(line, file=sys.stderr)
-        log_file.write(line + "\n")
-        log_file.flush()
+        print(f"[{stamp}] {msg}", file=sys.stderr)
 
     children: dict[str, object] = {}
     last_sig: tuple[tuple[str, ...], float] | None = None
