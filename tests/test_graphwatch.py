@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from lib import graphwatch, graphwatch_service
+from lib import graphwatch, graphwatch_config, graphwatch_daemon, graphwatch_service
 from lib.graphwatch import GraphwatchError
 
 
@@ -235,7 +235,7 @@ class TestConfigEdges(GraphwatchCase):
         # 制造写失败：把配置根换成一个只读父目录里的路径
         import unittest.mock
 
-        with unittest.mock.patch.object(graphwatch, "config_home", return_value=Path("/definitely/not/writable")):
+        with unittest.mock.patch.object(graphwatch_config, "config_home", return_value=Path("/definitely/not/writable")):
             with self.assertRaises(OSError):
                 graphwatch.save_config({"folders": []})
 
@@ -798,7 +798,7 @@ class TestFreshnessUpdating(GraphwatchCase):
         with redirect_stderr(buf), \
              unittest.mock.patch.object(graphwatch, "service_state", return_value=st), \
              unittest.mock.patch.object(graphwatch, "list_folders", return_value=[str(repo)]), \
-             unittest.mock.patch.object(graphwatch, "daemon_alive", return_value=True):
+             unittest.mock.patch.object(graphwatch_daemon, "daemon_alive", return_value=True):
             rc = self._cli().status(log=0)
         self.assertEqual(rc, 0)
         self.assertIn("更新中", buf.getvalue())
@@ -954,7 +954,7 @@ class TestOpsLogging(GraphwatchCase):
         buf = io.StringIO()
         stop = threading.Event()
         import unittest.mock
-        with unittest.mock.patch.object(graphwatch, "load_config", flaky), \
+        with unittest.mock.patch.object(graphwatch_daemon, "load_config", flaky), \
              contextlib.redirect_stderr(buf):
             with self.assertRaises(RuntimeError):
                 graphwatch.run_daemon(stop_event=stop, ensure=lambda: None,
@@ -1318,8 +1318,8 @@ class TestLockEdges(GraphwatchCase):
         blocker = self.home / "unreadable.lock"
         blocker.write_text("x", encoding="utf-8")
         blocker.chmod(0o000)
-        with unittest.mock.patch.object(graphwatch, "acquire_singleton_lock", return_value=None), \
-             unittest.mock.patch.object(graphwatch, "lock_path", return_value=blocker), \
+        with unittest.mock.patch.object(graphwatch_daemon, "acquire_singleton_lock", return_value=None), \
+             unittest.mock.patch.object(graphwatch_daemon, "lock_path", return_value=blocker), \
              self.assertRaises(GraphwatchError) as cm:
             graphwatch.run_daemon(ensure=lambda: None)
         self.assertIn("PID ?", str(cm.exception))
@@ -1377,7 +1377,7 @@ class TestNotifyEdges(GraphwatchCase):
         import unittest.mock
         blocker = self.home / "blocker"
         blocker.write_text("x", encoding="utf-8")
-        with unittest.mock.patch.object(graphwatch, "log_path", return_value=blocker / "logs" / "graphwatch.log"), \
+        with unittest.mock.patch.object(graphwatch_daemon, "log_path", return_value=blocker / "logs" / "graphwatch.log"), \
              unittest.mock.patch.object(graphwatch.sys, "platform", "linux"):
             self.assertTrue(graphwatch.notify("t", "m", runner=lambda c, **k: type("R", (), {"returncode": 0})()))
 
@@ -1698,7 +1698,7 @@ class TestWorkerEdges(GraphwatchCase):
         fac = FakeListenerFactory()
         stop, thread = self._daemon(FakeRunner(), fac)
         buf = io.StringIO()
-        p = unittest.mock.patch.object(graphwatch, "load_config", side_effect=RuntimeError("kaboom"))
+        p = unittest.mock.patch.object(graphwatch_daemon, "load_config", side_effect=RuntimeError("kaboom"))
         try:
             with contextlib.redirect_stderr(buf):
                 time.sleep(0.2)
