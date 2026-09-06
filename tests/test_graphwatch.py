@@ -208,3 +208,87 @@ class TestSaveFailure(GraphwatchCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestConfigWizard(GraphwatchCase):
+    def _feed(self, *answers):
+        it = iter(answers)
+        return lambda prompt="": next(it)
+
+    def test_wizard_writes_all_fields(self):
+        cfg = graphwatch.run_wizard(input_fn=self._feed(
+            "anthropic", "sk-1234567890abcdef", "https://api.example.com", "claude-sonnet-5", "5",
+        ))
+        p = graphwatch.config_path()
+        self.assertTrue(p.exists())
+        self.assertEqual(cfg["backend"], "anthropic")
+        self.assertEqual(cfg["api_key"], "sk-1234567890abcdef")
+        self.assertEqual(cfg["base_url"], "https://api.example.com")
+        self.assertEqual(cfg["model"], "claude-sonnet-5")
+        self.assertEqual(cfg["debounce"], 5.0)
+        # folders 不被向导改动
+        self.assertEqual(cfg["folders"], [])
+        mode = stat.S_IMODE(p.stat().st_mode)
+        self.assertEqual(mode, 0o600)
+
+    def test_wizard_enter_keeps_defaults_and_existing(self):
+        graphwatch.add_folder(self.mkdir())
+        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", "", ""))
+        self.assertEqual(cfg["debounce"], 3)
+        self.assertEqual(cfg["backend"], "")
+        self.assertEqual(len(cfg["folders"]), 1)
+
+    def test_wizard_bad_debounce_reasks(self):
+        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", "", "abc", "-1", "7"))
+        self.assertEqual(cfg["debounce"], 7.0)
+
+    def test_wizard_ctrl_c_keeps_old_config(self):
+        graphwatch.save_config({**graphwatch.load_config(), "api_key": "old"})
+        def interrupt(prompt=""):
+            raise KeyboardInterrupt
+        with self.assertRaises(KeyboardInterrupt):
+            graphwatch.run_wizard(input_fn=interrupt)
+        self.assertEqual(graphwatch.load_config()["api_key"], "old")
+
+
+class TestMaskSecret(GraphwatchCase):
+    def test_long_secret_masked_middle(self):
+        self.assertEqual(graphwatch.mask_secret("sk-1234567890abcdef"), "sk-1…cdef")
+
+    def test_short_secret_fully_hidden(self):
+        self.assertEqual(graphwatch.mask_secret("short"), "****")
+
+    def test_empty(self):
+        self.assertEqual(graphwatch.mask_secret(""), "")
+
+
+class TestCliConfig(GraphwatchCase):
+    def test_cli_config_show_masks(self):
+        cfg = graphwatch.load_config()
+        cfg["api_key"] = "sk-1234567890abcdef"
+        graphwatch.save_config(cfg)
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            rc = self._cli().config("show")
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertNotIn("sk-1234567890abcdef", out)
+        self.assertIn("sk-1", out)
+
+    def test_cli_config_wizard_via_stdin(self):
+        import io
+        from contextlib import redirect_stderr
+        answers = iter(["kimi", "mk-1234567890abcdef", "", "", ""])
+        import builtins
+        buf = io.StringIO()
+        real_input = builtins.input
+        builtins.input = lambda prompt="": next(answers)
+        try:
+            with redirect_stderr(buf):
+                rc = self._cli().config()
+        finally:
+            builtins.input = real_input
+        self.assertEqual(rc, 0)
+        self.assertEqual(graphwatch.load_config()["backend"], "kimi")

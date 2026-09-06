@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from lib.fire_base import BaseCli, timed_cli
@@ -134,6 +135,72 @@ def ensure_graphify() -> None:
         ) from e
 
 
+def mask_secret(value: str) -> str:
+    """脱敏：≥8 字符露前 4 后 4，短的全遮，空串原样。"""
+    if not value:
+        return ""
+    if len(value) < 8:
+        return "****"
+    return f"{value[:4]}…{value[-4:]}"
+
+
+# 向导步骤：(配置键, 提示, 校验/转换)。回车 = 保留当前值。
+_WIZARD_STEPS: list[tuple[str, str, tuple[str, str] | None]] = [
+    ("backend", "AI 后端（备用字段，重建不用 LLM；如 anthropic/kimi/gemini/ollama）", None),
+    ("api_key", "API key（写入 0600 配置文件）", None),
+    ("base_url", "base URL（留空用官方默认）", None),
+    ("model", "模型名（留空用后端默认）", None),
+    ("debounce", "防抖秒数（变更后等多久再重建）", ("debounce", "float_positive")),
+]
+
+
+def _parse_step(raw: str, current: str, validator):
+    """单步解析：回车保留当前值；按 validator 校验，非法返回 None 重问。"""
+    if not raw.strip():
+        return current
+    if validator is None:
+        return raw.strip()
+    if validator[1] == "float_positive":
+        try:
+            v = float(raw)
+        except ValueError:
+            return None
+        return v if v > 0 else None
+    return raw.strip()
+
+
+def run_wizard(input_fn=None) -> dict:
+    """引导式配置向导：逐项问 backend/api_key/base_url/model/debounce。
+
+    每步显示当前值，回车跳过；走完才一次性落盘（中途 Ctrl-C 不产生半写配置）。
+    目录列表只展示不修改（由 add/remove 管）。
+    """
+    if input_fn is None:
+        input_fn = input
+    cfg = load_config()
+    print("graphwatch 配置向导 — 回车保留当前值，Ctrl-C 放弃全部修改\n", file=sys.stderr)
+    folders = [str(f) for f in cfg["folders"]]
+    print(f"已注册目录（{len(folders)} 个，向导不改目录，用 add/remove）：", file=sys.stderr)
+    for f in folders:
+        print(f"  {f}", file=sys.stderr)
+    print(file=sys.stderr)
+
+    for key, prompt, validator in _WIZARD_STEPS:
+        current = cfg[key]
+        shown = mask_secret(current) if key == "api_key" else current
+        while True:
+            raw = input_fn(f"{prompt} [{shown!r}]: ")
+            parsed = _parse_step(raw, current, validator)
+            if parsed is not None:
+                cfg[key] = parsed
+                break
+            print("  无效输入，请重试", file=sys.stderr)
+
+    save_config(cfg)
+    print(f"\n✓ 已写入 {config_path()}", file=sys.stderr)
+    return cfg
+
+
 def _cmd(method):
     """子命令装饰器：计时 + GraphwatchError 转一行人话（同 archery 的 cmd）。"""
 
@@ -190,5 +257,33 @@ class GraphwatchCli(BaseCli):
         for f in folders:
             table.add_row(f)
         self._r.console.print(table)
+        return 0
+
+    @_cmd
+    def config(self, action: str = "wizard") -> int:
+        """引导式配置向导（backend/api_key/base_url/model/debounce）。
+
+        用法: graphwatch config          # 进向导
+              graphwatch config show     # 脱敏查看当前生效配置
+        """
+        if action == "show":
+            cfg = load_config()
+            from rich.table import Table
+
+            table = Table(title=f"graphwatch 配置（{config_path()}）")
+            table.add_column("字段", style="bold")
+            table.add_column("值")
+            table.add_row("folders", f"{len(cfg['folders'])} 个目录（graphwatch list 查看）")
+            table.add_row("backend", str(cfg["backend"]) or "（空）")
+            table.add_row("api_key", mask_secret(str(cfg["api_key"])) or "（空）")
+            table.add_row("base_url", str(cfg["base_url"]) or "（空）")
+            table.add_row("model", str(cfg["model"]) or "（空）")
+            table.add_row("debounce", str(cfg["debounce"]))
+            self._r.console.print(table)
+            return 0
+        if action != "wizard":
+            self._r.err(f"未知 config 动作 {action!r}，可用: wizard（默认）/ show")
+            return 2
+        run_wizard()
         return 0
 
