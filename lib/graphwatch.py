@@ -153,14 +153,14 @@ def ensure_graphify() -> None:
     except ImportError as e:
         raise GraphwatchError(
             "graphify 库未安装。graphwatch 只用它、不自己解析代码，请装上：\n"
-            "  pip install '.[graphify]'   # 或 '.[all]'"
+            "  pip3 install -r requirements.txt"
         ) from e
     try:
         import watchdog  # noqa: F401
     except ImportError as e:
         raise GraphwatchError(
             "watchdog 未安装（graphify watch 的监听依赖，缺了子进程起不来）：\n"
-            "  pip install watchdog"
+            "  pip3 install -r requirements.txt"
         ) from e
 
 

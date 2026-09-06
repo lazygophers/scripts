@@ -1,4 +1,6 @@
-# 基础依赖：全部 bin/* 命令需要
+# 全部依赖：基础（全部 bin/* 命令）+ graphwatch 监听（graphifyy / watchdog）
 fire>=0.5
 rich>=13.0
 pyyaml>=6
+graphifyy>=0.9.55
+watchdog>=4
