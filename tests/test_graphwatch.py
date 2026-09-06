@@ -1222,3 +1222,551 @@ class TestThrottle(GraphwatchCase):
         with unittest.mock.patch.object(graphwatch.time, "monotonic", return_value=graphwatch.time.monotonic() + 301):
             notifier.fire("/a", "t", "m")
         self.assertEqual(len(sent), 2)
+
+
+class TestValidationConcurrency(GraphwatchCase):
+    def test_bad_concurrency_raises_friendly(self):
+        graphwatch.config_path().write_text("rebuild_concurrency: abc\n", encoding="utf-8")
+        with self.assertRaises(GraphwatchError) as cm:
+            graphwatch.load_config()
+        self.assertIn("rebuild_concurrency", str(cm.exception))
+
+    def test_zero_concurrency_raises(self):
+        graphwatch.config_path().write_text("rebuild_concurrency: 0\n", encoding="utf-8")
+        with self.assertRaises(GraphwatchError):
+            graphwatch.load_config()
+
+
+class TestFreshnessEdges(GraphwatchCase):
+    def test_folder_freshness_fresh(self):
+        repo = self.mkdir()
+        (repo / "a.py").write_text("x\n", encoding="utf-8")
+        g = repo / "graphify-out"
+        g.mkdir()
+        (g / "graph.json").write_text("{}", encoding="utf-8")
+        st, detail = graphwatch.folder_freshness(str(repo))
+        self.assertEqual(st, "ok")
+        self.assertIn("新鲜", detail)
+
+    def test_stale_trigger_ignores_extensionless(self):
+        import os
+
+        repo = self.mkdir()
+        (repo / "a.py").write_text("x\n", encoding="utf-8")
+        (repo / "Makefile").write_text("all:\n", encoding="utf-8")
+        g = repo / "graphify-out"
+        g.mkdir()
+        (g / "graph.json").write_text("{}", encoding="utf-8")
+        future = time.time() + 100
+        os.utime(repo / "Makefile", (future, future))
+        # 无扩展名文件不在 watch 监听范围，不应判过期
+        self.assertIsNone(graphwatch.stale_trigger(str(repo)))
+
+
+class TestWatchedExtensionsFallback(GraphwatchCase):
+    def test_fallback_without_graphify(self):
+        saved = sys.modules.pop("graphify", None)
+        sys.modules["graphify"] = None
+        try:
+            ext = graphwatch._watched_extensions()
+        finally:
+            sys.modules.pop("graphify", None)
+            if saved is not None:
+                sys.modules["graphify"] = saved
+        self.assertIn(".py", ext)
+
+    def test_extensions_from_graphify_detect(self):
+        import types
+        import unittest.mock
+        det = types.ModuleType("graphify.detect")
+        det.CODE_EXTENSIONS = frozenset({".zz1"})
+        det.DOC_EXTENSIONS = frozenset({".zz2"})
+        det.PAPER_EXTENSIONS = frozenset({".zz3"})
+        det.IMAGE_EXTENSIONS = frozenset({".zz4"})
+        gfy = types.ModuleType("graphify")
+        with unittest.mock.patch.dict(sys.modules, {"graphify": gfy, "graphify.detect": det}):
+            ext = graphwatch._watched_extensions()
+        self.assertEqual(ext, frozenset({".zz1", ".zz2", ".zz3", ".zz4"}))
+
+
+class TestLockEdges(GraphwatchCase):
+    def test_daemon_alive_true_when_locked(self):
+        lock = graphwatch.acquire_singleton_lock()
+        try:
+            self.assertTrue(graphwatch.daemon_alive())
+        finally:
+            graphwatch.release_singleton_lock(lock)
+
+    def test_run_locked_pid_unreadable(self):
+        import unittest.mock
+        blocker = self.home / "unreadable.lock"
+        blocker.write_text("x", encoding="utf-8")
+        blocker.chmod(0o000)
+        with unittest.mock.patch.object(graphwatch, "acquire_singleton_lock", return_value=None), \
+             unittest.mock.patch.object(graphwatch, "lock_path", return_value=blocker), \
+             self.assertRaises(GraphwatchError) as cm:
+            graphwatch.run_daemon(ensure=lambda: None)
+        self.assertIn("PID ?", str(cm.exception))
+
+    def test_windows_lock_roundtrip(self):
+        import types
+        import unittest.mock
+        fake = types.ModuleType("msvcrt")
+        fake.locking = lambda fd, mode, nbytes: None
+        fake.LK_NBLCK = 2
+        fake.LK_UNLCK = 8
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "win32"), \
+             unittest.mock.patch.dict(sys.modules, {"msvcrt": fake}):
+            fd = graphwatch.acquire_singleton_lock()
+            self.assertIsNotNone(fd)
+            graphwatch.release_singleton_lock(fd)
+
+    def test_save_replace_and_unlink_both_fail(self):
+        import unittest.mock
+        with unittest.mock.patch.object(graphwatch.os, "replace", side_effect=OSError("boom")), \
+             unittest.mock.patch.object(graphwatch.os, "unlink", side_effect=OSError("gone")):
+            with self.assertRaises(OSError):
+                graphwatch.save_config({"folders": []})
+
+    def test_release_none_noop(self):
+        graphwatch.release_singleton_lock(None)
+
+
+class TestNotifyEdges(GraphwatchCase):
+    def test_windows_powershell_quotes_escaped(self):
+        import unittest.mock
+        cmds = []
+
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return type("R", (), {"returncode": 0})()
+
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "win32"):
+            ok = graphwatch.notify('ti"tle', "me'ssage", runner=fake_run)
+        self.assertTrue(ok)
+        joined = " ".join(cmds[0])
+        self.assertIn("powershell", joined)
+        self.assertIn("''", joined)  # 单引号双写转义
+
+    def test_runner_exception_returns_false(self):
+        import unittest.mock
+
+        def boom(cmd, **kw):
+            raise RuntimeError("gone")
+
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"):
+            self.assertFalse(graphwatch.notify("t", "m", runner=boom))
+
+    def test_audit_failure_swallowed(self):
+        import unittest.mock
+        blocker = self.home / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        with unittest.mock.patch.object(graphwatch, "log_path", return_value=blocker / "logs" / "graphwatch.log"), \
+             unittest.mock.patch.object(graphwatch.sys, "platform", "linux"):
+            self.assertTrue(graphwatch.notify("t", "m", runner=lambda c, **k: type("R", (), {"returncode": 0})()))
+
+    def test_notify_default_runner(self):
+        import unittest.mock
+
+        def fake_run(cmd, **kw):
+            return type("R", (), {"returncode": 0})()
+
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"), \
+             unittest.mock.patch("subprocess.run", fake_run):
+            self.assertTrue(graphwatch.notify("t", "m"))
+
+
+class TestServicePlatformEdges(GraphwatchCase):
+    def _R(self, rc=0, stdout=b""):
+        return type("R", (), {"returncode": rc, "stdout": stdout})()
+
+    def test_registered_linux_and_windows(self):
+        import unittest.mock
+        for plat in ("linux", "win32"):
+            with unittest.mock.patch.object(graphwatch.sys, "platform", plat):
+                self.assertTrue(graphwatch.service_registered(runner=lambda c, **k: self._R(0)))
+                self.assertFalse(graphwatch.service_registered(runner=lambda c, **k: self._R(1)))
+
+    def test_state_linux_parses_systemctl(self):
+        import unittest.mock
+
+        def runner(cmd, **kw):
+            return self._R(0, b"MainPID=42\nActiveState=active\nExecMainStatus=0\n")
+
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"), \
+             unittest.mock.patch.object(graphwatch, "service_registered", return_value=True):
+            st = graphwatch.service_state(runner=runner)
+        self.assertTrue(st["running"])
+        self.assertEqual(st["pid"], "42")
+        self.assertEqual(st["last_exit"], "0")
+
+    def test_state_windows_uses_daemon_alive(self):
+        import unittest.mock
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "win32"), \
+             unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
+             unittest.mock.patch.object(graphwatch, "daemon_alive", return_value=True):
+            st = graphwatch.service_state(runner=lambda c, **k: self._R(0))
+        self.assertTrue(st["running"])
+
+    def test_state_darwin_default_runner(self):
+        import unittest.mock
+
+        def fake_run(cmd, **kw):
+            return self._R(0, b"state = running\npid = 77\nlast exit code = 0\n")
+
+        with unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
+             unittest.mock.patch.object(graphwatch, "_launchd_gone", return_value=False), \
+             unittest.mock.patch("subprocess.run", fake_run):
+            st = graphwatch.service_state()
+        self.assertTrue(st["running"])
+        self.assertEqual(st["pid"], "77")
+
+    def test_install_windows_creates_task(self):
+        import unittest.mock
+        cmds = []
+
+        def runner(cmd, **kw):
+            cmds.append(cmd)
+            return self._R(0)
+
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "win32"):
+            graphwatch.install_service(runner=runner)
+        self.assertIn("/Create", cmds[0])
+
+    def test_install_linux_default_runner(self):
+        import unittest.mock
+        cmds = []
+        runner = lambda cmd, **kw: cmds.append(cmd) or self._R(0)  # noqa: E731
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"), \
+             unittest.mock.patch.object(graphwatch, "_checked_runner", return_value=runner), \
+             unittest.mock.patch.object(graphwatch.Path, "home", classmethod(lambda cls: self.home)):
+            graphwatch.install_service()
+        unit = self.home / ".config" / "systemd" / "user" / "graphwatch.service"
+        self.assertTrue(unit.exists())
+        flat = [" ".join(c) for c in cmds]
+        self.assertTrue(any("enable" in j for j in flat))
+
+    def test_uninstall_linux(self):
+        import unittest.mock
+        cmds = []
+        unit_dir = self.home / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True)
+        (unit_dir / "graphwatch.service").write_text("x", encoding="utf-8")
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"), \
+             unittest.mock.patch.object(graphwatch.Path, "home", classmethod(lambda cls: self.home)):
+            graphwatch.uninstall_service(runner=lambda cmd, **kw: cmds.append(cmd) or self._R(0))
+        self.assertFalse((unit_dir / "graphwatch.service").exists())
+
+    def test_windows_stop_ends_task(self):
+        import unittest.mock
+        cmds = []
+
+        def runner(cmd, **kw):
+            cmds.append(cmd)
+            return self._R(0)
+
+        with unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
+             unittest.mock.patch.object(graphwatch.sys, "platform", "win32"):
+            graphwatch.service_control("stop", runner=runner)
+        self.assertEqual(cmds[0][:3], ["schtasks", "/End", "/TN"])
+
+    def test_launchd_stop_bootout_fallback(self):
+        import unittest.mock
+        cmds = []
+
+        def runner(cmd, **kw):
+            cmds.append(cmd)
+            return self._R(0)  # print 永远 rc0：服务一直「活着」，逼出 bootout 兜底
+
+        with unittest.mock.patch.object(graphwatch.time, "sleep", lambda s: None):
+            graphwatch._launchd_stop(runner)
+        joined = [" ".join(c) for c in cmds]
+        self.assertTrue(any("kill" in j for j in joined))
+        self.assertTrue(any("bootout" in j for j in joined))
+
+    def test_launchd_start_retries_then_ok(self):
+        import unittest.mock
+        n = {"i": 0}
+
+        def runner(cmd, **kw):
+            n["i"] += 1
+            if n["i"] < 3:
+                raise RuntimeError("I/O error")
+            return self._R(0)
+
+        with unittest.mock.patch.object(graphwatch.time, "sleep", lambda s: None):
+            graphwatch._launchd_start(runner, "/tmp/x.plist")
+        self.assertEqual(n["i"], 3)
+
+    def test_launchd_start_all_fail_raises(self):
+        import unittest.mock
+
+        def runner(cmd, **kw):
+            raise RuntimeError("I/O error 5")
+
+        with unittest.mock.patch.object(graphwatch.time, "sleep", lambda s: None), \
+             self.assertRaises(RuntimeError):
+            graphwatch._launchd_start(runner, "/tmp/x.plist")
+
+    def test_launchd_stop_gone_after_bootout(self):
+        import unittest.mock
+
+        def runner(cmd, **kw):
+            # bootout 前服务一直「活着」，bootout 后消失：覆盖兜底后的 return
+            gone = any("bootout" in " ".join(c) for c in seen)
+            seen.append(cmd)
+            return self._R(1 if gone else 0)
+
+        seen = []
+        with unittest.mock.patch.object(graphwatch.time, "sleep", lambda s: None):
+            graphwatch._launchd_stop(runner)
+
+    def test_uninstall_linux_default_runner(self):
+        import unittest.mock
+        unit_dir = self.home / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True)
+        (unit_dir / "graphwatch.service").write_text("x", encoding="utf-8")
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"), \
+             unittest.mock.patch.object(graphwatch, "_checked_runner",
+                                        return_value=lambda cmd, **k: self._R(0)), \
+             unittest.mock.patch.object(graphwatch.Path, "home", classmethod(lambda cls: self.home)):
+            graphwatch.uninstall_service()
+        self.assertFalse((unit_dir / "graphwatch.service").exists())
+
+    def test_registered_default_runner_linux(self):
+        import unittest.mock
+        fake = {"rc": 0}
+
+        def fake_run(cmd, **kw):
+            return self._R(fake["rc"])
+
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"), \
+             unittest.mock.patch("subprocess.run", fake_run):
+            self.assertTrue(graphwatch.service_registered())
+            fake["rc"] = 1
+            self.assertFalse(graphwatch.service_registered())
+
+    def test_checked_runner_defaults_check_true(self):
+        import unittest.mock
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen.update(kw)
+            return self._R(0)
+
+        with unittest.mock.patch("subprocess.run", fake_run):
+            r = graphwatch._checked_runner()
+            r(["/usr/bin/true"])
+        self.assertIs(seen["check"], True)
+
+
+class TestWorkerEdges(GraphwatchCase):
+    def _daemon(self, runner, fac, **kw):
+        stop = threading.Event()
+        args = dict(stop_event=stop, ensure=lambda: None, listener_factory=fac,
+                    rebuild_runner=runner, poll_interval=0.05)
+        args.update(kw)
+        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=args, daemon=True)
+        thread.start()
+        return stop, thread
+
+    def _wait(self, cond, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not cond():
+            time.sleep(0.05)
+
+    def test_queued_during_flight_reruns(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        fac = FakeListenerFactory()
+        runner = FakeRunner(delay=0.2)
+        stop, thread = self._daemon(runner, fac)
+        try:
+            self._wait(lambda: str(repo.resolve()) in fac.listeners)
+            lis = fac.listeners[str(repo.resolve())]
+            lis.fire_change()
+            lis.fire_change()  # 第二次：在队列/执行中 → dirty，完成后重跑一轮
+            self._wait(lambda: len(runner.calls) >= 2)
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+        self.assertEqual(len(runner.calls), 2, "重建中再变更应合并为恰好重跑一轮")
+        self.assertEqual(runner.max_active, 1)
+
+    def test_rebuild_exception_logged_daemon_survives(self):
+        import contextlib
+        import io
+
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        fac = FakeListenerFactory()
+
+        class Boom:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, folder):
+                self.calls += 1
+                raise RuntimeError("update boom")
+
+        runner = Boom()
+        notified = []
+        notifier = graphwatch.Notifier(throttle_secs=300, sender=lambda f, t, m: notified.append(t) or True)
+        stop, thread = self._daemon(runner, fac, notifier=notifier)
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(buf):
+                self._wait(lambda: str(repo.resolve()) in fac.listeners)
+                fac.listeners[str(repo.resolve())].fire_change()
+                self._wait(lambda: runner.calls >= 1 and notified)
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+        self.assertIn("重建异常", buf.getvalue())
+        self.assertEqual(notified, ["graphwatch 重建失败"])
+
+    def test_concurrency_increase_midrun(self):
+        import contextlib
+        import io
+
+        r1, r2 = self.mkdir("r1"), self.mkdir("r2")
+        graphwatch.add_folder(r1)
+        graphwatch.add_folder(r2)
+        fac = FakeListenerFactory()
+        runner = FakeRunner(delay=0.2)
+        stop, thread = self._daemon(runner, fac)
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(buf):
+                self._wait(lambda: len(fac.listeners) >= 2)
+                cfg = graphwatch.load_config()
+                cfg["rebuild_concurrency"] = 2
+                graphwatch.save_config(cfg)
+                self._wait(lambda: "rebuild_concurrency 变化" in buf.getvalue())
+                for r in (r1, r2):
+                    fac.listeners[str(r.resolve())].fire_change()
+                self._wait(lambda: len(runner.calls) >= 2)
+                time.sleep(0.5)
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+        self.assertEqual(len(runner.calls), 2)
+        self.assertEqual(runner.max_active, 2, "并发提到 2 后应能同时重建")
+
+    def test_bad_config_round_skipped_logged(self):
+        import contextlib
+        import io
+
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        fac = FakeListenerFactory()
+        stop, thread = self._daemon(FakeRunner(), fac)
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(buf):
+                time.sleep(0.2)
+                graphwatch.config_path().write_text("a: [unclosed\n", encoding="utf-8")
+                time.sleep(0.4)
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+        self.assertIn("配置暂不可读", buf.getvalue())
+
+    def test_loop_unexpected_error_logged_and_exits(self):
+        import contextlib
+        import io
+        import unittest.mock
+
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        fac = FakeListenerFactory()
+        stop, thread = self._daemon(FakeRunner(), fac)
+        buf = io.StringIO()
+        p = unittest.mock.patch.object(graphwatch, "load_config", side_effect=RuntimeError("kaboom"))
+        try:
+            with contextlib.redirect_stderr(buf):
+                time.sleep(0.2)
+                p.start()
+                thread.join(timeout=5)
+        finally:
+            p.stop()
+            stop.set()
+            if thread.is_alive():
+                thread.join(timeout=5)
+        self.assertFalse(thread.is_alive(), "意外错误应让 daemon 退出待服务管理器拉起")
+        self.assertIn("daemon 意外错误", buf.getvalue())
+
+    def test_hot_remove_logged_and_stop_failure_tolerated(self):
+        import contextlib
+        import io
+
+        class BadStopListener(FakeListener):
+            def stop(self):
+                raise RuntimeError("stop boom")
+
+        class BadStopFactory(FakeListenerFactory):
+            def __call__(self, folder, debounce, on_change):
+                self.calls.append((str(folder), debounce))
+                lis = BadStopListener(folder, debounce, on_change)
+                self.listeners[str(folder)] = lis
+                return lis
+
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        fac = BadStopFactory()
+        stop, thread = self._daemon(FakeRunner(), fac)
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(buf):
+                self._wait(lambda: str(repo.resolve()) in fac.listeners)
+                graphwatch.remove_folder(repo)
+                self._wait(lambda: fac.listeners and all(x.stopped for x in fac.listeners.values()), timeout=5)
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+        self.assertIn("停止监听", buf.getvalue())
+
+
+class TestCliWrappers(GraphwatchCase):
+    def test_cli_install(self):
+        import unittest.mock
+        with unittest.mock.patch.object(graphwatch, "ensure_graphify"), \
+             unittest.mock.patch.object(graphwatch, "install_service") as m:
+            rc = self._cli().install()
+        self.assertEqual(rc, 0)
+        m.assert_called_once()
+
+    def test_cli_start_stop_restart_uninstall(self):
+        import unittest.mock
+        for name, target in (("start", "service_control"), ("stop", "service_control"),
+                             ("restart", "service_control"), ("uninstall", "uninstall_service")):
+            with unittest.mock.patch.object(graphwatch, target) as m:
+                rc = getattr(self._cli(), name)()
+            self.assertEqual(rc, 0)
+            m.assert_called_once()
+
+    def test_cli_config_unknown_action(self):
+        self.assertEqual(self._cli().config("haha"), 2)
+
+    def test_cli_run_keyboard_interrupt(self):
+        import unittest.mock
+
+        def boom():
+            raise KeyboardInterrupt
+
+        with unittest.mock.patch.object(graphwatch, "run_daemon", boom):
+            self.assertEqual(self._cli().run(), 0)
+
+
+class TestWizardEdges(GraphwatchCase):
+    def _feed(self, *answers):
+        it = iter(answers)
+        return lambda prompt="": next(it)
+
+    def test_bad_concurrency_reasks(self):
+        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", "", "", "abc", "-1", "4"))
+        self.assertEqual(cfg["rebuild_concurrency"], 4)
+
+    def test_backend_nonnumeric_reasks(self):
+        cfg = graphwatch.run_wizard(input_fn=self._feed("abc", "2", "", "", "", "", ""))
+        self.assertEqual(cfg["backend"], "kimi")
