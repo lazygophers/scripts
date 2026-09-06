@@ -506,18 +506,20 @@ class TestService(GraphwatchCase):
 
     def test_install_macos_writes_plist_and_loads(self):
         import unittest.mock
+        plist = self.home / "com.lazygophers.graphwatch.plist"
         cmds = []
         def fake_run(cmd, **kw):
             cmds.append(cmd)
             rc = 1 if "print" in " ".join(cmd) else 0
             return type("R", (), {"returncode": rc})()
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"), \
+             unittest.mock.patch.object(graphwatch, "launchd_plist_path", return_value=plist):
             graphwatch.install_service(runner=fake_run)
-        boot = graphwatch._sh("launchctl", "bootstrap", f"gui/{os.getuid()}", str(graphwatch.launchd_plist_path()))
+            boot = graphwatch._sh("launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist))
         self.assertIn(boot, cmds)
         self.assertEqual(boot[0], "/bin/zsh")
-        self.assertTrue(graphwatch.launchd_plist_path().exists())
-        self.assertIn(str(graphwatch.script_path()), graphwatch.launchd_plist_path().read_text())
+        self.assertTrue(plist.exists())
+        self.assertIn(str(graphwatch.script_path()), plist.read_text())
 
     def test_install_linux_enables_unit(self):
         import unittest.mock
@@ -533,15 +535,15 @@ class TestService(GraphwatchCase):
 
     def test_uninstall_macos_removes_plist(self):
         import unittest.mock
-        p = graphwatch.launchd_plist_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
+        p = self.home / "com.lazygophers.graphwatch.plist"
         p.write_text("x")
         cmds = []
         def fake_run(cmd, **kw):
             cmds.append(cmd)
             rc = 1 if "print" in " ".join(cmd) else 0
             return type("R", (), {"returncode": rc})()
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"), \
+             unittest.mock.patch.object(graphwatch, "launchd_plist_path", return_value=p):
             graphwatch.uninstall_service(runner=fake_run)
         self.assertFalse(p.exists())
         joined = [" ".join(c) for c in cmds]
@@ -661,6 +663,67 @@ class TestServiceControl(GraphwatchCase):
         with unittest.mock.patch.object(graphwatch, "service_registered", return_value=False):
             rc = self._cli().restart()
         self.assertNotEqual(rc, 0)
+
+
+class TestServiceStateAndLog(GraphwatchCase):
+    def _print_runner(self, text, gone=False):
+        def runner(cmd, **kw):
+            if gone:
+                return type("R", (), {"returncode": 1, "stdout": b""})()
+            return type("R", (), {"returncode": 0, "stdout": text.encode()})()
+        return runner
+
+    def test_state_unregistered(self):
+        import unittest.mock
+        with unittest.mock.patch.object(graphwatch, "service_registered", return_value=False):
+            st = graphwatch.service_state(runner=lambda cmd, **kw: None)
+        self.assertFalse(st["registered"])
+        self.assertFalse(st["running"])
+
+    def test_state_running_parses_launchctl(self):
+        import unittest.mock
+        text = "state = running\npid = 12345\nlast exit code = (never exited)\n"
+        with unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
+             unittest.mock.patch.object(graphwatch, "_launchd_gone", return_value=False), \
+             unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+            st = graphwatch.service_state(runner=self._print_runner(text))
+        self.assertTrue(st["running"])
+        self.assertEqual(st["pid"], "12345")
+        self.assertIn("never exited", st["last_exit"])
+
+    def test_state_not_running_when_gone(self):
+        import unittest.mock
+        with unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
+             unittest.mock.patch.object(graphwatch, "_launchd_gone", return_value=True):
+            st = graphwatch.service_state(runner=lambda cmd, **kw: type("R", (), {"returncode": 1, "stdout": b""})())
+        self.assertFalse(st["running"])
+        self.assertEqual(st["pid"], "-")
+
+    def test_tail_log(self):
+        p = graphwatch.log_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("\n".join(f"line{i}" for i in range(20)), encoding="utf-8")
+        self.assertEqual(graphwatch.tail_log(3), ["line17", "line18", "line19"])
+        self.assertEqual(graphwatch.tail_log(0), [])
+
+    def test_tail_log_missing_file(self):
+        self.assertEqual(graphwatch.tail_log(5), [])
+
+    def test_cli_status_prints_log(self):
+        import io
+        import unittest.mock
+        from contextlib import redirect_stderr
+        p = graphwatch.log_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("[2026-09-06 20:00:00] 开始监听 /tmp/x\n", encoding="utf-8")
+        st = {"registered": True, "running": True, "pid": "1", "last_exit": "0", "uptime": "-"}
+        buf = io.StringIO()
+        with redirect_stderr(buf), \
+             unittest.mock.patch.object(graphwatch, "service_state", return_value=st), \
+             unittest.mock.patch.object(graphwatch, "list_folders", return_value=[]):
+            rc = self._cli().status()
+        self.assertEqual(rc, 0)
+        self.assertIn("开始监听", buf.getvalue())
 
 
 class TestConfigWizard(GraphwatchCase):

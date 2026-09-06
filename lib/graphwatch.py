@@ -669,19 +669,21 @@ class GraphwatchCli(BaseCli):
         return 0
 
     @_cmd
-    def status(self) -> int:
-        """查看服务注册态、进程存活、各目录图谱新鲜度。
+    def status(self, log: int = 10) -> int:
+        """查看服务执行状态、各目录图谱新鲜度、最近日志。
 
-        用法: graphwatch status
+        用法: graphwatch status            # 服务态 + 新鲜度 + 最近 10 行日志
+              graphwatch status --log 50   # 多看些日志；--log 0 关闭日志段
         """
         from rich.table import Table
 
         rows: list[tuple] = []
-        installed = service_registered()
-        alive = daemon_alive() if installed else False
-        head = "已注册" if installed else "未注册"
-        head += " · 进程在跑" if alive else (" · 进程没在跑" if installed else "")
-        if not installed:
+        st = service_state()
+        head = "已注册" if st["registered"] else "未注册"
+        head += f" · {'运行中' if st['running'] else '没在跑'}"
+        head += f" · PID {st['pid']}" if st["running"] else ""
+        head += f" · 上次退出码 {st['last_exit']}" if st["registered"] else ""
+        if not st["registered"]:
             self._r.warn("服务未注册。先: graphwatch install")
         for f in list_folders():
             st, detail = folder_freshness(f)
@@ -690,11 +692,18 @@ class GraphwatchCli(BaseCli):
         table.add_column("目录", style="bold")
         table.add_column("图谱")
         table.add_column("详情")
-        for folder, st, detail in rows:
-            color = FRESHNESS_COLOR[st]
-            label = FRESHNESS_LABEL[st]
+        for folder, fs, detail in rows:
+            color = FRESHNESS_COLOR[fs]
+            label = FRESHNESS_LABEL[fs]
             table.add_row(folder, f"[{color}]{label}[/{color}]", detail)
         self._r.console.print(table)
+        if log:
+            lines = tail_log(log)
+            self._r.console.print(f"[bold blue]最近日志[/bold blue] [dim]({log_path()})[/dim]")
+            if not lines:
+                self._r.console.print("  [dim]（暂无）[/dim]")
+            for line in lines:
+                self._r.console.print(f"  [dim]{line}[/dim]")
         return 0
 
 
@@ -912,6 +921,55 @@ def daemon_alive() -> bool:
         return True
     release_singleton_lock(fd)
     return False
+
+
+def service_state(runner=None) -> dict:
+    """服务执行态：注册 / 运行 / PID / 上次退出码 / 运行时长。"""
+    state = {"registered": service_registered(runner), "running": False,
+             "pid": "-", "last_exit": "-", "uptime": "-"}
+    if not state["registered"]:
+        return state
+    import re
+    import subprocess
+
+    if runner is None:
+        def runner(cmd, **kw):
+            kw.setdefault("check", False)
+            return subprocess.run(cmd, capture_output=True, **kw)
+    plat = sys.platform
+    if plat == "darwin":
+        if not _launchd_gone(runner):
+            r = runner(_sh("launchctl", "print", f"{_launchd_domain()}/{LAUNCHD_LABEL}"), check=False)
+            text = getattr(r, "stdout", b"").decode(errors="replace") if isinstance(getattr(r, "stdout", None), bytes) else str(getattr(r, "stdout", "") or "")
+            pid = re.search(r"^\s*pid = (\d+)", text, re.M)
+            state["running"] = pid is not None
+            state["pid"] = pid.group(1) if pid else "-"
+            lex = re.search(r"^\s*last exit code = (.+)$", text, re.M)
+            state["last_exit"] = lex.group(1).strip() if lex else "-"
+    elif plat.startswith("linux"):
+        r = runner(["systemctl", "--user", "show", "graphwatch.service",
+                    "--property=MainPID,ActiveState,ExecMainStatus"])
+        text = getattr(r, "stdout", b"").decode(errors="replace")
+        for line in text.splitlines():
+            if line.startswith("MainPID="):
+                state["pid"] = line.split("=", 1)[1] or "-"
+            elif line.startswith("ActiveState="):
+                state["running"] = line.split("=", 1)[1] == "active"
+            elif line.startswith("ExecMainStatus="):
+                state["last_exit"] = line.split("=", 1)[1]
+    else:
+        state["running"] = daemon_alive()
+    # ponytail: 运行时长留 "-"——macOS 无跨版本稳的启动时间源，需要 ps -o etime 时再加
+    return state
+
+
+def tail_log(n: int = 10) -> list[str]:
+    """daemon + watch 子进程日志的末尾 n 行。"""
+    p = log_path()
+    if not p.is_file():
+        return []
+    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    return lines[-n:] if n > 0 else []
 
 
 def folder_freshness(folder: str) -> tuple[str, str]:
