@@ -299,6 +299,18 @@ def ask_select(
             t.append(f"{i + 1}. {opt}{mark}", style="bold" if i == idx else "")
             con.print(t)
 
+    def _finish(choice):
+        # 清输入缓冲：连按数字/方向键的残留字节会被后续 input() 读走、
+        # 造成"下一步瞬间跳过"（用户实报）。正常路径缓冲为空，无副作用。
+        if sys.platform != "win32" and sys.stdin.isatty():
+            import termios
+
+            try:
+                termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+            except termios.error:
+                pass
+        return choice
+
     draw()
     while True:
         key = read_key()
@@ -307,11 +319,11 @@ def ask_select(
         elif key == "down":
             idx = (idx + 1) % n
         elif key == "enter":
-            return options[idx]
+            return _finish(options[idx])
         elif key == "esc":
             return None
         elif key.isdigit() and 1 <= int(key) <= n:
-            return options[int(key) - 1]
+            return _finish(options[int(key) - 1])
         # 其他键忽略
         con.file.write(f"\x1b[{lines}A")
         draw()
