@@ -61,6 +61,7 @@ TOOLS: dict[str, tuple[str, str]] = {
     "ovpn": ("system", "连 OpenVPN，自动填账号密码与二步验证码"),
     "archery": ("system", "Archery SQL 平台命令行客户端（按域名分别登录）"),
     "grafana": ("system", "Grafana HTTP API 命令行客户端（按域名分别登录）"),
+    "graphwatch": ("system", "graphify 全局 watch 守护服务：注册目录自动重建知识图谱"),
     "inject": ("system", "把 bin/ 注入 shell PATH（写入 ~/.zshrc 等）"),
 }
 

@@ -8,6 +8,9 @@ dependencies = []
 
 [project.optional-dependencies]
 rich = ["rich>=13.0"]
+# graphwatch 需要 graphify 库（PyPI 包名 graphifyy），默认不装
+graphify = ["graphifyy>=0.9.55"]
+all = ["rich>=13.0", "graphifyy>=0.9.55"]
 dev = ["rich>=13.0"]
 
 [build-system]

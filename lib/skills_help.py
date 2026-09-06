@@ -130,6 +130,10 @@ COMMAND_SKILLS: dict[str, list[str]] = {
         "macOS 语音播报: `n say '部署完成'`。",
         "拒绝危险 shell 字符和超长内容。",
     ],
+    "graphwatch": [
+        "注册目录让 graphify 图谱自动保鲜: `graphwatch add <目录>`；`graphwatch list` 看全部。",
+        "需要 graphify 库: `pip install '.[graphify]'`；服务化与 config 向导见 `graphwatch --skills`。",
+    ],
     "ovpn": [
         "OpenVPN 连接/断开/状态/登录: `ovpn connect` / `ovpn disconnect` / `ovpn status`；凭据和 TOTP 已存好。",
         "碰配置的命令需要 root，可能经 sudo 重启自身；无特权查看用 `ovpn status`。",
