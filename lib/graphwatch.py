@@ -622,6 +622,36 @@ class GraphwatchCli(BaseCli):
         return 0
 
     @_cmd
+    def start(self) -> int:
+        """启动已注册的服务（等价于 launchctl load / systemctl start）。
+
+        用法: graphwatch start
+        """
+        service_control("start")
+        self._r.ok("服务已启动")
+        return 0
+
+    @_cmd
+    def stop(self) -> int:
+        """停止服务进程（注册保留，下次 start 或重启电脑恢复）。
+
+        用法: graphwatch stop
+        """
+        service_control("stop")
+        self._r.ok("服务已停止（注册保留，start 恢复）")
+        return 0
+
+    @_cmd
+    def restart(self) -> int:
+        """重启服务（重读配置，热加载之外的全量刷新）。
+
+        用法: graphwatch restart
+        """
+        service_control("restart")
+        self._r.ok("服务已重启")
+        return 0
+
+    @_cmd
     def uninstall(self) -> int:
         """停止并删除服务注册（配置与日志保留）。
 
@@ -751,6 +781,31 @@ def install_service(runner=None) -> None:
         runner(["systemctl", "--user", "enable", "--now", "graphwatch.service"])
     else:
         runner(schtasks_create_command())
+
+
+def service_control(action: str, runner=None) -> None:
+    """start / stop / restart 已注册的服务。stop 不动注册。"""
+    if runner is None:
+        runner = _checked_runner()
+    if action not in ("start", "stop", "restart"):
+        raise GraphwatchError(f"未知动作 {action!r}，可用: start / stop / restart")
+    if not service_registered():
+        raise GraphwatchError("服务未注册，先: graphwatch install")
+    plat = sys.platform
+    if plat == "darwin":
+        # launchd：load 幂等靠先 unload；restart = unload + load
+        p = str(launchd_plist_path())
+        if action in ("stop", "restart"):
+            runner(["launchctl", "unload", p], check=False)
+        if action in ("start", "restart"):
+            runner(["launchctl", "load", p])
+    elif plat.startswith("linux"):
+        runner(["systemctl", "--user", action, "graphwatch.service"])
+    else:
+        if action in ("stop", "restart"):
+            runner(["schtasks", "/End", "/TN", "graphwatch"], check=False)
+        if action in ("start", "restart"):
+            runner(["schtasks", "/Run", "/TN", "graphwatch"])
 
 
 def uninstall_service(runner=None) -> None:

@@ -594,6 +594,64 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestServiceControl(GraphwatchCase):
+    def _fake(self):
+        cmds = []
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return type("R", (), {"returncode": 0})()
+        return cmds, fake_run
+
+    def test_unknown_action_raises(self):
+        with self.assertRaises(GraphwatchError):
+            graphwatch.service_control("haha", runner=lambda cmd, **kw: None)
+
+    def test_not_registered_raises(self):
+        import unittest.mock
+        with unittest.mock.patch.object(graphwatch, "service_registered", return_value=False):
+            with self.assertRaises(GraphwatchError) as cm:
+                graphwatch.service_control("start", runner=lambda cmd, **kw: None)
+        self.assertIn("install", str(cm.exception))
+
+    def test_macos_restart_unload_then_load(self):
+        import unittest.mock
+        cmds, fake = self._fake()
+        with unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
+             unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+            graphwatch.service_control("restart", runner=fake)
+        self.assertEqual([c[1] for c in cmds], ["unload", "load"])
+
+    def test_macos_stop_only_unload(self):
+        import unittest.mock
+        cmds, fake = self._fake()
+        with unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
+             unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+            graphwatch.service_control("stop", runner=fake)
+        self.assertEqual([c[1] for c in cmds], ["unload"])
+
+    def test_linux_restart_maps_to_systemctl(self):
+        import unittest.mock
+        cmds, fake = self._fake()
+        with unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
+             unittest.mock.patch.object(graphwatch.sys, "platform", "linux"):
+            graphwatch.service_control("restart", runner=fake)
+        self.assertEqual(cmds[0], ["systemctl", "--user", "restart", "graphwatch.service"])
+
+    def test_windows_start_runs_task(self):
+        import unittest.mock
+        cmds, fake = self._fake()
+        with unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
+             unittest.mock.patch.object(graphwatch.sys, "platform", "win32"):
+            graphwatch.service_control("start", runner=fake)
+        self.assertEqual(cmds[0][:2], ["schtasks", "/Run"])
+
+    def test_cli_restart_unregistered_friendly(self):
+        import unittest.mock
+        with unittest.mock.patch.object(graphwatch, "service_registered", return_value=False):
+            rc = self._cli().restart()
+        self.assertNotEqual(rc, 0)
+
+
 class TestConfigWizard(GraphwatchCase):
     def _feed(self, *answers):
         it = iter(answers)
