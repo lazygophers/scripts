@@ -29,6 +29,15 @@ DEFAULTS: dict = {
 }
 
 
+# 新鲜度比对时整目录排除：构建产物/依赖目录不是「源码改动」，不排除的话
+# IDE/构建器一碰 build/ 就永远显示过期
+STALE_EXCLUDED_DIRS = frozenset({
+    "node_modules", "target", "build", "dist", "out", "obj",
+    ".venv", "venv", "__pycache__", ".dart_tool", "Pods", "DerivedData",
+    ".next", ".nuxt", ".cache", ".idea", ".gradle", ".terraform",
+})
+
+
 # 图谱新鲜度状态 → (列标签, 色)；list / status 共用
 FRESHNESS_LABEL: dict[str, str] = {"ok": "新鲜", "skip": "未构建", "fail": "过期"}
 FRESHNESS_COLOR: dict[str, str] = {"ok": "green", "skip": "yellow", "fail": "red"}
@@ -487,8 +496,7 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
                 if rc is not None:
                     _dlog(f"监听进程退出（rc={rc}），重启 {f}")
                     sent = notifier.fire(f, "graphwatch 重建失败", f"{f}\n监听进程退出（rc={rc}），已自动重启")
-                    if sent:
-                        _dlog(f"崩溃通知已发送: {f}")
+                    _dlog(f"崩溃通知{'已发送' if sent else '发送失败（系统通知不可用）'}: {f}")
                     del children[f]
             _start_missing(debounce, folders)
             return
@@ -1004,18 +1012,25 @@ def folder_freshness(folder: str) -> tuple[str, str]:
     graph = root / "graphify-out" / "graph.json"
     if not graph.is_file():
         return "skip", "无图谱（尚未构建）"
-    newest = graph.stat().st_mtime
+    gm = graph.stat().st_mtime
+    excluded = {"graphify-out", ".git"} | STALE_EXCLUDED_DIRS
+    newest_src = gm
     for p in root.rglob("*"):
-        if "graphify-out" in p.parts or ".git" in p.parts or not p.is_file():
+        # 跳过产物/依赖目录：不比对了，整棵子树都不是「源码改动」
+        if any(part in excluded for part in p.parts):
+            continue
+        if not p.is_file() or not p.suffix:
+            # 无扩展名文件不在 graphify watch 的监听范围（_WATCHED_EXTENSIONS
+            # 按 suffix 过滤），变更不触发重建，统计它们只会造成永久假过期
             continue
         try:
             mt = p.stat().st_mtime
         except OSError:
             continue
-        if mt > newest:
-            newest = mt
+        if mt > newest_src:
+            newest_src = mt
             break
-    if newest > graph.stat().st_mtime:
+    if newest_src > gm:
         return "fail", "图谱过期（源码有更新改动）"
     ts = datetime.datetime.fromtimestamp(graph.stat().st_mtime).strftime("%m-%d %H:%M")
     return "ok", f"新鲜（构建于 {ts}）"
