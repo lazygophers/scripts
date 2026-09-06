@@ -526,9 +526,12 @@ class GraphwatchCli(BaseCli):
         from rich.table import Table
 
         table = Table(title=f"graphwatch 注册表（{len(folders)} 个目录）")
-        table.add_column("目录")
+        table.add_column("目录", style="bold")
+        table.add_column("图谱")
         for f in folders:
-            table.add_row(f)
+            st, detail = folder_freshness(f)
+            color = {"ok": "green", "skip": "yellow", "fail": "red"}[st]
+            table.add_row(f, f"[{color}]{detail}[/{color}]")
         self._r.console.print(table)
         return 0
 
@@ -620,10 +623,8 @@ class GraphwatchCli(BaseCli):
         table.add_column("图谱")
         table.add_column("详情")
         for folder, st, detail in rows:
-            from lib.ui import STATUS_LABEL
-
             color = {"ok": "green", "skip": "yellow", "fail": "red"}[st]
-            label = "在监听" if st == "ok" else STATUS_LABEL.get(st, st)
+            label = {"ok": "新鲜", "skip": "未构建", "fail": "过期"}[st]
             table.add_row(folder, f"[{color}]{label}[/{color}]", detail)
         self._r.console.print(table)
         return 0
