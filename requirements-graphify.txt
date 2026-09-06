@@ -1,0 +1,4 @@
+# 可选：graphwatch 监听服务需要（默认不装）
+-r requirements.txt
+graphifyy>=0.9.55
+watchdog>=4

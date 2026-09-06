@@ -3,15 +3,15 @@ name = "scripts"
 version = "0.1.0"
 description = "脚本工具集：版本控制、构建检查、进程管理、系统通知"
 requires-python = ">=3.9"
-# 运行时仅依赖 stdlib; Rich 由 lib/ui.py 在缺失时回退到纯 stderr
-dependencies = []
+# fire=CLI 框架(fire_base 顶层 import), rich=强制输出(ui.py 缺席即报错),
+# pyyaml=配置读写(archery/graphwatch)
+dependencies = ["fire>=0.5", "rich>=13.0", "pyyaml>=6"]
 
 [project.optional-dependencies]
-rich = ["rich>=13.0"]
-# graphwatch 需要 graphify 库（PyPI 包名 graphifyy），默认不装
-graphify = ["graphifyy>=0.9.55"]
-all = ["rich>=13.0", "graphifyy>=0.9.55"]
-dev = ["rich>=13.0"]
+# graphwatch 监听需要 graphify（PyPI 包名 graphifyy）+ 其硬依赖 watchdog，默认不装
+graphify = ["graphifyy>=0.9.55", "watchdog>=4"]
+all = ["graphifyy>=0.9.55", "watchdog>=4"]
+dev = ["fire>=0.5", "rich>=13.0", "pyyaml>=6"]
 
 [build-system]
 requires = ["setuptools>=68"]
