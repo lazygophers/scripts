@@ -39,8 +39,8 @@ STALE_EXCLUDED_DIRS = frozenset({
 
 
 # 图谱新鲜度状态 → (列标签, 色)；list / status 共用
-FRESHNESS_LABEL: dict[str, str] = {"ok": "新鲜", "skip": "未构建", "fail": "过期"}
-FRESHNESS_COLOR: dict[str, str] = {"ok": "green", "skip": "yellow", "fail": "red"}
+FRESHNESS_LABEL: dict[str, str] = {"ok": "新鲜", "skip": "未构建", "fail": "过期", "updating": "更新中"}
+FRESHNESS_COLOR: dict[str, str] = {"ok": "green", "skip": "yellow", "fail": "red", "updating": "cyan"}
 
 
 class GraphwatchError(Exception):
@@ -342,8 +342,23 @@ def rotate_log() -> None:
 
 
 def notify(title: str, message: str, runner=None) -> bool:
-    """系统弹窗通知（无语音）。失败返回 False，不抛——通知是尽力而为。"""
+    """系统弹窗通知（无语音）。失败返回 False，不抛——通知是尽力而为。
+
+    每次调用（无论成败）都先在日志文件留一行：弹窗是给用户看的，
+    日志是给排障看的，两者必须在同一处可对上。
+    """
     import subprocess
+
+    def _audit(ok: bool) -> None:
+        try:
+            log_path().parent.mkdir(parents=True, exist_ok=True)
+            import datetime
+
+            stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with log_path().open("a", encoding="utf-8") as f:
+                f.write(f"[{stamp}] 通知({'已发' if ok else '失败'}): {title} — {message.splitlines()[0]}\n")
+        except OSError:
+            pass  # 审计失败不影响通知本身
 
     if runner is None:
         runner = subprocess.run
@@ -368,9 +383,11 @@ def notify(title: str, message: str, runner=None) -> bool:
         )
         cmd = ["powershell", "-NoProfile", "-Command", ps]
     try:
-        return runner(cmd, check=False, capture_output=True, timeout=15).returncode == 0
+        ok = runner(cmd, check=False, capture_output=True, timeout=15).returncode == 0
     except Exception:
-        return False
+        ok = False
+    _audit(ok)
+    return ok
 
 
 class Notifier:
@@ -469,8 +486,27 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
     started_logged: set[str] = set()
     last_sig: tuple[tuple[str, ...], float] | None = None
 
+    def _nudge_if_stale(folder: str) -> None:
+        """graphify watch 没有首轮构建：图谱落后于源码时 touch 过期文件、
+        重放变更事件触发重建。幂等——新鲜目录不动。"""
+        t = stale_trigger(folder)
+        if t is None:
+            return
+        try:
+            os.utime(t)
+            _dlog(f"补课：{folder} 图谱落后于源码，touch {t.name} 触发重建")
+        except OSError as e:
+            _dlog(f"补课失败: {folder}: {e}")
+
     def _start_missing(debounce: float, folders: list[str]) -> None:
-        """补起缺的监听子进程（首次或上一轮启动失败的重试）。"""
+        """补起缺的监听子进程（首次或上一轮启动失败的重试）。
+
+        每个新起的子进程都安排一次延迟补课（启动 / 热加载新增目录 /
+        崩溃重启统一走这里）：等一个 poll 周期让 watch 的监听就位，
+        再检测过期并触发首轮重建。
+        """
+        import threading
+
         start_fn = watch_factory(debounce)
         for f in folders:
             if f in children:
@@ -480,6 +516,7 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
             try:
                 children[f] = start_fn(Path(f))
                 started_logged.add(f)
+                threading.Timer(poll_interval, _nudge_if_stale, args=(f,)).start()
             except Exception as e:  # noqa: BLE001
                 _dlog(f"监听进程启动失败（下一轮重试）: {f}: {e}")
 
@@ -1001,10 +1038,40 @@ def tail_log(n: int = 10) -> list[str]:
     return lines[-n:] if n > 0 else []
 
 
-def folder_freshness(folder: str) -> tuple[str, str]:
+def stale_trigger(folder: str) -> Path | None:
+    """返回触发「过期」的那个源文件（比 graph.json 新），新鲜则 None。
+
+    daemon 给新起的 watch 子进程补课时 touch 它，重放变更事件触发重建。
+    """
+    root = Path(folder)
+    graph = root / "graphify-out" / "graph.json"
+    if not graph.is_file():
+        return None
+    gm = graph.stat().st_mtime
+    excluded = {"graphify-out", ".git"} | STALE_EXCLUDED_DIRS
+    for p in root.rglob("*"):
+        # 跳过产物/依赖目录：不比对了，整棵子树都不是「源码改动」
+        if any(part in excluded for part in p.parts):
+            continue
+        if not p.is_file() or not p.suffix:
+            # 无扩展名文件不在 graphify watch 的监听范围（_WATCHED_EXTENSIONS
+            # 按 suffix 过滤），变更不触发 watch 重建，统计它们只会造成永久假过期
+            continue
+        try:
+            mt = p.stat().st_mtime
+        except OSError:
+            continue
+        if mt > gm:
+            return p
+    return None
+
+
+def folder_freshness(folder: str, daemon_running: bool | None = None) -> tuple[str, str]:
     """单目录图谱新鲜度：(状态, 详情)。
 
-    图谱产物 graphify-out/graph.json 比源目录最新改动旧 → stale。
+    图谱产物 graphify-out/graph.json 比源目录最新改动旧 → stale；
+    daemon 在跑（watch 监听会自动重建）时显示「更新中」，没跑才是「过期」。
+    daemon_running=None 时现场探测。
     """
     import datetime
 
@@ -1012,25 +1079,11 @@ def folder_freshness(folder: str) -> tuple[str, str]:
     graph = root / "graphify-out" / "graph.json"
     if not graph.is_file():
         return "skip", "无图谱（尚未构建）"
-    gm = graph.stat().st_mtime
-    excluded = {"graphify-out", ".git"} | STALE_EXCLUDED_DIRS
-    newest_src = gm
-    for p in root.rglob("*"):
-        # 跳过产物/依赖目录：不比对了，整棵子树都不是「源码改动」
-        if any(part in excluded for part in p.parts):
-            continue
-        if not p.is_file() or not p.suffix:
-            # 无扩展名文件不在 graphify watch 的监听范围（_WATCHED_EXTENSIONS
-            # 按 suffix 过滤），变更不触发重建，统计它们只会造成永久假过期
-            continue
-        try:
-            mt = p.stat().st_mtime
-        except OSError:
-            continue
-        if mt > newest_src:
-            newest_src = mt
-            break
-    if newest_src > gm:
+    if stale_trigger(folder) is not None:
+        if daemon_running is None:
+            daemon_running = daemon_alive()
+        if daemon_running:
+            return "updating", "更新中（源码有变更，watch 自动重建）"
         return "fail", "图谱过期（源码有更新改动）"
     ts = datetime.datetime.fromtimestamp(graph.stat().st_mtime).strftime("%m-%d %H:%M")
     return "ok", f"新鲜（构建于 {ts}）"

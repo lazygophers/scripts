@@ -665,6 +665,121 @@ class TestServiceControl(GraphwatchCase):
         self.assertNotEqual(rc, 0)
 
 
+class TestFreshnessUpdating(GraphwatchCase):
+    def _stale_repo(self):
+        import os as _os
+
+        repo = self.mkdir()
+        (repo / "a.py").write_text("x\n", encoding="utf-8")
+        g = repo / "graphify-out"
+        g.mkdir()
+        (g / "graph.json").write_text("{}", encoding="utf-8")
+        old = 1000000000
+        _os.utime(g / "graph.json", (old, old))
+        return repo
+
+    def test_stale_with_daemon_is_updating(self):
+        repo = self._stale_repo()
+        st, detail = graphwatch.folder_freshness(str(repo), daemon_running=True)
+        self.assertEqual(st, "updating")
+        self.assertIn("自动重建", detail)
+
+    def test_stale_without_daemon_is_fail(self):
+        repo = self._stale_repo()
+        st, _ = graphwatch.folder_freshness(str(repo), daemon_running=False)
+        self.assertEqual(st, "fail")
+
+    def test_cli_status_renders_updating(self):
+        import io
+        import unittest.mock
+        from contextlib import redirect_stderr
+
+        repo = self._stale_repo()
+        buf = io.StringIO()
+        st = {"registered": True, "running": True, "pid": "1", "last_exit": "0", "uptime": "-"}
+        with redirect_stderr(buf), \
+             unittest.mock.patch.object(graphwatch, "service_state", return_value=st), \
+             unittest.mock.patch.object(graphwatch, "list_folders", return_value=[str(repo)]), \
+             unittest.mock.patch.object(graphwatch, "daemon_alive", return_value=True):
+            rc = self._cli().status(log=0)
+        self.assertEqual(rc, 0)
+        self.assertIn("更新中", buf.getvalue())
+
+
+class TestStartupCatchup(GraphwatchCase):
+    def _stale_repo(self):
+        """造一个「图谱过期」的目录：graph.json 比源文件旧。"""
+        import os as _os
+
+        repo = self.mkdir()
+        (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+        g = repo / "graphify-out"
+        g.mkdir()
+        (g / "graph.json").write_text("{}", encoding="utf-8")
+        old = 1000000000  # 2001 年
+        _os.utime(g / "graph.json", (old, old))
+        return repo
+
+    def test_stale_trigger_finds_file(self):
+        repo = self._stale_repo()
+        t = graphwatch.stale_trigger(str(repo))
+        self.assertIsNotNone(t)
+        self.assertEqual(t.name, "a.py")
+
+    def test_fresh_repo_no_trigger(self):
+        repo = self.mkdir()
+        (repo / "a.py").write_text("x\n", encoding="utf-8")
+        g = repo / "graphify-out"
+        g.mkdir()
+        (g / "graph.json").write_text("{}", encoding="utf-8")
+        self.assertIsNone(graphwatch.stale_trigger(str(repo)))
+
+    def _wait_nudge(self, repo, timeout=6):
+        import os as _os
+
+        # nudge 会 touch a.py：mtime 被拨到当下（远新于旧值）
+        deadline = time.monotonic() + timeout
+        old = _os.stat(repo / "a.py").st_mtime
+        while time.monotonic() < deadline:
+            if _os.stat(repo / "a.py").st_mtime > old:
+                return True
+            time.sleep(0.1)
+        return False
+
+    def test_startup_nudges_stale_folder(self):
+        import threading
+
+        repo = self._stale_repo()
+        graphwatch.add_folder(repo)
+        fac = FakeFactory()
+        stop = threading.Event()
+        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
+            stop_event=stop, ensure=lambda: None, watch_factory=fac, poll_interval=0.2), daemon=True)
+        thread.start()
+        nudged = self._wait_nudge(repo)
+        stop.set()
+        thread.join(timeout=5)
+        self.assertTrue(nudged, "启动补课应 touch 过期文件")
+
+    def test_hot_add_nudges_stale_folder(self):
+        import threading
+
+        repo = self._stale_repo()
+        other = self.mkdir("other")
+        graphwatch.add_folder(other)
+        fac = FakeFactory()
+        stop = threading.Event()
+        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
+            stop_event=stop, ensure=lambda: None, watch_factory=fac, poll_interval=0.2), daemon=True)
+        thread.start()
+        time.sleep(0.4)
+        graphwatch.add_folder(repo)  # 热加载新增过期目录
+        nudged = self._wait_nudge(repo)
+        stop.set()
+        thread.join(timeout=5)
+        self.assertTrue(nudged, "热加载新增的过期目录也应补课")
+
+
 class TestOpsLogging(GraphwatchCase):
     def _capture(self):
         import io
