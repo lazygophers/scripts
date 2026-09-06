@@ -1262,6 +1262,22 @@ class TestFreshnessEdges(GraphwatchCase):
         # 无扩展名文件不在 watch 监听范围，不应判过期
         self.assertIsNone(graphwatch.stale_trigger(str(repo)))
 
+    def test_stale_trigger_prunes_excluded_trees(self):
+        import os
+
+        repo = self.mkdir()
+        (repo / "a.py").write_text("x\n", encoding="utf-8")
+        nm = repo / "node_modules" / "pkg"
+        nm.mkdir(parents=True)
+        (nm / "dep.js").write_text("x\n", encoding="utf-8")
+        g = repo / "graphify-out"
+        g.mkdir()
+        (g / "graph.json").write_text("{}", encoding="utf-8")
+        future = time.time() + 100
+        os.utime(nm / "dep.js", (future, future))
+        # 产物/依赖目录整棵剪掉：里面的新文件不算源码改动
+        self.assertIsNone(graphwatch.stale_trigger(str(repo)))
+
 
 class TestWatchedExtensionsFallback(GraphwatchCase):
     def test_fallback_without_graphify(self):
