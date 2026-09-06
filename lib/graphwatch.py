@@ -126,13 +126,24 @@ def list_folders() -> list[str]:
 
 
 def ensure_graphify() -> None:
-    """graphify 库可用性探测：缺席时给安装指引而不是神秘 traceback。"""
+    """graphify 库可用性探测：缺席时给安装指引而不是神秘 traceback。
+
+    watchdog 是 `graphify watch` 子进程的硬依赖（缺了它监听进程启动即死、
+    只在日志里留一行 error），所以在这里一起探。
+    """
     try:
         import graphify  # noqa: F401
     except ImportError as e:
         raise GraphwatchError(
             "graphify 库未安装。graphwatch 只用它、不自己解析代码，请装上：\n"
             "  pip install '.[graphify]'   # 或 '.[all]'"
+        ) from e
+    try:
+        import watchdog  # noqa: F401
+    except ImportError as e:
+        raise GraphwatchError(
+            "watchdog 未安装（graphify watch 的监听依赖，缺了子进程起不来）：\n"
+            "  pip install watchdog"
         ) from e
 
 
@@ -561,3 +572,218 @@ class GraphwatchCli(BaseCli):
         run_wizard()
         return 0
 
+
+
+# === 服务注册（06 票）：全部用户级，无需 root ===
+
+    @_cmd
+    def install(self) -> int:
+        """注册为用户级系统服务并立即启动（登录自启，无需 root）。
+
+        用法: graphwatch install
+        """
+        ensure_graphify()
+        install_service()
+        self._r.ok(f"已注册并启动：{script_path()} run")
+        return 0
+
+    @_cmd
+    def uninstall(self) -> int:
+        """停止并删除服务注册（配置与日志保留）。
+
+        用法: graphwatch uninstall
+        """
+        uninstall_service()
+        self._r.ok("服务已注销（配置与日志保留）")
+        return 0
+
+    @_cmd
+    def status(self) -> int:
+        """查看服务注册态、进程存活、各目录图谱新鲜度。
+
+        用法: graphwatch status
+        """
+        from rich.table import Table
+
+        rows: list[tuple] = []
+        installed = service_registered()
+        alive = daemon_alive() if installed else False
+        head = "已注册" if installed else "未注册"
+        head += " · 进程在跑" if alive else (" · 进程没在跑" if installed else "")
+        if not installed:
+            self._r.warn("服务未注册。先: graphwatch install")
+        for f in list_folders():
+            st, detail = folder_freshness(f)
+            rows.append((f, st, detail))
+        table = Table(title=f"graphwatch 状态（服务{head}）")
+        table.add_column("目录", style="bold")
+        table.add_column("图谱")
+        table.add_column("详情")
+        for folder, st, detail in rows:
+            from lib.ui import STATUS_LABEL
+
+            color = {"ok": "green", "skip": "yellow", "fail": "red"}[st]
+            label = "在监听" if st == "ok" else STATUS_LABEL.get(st, st)
+            table.add_row(folder, f"[{color}]{label}[/{color}]", detail)
+        self._r.console.print(table)
+        return 0
+
+
+def script_path() -> Path:
+    """本仓 bin/graphwatch 绝对路径——服务里就跑它。"""
+    return Path(__file__).resolve().parent.parent / "bin" / "graphwatch"
+
+
+def launchd_plist_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / "com.lazygophers.graphwatch.plist"
+
+
+def launchd_plist() -> str:
+    """LaunchAgent plist：KeepAlive 崩了自动拉起，RunAtLoad 登录自启。"""
+    exe = script_path()
+    log = log_path()
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.lazygophers.graphwatch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{sys.executable}</string>
+    <string>{exe}</string>
+    <string>run</string>
+  </array>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict>
+</plist>
+"""
+
+
+def systemd_unit() -> str:
+    """systemd --user 单元：Restart=always，登录自启（需 loginctl enable-linger 常驻）。"""
+    exe = script_path()
+    return f"""[Unit]
+Description=graphwatch — graphify 全局 watch 守护
+After=network.target
+
+[Service]
+ExecStart={sys.executable} {exe} run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+"""
+
+
+def schtasks_create_command() -> list[str]:
+    """Windows 登录自启计划任务命令（schtasks 用户级，无需管理员）。"""
+    exe = script_path()
+    return [
+        "schtasks", "/Create", "/F",
+        "/TN", "graphwatch",
+        "/SC", "ONLOGON",
+        "/TR", f'"{sys.executable}" "{exe}" run',
+    ]
+
+
+def install_service(runner=None) -> None:
+    """注册为用户级服务并立即启动。按平台走 launchd / systemd / schtasks。"""
+    import subprocess
+
+    if runner is None:
+        def runner(cmd, **kw):
+            return subprocess.run(cmd, check=True, capture_output=True, **kw)
+    plat = sys.platform
+    if plat == "darwin":
+        p = launchd_plist_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(launchd_plist(), encoding="utf-8")
+        runner(["launchctl", "unload", str(p)], check=False)
+        runner(["launchctl", "load", str(p)])
+    elif plat.startswith("linux"):
+        unit_dir = Path.home() / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True, exist_ok=True)
+        (unit_dir / "graphwatch.service").write_text(systemd_unit(), encoding="utf-8")
+        runner(["systemctl", "--user", "daemon-reload"])
+        runner(["systemctl", "--user", "enable", "--now", "graphwatch.service"])
+    else:
+        runner(schtasks_create_command())
+
+
+def uninstall_service(runner=None) -> None:
+    """停止并删除服务注册。配置与日志不动。"""
+    import subprocess
+
+    if runner is None:
+        def runner(cmd, **kw):
+            return subprocess.run(cmd, check=True, capture_output=True, **kw)
+    plat = sys.platform
+    if plat == "darwin":
+        p = launchd_plist_path()
+        if p.exists():
+            runner(["launchctl", "unload", str(p)], check=False)
+            p.unlink()
+    elif plat.startswith("linux"):
+        runner(["systemctl", "--user", "disable", "--now", "graphwatch.service"])
+        (Path.home() / ".config" / "systemd" / "user" / "graphwatch.service").unlink(missing_ok=True)
+    else:
+        runner(["schtasks", "/Delete", "/F", "/TN", "graphwatch"])
+
+
+def service_registered(runner=None) -> bool:
+    """服务注册态探测：launchctl / systemctl / schtasks 各查各的。"""
+    import subprocess
+
+    if runner is None:
+        def runner(cmd, **kw):
+            return subprocess.run(cmd, check=False, capture_output=True, **kw)
+    plat = sys.platform
+    if plat == "darwin":
+        r = runner(["launchctl", "list", "com.lazygophers.graphwatch"])
+        return r.returncode == 0
+    if plat.startswith("linux"):
+        r = runner(["systemctl", "--user", "is-enabled", "graphwatch.service"])
+        return r.returncode == 0
+    r = runner(["schtasks", "/Query", "/TN", "graphwatch"])
+    return r.returncode == 0
+
+
+def daemon_alive() -> bool:
+    """本机有没有活的 graphwatch daemon：能拿到单例锁 = 没有。"""
+    fd = acquire_singleton_lock()
+    if fd is None:
+        return True
+    release_singleton_lock(fd)
+    return False
+
+
+def folder_freshness(folder: str) -> tuple[str, str]:
+    """单目录图谱新鲜度：(状态, 详情)。
+
+    图谱产物 graphify-out/graph.json 比源目录最新改动旧 → stale。
+    """
+    import datetime
+
+    root = Path(folder)
+    graph = root / "graphify-out" / "graph.json"
+    if not graph.is_file():
+        return "skip", "无图谱（尚未构建）"
+    newest = graph.stat().st_mtime
+    for p in root.rglob("*"):
+        if "graphify-out" in p.parts or ".git" in p.parts or not p.is_file():
+            continue
+        try:
+            mt = p.stat().st_mtime
+        except OSError:
+            continue
+        if mt > newest:
+            newest = mt
+            break
+    if newest > graph.stat().st_mtime:
+        return "fail", "图谱过期（源码有更新改动）"
+    ts = datetime.datetime.fromtimestamp(graph.stat().st_mtime).strftime("%m-%d %H:%M")
+    return "ok", f"新鲜（构建于 {ts}）"

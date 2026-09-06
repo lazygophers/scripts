@@ -126,6 +126,23 @@ class TestGraphifyDependency(GraphwatchCase):
         self.assertIn("[graphify]", str(cm.exception))
 
 
+class TestWatchdogDependency(GraphwatchCase):
+    def test_missing_watchdog_guidance(self):
+        import builtins
+        import unittest.mock
+        real_import = builtins.__import__
+
+        def fake_import(name, *a, **kw):
+            if name == "watchdog":
+                raise ImportError("watchdog")
+            return real_import(name, *a, **kw)
+
+        with unittest.mock.patch("builtins.__import__", fake_import):
+            with self.assertRaises(GraphwatchError) as cm:
+                graphwatch.ensure_graphify()
+        self.assertIn("watchdog", str(cm.exception))
+
+
 class TestCli(GraphwatchCase):
     def test_cli_add_and_list(self):
         repo = self.mkdir()
@@ -417,6 +434,115 @@ class TestCliRun(GraphwatchCase):
             rc = self._cli().run()
         self.assertEqual(rc, 0)
         self.assertTrue(called or called == {})
+
+
+class TestService(GraphwatchCase):
+    def test_plist_content(self):
+        plist = graphwatch.launchd_plist()
+        self.assertIn("com.lazygophers.graphwatch", plist)
+        self.assertIn(str(graphwatch.script_path()), plist)
+        self.assertIn("<string>run</string>", plist)
+        self.assertIn("<key>KeepAlive</key>", plist)
+        self.assertIn("<key>RunAtLoad</key>", plist)
+
+    def test_systemd_unit_content(self):
+        unit = graphwatch.systemd_unit()
+        self.assertIn(str(graphwatch.script_path()), unit)
+        self.assertIn("Restart=always", unit)
+        self.assertIn("WantedBy=default.target", unit)
+
+    def test_schtasks_command_content(self):
+        cmd = graphwatch.schtasks_create_command()
+        self.assertEqual(cmd[0], "schtasks")
+        self.assertIn("/SC", cmd)
+        self.assertIn("ONLOGON", cmd)
+        self.assertIn(str(graphwatch.script_path()), " ".join(cmd))
+
+    def test_install_macos_writes_plist_and_loads(self):
+        import unittest.mock
+        cmds = []
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return type("R", (), {"returncode": 0})()
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+            graphwatch.install_service(runner=fake_run)
+        self.assertIn(["launchctl", "load", str(graphwatch.launchd_plist_path())], cmds)
+        self.assertTrue(graphwatch.launchd_plist_path().exists())
+        self.assertIn(str(graphwatch.script_path()), graphwatch.launchd_plist_path().read_text())
+
+    def test_install_linux_enables_unit(self):
+        import unittest.mock
+        cmds = []
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return type("R", (), {"returncode": 0})()
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"):
+            graphwatch.install_service(runner=fake_run)
+        self.assertIn(["systemctl", "--user", "enable", "--now", "graphwatch.service"], cmds)
+        unit = Path.home() / ".config" / "systemd" / "user" / "graphwatch.service"
+        self.assertIn("Restart=always", unit.read_text())
+
+    def test_uninstall_macos_removes_plist(self):
+        import unittest.mock
+        p = graphwatch.launchd_plist_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x")
+        cmds = []
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return type("R", (), {"returncode": 0})()
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+            graphwatch.uninstall_service(runner=fake_run)
+        self.assertFalse(p.exists())
+        self.assertIn(["launchctl", "unload", str(p)], cmds)
+
+    def test_uninstall_windows_deletes_task(self):
+        import unittest.mock
+        cmds = []
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            return type("R", (), {"returncode": 0})()
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "win32"):
+            graphwatch.uninstall_service(runner=fake_run)
+        self.assertEqual(cmds[0][:4], ["schtasks", "/Delete", "/F", "/TN"])
+
+    def test_service_registered_queries_platform(self):
+        import unittest.mock
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+            ok = graphwatch.service_registered(runner=lambda cmd, **kw: type("R", (), {"returncode": 0})())
+            no = graphwatch.service_registered(runner=lambda cmd, **kw: type("R", (), {"returncode": 1})())
+        self.assertTrue(ok)
+        self.assertFalse(no)
+
+    def test_daemon_alive_false_when_free(self):
+        self.assertFalse(graphwatch.daemon_alive())
+
+    def test_folder_freshness_stale(self):
+        repo = self.mkdir()
+        (repo / "a.py").write_text("x")
+        g = repo / "graphify-out"
+        g.mkdir()
+        (g / "graph.json").write_text("{}")
+        # graph 比源旧：把源 mtime 拨新
+        import os as _os
+        st = (repo / "a.py").stat()
+        _os.utimedelta = None
+        import os
+        future = st.st_mtime + 100
+        os.utime(repo / "a.py", (future, future))
+        status, detail = graphwatch.folder_freshness(str(repo))
+        self.assertEqual(status, "fail")
+
+    def test_folder_freshness_no_graph(self):
+        repo = self.mkdir()
+        status, _ = graphwatch.folder_freshness(str(repo))
+        self.assertEqual(status, "skip")
+
+    def test_cli_status_unregistered(self):
+        import unittest.mock
+        with unittest.mock.patch.object(graphwatch, "service_registered", return_value=False):
+            rc = self._cli().status()
+        self.assertEqual(rc, 0)
 
 
 if __name__ == "__main__":
