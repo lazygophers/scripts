@@ -28,6 +28,11 @@ DEFAULTS: dict = {
 }
 
 
+# 图谱新鲜度状态 → (列标签, 色)；list / status 共用
+FRESHNESS_LABEL: dict[str, str] = {"ok": "新鲜", "skip": "未构建", "fail": "过期"}
+FRESHNESS_COLOR: dict[str, str] = {"ok": "green", "skip": "yellow", "fail": "red"}
+
+
 class GraphwatchError(Exception):
     """graphwatch 自己的错误：CLI 层转一行人话，不甩 traceback。"""
 
@@ -59,7 +64,19 @@ def load_config() -> dict:
             raise GraphwatchError(f"配置文件不是合法 YAML: {p}\n{e}") from e
         if not isinstance(data, dict):
             raise GraphwatchError(f"配置文件顶层应是映射: {p}")
+        unknown = [k for k in data if k not in DEFAULTS]
+        if unknown:
+            print(f"配置里有未知字段（忽略）: {', '.join(unknown)}", file=sys.stderr)
         cfg.update({k: v for k, v in data.items() if k in DEFAULTS})
+    folders = cfg["folders"]
+    if not isinstance(folders, list) or not all(isinstance(f, str) for f in folders):
+        raise GraphwatchError(f"folders 应是目录路径列表: {p}")
+    try:
+        cfg["debounce"] = float(cfg["debounce"])
+    except (TypeError, ValueError) as e:
+        raise GraphwatchError(f"debounce 应是数字: {p}") from e
+    if cfg["debounce"] <= 0:
+        raise GraphwatchError(f"debounce 应大于 0: {p}")
     return cfg
 
 
@@ -310,6 +327,7 @@ def notify(title: str, message: str, runner=None) -> bool:
 
     if runner is None:
         runner = subprocess.run
+    # 各平台把双引号换成单引号：osascript 双引号串 / PowerShell 单引号串都吃不消嵌套引号
     quoted = message.replace('"', "'")
     tquoted = title.replace('"', "'")
     if sys.platform == "darwin":
@@ -317,12 +335,15 @@ def notify(title: str, message: str, runner=None) -> bool:
     elif sys.platform.startswith("linux"):
         cmd = ["notify-send", title, message]
     else:
+        # PowerShell 单引号串里 ' 要双写转义，防消息含引号截断
+        psq = quoted.replace("'", "''")
+        pst = tquoted.replace("'", "''")
         # win32：PowerShell 气泡通知，无需额外安装
         ps = (
             "Add-Type -AssemblyName System.Windows.Forms;"
             "$n = New-Object System.Windows.Forms.NotifyIcon;"
             "$n.Icon = [System.Drawing.SystemIcons]::Warning;"
-            f"$n.Visible = $true; $n.ShowBalloonTip(5000, '{tquoted}', '{quoted}', 'Warning');"
+            f"$n.Visible = $true; $n.ShowBalloonTip(5000, '{pst}', '{psq}', 'Warning');"
             "Start-Sleep -Seconds 6; $n.Dispose()"
         )
         cmd = ["powershell", "-NoProfile", "-Command", ps]
@@ -530,7 +551,7 @@ class GraphwatchCli(BaseCli):
         table.add_column("图谱")
         for f in folders:
             st, detail = folder_freshness(f)
-            color = {"ok": "green", "skip": "yellow", "fail": "red"}[st]
+            color = FRESHNESS_COLOR[st]
             table.add_row(f, f"[{color}]{detail}[/{color}]")
         self._r.console.print(table)
         return 0
@@ -623,8 +644,8 @@ class GraphwatchCli(BaseCli):
         table.add_column("图谱")
         table.add_column("详情")
         for folder, st, detail in rows:
-            color = {"ok": "green", "skip": "yellow", "fail": "red"}[st]
-            label = {"ok": "新鲜", "skip": "未构建", "fail": "过期"}[st]
+            color = FRESHNESS_COLOR[st]
+            label = FRESHNESS_LABEL[st]
             table.add_row(folder, f"[{color}]{label}[/{color}]", detail)
         self._r.console.print(table)
         return 0
@@ -691,13 +712,19 @@ def schtasks_create_command() -> list[str]:
     ]
 
 
-def install_service(runner=None) -> None:
-    """注册为用户级服务并立即启动。按平台走 launchd / systemd / schtasks。"""
+def _checked_runner():
+    """默认服务命令执行器：check=True（失败点抛错，不吞）。"""
     import subprocess
 
+    def runner(cmd, **kw):
+        return subprocess.run(cmd, check=True, capture_output=True, **kw)
+    return runner
+
+
+def install_service(runner=None) -> None:
+    """注册为用户级服务并立即启动。按平台走 launchd / systemd / schtasks。"""
     if runner is None:
-        def runner(cmd, **kw):
-            return subprocess.run(cmd, check=True, capture_output=True, **kw)
+        runner = _checked_runner()
     plat = sys.platform
     if plat == "darwin":
         p = launchd_plist_path()
@@ -717,11 +744,8 @@ def install_service(runner=None) -> None:
 
 def uninstall_service(runner=None) -> None:
     """停止并删除服务注册。配置与日志不动。"""
-    import subprocess
-
     if runner is None:
-        def runner(cmd, **kw):
-            return subprocess.run(cmd, check=True, capture_output=True, **kw)
+        runner = _checked_runner()
     plat = sys.platform
     if plat == "darwin":
         p = launchd_plist_path()

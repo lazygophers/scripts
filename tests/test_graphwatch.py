@@ -67,6 +67,51 @@ class TestConfigFile(GraphwatchCase):
         self.assertEqual(graphwatch.load_config()["api_key"], "sk-secret")
 
 
+class TestConfigValidation(GraphwatchCase):
+    def test_bad_debounce_raises_friendly(self):
+        graphwatch.config_path().write_text("debounce: abc\n", encoding="utf-8")
+        with self.assertRaises(GraphwatchError) as cm:
+            graphwatch.load_config()
+        self.assertIn("debounce", str(cm.exception))
+
+    def test_negative_debounce_raises(self):
+        graphwatch.config_path().write_text("debounce: -1\n", encoding="utf-8")
+        with self.assertRaises(GraphwatchError):
+            graphwatch.load_config()
+
+    def test_folders_not_list_raises(self):
+        graphwatch.config_path().write_text("folders: 42\n", encoding="utf-8")
+        with self.assertRaises(GraphwatchError):
+            graphwatch.load_config()
+
+    def test_unknown_key_warned_and_ignored(self):
+        import contextlib
+        import io
+        graphwatch.config_path().write_text("deboune: 5\n", encoding="utf-8")
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            cfg = graphwatch.load_config()
+        self.assertEqual(cfg["debounce"], 3.0)
+        self.assertIn("deboune", buf.getvalue())
+
+    def test_daemon_survives_bad_debounce(self):
+        # 手改配置写坏 debounce：daemon 跳过本轮不崩
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        import threading
+        stop = threading.Event()
+        fac = FakeFactory()
+        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
+            stop_event=stop, ensure=lambda: None, watch_factory=fac, poll_interval=0.05), daemon=True)
+        thread.start()
+        time.sleep(0.2)
+        graphwatch.config_path().write_text("debounce: abc\n", encoding="utf-8")
+        time.sleep(0.3)
+        self.assertTrue(thread.is_alive(), "坏 debounce 不应让 daemon 退出")
+        stop.set()
+        thread.join(timeout=5)
+
+
 class TestRegistry(GraphwatchCase):
     def test_add_registers_existing_dir(self):
         repo = self.mkdir()
