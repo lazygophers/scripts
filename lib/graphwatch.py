@@ -144,22 +144,35 @@ def mask_secret(value: str) -> str:
     return f"{value[:4]}…{value[-4:]}"
 
 
+# 后端清单抄自 graphify/llm.py 的 BACKENDS（claude/kimi/ollama/gemini/openai/
+# deepseek/azure/bedrock/claude-cli）；openai 即 OpenAI 标准协议，配 base_url
+# 可指向任意兼容端点（LiteLLM、网关、中转等）。
+BACKEND_CHOICES: list[str] = [
+    "claude", "kimi", "gemini", "openai", "deepseek", "ollama", "azure", "bedrock", "claude-cli",
+]
+
 # 向导步骤：(配置键, 提示, 校验/转换)。回车 = 保留当前值。
 _WIZARD_STEPS: list[tuple[str, str, tuple[str, str] | None]] = [
-    ("backend", "AI 后端（备用字段，重建不用 LLM；如 anthropic/kimi/gemini/ollama）", None),
+    ("backend", "AI 后端（备用字段，重建不用 LLM；输入编号选择）", ("backend", "choice")),
     ("api_key", "API key（写入 0600 配置文件）", None),
-    ("base_url", "base URL（留空用官方默认）", None),
+    ("base_url", "base URL（留空用官方默认；openai 协议常需要填）", None),
     ("model", "模型名（留空用后端默认）", None),
     ("debounce", "防抖秒数（变更后等多久再重建）", ("debounce", "float_positive")),
 ]
 
 
-def _parse_step(raw: str, current: str, validator):
+def _parse_step(raw: str, current, validator):
     """单步解析：回车保留当前值；按 validator 校验，非法返回 None 重问。"""
     if not raw.strip():
         return current
     if validator is None:
         return raw.strip()
+    if validator[1] == "choice":
+        try:
+            idx = int(raw.strip())
+        except ValueError:
+            return None
+        return BACKEND_CHOICES[idx - 1] if 1 <= idx <= len(BACKEND_CHOICES) else None
     if validator[1] == "float_positive":
         try:
             v = float(raw)
@@ -188,13 +201,21 @@ def run_wizard(input_fn=None) -> dict:
     for key, prompt, validator in _WIZARD_STEPS:
         current = cfg[key]
         shown = mask_secret(current) if key == "api_key" else current
-        while True:
+        if validator is not None and validator[1] == "choice":
+            print(f"{prompt}:", file=sys.stderr)
+            for i, opt in enumerate(BACKEND_CHOICES, 1):
+                mark = " ←当前" if opt == current else ""
+                print(f"  {i}. {opt}{mark}", file=sys.stderr)
+            raw = input_fn(f"选择 1-{len(BACKEND_CHOICES)}（回车保留 {shown!r}）: ")
+        else:
             raw = input_fn(f"{prompt} [{shown!r}]: ")
+        while True:
             parsed = _parse_step(raw, current, validator)
             if parsed is not None:
                 cfg[key] = parsed
                 break
             print("  无效输入，请重试", file=sys.stderr)
+            raw = input_fn(f"{prompt} [{shown!r}]: ")
 
     save_config(cfg)
     print(f"\n✓ 已写入 {config_path()}", file=sys.stderr)

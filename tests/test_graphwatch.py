@@ -216,15 +216,16 @@ class TestConfigWizard(GraphwatchCase):
         return lambda prompt="": next(it)
 
     def test_wizard_writes_all_fields(self):
+        # backend 是编号选择：4 = openai（OpenAI 标准协议）
         cfg = graphwatch.run_wizard(input_fn=self._feed(
-            "anthropic", "sk-1234567890abcdef", "https://api.example.com", "claude-sonnet-5", "5",
+            "4", "sk-1234567890abcdef", "https://api.example.com", "gpt-5", "5",
         ))
         p = graphwatch.config_path()
         self.assertTrue(p.exists())
-        self.assertEqual(cfg["backend"], "anthropic")
+        self.assertEqual(cfg["backend"], "openai")
         self.assertEqual(cfg["api_key"], "sk-1234567890abcdef")
         self.assertEqual(cfg["base_url"], "https://api.example.com")
-        self.assertEqual(cfg["model"], "claude-sonnet-5")
+        self.assertEqual(cfg["model"], "gpt-5")
         self.assertEqual(cfg["debounce"], 5.0)
         # folders 不被向导改动
         self.assertEqual(cfg["folders"], [])
@@ -237,6 +238,10 @@ class TestConfigWizard(GraphwatchCase):
         self.assertEqual(cfg["debounce"], 3)
         self.assertEqual(cfg["backend"], "")
         self.assertEqual(len(cfg["folders"]), 1)
+
+    def test_wizard_bad_backend_number_reasks(self):
+        cfg = graphwatch.run_wizard(input_fn=self._feed("99", "0", "1", "", "", "", ""))
+        self.assertEqual(cfg["backend"], "claude")  # 1 = claude
 
     def test_wizard_bad_debounce_reasks(self):
         cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", "", "abc", "-1", "7"))
@@ -280,7 +285,7 @@ class TestCliConfig(GraphwatchCase):
     def test_cli_config_wizard_via_stdin(self):
         import io
         from contextlib import redirect_stderr
-        answers = iter(["kimi", "mk-1234567890abcdef", "", "", ""])
+        answers = iter(["2", "mk-1234567890abcdef", "", "", ""])
         import builtins
         buf = io.StringIO()
         real_input = builtins.input
