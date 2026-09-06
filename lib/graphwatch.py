@@ -211,11 +211,12 @@ def _parse_step(raw: str, current, validator):
     return raw.strip()
 
 
-def run_wizard(input_fn=None) -> dict:
+def run_wizard(input_fn=None, picker=None) -> dict:
     """引导式配置向导：逐项问 backend/api_key/base_url/model/debounce。
 
     每步显示当前值，回车跳过；走完才一次性落盘（中途 Ctrl-C 不产生半写配置）。
-    目录列表只展示不修改（由 add/remove 管）。
+    目录列表只展示不修改（由 add/remove 管）。picker 是按键注入缝（测试用），
+    传 None 时 ask_select 在无 TTY 下自回退到编号输入。
     """
     if input_fn is None:
         input_fn = input
@@ -231,6 +232,15 @@ def run_wizard(input_fn=None) -> dict:
         current = cfg[key]
         shown = mask_secret(current) if key == "api_key" else current
         if validator is not None and validator[1] == "choice":
+            # TTY 下走方向键 + 数字快捷键菜单，Esc = 保留当前值；
+            # 非交互（测试/管道）回退编号文本输入
+            from lib.ui import ask_select
+
+            if picker is not None or sys.stdin.isatty():
+                picked = ask_select("AI 后端（备用字段，重建不用 LLM）", BACKEND_CHOICES,
+                                    current=current or None, read_key=picker)
+                cfg[key] = picked if picked is not None else current
+                continue
             print(f"{prompt}:", file=sys.stderr)
             for i, opt in enumerate(BACKEND_CHOICES, 1):
                 mark = " ←当前" if opt == current else ""

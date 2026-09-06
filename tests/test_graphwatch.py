@@ -640,6 +640,35 @@ class TestConfigWizard(GraphwatchCase):
         self.assertEqual(graphwatch.load_config()["api_key"], "old")
 
 
+class TestWizardPicker(GraphwatchCase):
+    def _feed(self, *answers):
+        it = iter(answers)
+        return lambda prompt="": next(it)
+
+    def test_picker_digit_selects(self):
+        keys = iter(["4"])
+        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", ""), picker=lambda: next(keys))
+        self.assertEqual(cfg["backend"], "openai")
+
+    def test_picker_arrows_then_enter(self):
+        keys = iter(["down", "down", "enter"])
+        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", ""), picker=lambda: next(keys))
+        self.assertEqual(cfg["backend"], "gemini")
+
+    def test_picker_esc_keeps_current(self):
+        graphwatch.save_config({**graphwatch.load_config(), "backend": "kimi"})
+        keys = iter(["esc"])
+        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", ""), picker=lambda: next(keys))
+        self.assertEqual(cfg["backend"], "kimi")
+
+    def test_picker_none_non_tty_falls_back(self):
+        import io
+        import unittest.mock
+        with unittest.mock.patch.object(graphwatch.sys, "stdin", io.StringIO("")):
+            cfg = graphwatch.run_wizard(input_fn=self._feed("1", "", "", "", ""))
+        self.assertEqual(cfg["backend"], "claude")
+
+
 class TestMaskSecret(GraphwatchCase):
     def test_long_secret_masked_middle(self):
         self.assertEqual(graphwatch.mask_secret("sk-1234567890abcdef"), "sk-1…cdef")

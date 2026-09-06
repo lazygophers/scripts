@@ -351,3 +351,54 @@ class TestTimed(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAskSelect(unittest.TestCase):
+    def _run(self, keys, **kw):
+        import io
+
+        from rich.console import Console
+
+        from lib.ui import ask_select
+
+        buf = io.StringIO()
+        it = iter(keys)
+        result = ask_select("选一个", ["a", "b", "c"], console=Console(file=buf, force_terminal=False),
+                            read_key=lambda: next(it), **kw)
+        return result, buf.getvalue()
+
+    def test_down_enter(self):
+        result, out = self._run(["down", "enter"])
+        self.assertEqual(result, "b")
+        self.assertIn("❯ 2. b", out)
+
+    def test_digit_hotkey(self):
+        result, _ = self._run(["3"])
+        self.assertEqual(result, "c")
+
+    def test_esc_returns_none(self):
+        result, _ = self._run(["esc"])
+        self.assertIsNone(result)
+
+    def test_wraparound_up(self):
+        result, _ = self._run(["up", "enter"])
+        self.assertEqual(result, "c")
+
+    def test_current_preselected_and_marked(self):
+        result, out = self._run(["enter"], current="b")
+        self.assertEqual(result, "b")
+        self.assertIn("←当前", out)
+
+    def test_digit_out_of_range_ignored(self):
+        result, _ = self._run(["9", "enter"])
+        self.assertEqual(result, "a")
+
+    def test_non_tty_no_read_key_returns_none(self):
+        import io
+
+        from rich.console import Console
+
+        from lib.ui import ask_select
+
+        result = ask_select("选一个", ["a", "b"], console=Console(file=io.StringIO()))
+        self.assertIsNone(result)

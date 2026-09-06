@@ -261,6 +261,100 @@ def ask_text(prompt: str, *, default: str = "") -> str | None:
         return None
 
 
+def ask_select(
+    prompt: str,
+    options: Sequence[str],
+    *,
+    current: str | None = None,
+    console: Console | None = None,
+    read_key=None,
+) -> str | None:
+    """方向键 + 数字快捷键单选菜单。
+
+    ↑/↓ 移动高亮，回车确认；按数字直接选中对应项并确认；Esc/Ctrl-C 取消
+    返回 None。非交互（无 TTY 且未注入 read_key）时直接返回 None，
+    调用方自行回退到别的输入方式。
+    """
+    from rich.text import Text
+
+    con = console or Console()
+    if read_key is None:
+        if not sys.stdin.isatty():
+            return None
+        read_key = _read_tty_key
+    n = len(options)
+    idx = options.index(current) if current in options else 0
+    lines = n + 1
+
+    def draw() -> None:
+        # 光标回到列表头上，整块重画（每次 draw 前已上移 lines 行）
+        t = Text()
+        t.append(f"? {prompt} ", style="bold cyan")
+        t.append("（↑↓ 选择，数字快捷，回车确认，Esc 取消）", style="dim")
+        con.print(t)
+        for i, opt in enumerate(options):
+            mark = " ←当前" if opt == current else ""
+            t = Text()
+            t.append("❯ " if i == idx else "  ", style="bold green" if i == idx else "dim")
+            t.append(f"{i + 1}. {opt}{mark}", style="bold" if i == idx else "")
+            con.print(t)
+
+    draw()
+    while True:
+        key = read_key()
+        if key == "up":
+            idx = (idx - 1) % n
+        elif key == "down":
+            idx = (idx + 1) % n
+        elif key == "enter":
+            return options[idx]
+        elif key == "esc":
+            return None
+        elif key.isdigit() and 1 <= int(key) <= n:
+            return options[int(key) - 1]
+        # 其他键忽略
+        con.file.write(f"\x1b[{lines}A")
+        draw()
+
+
+def _read_tty_key() -> str:
+    """读一个按键，归一化成 up/down/enter/esc/单字符。POSIX 走 termios。"""
+    fd = sys.stdin.fileno()
+    if sys.platform == "win32":
+        import msvcrt
+
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):  # 方向键前缀
+            return {"H": "up", "P": "down", "K": "left", "M": "right"}.get(msvcrt.getwch(), "")
+        if ch in ("\r", "\n"):
+            return "enter"
+        if ch == "\x1b":
+            return "esc"
+        return ch
+    import termios
+    import tty
+
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        ch = sys.stdin.read(1)
+        if ch == "\x1b":
+            # 读转义序列：[A=↑ [B=↓；裸 Esc 取消
+            import select
+
+            if select.select([fd], [], [], 0.05)[0]:
+                seq = sys.stdin.read(2)
+                return {"[A": "up", "[B": "down"}.get(seq, "")
+            return "esc"
+        if ch in ("\r", "\n"):
+            return "enter"
+        if ch == "\x03":
+            raise KeyboardInterrupt
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def _format_elapsed(seconds: float) -> str:
     """耗时人话格式：<1s → '823ms'；<60s → '12.3s'；否则 → '1m23s'。"""
     if seconds < 1:
