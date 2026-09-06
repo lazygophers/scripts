@@ -9,6 +9,7 @@ import os
 import stat
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -100,9 +101,9 @@ class TestConfigValidation(GraphwatchCase):
         graphwatch.add_folder(repo)
         import threading
         stop = threading.Event()
-        fac = FakeFactory()
+        fac = FakeListenerFactory()
         thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
-            stop_event=stop, ensure=lambda: None, watch_factory=fac, poll_interval=0.05), daemon=True)
+            stop_event=stop, ensure=lambda: None, listener_factory=fac, rebuild_runner=FakeRunner(), poll_interval=0.05), daemon=True)
         thread.start()
         time.sleep(0.2)
         graphwatch.config_path().write_text("debounce: abc\n", encoding="utf-8")
@@ -295,50 +296,65 @@ class TestSingletonLock(GraphwatchCase):
         graphwatch.release_singleton_lock(lock)
 
 
-class FakeProc:
-    """假子进程：记录 terminate，可模拟崩溃。"""
+class FakeListener:
+    """假监听器：记录 start/stop，保留 on_change 供测试手动触发变更。"""
+
+    def __init__(self, folder, debounce, on_change):
+        self.folder = str(folder)
+        self.debounce = debounce
+        self.on_change = on_change
+        self.started = False
+        self.stopped = False
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+    def join(self, timeout=None):
+        pass
+
+    def fire_change(self):
+        self.on_change()
+
+
+class FakeListenerFactory:
+    """假监听工厂：记录挂载的目录与 debounce。"""
 
     def __init__(self):
-        self.terminated = False
-        self.returncode = None
+        self.listeners: dict[str, FakeListener] = {}
+        self.calls: list[tuple[str, float]] = []
 
-    def poll(self):
-        return self.returncode
-
-    def wait(self, timeout=None):
-        return self.returncode or 0
-
-    def kill(self):
-        self.terminated = True
-        self.returncode = -9
-
-    def terminate(self):
-        self.terminated = True
-        self.returncode = 0
+    def __call__(self, folder, debounce, on_change):
+        self.calls.append((str(folder), debounce))
+        lis = FakeListener(folder, debounce, on_change)
+        self.listeners[str(folder)] = lis
+        return lis
 
 
-class FakeFactory:
-    """假 watch 工厂：记录每次 start/terminate 的目录与 debounce。"""
+class FakeRunner:
+    """假重建执行器：记录调用；串行性断言用 active 计数。"""
 
-    def __init__(self):
-        self.started: list[tuple[str, float]] = []
-        self.stopped: list[str] = []
-        self.procs: dict[str, FakeProc] = {}
+    def __init__(self, rc=0, delay=0.0):
+        self.rc = rc
+        self.delay = delay
+        self.calls: list[str] = []
+        self.active = 0
+        self.max_active = 0
 
-    def __call__(self, debounce: float):
-        def start(folder):
-            key = str(folder)
-            self.started.append((key, debounce))
-            proc = FakeProc()
-            self.procs[key] = proc
-            return proc
-        return start
+    def __call__(self, folder):
+        import time as _t
 
-    def note_stop(self, folder):
-        self.stopped.append(str(folder))
-
-    def crash(self, folder):
-        self.procs[str(folder)].returncode = 1
+        self.calls.append(folder)
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            if self.delay:
+                _t.sleep(self.delay)
+            return self.rc
+        finally:
+            self.active -= 1
 
 
 class TestRunDaemon(GraphwatchCase):
@@ -363,18 +379,19 @@ class TestRunDaemon(GraphwatchCase):
         self.assertIsNotNone(lock)
         graphwatch.release_singleton_lock(lock)
 
-    def test_run_starts_watcher_per_folder(self):
+    def test_run_starts_listener_per_folder(self):
         import threading
         repo = self.mkdir()
         graphwatch.add_folder(repo)
         stop = threading.Event()
-        fac = FakeFactory()
+        fac = FakeListenerFactory()
 
         def bootstrap():
             stop.set()
-        graphwatch.run_daemon(stop_event=stop, ensure=lambda: None, watch_factory=fac, poll_interval=0.05, on_started=bootstrap)
-        self.assertEqual([k for k, _ in fac.started], [str(repo.resolve())])
-        self.assertEqual(fac.started[0][1], 3.0)
+        graphwatch.run_daemon(stop_event=stop, ensure=lambda: None, listener_factory=fac,
+                              rebuild_runner=FakeRunner(), poll_interval=0.05, on_started=bootstrap)
+        self.assertEqual([k for k, _ in fac.calls], [str(repo.resolve())])
+        self.assertEqual(fac.calls[0][1], 3.0)
 
     def test_run_blocked_when_locked(self):
         lock = graphwatch.acquire_singleton_lock()
@@ -392,7 +409,8 @@ class TestRunDaemon(GraphwatchCase):
         args = dict(ensure=lambda: None, poll_interval=0.05)
         args.update(kw)
         if fac is not None:
-            args["watch_factory"] = fac
+            args["listener_factory"] = fac
+        args.setdefault("rebuild_runner", FakeRunner())
         thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(stop_event=stop, **args), daemon=True)
         thread.start()
         deadline = time.monotonic() + 10
@@ -402,44 +420,41 @@ class TestRunDaemon(GraphwatchCase):
         thread.join(timeout=5)
         self.assertFalse(thread.is_alive(), "daemon 线程未退出")
 
-    def test_hot_add_starts_watcher(self):
+    def test_hot_add_starts_listener(self):
         repo1 = self.mkdir("r1")
         graphwatch.add_folder(repo1)
-        fac = FakeFactory()
+        fac = FakeListenerFactory()
         repo2 = self.mkdir("r2")
 
         def step():
             graphwatch.add_folder(repo2)
 
-        self._run_until(lambda: len(fac.started) >= 2, fac=fac, on_started=step)
-        self.assertIn(str(repo2.resolve()), [k for k, _ in fac.started])
+        self._run_until(lambda: len(fac.calls) >= 2, fac=fac, on_started=step)
+        self.assertIn(str(repo2.resolve()), [k for k, _ in fac.calls])
 
-    def test_hot_remove_stops_watcher(self):
+    def test_hot_remove_stops_listener(self):
         repo = self.mkdir()
         graphwatch.add_folder(repo)
-        fac = FakeFactory()
+        fac = FakeListenerFactory()
         stopped = []
 
         def step():
             graphwatch.remove_folder(repo)
             stopped.append(True)
 
-        self._run_until(lambda: stopped and fac.procs and all(p.terminated for p in fac.procs.values()),
+        self._run_until(lambda: stopped and fac.listeners and all(x.stopped for x in fac.listeners.values()),
                         fac=fac, on_started=lambda: time.sleep(0.2) or stopped.append(None))
-        self.assertTrue(all(p.terminated for p in fac.procs.values()))
+        self.assertTrue(all(x.stopped for x in fac.listeners.values()))
 
     def test_bad_yaml_does_not_crash_daemon(self):
         repo = self.mkdir()
         graphwatch.add_folder(repo)
-        fac = FakeFactory()
-        def step():
-            graphwatch.config_path().write_text("a: [unclosed\n", encoding="utf-8")
-        self._run_until(lambda: False, fac=fac, on_started=step, max_loops_hint=None) if False else None
-        # 直接驱动：坏 YAML 期间 load_config 抛错但主循环活着
+        fac = FakeListenerFactory()
         import threading
         stop = threading.Event()
         thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
-            stop_event=stop, ensure=lambda: None, watch_factory=fac, poll_interval=0.05), daemon=True)
+            stop_event=stop, ensure=lambda: None, listener_factory=fac, rebuild_runner=FakeRunner(),
+            poll_interval=0.05), daemon=True)
         thread.start()
         time.sleep(0.2)
         graphwatch.config_path().write_text("a: [unclosed\n", encoding="utf-8")
@@ -448,24 +463,107 @@ class TestRunDaemon(GraphwatchCase):
         stop.set()
         thread.join(timeout=5)
 
-    def test_debounce_change_restarts_watchers(self):
+    def test_debounce_change_restarts_listeners(self):
         repo = self.mkdir()
         graphwatch.add_folder(repo)
-        fac = FakeFactory()
+        fac = FakeListenerFactory()
         def step():
             cfg = graphwatch.load_config()
             cfg["debounce"] = 7
             graphwatch.save_config(cfg)
-        self._run_until(lambda: any(d == 7 for _, d in fac.started), fac=fac, on_started=step)
+        self._run_until(lambda: any(d == 7 for _, d in fac.calls), fac=fac, on_started=step)
 
-    def test_crashed_watcher_restarted(self):
+    def test_change_triggers_rebuild(self):
         repo = self.mkdir()
         graphwatch.add_folder(repo)
-        fac = FakeFactory()
+        fac = FakeListenerFactory()
+        runner = FakeRunner()
+        fired = threading.Event()
+
         def step():
-            if fac.procs:
-                fac.crash(repo.resolve())
-        self._run_until(lambda: len(fac.started) >= 2, fac=fac, on_started=step)
+            if str(repo.resolve()) in fac.listeners:
+                fac.listeners[str(repo.resolve())].fire_change()
+                fired.set()
+
+        self._run_until(lambda: len(runner.calls) >= 1, fac=fac, rebuild_runner=runner,
+                        on_started=lambda: time.sleep(0.3) or step())
+        self.assertEqual(runner.calls, [str(repo.resolve())])
+
+    def test_rebuilds_serial_at_concurrency_1(self):
+        import threading
+        repo1 = self.mkdir("r1")
+        repo2 = self.mkdir("r2")
+        graphwatch.add_folder(repo1)
+        graphwatch.add_folder(repo2)
+        fac = FakeListenerFactory()
+        runner = FakeRunner(delay=0.15)
+
+        stop = threading.Event()
+        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
+            stop_event=stop, ensure=lambda: None, listener_factory=fac, rebuild_runner=runner,
+            poll_interval=0.05), daemon=True)
+        thread.start()
+        time.sleep(0.3)
+        for r in (repo1, repo2):
+            fac.listeners[str(r.resolve())].fire_change()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and len(runner.calls) < 2:
+            time.sleep(0.05)
+        stop.set()
+        thread.join(timeout=5)
+        self.assertEqual(len(runner.calls), 2)
+        self.assertEqual(runner.max_active, 1, "并发 1 时重建必须串行")
+
+    def test_rebuild_failure_notifies(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        fac = FakeListenerFactory()
+        runner = FakeRunner(rc=1)
+        notified = []
+        import threading
+        stop = threading.Event()
+        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
+            stop_event=stop, ensure=lambda: None, listener_factory=fac, rebuild_runner=runner,
+            poll_interval=0.05,
+            notifier=graphwatch.Notifier(throttle_secs=300, sender=lambda f, t, m: notified.append((f, t)) or True)), daemon=True)
+        thread.start()
+        time.sleep(0.2)
+        fac.listeners[str(repo.resolve())].fire_change()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not notified:
+            time.sleep(0.05)
+        stop.set()
+        thread.join(timeout=5)
+        self.assertEqual(len(notified), 1)
+        self.assertIn("重建失败", notified[0][1])
+
+    def test_rebuild_concurrency_2_parallel(self):
+        import threading
+        repo1 = self.mkdir("r1")
+        repo2 = self.mkdir("r2")
+        graphwatch.add_folder(repo1)
+        graphwatch.add_folder(repo2)
+        cfg = graphwatch.load_config()
+        cfg["rebuild_concurrency"] = 2
+        graphwatch.save_config(cfg)
+        fac = FakeListenerFactory()
+        runner = FakeRunner(delay=0.2)
+        stop = threading.Event()
+        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
+            stop_event=stop, ensure=lambda: None, listener_factory=fac, rebuild_runner=runner,
+            poll_interval=0.05), daemon=True)
+        thread.start()
+        time.sleep(0.3)
+        for r in (repo1, repo2):
+            fac.listeners[str(r.resolve())].fire_change()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and len(runner.calls) < 2:
+            time.sleep(0.05)
+        time.sleep(0.3)
+        stop.set()
+        thread.join(timeout=5)
+        self.assertEqual(len(runner.calls), 2)
+        self.assertEqual(runner.max_active, 2, "并发 2 时应可同时重建")
 
 
 class TestCliRun(GraphwatchCase):
@@ -734,32 +832,23 @@ class TestStartupCatchup(GraphwatchCase):
         (g / "graph.json").write_text("{}", encoding="utf-8")
         self.assertIsNone(graphwatch.stale_trigger(str(repo)))
 
-    def _wait_nudge(self, repo, timeout=6):
-        import os as _os
-
-        # nudge 会 touch a.py：mtime 被拨到当下（远新于旧值）
-        deadline = time.monotonic() + timeout
-        old = _os.stat(repo / "a.py").st_mtime
-        while time.monotonic() < deadline:
-            if _os.stat(repo / "a.py").st_mtime > old:
-                return True
-            time.sleep(0.1)
-        return False
-
     def test_startup_nudges_stale_folder(self):
         import threading
 
         repo = self._stale_repo()
         graphwatch.add_folder(repo)
-        fac = FakeFactory()
+        fac = FakeListenerFactory()
+        runner = FakeRunner()
         stop = threading.Event()
         thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
-            stop_event=stop, ensure=lambda: None, watch_factory=fac, poll_interval=0.2), daemon=True)
+            stop_event=stop, ensure=lambda: None, listener_factory=fac, rebuild_runner=runner, poll_interval=0.2), daemon=True)
         thread.start()
-        nudged = self._wait_nudge(repo)
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline and not runner.calls:
+            time.sleep(0.05)
         stop.set()
         thread.join(timeout=5)
-        self.assertTrue(nudged, "启动补课应 touch 过期文件")
+        self.assertEqual(runner.calls, [str(repo.resolve())], "启动补课应入队重建过期目录")
 
     def test_hot_add_nudges_stale_folder(self):
         import threading
@@ -767,17 +856,20 @@ class TestStartupCatchup(GraphwatchCase):
         repo = self._stale_repo()
         other = self.mkdir("other")
         graphwatch.add_folder(other)
-        fac = FakeFactory()
+        fac = FakeListenerFactory()
+        runner = FakeRunner()
         stop = threading.Event()
         thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
-            stop_event=stop, ensure=lambda: None, watch_factory=fac, poll_interval=0.2), daemon=True)
+            stop_event=stop, ensure=lambda: None, listener_factory=fac, rebuild_runner=runner, poll_interval=0.2), daemon=True)
         thread.start()
         time.sleep(0.4)
         graphwatch.add_folder(repo)  # 热加载新增过期目录
-        nudged = self._wait_nudge(repo)
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline and str(repo.resolve()) not in runner.calls:
+            time.sleep(0.05)
         stop.set()
         thread.join(timeout=5)
-        self.assertTrue(nudged, "热加载新增的过期目录也应补课")
+        self.assertIn(str(repo.resolve()), runner.calls, "热加载新增的过期目录也应补课")
 
 
 class TestOpsLogging(GraphwatchCase):
@@ -796,7 +888,7 @@ class TestOpsLogging(GraphwatchCase):
         def target():
             try:
                 graphwatch.run_daemon(stop_event=stop, ensure=lambda: None,
-                                      watch_factory=fac, poll_interval=0.05)
+                                      listener_factory=fac, rebuild_runner=FakeRunner(), poll_interval=0.05)
             except Exception as e:  # noqa: BLE001
                 errors.append(e)
 
@@ -813,7 +905,7 @@ class TestOpsLogging(GraphwatchCase):
     def test_debounce_change_logged(self):
         repo = self.mkdir()
         graphwatch.add_folder(repo)
-        fac = FakeFactory()
+        fac = FakeListenerFactory()
 
         def step():
             cfg = graphwatch.load_config()
@@ -832,33 +924,23 @@ class TestOpsLogging(GraphwatchCase):
         class ExplodingFactory:
             def __init__(self):
                 self.calls = 0
-            def __call__(self, debounce):
-                def start(folder):
-                    self.calls += 1
-                    raise OSError("spawn boom")
-                return start
+            def __call__(self, folder, debounce, on_change):
+                self.calls += 1
+                raise OSError("spawn boom")
 
         fac = ExplodingFactory()
         buf, redir = self._capture()
         with redir:
             errors = self._run_capture(fac, lambda: None, wait=0.3)
         self.assertEqual(errors, [], "spawn 失败不应杀 daemon")
-        self.assertIn("监听进程启动失败", buf.getvalue())
+        self.assertIn("监听启动失败", buf.getvalue())
         self.assertGreater(fac.calls, 1, "下一轮应重试")
 
     def test_unexpected_error_logged_and_reraised(self):
         repo = self.mkdir()
         graphwatch.add_folder(repo)
         import threading
-        class BoomFactory(FakeFactory):
-            def __call__(self, debounce):
-                def start(folder):
-                    proc = FakeProc()
-                    self.procs[str(folder)] = proc
-                    return proc
-                return start
-        boom = BoomFactory()
-        boom(3.0)(repo.resolve())
+        boom = FakeListenerFactory()
         # 直接制造 _reconcile 内部异常：patch load_config 第二次起抛 RuntimeError
         calls = {"n": 0}
         real_load = graphwatch.load_config
@@ -876,7 +958,7 @@ class TestOpsLogging(GraphwatchCase):
              contextlib.redirect_stderr(buf):
             with self.assertRaises(RuntimeError):
                 graphwatch.run_daemon(stop_event=stop, ensure=lambda: None,
-                                      watch_factory=boom, poll_interval=0.05)
+                                      listener_factory=boom, rebuild_runner=FakeRunner(), poll_interval=0.05)
         self.assertIn("daemon 意外错误", buf.getvalue())
 
 
@@ -949,7 +1031,7 @@ class TestConfigWizard(GraphwatchCase):
     def test_wizard_writes_all_fields(self):
         # backend 是编号选择：4 = openai（OpenAI 标准协议）
         cfg = graphwatch.run_wizard(input_fn=self._feed(
-            "4", "sk-1234567890abcdef", "https://api.example.com", "gpt-5", "5",
+            "4", "sk-1234567890abcdef", "https://api.example.com", "gpt-5", "5", "2",
         ))
         p = graphwatch.config_path()
         self.assertTrue(p.exists())
@@ -958,6 +1040,7 @@ class TestConfigWizard(GraphwatchCase):
         self.assertEqual(cfg["base_url"], "https://api.example.com")
         self.assertEqual(cfg["model"], "gpt-5")
         self.assertEqual(cfg["debounce"], 5.0)
+        self.assertEqual(cfg["rebuild_concurrency"], 2)
         # folders 不被向导改动
         self.assertEqual(cfg["folders"], [])
         mode = stat.S_IMODE(p.stat().st_mode)
@@ -965,17 +1048,17 @@ class TestConfigWizard(GraphwatchCase):
 
     def test_wizard_enter_keeps_defaults_and_existing(self):
         graphwatch.add_folder(self.mkdir())
-        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", "", ""))
+        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", "", "", ""))
         self.assertEqual(cfg["debounce"], 3)
         self.assertEqual(cfg["backend"], "")
         self.assertEqual(len(cfg["folders"]), 1)
 
     def test_wizard_bad_backend_number_reasks(self):
-        cfg = graphwatch.run_wizard(input_fn=self._feed("99", "0", "1", "", "", "", ""))
+        cfg = graphwatch.run_wizard(input_fn=self._feed("99", "0", "1", "", "", "", "", ""))
         self.assertEqual(cfg["backend"], "claude")  # 1 = claude
 
     def test_wizard_bad_debounce_reasks(self):
-        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", "", "abc", "-1", "7"))
+        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", "", "abc", "-1", "7", ""))
         self.assertEqual(cfg["debounce"], 7.0)
 
     def test_wizard_ctrl_c_keeps_old_config(self):
@@ -994,25 +1077,25 @@ class TestWizardPicker(GraphwatchCase):
 
     def test_picker_digit_selects(self):
         keys = iter(["4"])
-        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", ""), picker=lambda: next(keys))
+        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", "", "", ""), picker=lambda: next(keys))
         self.assertEqual(cfg["backend"], "openai")
 
     def test_picker_arrows_then_enter(self):
         keys = iter(["down", "down", "enter"])
-        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", ""), picker=lambda: next(keys))
+        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", "", "", ""), picker=lambda: next(keys))
         self.assertEqual(cfg["backend"], "gemini")
 
     def test_picker_esc_keeps_current(self):
         graphwatch.save_config({**graphwatch.load_config(), "backend": "kimi"})
         keys = iter(["esc"])
-        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", ""), picker=lambda: next(keys))
+        cfg = graphwatch.run_wizard(input_fn=self._feed("", "", "", "", "", ""), picker=lambda: next(keys))
         self.assertEqual(cfg["backend"], "kimi")
 
     def test_picker_none_non_tty_falls_back(self):
         import io
         import unittest.mock
         with unittest.mock.patch.object(graphwatch.sys, "stdin", io.StringIO("")):
-            cfg = graphwatch.run_wizard(input_fn=self._feed("1", "", "", "", ""))
+            cfg = graphwatch.run_wizard(input_fn=self._feed("1", "", "", "", "", ""))
         self.assertEqual(cfg["backend"], "claude")
 
 
@@ -1045,7 +1128,7 @@ class TestCliConfig(GraphwatchCase):
     def test_cli_config_wizard_via_stdin(self):
         import io
         from contextlib import redirect_stderr
-        answers = iter(["2", "mk-1234567890abcdef", "", "", ""])
+        answers = iter(["2", "mk-1234567890abcdef", "", "", "", ""])
         import builtins
         buf = io.StringIO()
         real_input = builtins.input
@@ -1139,31 +1222,3 @@ class TestThrottle(GraphwatchCase):
         with unittest.mock.patch.object(graphwatch.time, "monotonic", return_value=graphwatch.time.monotonic() + 301):
             notifier.fire("/a", "t", "m")
         self.assertEqual(len(sent), 2)
-
-
-class TestDaemonNotifiesOnCrash(GraphwatchCase):
-    def test_crash_fires_notification(self):
-        repo = self.mkdir()
-        graphwatch.add_folder(repo)
-        fac = FakeFactory()
-        notified = []
-
-        import threading
-        stop = threading.Event()
-        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
-            stop_event=stop, ensure=lambda: None, watch_factory=fac, poll_interval=0.05,
-            notifier=graphwatch.Notifier(throttle_secs=300, sender=lambda f, t, m: notified.append((f, t)))), daemon=True)
-        thread.start()
-        # 等 watcher 起来，然后注入崩溃
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and not fac.procs:
-            time.sleep(0.02)
-        if fac.procs:
-            fac.crash(repo.resolve())
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and not notified and thread.is_alive():
-            time.sleep(0.02)
-        stop.set()
-        thread.join(timeout=5)
-        self.assertEqual(len(notified), 1, f"notified={notified}")
-        self.assertIn(str(repo.resolve()), notified[0][0])

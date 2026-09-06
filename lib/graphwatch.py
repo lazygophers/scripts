@@ -26,6 +26,7 @@ DEFAULTS: dict = {
     "base_url": "",
     "model": "",
     "debounce": DEFAULT_DEBOUNCE,
+    "rebuild_concurrency": 1,
 }
 
 
@@ -87,6 +88,12 @@ def load_config() -> dict:
         raise GraphwatchError(f"debounce 应是数字: {p}") from e
     if cfg["debounce"] <= 0:
         raise GraphwatchError(f"debounce 应大于 0: {p}")
+    try:
+        cfg["rebuild_concurrency"] = int(cfg["rebuild_concurrency"])
+    except (TypeError, ValueError) as e:
+        raise GraphwatchError(f"rebuild_concurrency 应是整数: {p}") from e
+    if cfg["rebuild_concurrency"] < 1:
+        raise GraphwatchError(f"rebuild_concurrency 最小为 1: {p}")
     return cfg
 
 
@@ -197,6 +204,7 @@ _WIZARD_STEPS: list[tuple[str, str, tuple[str, str] | None]] = [
     ("base_url", "base URL（留空用官方默认；openai 协议常需要填）", None),
     ("model", "模型名（留空用后端默认）", None),
     ("debounce", "防抖秒数（变更后等多久再重建）", ("debounce", "float_positive")),
+    ("rebuild_concurrency", "同时重建的目录数（串行=1，最小 1）", ("rebuild_concurrency", "int_min1")),
 ]
 
 
@@ -218,6 +226,12 @@ def _parse_step(raw: str, current, validator):
         except ValueError:
             return None
         return v if v > 0 else None
+    if validator[1] == "int_min1":
+        try:
+            v = int(raw)
+        except ValueError:
+            return None
+        return v if v >= 1 else None
     return raw.strip()
 
 
@@ -407,44 +421,84 @@ class Notifier:
         return bool(self._sender(folder, title, message))
 
 
-def _spawn_watcher_factory(debounce: float):
-    """默认 watch 工厂：每目录起一个 `python -m graphify watch` 子进程。
+def _watched_extensions() -> frozenset[str]:
+    """graphify watch 监听的扩展名（变更才触发重建）；导入失败回落常用集。"""
+    try:
+        from graphify.detect import CODE_EXTENSIONS, DOC_EXTENSIONS, IMAGE_EXTENSIONS, PAPER_EXTENSIONS
 
-    走公共 CLI 而不是 import graphify 内部函数（watch() 的循环只认
-    KeyboardInterrupt，线程停不掉）；子进程 terminate 即干净停监听，
-    崩溃由 daemon 主循环拉起。
+        return frozenset(CODE_EXTENSIONS | DOC_EXTENSIONS | PAPER_EXTENSIONS | IMAGE_EXTENSIONS)
+    except Exception:
+        # ponytail: 回落集只保最常见的源/文档后缀，graphify 缺席时够用
+        return frozenset({".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".rb",
+                          ".c", ".h", ".cpp", ".hpp", ".md", ".txt", ".yaml", ".yml", ".json"})
+
+
+def _watchdog_listener(folder: str, debounce: float, on_change) -> object:
+    """单目录监听器：watchdog 观察文件事件，防抖后回调 on_change。
+
+    自己写而不是跑 `graphify watch` 子进程：监听与重建必须拆开，重建才能
+    全局排队（并发可配，默认串行）。
     """
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+
+    watched = _watched_extensions()
+
+    class _Handler(FileSystemEventHandler):
+        def __init__(self):
+            self._timer = None
+
+        def _schedule(self):
+            if self._timer is not None:
+                self._timer.cancel()
+            import threading
+
+            t = threading.Timer(debounce, on_change)
+            t.daemon = True
+            t.start()
+            self._timer = t
+
+        def on_any_event(self, event) -> None:
+            from pathlib import Path as _P
+
+            if event.is_directory:
+                return
+            p = _P(event.src_path)
+            if "graphify-out" in p.parts or ".git" in p.parts:
+                return
+            if p.suffix.lower() not in watched:
+                return
+            self._schedule()
+
+    obs = Observer()
+    obs.schedule(_Handler(), folder, recursive=True)
+    obs.daemon = True
+    return obs
+
+
+def _run_update(folder: str) -> int:
+    """跑一次增量重建（graphify update，无 LLM）。返回退出码。"""
     import subprocess
 
-    def start(folder: Path):
-        return subprocess.Popen(
-            [sys.executable, "-m", "graphify", "watch", str(folder), "--debounce", str(debounce)],
-            stdout=getattr(run_daemon, "_log_file", None) or sys.stderr,
-            stderr=getattr(run_daemon, "_log_file", None) or sys.stderr,
-        )
-
-    return start
-
-
-def _stop_child(proc, folder: str) -> None:
-    """停一个监听子进程：terminate → 等 5s → kill。"""
-    if proc.poll() is not None:
-        return
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except Exception:
-        proc.kill()
+    r = subprocess.run(
+        [sys.executable, "-m", "graphify", "update", folder],
+        stdout=getattr(run_daemon, "_log_file", None) or sys.stderr,
+        stderr=getattr(run_daemon, "_log_file", None) or sys.stderr,
+        check=False,
+    )
+    return r.returncode
 
 
-def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: float = 2.0,
-               on_started=None, notifier=None) -> None:
-    """前台守护进程：监督每目录一个监听子进程，全局单例锁防双开。
+def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_factory=None,
+               poll_interval: float = 2.0, on_started=None, notifier=None) -> None:
+    """前台守护进程：每目录一个监听线程，重建全局排队，全局单例锁防双开。
 
-    主循环每 poll_interval 醒一次：读配置（坏 YAML 跳过本轮不崩），
-    目录列表或 debounce 变化时增删/重启子进程，子进程崩溃自动拉起。
-    stop_event 主要给测试用；正常路径靠 KeyboardInterrupt 退出。
+    监听（watchdog，轻量）与重建（graphify update 子进程，重）分离：
+    重建进全局队列，由 rebuild_concurrency 个 worker 执行（默认 1 = 串行，
+    最小 1）。同一目录的变更在队列里去重合并，重建中再变更则重跑一轮。
+    主循环每 poll_interval 醒一次热加载配置；stop_event 停一切。
     """
+    import queue
     import threading
 
     if stop_event is None:
@@ -465,8 +519,10 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
             pid = "?"
         raise GraphwatchError(f"已有 graphwatch 实例在运行（PID {pid}，锁: {lock_path()}）")
 
-    if watch_factory is None:
-        watch_factory = _spawn_watcher_factory
+    if rebuild_runner is None:
+        rebuild_runner = _run_update
+    if listener_factory is None:
+        listener_factory = _watchdog_listener
     if notifier is None:
         notifier = Notifier()
 
@@ -482,79 +538,124 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{stamp}] {msg}", file=sys.stderr)
 
-    children: dict[str, object] = {}
-    started_logged: set[str] = set()
-    last_sig: tuple[tuple[str, ...], float] | None = None
+    listeners: dict[str, object] = {}
+    workers: list[threading.Thread] = []
+    work: queue.Queue[str] = queue.Queue()
+    queued: set[str] = set()
+    in_flight: set[str] = set()
+    dirty: set[str] = set()
+    state_lock = threading.Lock()
 
-    def _nudge_if_stale(folder: str) -> None:
-        """graphify watch 没有首轮构建：图谱落后于源码时 touch 过期文件、
-        重放变更事件触发重建。幂等——新鲜目录不动。"""
-        t = stale_trigger(folder)
-        if t is None:
-            return
-        try:
-            os.utime(t)
-            _dlog(f"补课：{folder} 图谱落后于源码，touch {t.name} 触发重建")
-        except OSError as e:
-            _dlog(f"补课失败: {folder}: {e}")
+    def _enqueue(folder: str) -> None:
+        """重建入队：已在队列/执行中则标 dirty，完成后自动重跑。"""
+        with state_lock:
+            if folder in queued or folder in in_flight:
+                dirty.add(folder)
+                return
+            queued.add(folder)
+        work.put(folder)
 
-    def _start_missing(debounce: float, folders: list[str]) -> None:
-        """补起缺的监听子进程（首次或上一轮启动失败的重试）。
-
-        每个新起的子进程都安排一次延迟补课（启动 / 热加载新增目录 /
-        崩溃重启统一走这里）：等一个 poll 周期让 watch 的监听就位，
-        再检测过期并触发首轮重建。
-        """
-        import threading
-
-        start_fn = watch_factory(debounce)
-        for f in folders:
-            if f in children:
-                continue
-            if f not in started_logged:
-                _dlog(f"开始监听 {f}")
+    def _worker() -> None:
+        while not stop_event.is_set():
             try:
-                children[f] = start_fn(Path(f))
-                started_logged.add(f)
-                threading.Timer(poll_interval, _nudge_if_stale, args=(f,)).start()
+                folder = work.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            with state_lock:
+                queued.discard(folder)
+                in_flight.add(folder)
+            _dlog(f"重建开始: {folder}")
+            try:
+                rc = rebuild_runner(folder)
             except Exception as e:  # noqa: BLE001
-                _dlog(f"监听进程启动失败（下一轮重试）: {f}: {e}")
+                _dlog(f"重建异常: {folder}: {type(e).__name__}: {e}")
+                rc = 1
+            with state_lock:
+                in_flight.discard(folder)
+                redo = folder in dirty
+                dirty.discard(folder)
+            if rc != 0:
+                _dlog(f"重建失败（rc={rc}）: {folder}")
+                sent = notifier.fire(folder, "graphwatch 重建失败", f"{folder}\n重建退出码 {rc}，稍后变更会重试")
+                _dlog(f"失败通知{'已发送' if sent else '发送失败（系统通知不可用）'}: {folder}")
+            else:
+                _dlog(f"重建完成: {folder}")
+            if redo and not stop_event.is_set():
+                _enqueue(folder)
+
+    def _spawn_workers(n: int) -> None:
+        for _ in range(n):
+            t = threading.Thread(target=_worker, daemon=True)
+            t.start()
+            workers.append(t)
+
+    def _start_listening(folders: list[str], debounce: float) -> None:
+        for f in folders:
+            if f in listeners:
+                continue
+            _dlog(f"开始监听 {f}")
+            try:
+                obs = listener_factory(f, debounce, lambda ff=f: _enqueue(ff))
+                obs.start()
+                listeners[f] = obs
+                threading.Timer(poll_interval, lambda ff=f: _catchup(ff)).start()
+            except Exception as e:  # noqa: BLE001
+                _dlog(f"监听启动失败（下一轮重试）: {f}: {e}")
+
+    def _catchup(folder: str) -> None:
+        """新挂载的目录若图谱落后于源码，直接入队重建（首轮补课）。"""
+        if stop_event.is_set():
+            return
+        if stale_trigger(folder) is not None:
+            _dlog(f"补课：{folder} 图谱落后于源码，入队重建")
+            _enqueue(folder)
+
+    last_sig: tuple[tuple[str, ...], float, int] | None = None
 
     def _reconcile() -> None:
         nonlocal last_sig
         cfg = load_config()
         debounce = float(cfg["debounce"])
+        concurrency = int(cfg["rebuild_concurrency"])
         folders = [str(f) for f in cfg["folders"]]
-        sig = (tuple(folders), debounce)
+        sig = (tuple(folders), debounce, concurrency)
         if sig == last_sig:
-            # 无配置变化：处理崩溃重启 + 补起上轮启动失败的
-            for f, proc in list(children.items()):
-                rc = proc.poll()
-                if rc is not None:
-                    _dlog(f"监听进程退出（rc={rc}），重启 {f}")
-                    sent = notifier.fire(f, "graphwatch 重建失败", f"{f}\n监听进程退出（rc={rc}），已自动重启")
-                    _dlog(f"崩溃通知{'已发送' if sent else '发送失败（系统通知不可用）'}: {f}")
-                    del children[f]
-            _start_missing(debounce, folders)
+            # 无配置变化：补起上轮启动失败的监听
+            _start_listening(folders, debounce)
             return
         desired = set(folders)
         if last_sig is not None and last_sig[1] != debounce:
-            # debounce 变了：所有子进程按旧参数起的，全部重启
             _dlog(f"debounce 变化 {last_sig[1]} → {debounce}，重启所有监听")
-            for f, proc in children.items():
-                _stop_child(proc, f)
-            children.clear()
-        for f in list(children):
+            for f, obs in listeners.items():
+                _stop_listener(obs)
+            listeners.clear()
+        if last_sig is not None and last_sig[2] != concurrency:
+            _dlog(f"rebuild_concurrency 变化 {last_sig[2]} → {concurrency}，重建 worker 已按新并发增量拉起")
+            _spawn_workers(concurrency - len(workers)) if concurrency > len(workers) else None
+            # ponytail: 并发调小不杀在跑的 worker，只少不增；下次重启生效到底
+        for f in list(listeners):
             if f not in desired:
                 _dlog(f"停止监听 {f}")
-                _stop_child(children.pop(f), f)
-                started_logged.discard(f)
-        _start_missing(debounce, folders)
+                _stop_listener(listeners.pop(f))
+        _start_listening(folders, debounce)
         last_sig = sig
 
+    def _stop_listener(obs) -> None:
+        try:
+            obs.stop()
+            obs.join(timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _unexpected(e: Exception) -> None:
+        # 意外错误：留痕后退出，交给服务管理器（KeepAlive/Restart）拉起
+        _dlog(f"daemon 意外错误，退出待服务管理器拉起: {type(e).__name__}: {e}")
+
     try:
+        first = load_config()
+        _spawn_workers(max(1, int(first["rebuild_concurrency"])))
         _reconcile()
-        _dlog(f"graphwatch daemon：{len(children)} 个目录在监听（Ctrl-C 退出）")
+        _dlog(f"graphwatch daemon：{len(listeners)} 个目录在监听，重建并发 {first['rebuild_concurrency']}（Ctrl-C 退出）")
         if on_started is not None:
             on_started()
         while not stop_event.wait(poll_interval):
@@ -565,16 +666,18 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
                 # 配置短暂非法（写坏 YAML / 写到一半）：不崩，等下一轮
                 _dlog(f"配置暂不可读，跳过本轮: {e}")
             except Exception as e:  # noqa: BLE001
-                # 意外错误：留痕后退出，交给服务管理器（KeepAlive/Restart）拉起
-                _dlog(f"daemon 意外错误，退出待服务管理器拉起: {type(e).__name__}: {e}")
+                _unexpected(e)
                 raise
+    except Exception as e:  # noqa: BLE001
+        _unexpected(e)
+        raise
     finally:
-        if children:
-            _dlog(f"daemon 退出：停止 {len(children)} 个监听子进程")
-        for f, proc in children.items():
-            _stop_child(proc, f)
+        if listeners:
+            _dlog(f"daemon 退出：停止 {len(listeners)} 个监听")
+        for obs in listeners.values():
+            _stop_listener(obs)
         release_singleton_lock(lock)
-        _dlog("graphwatch daemon：已退出，监听子进程已停，锁已释放")
+        _dlog("graphwatch daemon：已退出，监听已停，锁已释放")
         log_file.close()
 
 
