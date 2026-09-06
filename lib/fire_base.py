@@ -116,9 +116,12 @@ def _render_fire_info(args, kwargs) -> None:
 
 def _render_fire_help(lines, out) -> None:
     """接管 fire.core.Display：把 Fire help 压成彩色短版。"""
-    text = "\n".join(lines).strip("\n")
+    import re
+
+    # fire 在 TTY 下生成的 help 文本自带 ANSI 转义（\x1b[1mNAME\x1b[0m），
+    # 解析器找的是裸 "NAME"，不剥掉就整段解析为空、只打出兜底的 "help"。
+    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", "\n".join(lines)).strip("\n")
     from rich.console import Console
-    from rich.table import Table
     from rich.text import Text
 
     console = Console(file=out, force_terminal=True, highlight=False)

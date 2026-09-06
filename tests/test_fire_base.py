@@ -134,6 +134,27 @@ class TestRenderFireHelp(unittest.TestCase):
     def test_empty_input_prints_minimal_head(self) -> None:
         self.assertEqual([str(item) for item in self._render([])], ["help"])
 
+    def test_ansi_styled_tty_help_still_parses(self) -> None:
+        # 回归：fire 在 TTY 下生成带 ANSI 转义的 help（\x1b[1mNAME\x1b[0m），
+        # 解析器曾因此整段为空、只打出兜底的 "help"。
+        out = self._render([
+            "\x1b[1mNAME\x1b[0m",
+            "    cicd - CI 工具",
+            "",
+            "\x1b[1mSYNOPSIS\x1b[0m",
+            "    cicd \x1b[4mCOMMAND\x1b[0m",
+            "",
+            "\x1b[1mCOMMANDS\x1b[0m",
+            "    \x1b[1m\x1b[4mCOMMAND\x1b[0m\x1b[0m is one of the following:",
+            "",
+            "     now",
+            "       查看状态",
+        ])
+        joined = "\n".join(str(item) for item in out)
+        self.assertIn("cicd", joined)
+        self.assertIn("命令", joined)
+        self.assertIn("查看状态", joined)
+
 
 class TestHelpParsers(unittest.TestCase):
     def test_help_choices_extracts_command_descriptions(self) -> None:
