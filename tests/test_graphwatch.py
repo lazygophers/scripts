@@ -168,7 +168,7 @@ class TestGraphifyDependency(GraphwatchCase):
                 sys.modules["graphify"] = saved
             else:
                 sys.modules.pop("graphify", None)
-        self.assertIn("[graphify]", str(cm.exception))
+        self.assertIn("requirements.txt", str(cm.exception))
 
 
 class TestWatchdogDependency(GraphwatchCase):
@@ -348,7 +348,7 @@ class TestRunDaemon(GraphwatchCase):
         try:
             with self.assertRaises(GraphwatchError) as cm:
                 graphwatch.run_daemon()
-            self.assertIn("[graphify]", str(cm.exception))
+            self.assertIn("requirements.txt", str(cm.exception))
         finally:
             sys.modules.pop("graphify", None)
             if saved is not None:
