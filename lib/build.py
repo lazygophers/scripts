@@ -236,13 +236,14 @@ def _check_python_project(project_dir: Path, *,
     if py_files:
         if log is not None:
             log(f"py_compile: {len(py_files)} 个 .py 文件")
-        import py_compile
         errors: list[str] = []
         for f in py_files:
             try:
-                py_compile.compile(str(f), doraise=True)
-            except py_compile.PyCompileError as e:
-                errors.append(str(e))
+                # compile() 内存编译：与 py_compile 同一套语法校验，
+                # 但不往被检项目写 __pycache__/*.pyc（违背零产物承诺）
+                compile(f.read_text(encoding="utf-8"), str(f), "exec")
+            except SyntaxError as e:
+                errors.append(f"{e.filename}:{e.lineno}: {e.msg}")
         if errors:
             results.append(CheckResult("py_compile", "fail", "\n".join(errors)))
         else:
