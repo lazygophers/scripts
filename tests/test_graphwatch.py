@@ -511,7 +511,7 @@ class TestService(GraphwatchCase):
             return type("R", (), {"returncode": 0})()
         with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
             graphwatch.install_service(runner=fake_run)
-        self.assertIn(["launchctl", "load", str(graphwatch.launchd_plist_path())], cmds)
+        self.assertIn(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(graphwatch.launchd_plist_path())], cmds)
         self.assertTrue(graphwatch.launchd_plist_path().exists())
         self.assertIn(str(graphwatch.script_path()), graphwatch.launchd_plist_path().read_text())
 
@@ -539,7 +539,7 @@ class TestService(GraphwatchCase):
         with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
             graphwatch.uninstall_service(runner=fake_run)
         self.assertFalse(p.exists())
-        self.assertIn(["launchctl", "unload", str(p)], cmds)
+        self.assertIn(["launchctl", "bootout", f"gui/{os.getuid()}", graphwatch.LAUNCHD_LABEL], cmds)
 
     def test_uninstall_windows_deletes_task(self):
         import unittest.mock
@@ -619,7 +619,7 @@ class TestServiceControl(GraphwatchCase):
         with unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
              unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
             graphwatch.service_control("restart", runner=fake)
-        self.assertEqual([c[1] for c in cmds], ["unload", "load"])
+        self.assertEqual([c[1] for c in cmds], ["bootout", "bootstrap"])
 
     def test_macos_stop_only_unload(self):
         import unittest.mock
@@ -627,7 +627,7 @@ class TestServiceControl(GraphwatchCase):
         with unittest.mock.patch.object(graphwatch, "service_registered", return_value=True), \
              unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
             graphwatch.service_control("stop", runner=fake)
-        self.assertEqual([c[1] for c in cmds], ["unload"])
+        self.assertEqual([c[1] for c in cmds], ["bootout"])
 
     def test_linux_restart_maps_to_systemctl(self):
         import unittest.mock

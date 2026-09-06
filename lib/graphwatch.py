@@ -16,6 +16,7 @@ from lib.fire_base import BaseCli, timed_cli
 
 CONFIG_NAME = "graphwatch.yaml"
 DEFAULT_DEBOUNCE = 3.0
+LAUNCHD_LABEL = "com.lazygophers.graphwatch"
 
 # 默认值即 schema：folders 由 add/remove 管，其余字段 config 向导（02 票）读写。
 DEFAULTS: dict = {
@@ -704,11 +705,12 @@ def launchd_plist() -> str:
     """LaunchAgent plist：KeepAlive 崩了自动拉起，RunAtLoad 登录自启。"""
     exe = script_path()
     log = log_path()
+    label = LAUNCHD_LABEL
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.lazygophers.graphwatch</string>
+  <key>Label</key><string>{label}</string>
   <key>ProgramArguments</key>
   <array>
     <string>{sys.executable}</string>
@@ -762,6 +764,10 @@ def _checked_runner():
     return runner
 
 
+def _launchd_domain() -> str:
+    return f"gui/{os.getuid()}"
+
+
 def install_service(runner=None) -> None:
     """注册为用户级服务并立即启动。按平台走 launchd / systemd / schtasks。"""
     if runner is None:
@@ -771,8 +777,8 @@ def install_service(runner=None) -> None:
         p = launchd_plist_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(launchd_plist(), encoding="utf-8")
-        runner(["launchctl", "unload", str(p)], check=False)
-        runner(["launchctl", "load", str(p)])
+        runner(["launchctl", "bootout", _launchd_domain(), LAUNCHD_LABEL], check=False)
+        runner(["launchctl", "bootstrap", _launchd_domain(), str(p)])
     elif plat.startswith("linux"):
         unit_dir = Path.home() / ".config" / "systemd" / "user"
         unit_dir.mkdir(parents=True, exist_ok=True)
@@ -793,12 +799,12 @@ def service_control(action: str, runner=None) -> None:
         raise GraphwatchError("服务未注册，先: graphwatch install")
     plat = sys.platform
     if plat == "darwin":
-        # launchd：load 幂等靠先 unload；restart = unload + load
+        # 现代 launchd API：bootstrap/bootout（旧 load/unload 会 "Unload failed: 5"）
         p = str(launchd_plist_path())
         if action in ("stop", "restart"):
-            runner(["launchctl", "unload", p], check=False)
+            runner(["launchctl", "bootout", _launchd_domain(), LAUNCHD_LABEL], check=False)
         if action in ("start", "restart"):
-            runner(["launchctl", "load", p])
+            runner(["launchctl", "bootstrap", _launchd_domain(), p])
     elif plat.startswith("linux"):
         runner(["systemctl", "--user", action, "graphwatch.service"])
     else:
@@ -815,8 +821,8 @@ def uninstall_service(runner=None) -> None:
     plat = sys.platform
     if plat == "darwin":
         p = launchd_plist_path()
+        runner(["launchctl", "bootout", _launchd_domain(), LAUNCHD_LABEL], check=False)
         if p.exists():
-            runner(["launchctl", "unload", str(p)], check=False)
             p.unlink()
     elif plat.startswith("linux"):
         runner(["systemctl", "--user", "disable", "--now", "graphwatch.service"])
@@ -834,7 +840,7 @@ def service_registered(runner=None) -> bool:
             return subprocess.run(cmd, check=False, capture_output=True, **kw)
     plat = sys.platform
     if plat == "darwin":
-        r = runner(["launchctl", "list", "com.lazygophers.graphwatch"])
+        r = runner(["launchctl", "print", f"{_launchd_domain()}/{LAUNCHD_LABEL}"])
         return r.returncode == 0
     if plat.startswith("linux"):
         r = runner(["systemctl", "--user", "is-enabled", "graphwatch.service"])
