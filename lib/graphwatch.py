@@ -723,11 +723,12 @@ def schtasks_create_command() -> list[str]:
 
 
 def _checked_runner():
-    """默认服务命令执行器：check=True（失败点抛错，不吞）。"""
+    """默认服务命令执行器：默认 check=True（失败点抛错，不吞），调用方可覆盖。"""
     import subprocess
 
     def runner(cmd, **kw):
-        return subprocess.run(cmd, check=True, capture_output=True, **kw)
+        kw.setdefault("check", True)
+        return subprocess.run(cmd, capture_output=True, **kw)
     return runner
 
 
