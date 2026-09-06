@@ -196,7 +196,7 @@ def run_workflow(
         if parsed.auto_commit:
             steps.append(("自动提交", "若有未提交变更，调 commit（lib）"))
         if not parsed.no_check:
-            steps.append(("构建检查", f"checkwork 当前分支 + 合并结果"))
+            steps.append(("构建检查", "checkwork 当前分支 + 合并结果"))
         steps += [
             ("同步分支", f"git pull + git push ({current_branch})"),
             ("合并", f"git merge {current_branch} → {target_branch}"),
@@ -245,9 +245,8 @@ def run_workflow(
 
         _step(f"预演合并 {current_branch} → {target_branch}（无副作用）", r)
         if _preview_merge_conflicts(target_branch, current_branch, r=r):
-            r.err(f"预演发现合并冲突，中止操作（未执行实际合并）")
+            r.err("预演发现合并冲突，中止操作（未执行实际合并）")
             r.warn("请先在本地解决冲突后重新运行")
-            _git(["checkout", original_branch], r=r, title="回滚分支")
             _notify_done("预演发现冲突，未执行", script_dir=script_dir)
             raise GitError("预演发现合并冲突，操作已中止")
 
@@ -261,11 +260,9 @@ def run_workflow(
                 cont = _git(["commit", "--no-edit"], r=r, title="完成合并提交", show_ok=True)
             else:
                 r.err("检测到合并冲突：非交互模式下无法继续，请手动解决后重新运行")
-                _git(["checkout", original_branch], r=r, title="回滚分支")
                 _notify_done("合并冲突未解决", script_dir=script_dir)
                 raise GitError("合并冲突未解决")
             if cont.returncode != 0:
-                _git(["checkout", original_branch], r=r, title="回滚分支")
                 _notify_done("合并冲突未解决", script_dir=script_dir)
                 raise GitError("冲突未完全解决，操作已终止！")
 
@@ -286,8 +283,6 @@ def run_workflow(
                 show_output=True,
                 title="push 输出",
             )
-            if not stay_on_target:
-                _git(["checkout", original_branch], r=r, title="回到原始分支")
             _notify_done("推送失败", script_dir=script_dir)
             raise GitError("推送失败！请检查网络或权限。")
         if sync.last_output.strip():
@@ -301,9 +296,6 @@ def run_workflow(
                 style="green",
             )
         else:
-            _step(f"切回原始分支 {original_branch}", r)
-            _git(["checkout", original_branch], r=r, title="切换分支")
-
             r.panel(
                 "工作流完成",
                 f"{current_branch}  →  {target_branch}\n"
@@ -322,7 +314,6 @@ def run_workflow(
             cur = _git(["branch", "--show-current"])
             if (cur.stdout or "").strip() != original_branch:
                 _git(["checkout", original_branch], r=r, title="兜底切回原始分支", show_ok=True)
-
 
 def run_merge_workflow(
     script_name: str,
@@ -345,7 +336,7 @@ def run_merge_workflow(
 
     auto_detect = default_branch == "master"
     parser = argparse.ArgumentParser(
-        description=f"合并目标分支到当前分支（target → current）",
+        description="合并目标分支到当前分支（target → current）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="示例:\n"
                f"  {script_name}           # 合并 {default_branch if not auto_detect else '远端默认分支'} → 当前\n"
@@ -418,7 +409,7 @@ def run_merge_workflow(
                     raise GitError(f"自动提交失败（退出码 {rc}），中止工作流")
 
         # 步骤1：本地工作区干净检查
-        _step(f"检查工作区是否干净", r)
+        _step("检查工作区是否干净", r)
         check_bit_clean()
 
         # 步骤2：更新当前分支为最新（远端无该分支则跳过）

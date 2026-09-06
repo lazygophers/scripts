@@ -15,6 +15,7 @@ from lib.git import (
     _rollback_to_branch,
     _run_git_retry,
     _switch_to_branch,
+    branch_session,
     check_bit_clean,
     ensure_tool_exists,
     fetch_and_check_branch,
@@ -131,8 +132,15 @@ class TestRollback(unittest.TestCase):
 
     @patch("lib.git.run")
     def test_checks_out_original(self, mock_run):
+        mock_run.side_effect = [_proc(0, "feature\n"), _proc(0)]
         _rollback_to_branch("main", "git")
         self.assertEqual(mock_run.call_args[0][0], ["git", "checkout", "main"])
+
+    @patch("lib.git.run")
+    def test_already_on_original_is_noop(self, mock_run):
+        mock_run.side_effect = [_proc(0, "main\n")]
+        _rollback_to_branch("main", "git")
+        self.assertEqual(mock_run.call_count, 1)  # 只查了当前分支，没 checkout
 
 
 class TestRunGitRetry(unittest.TestCase):
@@ -140,7 +148,7 @@ class TestRunGitRetry(unittest.TestCase):
     def test_success_silent_when_no_output(self, mock_retry):
         mock_retry.return_value = _retry(True, "  \n")
         r = MagicMock()
-        _run_git_retry(["git", "push"], bit_cmd="git", original_branch="main",
+        _run_git_retry(["git", "push"], bit_cmd="git",
                        r=r, error_msg="推送失败", title="push")
         r.output.assert_not_called()
 
@@ -148,20 +156,18 @@ class TestRunGitRetry(unittest.TestCase):
     def test_success_prints_output(self, mock_retry):
         mock_retry.return_value = _retry(True, "Everything up-to-date")
         r = MagicMock()
-        _run_git_retry(["git", "push"], bit_cmd="git", original_branch="main",
+        _run_git_retry(["git", "push"], bit_cmd="git",
                        r=r, error_msg="推送失败", title="push")
         r.output.assert_called_once_with("Everything up-to-date")
 
-    @patch("lib.git.run")
     @patch("lib.git.retry_command")
-    def test_failure_rolls_back_and_raises(self, mock_retry, mock_run):
+    def test_failure_raises_and_reports(self, mock_retry):
         mock_retry.return_value = _retry(False, "rejected")
         r = MagicMock()
         with self.assertRaises(GitError) as cm:
-            _run_git_retry(["git", "push"], bit_cmd="git", original_branch="feat",
+            _run_git_retry(["git", "push"], bit_cmd="git",
                            r=r, error_msg="推送失败", title="push")
         self.assertIn("rejected", str(cm.exception))
-        self.assertEqual(mock_run.call_args[0][0], ["git", "checkout", "feat"])
         r.cmd_result.assert_called_once()
 
 
@@ -224,7 +230,7 @@ class TestUpdateBranch(unittest.TestCase):
     @patch("lib.git.retry_command")
     @patch("lib.git.run")
     def test_pull_failure_raises(self, mock_run, mock_retry, mock_clean):
-        mock_run.side_effect = [_proc(0, "dev\n"), _proc(0), _proc(0)]
+        mock_run.side_effect = [_proc(0, "dev\n"), _proc(0), _proc(0, "dev\n")]
         mock_retry.return_value = _retry(False, "conflict")
         with self.assertRaises(GitError) as cm:
             update_branch("dev")
@@ -365,3 +371,39 @@ class TestRenderBranchTableRich(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBranchSession(unittest.TestCase):
+    @patch("lib.git.run")
+    @patch("lib.git._switch_to_branch")
+    def test_switches_in_and_restores_on_success(self, mock_switch, mock_run):
+        mock_run.side_effect = [_proc(0, "main\n"), _proc(0, "canary\n"), _proc(0)]
+        with branch_session("canary", restore_on_success=True):
+            pass
+        mock_switch.assert_called_once_with("canary", "git", "origin", "main")
+        self.assertEqual(mock_run.call_args[0][0], ["git", "checkout", "main"])
+
+    @patch("lib.git.run")
+    @patch("lib.git._switch_to_branch")
+    def test_error_path_rolls_back(self, mock_switch, mock_run):
+        mock_run.side_effect = [_proc(0, "main\n"), _proc(0, "canary\n"), _proc(0)]
+        with self.assertRaises(RuntimeError):
+            with branch_session("canary"):
+                raise RuntimeError("boom")
+        self.assertEqual(mock_run.call_args[0][0], ["git", "checkout", "main"])
+
+    @patch("lib.git.run")
+    def test_no_restore_on_success_by_default(self, mock_run):
+        mock_run.side_effect = [_proc(0, "main\n"), _proc(0, "canary\n")]
+        with branch_session("canary"):
+            pass
+        # 默认成功留在目标分支：除切入前查分支外没有任何 checkout
+        self.assertEqual(mock_run.call_count, 2)
+
+    @patch("lib.git.run")
+    def test_error_with_restore_disabled_stays(self, mock_run):
+        mock_run.side_effect = [_proc(0, "main\n"), _proc(0, "canary\n")]
+        with self.assertRaises(RuntimeError):
+            with branch_session("canary", restore_on_error=False):
+                raise RuntimeError("boom")
+        self.assertEqual(mock_run.call_count, 2)

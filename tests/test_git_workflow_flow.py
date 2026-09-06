@@ -248,11 +248,13 @@ class TestRunWorkflow(FlowCase):
             return gw.run_workflow("push_canary", "canary", argv, stay_on_target=stay)
 
     def test_happy_path_merges_pushes_and_switches_back(self) -> None:
+        # update_branch 被 mock：分支没离开 feature，幂等 finally 正确地不 checkout；
+        # 真正「离开后被切回」由 test_finally_block_switches_back_when_left_elsewhere 盖
         fake = FakeGit({"branch --show-current": _p(0, "feature\n")})
         rc = self._run(fake, ["push_canary"])
         self.assertEqual(rc, 0)
         self.assertTrue(fake.ran("merge --no-edit feature"))
-        self.assertTrue(fake.ran("checkout feature"))
+        self.assertFalse(fake.ran("checkout feature"))
 
     def test_stay_on_target_skips_switch_back(self) -> None:
         fake = FakeGit({"branch --show-current": _p(0, "feature\n")})

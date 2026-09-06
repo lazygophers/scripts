@@ -60,20 +60,59 @@ def _report(r: Reporter | None, method: str, *args, **kwargs) -> None:
 
 
 def _rollback_to_branch(original_branch: str, bit_cmd: str) -> None:
-    if original_branch:
-        run([bit_cmd, "checkout", original_branch], check=False, capture_output=True)
+    if not original_branch:
+        return
+    # 幂等：已在原分支就不动（工作流外层兜底与内层回滚会重复触达）
+    if get_current_branch(bit_cmd) == original_branch:
+        return
+    run([bit_cmd, "checkout", original_branch], check=False, capture_output=True)
 
 
 def _run_git_retry(
-    cmd: list, *, bit_cmd: str, original_branch: str, r: Reporter | None, error_msg: str, title: str
+    cmd: list, *, bit_cmd: str, r: Reporter | None, error_msg: str, title: str
 ) -> None:
     result = retry_command(cmd, max_retries=3, timeout=NET_TIMEOUT)
     if not result.ok:
         _report(r, "cmd_result", cmd, returncode=1, output=result.last_output, show_output=True, title=title)
-        _rollback_to_branch(original_branch, bit_cmd)
         raise GitError(f"{error_msg}: {result.last_output}".rstrip())
     if result.last_output.strip():
         _report(r, "output", result.last_output)
+
+
+def branch_session(
+    target: str | None = None,
+    *,
+    bit_cmd: str = "git",
+    remote: str = "origin",
+    restore_on_error: bool = True,
+    restore_on_success: bool = False,
+):
+    """「切分支 + 出错回滚」的深接口：进入时切到 target（不存在则建跟踪分支），
+    退出时按路径决定是否回原分支——调用方不再自己记得回滚。
+
+    - update_branch：error 回 / 成功留在目标分支（后续 merge 在目标分支上做）
+    - push 工作流：两条路径都回（--stay 除外）
+    回滚幂等（已在原分支则跳过），target=None 表示只管回滚不管切入。
+    """
+    from contextlib import contextmanager
+
+    original = get_current_branch(bit_cmd)
+
+    @contextmanager
+    def _session():
+        if target and target != original:
+            _switch_to_branch(target, bit_cmd, remote, original)
+        try:
+            yield original
+        except BaseException:
+            if restore_on_error:
+                _rollback_to_branch(original, bit_cmd)
+            raise
+        else:
+            if restore_on_success:
+                _rollback_to_branch(original, bit_cmd)
+
+    return _session()
 
 
 def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", r: Reporter | None = None, check_after_pull: bool = True) -> None:
@@ -81,37 +120,34 @@ def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", 
 
     check_after_pull=False 时跳过 pull 后的 check_bit_clean（用于切到目标分支后，
     工作区可能因 gitignore/行尾等残留显示"脏"但无实质改动的场景；合并后的检查
-    由调用方在 merge 完成后统一做）。
+    由调用方在 merge 完成后统一做）。失败时由 branch_session 回原分支。
 
     Raises:
         GitError: 当切换分支、拉取或推送失败时
     """
-    original_branch = _get_current_branch(bit_cmd)
-    retry_ctx = dict(bit_cmd=bit_cmd, original_branch=original_branch, r=r)
+    with branch_session(branch, bit_cmd=bit_cmd, remote=remote):
+        retry_ctx = dict(bit_cmd=bit_cmd, r=r)
 
-    if original_branch != branch:
-        _switch_to_branch(branch, bit_cmd, remote, original_branch)
+        remote_ref = run([bit_cmd, "ls-remote", "--exit-code", "--heads", remote, branch], check=False, capture_output=True, timeout=NET_TIMEOUT)
+        if remote_ref.returncode != 0:
+            _report(r, "warn", f"远端不存在 {remote}/{branch}，将先 push -u 创建该分支")
+            _run_git_retry(
+                [bit_cmd, "push", "-u", remote, branch],
+                **retry_ctx, error_msg="推送失败", title="push -u 输出",
+            )
+            if check_after_pull:
+                check_bit_clean(bit_cmd=bit_cmd)
+            return
 
-    remote_ref = run([bit_cmd, "ls-remote", "--exit-code", "--heads", remote, branch], check=False, capture_output=True, timeout=NET_TIMEOUT)
-    if remote_ref.returncode != 0:
-        _report(r, "warn", f"远端不存在 {remote}/{branch}，将先 push -u 创建该分支")
-        _run_git_retry(
-            [bit_cmd, "push", "-u", remote, branch],
-            **retry_ctx, error_msg="推送失败", title="push -u 输出",
-        )
+        pull_cmd = [bit_cmd, "-c", "merge.autoEdit=false", "pull", remote, branch]
+        _report(r, "step", f"{bit_cmd} pull {remote} {branch}")
+        _run_git_retry(pull_cmd, **retry_ctx, error_msg="拉取或合并失败", title="pull 输出")
         if check_after_pull:
             check_bit_clean(bit_cmd=bit_cmd)
-        return
 
-    pull_cmd = [bit_cmd, "-c", "merge.autoEdit=false", "pull", remote, branch]
-    _report(r, "step", f"{bit_cmd} pull {remote} {branch}")
-    _run_git_retry(pull_cmd, **retry_ctx, error_msg="拉取或合并失败", title="pull 输出")
-    if check_after_pull:
-        check_bit_clean(bit_cmd=bit_cmd)
-
-    push_cmd = [bit_cmd, "push", remote, branch]
-    _report(r, "step", f"{bit_cmd} push {remote} {branch}")
-    _run_git_retry(push_cmd, **retry_ctx, error_msg="推送失败", title="push 输出")
+        push_cmd = [bit_cmd, "push", remote, branch]
+        _report(r, "step", f"{bit_cmd} push {remote} {branch}")
+        _run_git_retry(push_cmd, **retry_ctx, error_msg="推送失败", title="push 输出")
 
 
 def ensure_tool_exists(cmd: str) -> None:

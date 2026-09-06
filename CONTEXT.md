@@ -11,3 +11,7 @@
 - **重建并发（rebuild concurrency）**：同时执行重建的目录数，最小 1，默认 1（串行）。
 - **服务管理（service management）**：把 daemon 注册成用户级系统服务的动作集合——install / uninstall / start / stop / restart / registered / state。与 daemon 内部逻辑互不感知。
 - **平台 adapter**：服务管理在某平台的具体实现（macOS launchd / Linux systemd --user / Windows schtasks）。平台差异只存在于 adapter 内部。
+
+## git 工作流
+
+- **分支会话（branch session）**：切到目标分支（不存在则建跟踪分支）并在退出时按路径决定是否回原分支的保证。错误路径默认回滚，成功路径默认留在目标分支。回滚幂等：已在原分支则跳过。
