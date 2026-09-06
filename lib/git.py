@@ -162,44 +162,51 @@ def _list_top_repos(root: Path) -> list[Path]:
 
 
 def fetch_all(root: Path = Path(".")) -> int:
-    """一键 fetch 所有顶层 Git 仓库的远程更新。"""
+    """一键 fetch 所有顶层 Git 仓库的远程更新（并发，BATCH_CONCURRENCY 控制，默认 4）。
+
+    fetch 是纯网络操作、互不依赖，并发后总耗时 ≈ 最慢一个而非全部之和；
+    输出顺序按仓库名固定，不随完成顺序抖动。
+    """
+    import contextlib
+    import os
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     root = root.resolve()
     repos = _list_top_repos(root)
     failures: list[tuple[str, str]] = []
 
     r = reporter(stderr=True)
     r.rule("Git Fetch All", style="blue")
-    # 单行扫描摘要（禁逐行列仓库，避免与汇总段重复）
-    r.info(f"扫描 {len(repos)} 个仓库（{root}）")
+    concurrency = max(1, int(os.environ.get("BATCH_CONCURRENCY", "4")))
+    r.info(f"扫描 {len(repos)} 个仓库（{root}，fetch 并发 {concurrency}）")
 
+    def _fetch_one(repo: Path):
+        return repo, retry_command(["git", "fetch", "--all"], cwd=str(repo), max_retries=3, timeout=NET_TIMEOUT)
+
+    outcomes: list = [None] * len(repos)
+    idx = {repo: i for i, repo in enumerate(repos)}
     prog = progress(r.console)
-    if prog is not None:
-        with prog:
-            task_id = prog.add_task("fetch", total=len(repos))
-            for repo in repos:
-                prog.update(task_id, description=f"fetch {repo.name}")
-                res = retry_command(["git", "fetch", "--all"], cwd=str(repo), max_retries=3, timeout=NET_TIMEOUT)
-                if res.ok:
-                    r.status("ok", repo.name)
-                else:
-                    failures.append((repo.name, res.last_output.strip()))
-                    detail = "fetch 失败"
-                    if res.last_output.strip():
-                        # 失败时附关键错误行（首条非空），便于定位
-                        first = next((ln.strip() for ln in res.last_output.splitlines() if ln.strip()), "")
-                        if first:
-                            detail = f"fetch 失败 — {first[:120]}"
-                    r.status("fail", f"{repo.name} {detail}")
+    ctx = prog if prog is not None else contextlib.nullcontext()
+    with ctx, ThreadPoolExecutor(max_workers=concurrency) as pool:
+        task_id = prog.add_task("fetch", total=len(repos)) if prog is not None else None
+        for fut in as_completed([pool.submit(_fetch_one, repo) for repo in repos]):
+            repo, res = fut.result()
+            outcomes[idx[repo]] = (repo, res)
+            if task_id is not None:
                 prog.advance(task_id)
-    else:
-        for repo in repos:
-            r.step(f"fetch {repo.name}")
-            res = retry_command(["git", "fetch", "--all"], cwd=str(repo), max_retries=3, timeout=NET_TIMEOUT)
-            if res.ok:
-                r.status("ok", repo.name)
-            else:
-                failures.append((repo.name, res.last_output.strip()))
-                r.status("fail", f"{repo.name} 失败")
+
+    for repo, res in outcomes:
+        if res.ok:
+            r.status("ok", repo.name)
+        else:
+            failures.append((repo.name, res.last_output.strip()))
+            detail = "fetch 失败"
+            if res.last_output.strip():
+                # 失败时附关键错误行（首条非空），便于定位
+                first = next((ln.strip() for ln in res.last_output.splitlines() if ln.strip()), "")
+                if first:
+                    detail = f"fetch 失败 — {first[:120]}"
+            r.status("fail", f"{repo.name} {detail}")
 
     # 汇总：紧凑 Table（status_table 自带标题），无第二个 rule
     failed_names = {name for name, _ in failures}
@@ -315,6 +322,7 @@ def _render_branch_table(
         dup_names = {n for n, c in counter.items() if c > 1}
 
     from rich.box import ROUNDED
+
     from lib.ui import Table  # noqa: E402, I001
 
     # 按仓库分组，保持发现顺序
