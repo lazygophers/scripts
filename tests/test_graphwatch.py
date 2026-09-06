@@ -665,6 +665,106 @@ class TestServiceControl(GraphwatchCase):
         self.assertNotEqual(rc, 0)
 
 
+class TestOpsLogging(GraphwatchCase):
+    def _capture(self):
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        return buf, redirect_stderr(buf)
+
+    def _run_capture(self, fac, step, wait=0.4):
+        """跑 daemon 直到 step 副作用生效，捕获 stderr；返回 (errors, 日志前 buf)。"""
+        import threading
+
+        errors: list[Exception] = []
+
+        def target():
+            try:
+                graphwatch.run_daemon(stop_event=stop, ensure=lambda: None,
+                                      watch_factory=fac, poll_interval=0.05)
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        stop = threading.Event()
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
+        time.sleep(0.2)
+        step()
+        time.sleep(wait)
+        stop.set()
+        thread.join(timeout=5)
+        return errors
+
+    def test_debounce_change_logged(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        fac = FakeFactory()
+
+        def step():
+            cfg = graphwatch.load_config()
+            cfg["debounce"] = 7
+            graphwatch.save_config(cfg)
+
+        buf, redir = self._capture()
+        with redir:
+            self._run_capture(fac, step)
+        self.assertIn("debounce 变化 3.0 → 7.0", buf.getvalue())
+
+    def test_spawn_failure_logged_and_daemon_survives(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+
+        class ExplodingFactory:
+            def __init__(self):
+                self.calls = 0
+            def __call__(self, debounce):
+                def start(folder):
+                    self.calls += 1
+                    raise OSError("spawn boom")
+                return start
+
+        fac = ExplodingFactory()
+        buf, redir = self._capture()
+        with redir:
+            errors = self._run_capture(fac, lambda: None, wait=0.3)
+        self.assertEqual(errors, [], "spawn 失败不应杀 daemon")
+        self.assertIn("监听进程启动失败", buf.getvalue())
+        self.assertGreater(fac.calls, 1, "下一轮应重试")
+
+    def test_unexpected_error_logged_and_reraised(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        import threading
+        class BoomFactory(FakeFactory):
+            def __call__(self, debounce):
+                def start(folder):
+                    proc = FakeProc()
+                    self.procs[str(folder)] = proc
+                    return proc
+                return start
+        boom = BoomFactory()
+        boom(3.0)(repo.resolve())
+        # 直接制造 _reconcile 内部异常：patch load_config 第二次起抛 RuntimeError
+        calls = {"n": 0}
+        real_load = graphwatch.load_config
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise RuntimeError("kaboom")
+            return real_load()
+        import contextlib
+        import io
+        buf = io.StringIO()
+        stop = threading.Event()
+        import unittest.mock
+        with unittest.mock.patch.object(graphwatch, "load_config", flaky), \
+             contextlib.redirect_stderr(buf):
+            with self.assertRaises(RuntimeError):
+                graphwatch.run_daemon(stop_event=stop, ensure=lambda: None,
+                                      watch_factory=boom, poll_interval=0.05)
+        self.assertIn("daemon 意外错误", buf.getvalue())
+
+
 class TestServiceStateAndLog(GraphwatchCase):
     def _print_runner(self, text, gone=False):
         def runner(cmd, **kw):

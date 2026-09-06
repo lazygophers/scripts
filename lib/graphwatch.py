@@ -457,7 +457,22 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
         print(f"[{stamp}] {msg}", file=sys.stderr)
 
     children: dict[str, object] = {}
+    started_logged: set[str] = set()
     last_sig: tuple[tuple[str, ...], float] | None = None
+
+    def _start_missing(debounce: float, folders: list[str]) -> None:
+        """补起缺的监听子进程（首次或上一轮启动失败的重试）。"""
+        start_fn = watch_factory(debounce)
+        for f in folders:
+            if f in children:
+                continue
+            if f not in started_logged:
+                _dlog(f"开始监听 {f}")
+            try:
+                children[f] = start_fn(Path(f))
+                started_logged.add(f)
+            except Exception as e:  # noqa: BLE001
+                _dlog(f"监听进程启动失败（下一轮重试）: {f}: {e}")
 
     def _reconcile() -> None:
         nonlocal last_sig
@@ -466,17 +481,21 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
         folders = [str(f) for f in cfg["folders"]]
         sig = (tuple(folders), debounce)
         if sig == last_sig:
-            # 无配置变化：只处理崩溃重启
+            # 无配置变化：处理崩溃重启 + 补起上轮启动失败的
             for f, proc in list(children.items()):
                 rc = proc.poll()
                 if rc is not None:
                     _dlog(f"监听进程退出（rc={rc}），重启 {f}")
-                    notifier.fire(f, "graphwatch 重建失败", f"{f}\n监听进程退出（rc={rc}），已自动重启")
-                    children[f] = watch_factory(debounce)(Path(f))
+                    sent = notifier.fire(f, "graphwatch 重建失败", f"{f}\n监听进程退出（rc={rc}），已自动重启")
+                    if sent:
+                        _dlog(f"崩溃通知已发送: {f}")
+                    del children[f]
+            _start_missing(debounce, folders)
             return
         desired = set(folders)
         if last_sig is not None and last_sig[1] != debounce:
             # debounce 变了：所有子进程按旧参数起的，全部重启
+            _dlog(f"debounce 变化 {last_sig[1]} → {debounce}，重启所有监听")
             for f, proc in children.items():
                 _stop_child(proc, f)
             children.clear()
@@ -484,11 +503,8 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
             if f not in desired:
                 _dlog(f"停止监听 {f}")
                 _stop_child(children.pop(f), f)
-        start_fn = watch_factory(debounce)
-        for f in folders:
-            if f not in children:
-                _dlog(f"开始监听 {f}")
-                children[f] = start_fn(Path(f))
+                started_logged.discard(f)
+        _start_missing(debounce, folders)
         last_sig = sig
 
     try:
@@ -503,7 +519,13 @@ def run_daemon(stop_event=None, ensure=None, watch_factory=None, poll_interval: 
             except GraphwatchError as e:
                 # 配置短暂非法（写坏 YAML / 写到一半）：不崩，等下一轮
                 _dlog(f"配置暂不可读，跳过本轮: {e}")
+            except Exception as e:  # noqa: BLE001
+                # 意外错误：留痕后退出，交给服务管理器（KeepAlive/Restart）拉起
+                _dlog(f"daemon 意外错误，退出待服务管理器拉起: {type(e).__name__}: {e}")
+                raise
     finally:
+        if children:
+            _dlog(f"daemon 退出：停止 {len(children)} 个监听子进程")
         for f, proc in children.items():
             _stop_child(proc, f)
         release_singleton_lock(lock)
