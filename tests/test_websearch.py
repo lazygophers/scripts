@@ -554,6 +554,11 @@ class TestCli(unittest.TestCase):
         self.assertIn("未知引擎", err.getvalue())
         self.assertFalse(cfg_path.exists())  # 拒绝时不落盘
 
+    def test_default_limit_is_20(self):
+        args = websearch.build_parser().parse_args(["q"])
+        self.assertEqual(args.limit, 20)
+        self.assertEqual(websearch.search.__defaults__[0], 20)  # 库调用默认值同源
+
     def test_main_failure_exit_1(self):
         err = io.StringIO()
         with mock.patch.object(websearch, "search",

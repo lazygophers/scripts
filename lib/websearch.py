@@ -630,7 +630,7 @@ def _active_engines(engine: str | None) -> list[str]:
     return names
 
 
-def search(query: str, limit: int = 10, engine: str | None = None,
+def search(query: str, limit: int = 20, engine: str | None = None,
            timeout: float = 15) -> list[dict]:
     """并行检索参与引擎(limit = 每引擎抓取条数),按 URL 合并去重,
     返回全部去重结果(首见顺序保留)。"""
@@ -729,8 +729,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("query", nargs="+", help="搜索词(多词直接跟在后面)")
-    p.add_argument("-n", "--limit", type=int, default=10,
-                   help="每个引擎抓几条(默认 10;合并去重后可能少于引擎总数)")
+    p.add_argument("-n", "--limit", type=int, default=20,
+                   help="每个引擎抓几条(默认 20;合并去重后可能少于引擎总数)")
     p.add_argument("--engine", choices=[n for n, _ in ENGINES],
                    help="只用指定引擎(默认全部引擎)")
     p.add_argument("-f", "--format", choices=list(FORMATTERS), default="plain",
