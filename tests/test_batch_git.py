@@ -121,7 +121,6 @@ class TestPrintRepoList(unittest.TestCase):
 class TestPrintSummary(unittest.TestCase):
     def _capture(self):
         """捕获 Reporter 输出：把 Rich Console 重定向到 StringIO。"""
-        import io
         from contextlib import contextmanager
 
         @contextmanager
@@ -424,6 +423,75 @@ class TestSwitchFactory(unittest.TestCase):
         status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "skip")
         self.assertIn("已在", detail)
+
+
+class TestNetTimeout(unittest.TestCase):
+    """批量 detect/execute 的网络 git 命令必须带 NET_TIMEOUT。
+
+    回归背景：fetch 远端慢或需认证时永不返回，进度条 0% 挂死整批
+    （switch_branch 14 仓实测卡 2 分半无任何输出）。
+    """
+
+    @staticmethod
+    def _fetch_timeouts(mock_run):
+        return [c.kwargs.get("timeout") for c in mock_run.call_args_list
+                if c.args[0][:2] == ["git", "fetch"]]
+
+    @patch("lib.batch_git._get_current_branch", return_value="main")
+    @patch("lib.batch_git._run")
+    def test_switch_detect_fetch_timed_out(self, mock_run, _mock_br):
+        from lib.exec import CommandTimeout
+        mock_run.side_effect = CommandTimeout("fetch 超时")
+        op = _switch_one_factory("main")
+        with self.assertRaises(CommandTimeout):
+            op(Path("/repo"), MagicMock(), Path("/root"))
+        # 抛给 BatchRunner._detect_one 兜底成该仓 fail，不挂死整批
+
+    @patch("lib.batch_git._get_current_branch", return_value="main")
+    @patch("lib.batch_git._run")
+    def test_switch_fetch_passes_net_timeout(self, mock_run, _mock_br):
+        from lib.exec import NET_TIMEOUT
+        mock_run.return_value = _mock_run(returncode=0)
+        op = _switch_one_factory("main")
+        _run_op(op, Path("/repo"), MagicMock(), Path("/root"))
+        timeouts = self._fetch_timeouts(mock_run)
+        self.assertTrue(timeouts)
+        self.assertEqual(timeouts, [NET_TIMEOUT] * len(timeouts))
+
+    @patch("lib.batch_git._resolve_main_branch", return_value="master")
+    @patch("lib.batch_git._run")
+    def test_sync_fetch_passes_net_timeout(self, mock_run, _mock_resolve):
+        from lib.exec import NET_TIMEOUT
+        mock_run.return_value = _mock_run(returncode=0)
+        op = _sync_one_factory("master", force=False)
+        _run_op(op, Path("/repo"), MagicMock(), Path("/root"))
+        timeouts = self._fetch_timeouts(mock_run)
+        self.assertTrue(timeouts)
+        self.assertEqual(timeouts, [NET_TIMEOUT] * len(timeouts))
+
+
+class TestDetectTimeoutBailout(unittest.TestCase):
+    """detect 阶段网络超时必须兜底成单仓 fail，整批照常出结果（不挂死）。"""
+
+    def test_command_timeout_becomes_repo_failure(self) -> None:
+        import tempfile
+
+        from lib.batch_git import BatchRunner, CallbackBatchOperation
+        from lib.exec import CommandTimeout
+
+        def _raise(repo, r, root):
+            raise CommandTimeout("命令超时（120s）: git fetch origin")
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "r1"
+            repo.mkdir()
+            (repo / ".git").mkdir()  # scan_repos 只认 .git 存在
+            result = BatchRunner().run(CallbackBatchOperation(
+                title="超时兜底", root=Path(td), confirm=False, detect_fn=_raise,
+            ))
+        self.assertEqual(result.total, 1)
+        self.assertEqual(len(result.failed), 1)
+        self.assertIn("命令超时", result.failed[0].detail)
 
 
 class TestSyncFactory(unittest.TestCase):

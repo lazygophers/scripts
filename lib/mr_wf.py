@@ -13,7 +13,7 @@ from lib.ai_workflow import (
     remote_default_branch,
     run_claude,
 )
-from lib.exec import run
+from lib.exec import NET_TIMEOUT, run
 from lib.ui import reporter
 
 
@@ -152,7 +152,7 @@ def _build_prompt(
         cmd = f'glab mr create --target-branch {base} --title "<title>" --description "<body>" {extra}'.strip()
 
     # 预注入 commit log + diff stat，claude 不必自己 fetch/log/diff
-    run(["git", "fetch", info.remote, base], check=False, capture_output=True)
+    run(["git", "fetch", info.remote, base], check=False, capture_output=True, timeout=NET_TIMEOUT)
     # 辅助收窄: 仅自己 author 的 commit (主防线仍是 DATA 分隔 + 白名单)
     author = _self_author_filter()
     log_args = ["git", "log", f"{info.remote}/{base}..HEAD", "--oneline"]

@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from lib.exec import retry_command, run, run_logged
+from lib.exec import NET_TIMEOUT, retry_command, run, run_logged
 from lib.git import GitError, check_bit_clean, get_current_branch, remote_branch_exists
 from lib.notify import notify
 from lib.ui import Reporter, reporter
@@ -80,9 +80,11 @@ def aggregate_message(subjects: list[str], source: str, target: str) -> str:
 
 
 def _git(args: list[str], *, r: Reporter | None = None, title: str = "",
-         show_ok: bool = False, cwd: str | None = None):
+         show_ok: bool = False, cwd: str | None = None,
+         timeout: float | None = None):
     return run_logged(["git", *args], check=False, capture_output=True, r=r,
-                      title=title, show_output_on_success=show_ok, cwd=cwd)
+                      title=title, show_output_on_success=show_ok, cwd=cwd,
+                      timeout=timeout)
 
 
 def _parse_merge_tree_output(output: str) -> list[str]:
@@ -201,7 +203,7 @@ def _rollback(state: _RollbackState, *, r: Reporter, remote: str = REMOTE,
     # （回滚路径不会出现在成功 force push 之后：push 后仅剩 mr 步，失败不回滚）
     if state.pr_branch_pushed and not state.pr_branch_remote_preexisting:
         run(["git", "push", remote, "--delete", state.pr_branch],
-            cwd=cwd, check=False, capture_output=True)
+            cwd=cwd, check=False, capture_output=True, timeout=NET_TIMEOUT)
     if state.original_branch:
         # 先切回起始分支，否则无法删/重置当前所在分支
         run(["git", "checkout", state.original_branch],
@@ -274,7 +276,7 @@ def run_squash_pr(
     # target 必须成功 fetch（冲突预演 / merge-base 需要 origin/<target>）
     r.step(f"fetch {remote} {target}")
     fres = retry_command(["git", "fetch", remote, target],
-                         cwd=cwd, max_retries=3)
+                         cwd=cwd, max_retries=3, timeout=NET_TIMEOUT)
     if not fres.ok:
         return _fail(f"fetch {target} 失败: {fres.last_output}".rstrip(), state, r=r, cwd=cwd,
                      notify_msg="fetch 失败")
@@ -286,7 +288,7 @@ def run_squash_pr(
     if src_remote_exists:
         r.step(f"fetch {remote} {source}")
         sres = retry_command(["git", "fetch", remote, source],
-                             cwd=cwd, max_retries=3)
+                             cwd=cwd, max_retries=3, timeout=NET_TIMEOUT)
         if not sres.ok:
             r.warn(f"fetch {source} 失败（忽略，远端比较将跳过）: {sres.last_output}".rstrip())
         elif sres.last_output.strip():
@@ -353,7 +355,7 @@ def run_squash_pr(
         # 有并发推送时拒绝而非覆盖
         r.step(f"fetch {remote} {pr_branch}")
         fres_pr = retry_command(["git", "fetch", remote, pr_branch],
-                                cwd=cwd, max_retries=3)
+                                cwd=cwd, max_retries=3, timeout=NET_TIMEOUT)
         if not fres_pr.ok:
             return _fail(f"fetch {pr_branch} 失败: {fres_pr.last_output}".rstrip(),
                          state, r=r, cwd=cwd, notify_msg="fetch PR 分支失败")
@@ -428,10 +430,10 @@ def run_squash_pr(
     # FR8 — push（PR 分支已存在于远端 → force-with-lease 更新，保持同一 PR）
     if state.pr_branch_remote_preexisting:
         r.step(f"push --force-with-lease {remote} {pr_branch}")
-        pp = _git(["push", "--force-with-lease", remote, pr_branch], r=r, cwd=cwd)
+        pp = _git(["push", "--force-with-lease", remote, pr_branch], r=r, cwd=cwd, timeout=NET_TIMEOUT)
     else:
         r.step(f"push -u {remote} {pr_branch}")
-        pp = _git(["push", "-u", remote, pr_branch], r=r, cwd=cwd)
+        pp = _git(["push", "-u", remote, pr_branch], r=r, cwd=cwd, timeout=NET_TIMEOUT)
     if pp.returncode != 0:
         return _fail(f"push 失败: {pp.stderr}".rstrip(), state, r=r, cwd=cwd,
                      notify_msg="push 失败")

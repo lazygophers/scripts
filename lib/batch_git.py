@@ -402,7 +402,7 @@ def run_batch(
 # ── 三个具体批量操作的薄壳入口 ─────────────────────────────────────────
 # 用 closure 捕获参数，替代旧实现的模块级 _TARGET/_FORCE/_DRY_RUN/_EXTRA 全局态。
 
-from lib.exec import run as _run  # noqa: E402, I001
+from lib.exec import NET_TIMEOUT, run as _run  # noqa: E402, I001
 from lib.git import get_current_branch as _get_current_branch  # noqa: E402
 
 
@@ -506,7 +506,7 @@ def _push_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list
     def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
         # fetch
         r.step("fetch origin …")
-        p = _run(["git", "fetch", "origin"], cwd=str(repo), check=False, capture_output=True)
+        p = _run(["git", "fetch", "origin"], cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
         if p.returncode != 0:
             err = ((p.stdout or '') + (p.stderr or '')).strip()
             r.err(f"fetch origin 失败: {err[:200]}")
@@ -657,7 +657,7 @@ def _merge_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: lis
 
     def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
         r.step("fetch origin …")
-        p = _run(["git", "fetch", "origin"], cwd=str(repo), check=False, capture_output=True)
+        p = _run(["git", "fetch", "origin"], cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
         if p.returncode != 0:
             err = ((p.stdout or '') + (p.stderr or '')).strip()
             r.err(f"fetch origin 失败: {err[:200]}")
@@ -752,7 +752,7 @@ def _switch_one_factory(target: str) -> DetectFn:
             # 已在 target 但落后远端 → ff-only 对齐（switch 语义：切到分支且最新）
             r.step(f"已在 {target}，落后远端 → pull --ff-only")
             pull = _run(["git", "pull", "--ff-only", "-q", "origin", target],
-                        cwd=str(repo), check=False, capture_output=True)
+                        cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
             if pull.returncode != 0:
                 err = _extract_error((pull.stderr or "") + (pull.stdout or ""), pull.returncode, "pull --ff-only")
                 return "fail", err
@@ -768,7 +768,7 @@ def _switch_one_factory(target: str) -> DetectFn:
 
     def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
         r.step("fetch origin …")
-        p = _run(["git", "fetch", "origin"], cwd=str(repo), check=False, capture_output=True)
+        p = _run(["git", "fetch", "origin"], cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
         if p.returncode != 0:
             r.warn(f"fetch 失败: {(p.stdout or '')[:200]}")
 
@@ -910,7 +910,7 @@ def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
 
     def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
         p = _run(["git", "fetch", "--prune", "-q", "origin"],
-                 cwd=str(repo), check=False, capture_output=True)
+                 cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
         if p.returncode != 0:
             return RepoPlan(status="fail", detail=_extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "fetch 失败"))
 
@@ -1033,7 +1033,7 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
         if remote_exists:
             r.step(f"pull --ff-only {remote_ref} …")
             pull = _run(["git", "pull", "--ff-only", "-q", "origin", target],
-                        cwd=str(repo), check=False, capture_output=False).returncode
+                        cwd=str(repo), check=False, capture_output=False, timeout=NET_TIMEOUT).returncode
             if pull != 0:
                 if not single:
                     return "skip", f"远端有分叉/冲突 (pull rc={pull})"
@@ -1041,7 +1041,7 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
                 r.step(f"pull --no-rebase（合并分叉）{remote_ref} …")
                 pull_merge = _run(
                     ["git", "pull", "--no-rebase", "--no-edit", "origin", target],
-                    cwd=str(repo), check=False, capture_output=False,
+                    cwd=str(repo), check=False, capture_output=False, timeout=NET_TIMEOUT,
                 ).returncode
                 if pull_merge != 0:
                     return "skip", f"自动 merge 失败（需手动解决冲突）(rc={pull_merge})"
@@ -1054,7 +1054,7 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
         push_args += ["origin", target]
 
         r.step(f"push {target} → origin/{target} …")
-        push = _run(push_args, cwd=str(repo), check=False, capture_output=False).returncode
+        push = _run(push_args, cwd=str(repo), check=False, capture_output=False, timeout=NET_TIMEOUT).returncode
         if push != 0:
             return "fail", f"push 失败 (rc={push})"
 
@@ -1069,7 +1069,7 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
 
     def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
         p = _run(["git", "fetch", "--prune", "-q", "origin"],
-                 cwd=str(repo), check=False, capture_output=True)
+                 cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
         if p.returncode != 0:
             return RepoPlan(status="fail", detail=_extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "fetch 失败"))
 
@@ -1213,12 +1213,12 @@ def _delete_branch_remote_one_factory(target: str, remote: str) -> DetectFn:
     def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
         r.step(f"git push {remote} --delete {target} …")
         p = _run(["git", "push", remote, "--delete", target],
-                 cwd=str(repo), check=False, capture_output=False).returncode
+                 cwd=str(repo), check=False, capture_output=False, timeout=NET_TIMEOUT).returncode
         if p != 0:
             return "fail", f"删除失败 (rc={p})"
         # 清理本地 tracking ref
         _run(["git", "fetch", "--prune", remote],
-             cwd=str(repo), check=False, capture_output=True)
+             cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
         return "ok", f"已删 {remote}/{target}"
 
     def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:

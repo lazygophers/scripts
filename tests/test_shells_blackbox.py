@@ -203,6 +203,24 @@ class TestBatchGitCliBlackbox(unittest.TestCase):
         self.assertIn("feat-target", remote_heads)
         self.assertIn("main", remote_heads)
 
+    def test_merge_branch_missing_arg_prints_usage(self):
+        p = self._run_bin("merge_branch")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("用法", p.stderr)
+
+    def test_merge_branch_merges_named_target_into_current(self):
+        # 远端建 source 分支 → merge_branch 把它合进当前分支
+        self._git(self.repo, "switch", "-c", "src")
+        (self.repo / "src.txt").write_text("src\n")
+        self._git(self.repo, "add", "src.txt")
+        self._git(self.repo, "commit", "-m", "src work")
+        self._git(self.repo, "push", "-u", "origin", "src")
+        self._git(self.repo, "switch", "main")
+        p = self._run_bin("merge_branch", "src")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        files = [f.name for f in self.repo.iterdir() if f.is_file()]
+        self.assertIn("src.txt", files)  # src 内容已合入 main
+
 
 if __name__ == "__main__":
     unittest.main()

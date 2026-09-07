@@ -89,7 +89,7 @@ def _ensure_remote_branch_exists(branch: str, *, remote: str = "origin", r=None)
     elif r is not None:
         r.warn(f"本地已存在 {branch}，保留现有 ref 推送到远端")
 
-    p2 = _git(["push", "-u", remote, branch], r=r, title="创建远端分支", show_ok=True)
+    p2 = _git(["push", "-u", remote, branch], r=r, title="创建远端分支", show_ok=True, timeout=NET_TIMEOUT)
     return p2.returncode == 0
 
 
