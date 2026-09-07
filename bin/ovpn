@@ -369,8 +369,13 @@ class OvpnCli(BaseCli):
             return 2
         return 0
 
-    def __call__(self, *names: str):
-        """无参 → connect；带参 → 按顺序跑对应子命令。"""
+    def __call__(self, *names: str, verbose: bool = False, reconnect: bool = True,
+                 reconnect_max: int = 0, split: bool = True):
+        """无参 → connect；带参 → 按顺序跑对应子命令。
+
+        裸调用时接受 connect 的全部 flag（`ovpn --verbose` 必须生效，
+        而不是被 fire 当成消费不掉的尾巴在退出后报错）。
+        """
         targets = names or ("connect",)
         rc = 0
         for name in targets:
@@ -378,7 +383,11 @@ class OvpnCli(BaseCli):
             if not callable(method):
                 print(f"未知子命令: {name}", file=sys.stderr)
                 return 1
-            rc = method() or 0
+            if name == "connect":
+                rc = method(verbose=verbose, reconnect=reconnect,
+                            reconnect_max=reconnect_max, split=split) or 0
+            else:
+                rc = method() or 0
             if rc:
                 return rc
         return rc

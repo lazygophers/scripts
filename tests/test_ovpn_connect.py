@@ -557,6 +557,81 @@ class TestDrive(unittest.TestCase):
         _, rc, _, _ = self._drive([socket.timeout(), ">STATE:1,WAIT,", None])
         self.assertEqual(rc, 0)
 
+    # ── 断线重连 watchdog：第一层卡死 → 整组杀掉，返回 10 让外层重拉 ──
+
+    def _drive_raw(self, lines, proc=None, split=None):
+        mgmt = FakeMgmt(lines)
+        proc = proc or FakeProc(returncode=0)
+        r = _r()
+        rc, connected, counter = ovpn._drive(
+            mgmt, proc, r, username="u", password="p", secret="",
+            verbose=False, last_otp_counter=None, split=split,
+        )
+        return mgmt, proc, r, rc, connected, counter
+
+    def test_reconnect_stuck_triggers_hard_reset(self) -> None:
+        # 连上 → 断线 RECONNECTING → 卡住（timeout 反复）→ 强杀重拉
+        lines = [
+            ">STATE:1,CONNECTED,SUCCESS,10.8.0.6,203.0.113.1",
+            ">STATE:2,RECONNECTING,ping-restart",
+            socket.timeout(),
+            socket.timeout(),
+        ]
+        with mock.patch.object(ovpn, "RECONNECT_DEADLINE_SECS", 0), \
+             mock.patch.object(ovpn, "_hard_reset",
+                               side_effect=lambda p, r, c, lc: (10, c, lc)) as hr:
+            mgmt, _, _, rc, connected, _ = self._drive_raw(lines)
+        self.assertEqual(rc, 10)
+        self.assertTrue(connected)
+        hr.assert_called_once()
+
+    def test_reconnect_auth_stuck_triggers_hard_reset(self) -> None:
+        # 连上后断线，AUTH 自动填写，之后服务端不响应 → 也要强杀重拉
+        lines = [
+            ">STATE:1,CONNECTED,SUCCESS,10.8.0.6,203.0.113.1",
+            ">PASSWORD:Need 'Auth' username/password",
+            socket.timeout(),
+        ]
+        with mock.patch.object(ovpn, "RECONNECT_DEADLINE_SECS", 0), \
+             mock.patch.object(ovpn, "_hard_reset",
+                               side_effect=lambda p, r, c, lc: (10, c, lc)) as hr:
+            _, _, _, rc, connected, _ = self._drive_raw(lines)
+        self.assertEqual(rc, 10)
+        self.assertTrue(connected)
+        hr.assert_called_once()
+
+    def test_no_hard_reset_when_never_connected(self) -> None:
+        # 首次连接卡住不触发强杀（openvpn 自己 connect-retry 会一直试）
+        lines = [">STATE:1,WAIT,", socket.timeout()]
+        with mock.patch.object(ovpn, "RECONNECT_DEADLINE_SECS", 0), \
+             mock.patch.object(ovpn, "_hard_reset") as hr:
+            _, _, _, rc, _, _ = self._drive_raw(lines + [None])
+        self.assertEqual(rc, 0)
+        hr.assert_not_called()
+
+    def test_hard_reset_kills_process_group(self) -> None:
+        proc = FakeProc()
+        proc.pid = 1111
+        with mock.patch.object(ovpn.os, "getpgid", return_value=4242) as gp, \
+             mock.patch.object(ovpn.os, "killpg") as kp:
+            rc, connected, counter = ovpn._hard_reset(proc, _r(), True, None)
+        self.assertEqual(rc, 10)
+        gp.assert_called_once_with(proc.pid)
+        kp.assert_called_once()
+        self.assertEqual(kp.call_args[0][1], ovpn.signal.SIGTERM)
+
+    def test_hard_reset_escalates_to_sigkill(self) -> None:
+        proc = FakeProc()
+        proc.pid = 1111
+        proc.wait = lambda timeout=None: (_ for _ in ()).throw(
+            ovpn.subprocess.TimeoutExpired(cmd="x", timeout=timeout))
+        with mock.patch.object(ovpn.os, "getpgid", return_value=4242), \
+             mock.patch.object(ovpn.os, "killpg") as kp:
+            rc, _, _ = ovpn._hard_reset(proc, _r(), True, None)
+        self.assertEqual(rc, 10)
+        self.assertEqual(kp.call_count, 2)
+        self.assertEqual(kp.call_args_list[1][0][1], ovpn.signal.SIGKILL)
+
     def test_socket_error_breaks_the_loop(self) -> None:
         _, rc, _, _ = self._drive([OSError("管理口断了")])
         self.assertEqual(rc, 0)

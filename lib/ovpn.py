@@ -25,6 +25,7 @@ import os
 import pathlib
 import re
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -401,6 +402,40 @@ def parse_pushed_dns(line: str) -> list[str]:
 
 # ---------------------------------------------------------------- connect
 
+# 断线重连的第一层（openvpn 进程内 SIGUSR1）超过这个秒数还没恢复
+# （AUTH 卡住 / RECONNECTING 不出 CONNECTED），就整组杀掉交给外层重拉。
+# 第一层卡死时 --ping-restart 救不了它（链路没死，是认证/状态机死了），
+# 必须全新进程：新 management、resolver 重建、TOTP 换新码。
+RECONNECT_DEADLINE_SECS = 120
+
+# _drive watchdog 强杀后的返回码；不能落在 connect() 的保留集 (0, 2, 127, 130)
+# 里，否则外层不重连直接退出
+_HARD_RESET_RC = 10
+
+
+def _hard_reset(proc, reporter, connected_ever: bool,
+                last_otp_counter: int | None) -> tuple[int, bool, int | None]:
+    """watchdog 超时：杀掉 sudo+openvpn 整个进程组，让外层重新拉起。"""
+    reporter.warn(f"VPN 断线后 {RECONNECT_DEADLINE_SECS} 秒没有恢复（认证或状态机卡死），"
+                  "kill 掉 openvpn 整组进程重新拉起")
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass  # SIGKILL 后仍不退：内核回收前不再等，外层重拉前不阻塞
+    return _HARD_RESET_RC, connected_ever, last_otp_counter
+
+
 class ManagementClient:
     """OpenVPN management interface 的行协议客户端（TCP，行以 \\r\\n 结尾）。"""
 
@@ -572,6 +607,9 @@ def _connect_once(cfg: dict, reporter, *, verbose: bool = False,
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        # 独立进程组：断线重连卡死时 killpg 一次杀掉 sudo + openvpn 整组，
+        # 不留孤儿 openvpn 占着 tun 网卡
+        start_new_session=True,
     )
 
     import threading
@@ -639,6 +677,9 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
 
     openvpn 自己发起的 SIGUSR1 重启不会退出进程，只是重新走一遍 AUTH，
     所以这个循环一直活着就等于「断线自动重连」的第一层。
+    第一层卡死（AUTH 后服务端不响应、RECONNECTING 一直不恢复）超过
+    RECONNECT_DEADLINE_SECS 时强杀整组进程，返回 10 让外层 connect()
+    重新拉起全新 openvpn（脚本已是 root，重启不会再次要 sudo 密码）。
     """
     mgmt.authenticate()
     mgmt.send("state on")
@@ -647,6 +688,7 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
     crv_state: str | None = None
     connected_ever = False
     reconnecting = False
+    deadline: float | None = None
 
     while True:
         if proc.poll() is not None:
@@ -654,6 +696,8 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
         try:
             line = mgmt.readline(timeout=1.0)
         except socket.timeout:
+            if reconnecting and deadline is not None and time.time() > deadline:
+                return _hard_reset(proc, reporter, connected_ever, last_otp_counter)
             continue
         except OSError:
             return (1 if reconnecting else 0), connected_ever, last_otp_counter
@@ -664,6 +708,10 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
 
         need_auth, sc_flags = parse_need_auth(line)
         if need_auth:
+            if connected_ever:
+                # 断线重连的 AUTH：开始计时，卡住超过时限就整组杀掉重来
+                reconnecting = True
+                deadline = time.time() + RECONNECT_DEADLINE_SECS
             otp = None
             if secret:
                 wait_fresh_totp(last_otp_counter, reporter)
@@ -702,6 +750,7 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
             detail = fields[2] if len(fields) > 2 else ""
             if name == "CONNECTED":
                 reconnecting = False
+                deadline = None
                 connected_ever = True
                 local_ip = fields[3] if len(fields) > 3 else ""
                 remote = fields[4] if len(fields) > 4 else ""
@@ -713,6 +762,7 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
             elif name == "RECONNECTING":
                 if connected_ever:
                     reconnecting = True
+                    deadline = time.time() + RECONNECT_DEADLINE_SECS
                 reporter.warn(f"VPN 网络断了一下，OpenVPN 正在自动重连。原因: {detail or '没有给出原因'}")
                 if connected_ever:
                     reporter.info("OpenVPN 进程还在，等它自己恢复。恢复后这里会继续出日志")
