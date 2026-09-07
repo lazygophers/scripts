@@ -36,7 +36,7 @@ _BASH_ONLY_BINS = {"disable-ipv6", "enable-ipv6"}
 class TestShellCommonFlags(unittest.TestCase):
     """所有薄壳通用参数必须正常退出。"""
 
-    def _run_shell(self, name: str, flag: str) -> subprocess.CompletedProcess:
+    def _run_shell(self, name: str, *flags: str) -> subprocess.CompletedProcess:
         # 隔离: 临时 HOME 防止任何 rc 副作用; PYTHONPATH 指向 repo root
         env = {
             "PATH": os.environ.get("PATH", ""),
@@ -47,7 +47,7 @@ class TestShellCommonFlags(unittest.TestCase):
         }
         cwd = tempfile.mkdtemp(prefix="shelltest_cwd_")
         return subprocess.run(
-            [sys.executable, str(BIN_DIR / name), flag],
+            [sys.executable, str(BIN_DIR / name), *flags],
             capture_output=True, text=True, env=env, cwd=cwd, timeout=10,
         )
 
@@ -64,6 +64,19 @@ class TestShellCommonFlags(unittest.TestCase):
         if failures:
             msg = "\n".join(f"{n} {flag}: exit={rc} stderr={e}" for n, flag, rc, e in failures)
             self.fail(f"薄壳通用参数失败:\n{msg}")
+
+    def test_debug_flag_combines_with_help(self):
+        """--debug 必须被剥掉而不是挡住后面的 --help（每个 bin 都支持 --debug）。"""
+        shells = [s for s in _all_shells() if s not in _BASH_ONLY_BINS]
+        failures = []
+        for name in shells:
+            with self.subTest(shell=name):
+                p = self._run_shell(name, "--debug", "--help")
+                if p.returncode != 0:
+                    failures.append((name, p.returncode, p.stderr[:200]))
+        if failures:
+            msg = "\n".join(f"{n}: exit={rc} stderr={e}" for n, rc, e in failures)
+            self.fail(f"--debug --help 失败:\n{msg}")
 
 
 class TestInjectDryRunIsolated(unittest.TestCase):

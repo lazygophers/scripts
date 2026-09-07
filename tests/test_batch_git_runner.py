@@ -237,6 +237,59 @@ class TestBatchRunner(RunnerCase):
         result = self.run_with(lambda *a: RepoPlan(status="ok"), [])
         self.assertEqual(result.total, 0)
 
+    def test_execute_parallel_runs_concurrently(self) -> None:
+        """EXECUTE_CONCURRENCY>1 时 execute 真并发（barrier 同步验证）。"""
+        import threading
+
+        barrier = threading.Barrier(3, timeout=5)
+
+        def ex(repo, plan, r, root):
+            barrier.wait()  # 三个 worker 都到场才放行 = 真并发
+            return "ok", ""
+
+        detect = lambda repo, r, root: RepoPlan(status="ok", execute=ex)  # noqa: E731
+        with mock.patch.dict(os.environ, {"EXECUTE_CONCURRENCY": "3"}):
+            result = self.run_with(detect, [Path("/root/a"), Path("/root/b"), Path("/root/c")])
+        self.assertEqual(len(result.succeeded), 3)
+        printed = " ".join(str(c[0][0]) for c in self.reporter.rule.call_args_list)
+        self.assertIn("并发 3", printed)
+
+    def test_execute_parallel_forced_serial_in_debug(self) -> None:
+        """debug 模式强制串行：rule 文案 + 逐个顺序执行。"""
+        order: list[str] = []
+
+        def ex(repo, plan, r, root):
+            order.append(repo.name)
+            return "ok", ""
+
+        detect = lambda repo, r, root: RepoPlan(status="ok", execute=ex)  # noqa: E731
+        with mock.patch.dict(os.environ, {"EXECUTE_CONCURRENCY": "4"}), \
+             mock.patch.object(bg, "_EXEC_PARALLEL", False), \
+             mock.patch("lib.notify.debug_concurrency", side_effect=lambda d: 1):
+            result = self.run_with(detect, [Path("/root/a"), Path("/root/b")])
+        self.assertEqual(order, ["a", "b"])
+        self.assertEqual(len(result.succeeded), 2)
+
+    def test_run_exec_parallel_captures_and_replays(self) -> None:
+        """_EXEC_PARALLEL=True 时子进程输出捕获后整段回放（带仓库名前缀）。"""
+        p = mock.Mock(stdout="out", stderr="err")
+        r = mock.MagicMock()
+        with mock.patch.object(bg, "_EXEC_PARALLEL", True), \
+             mock.patch.object(bg, "_run", return_value=p) as mrun:
+            got = bg._run_exec(["git", "push"], label="repo1", r=r, cwd="/x", check=False)
+        self.assertIs(got, p)
+        mrun.assert_called_once_with(["git", "push"], cwd="/x", check=False, capture_output=True)
+        r.output.assert_called_once()
+        self.assertIn("out", r.output.call_args[0][0])
+        self.assertIn("repo1", r.output.call_args[1]["prefix"])
+
+    def test_run_exec_serial_streams_live(self) -> None:
+        p = mock.Mock(stdout="", stderr="")
+        with mock.patch.object(bg, "_EXEC_PARALLEL", False), \
+             mock.patch.object(bg, "_run", return_value=p) as mrun:
+            bg._run_exec(["git", "switch"], label="repo1", r=mock.MagicMock(), cwd="/x")
+        mrun.assert_called_once_with(["git", "switch"], cwd="/x", capture_output=False)
+
     def test_concurrency_reads_the_env_var(self) -> None:
         with mock.patch.dict(os.environ, {"BATCH_CONCURRENCY": "7"}):
             self.run_with(lambda *a: RepoPlan(status="skip"), [Path("/root/a")])

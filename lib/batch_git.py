@@ -253,7 +253,8 @@ class BatchRunner:
 
         r.rule(operation.title, style="blue")
         repos = operation.scan()
-        concurrency = max(1, int(os.environ.get("BATCH_CONCURRENCY", "4")))
+        from lib.notify import debug_concurrency
+        concurrency = debug_concurrency(int(os.environ.get("BATCH_CONCURRENCY", "4")))
         r.info(f"扫描 {len(repos)} 个仓库（检测并发 {concurrency}，执行串行）")
 
         if operation.confirm and os.environ.get("BATCH_NO_CONFIRM") != "1":
@@ -337,38 +338,66 @@ class BatchRunner:
                 to_execute.append((plan, rr))
 
         if to_execute:
-            r.rule("执行（串行）", style="blue")
+            from lib.notify import debug_concurrency
+
+            # execute 并发：不同仓库互不相干，并发安全；输出走 _run_exec 捕获回放。
+            # 默认 1（串行直吐实时输出），EXECUTE_CONCURRENCY=N 开并发；debug 强制串行。
+            exec_conc = debug_concurrency(int(os.environ.get("EXECUTE_CONCURRENCY", "1")))
+            r.rule(f"执行（{'并发 ' + str(exec_conc) if exec_conc > 1 else '串行'}）", style="blue")
             prog2 = progress(r.console)
             prog2_task = None
             if prog2 is not None:
                 prog2_task = prog2.add_task("执行中", total=len(to_execute))
                 prog2.start()
+
+            def _exec_one(plan, rr) -> RepoResult:
+                try:
+                    outcome = operation.execute(Path(rr.path), plan, r, root)
+                    rr.status = outcome.status
+                    rr.detail = outcome.detail
+                except Exception as e:
+                    r.err(f"执行异常 ({rr.name}): {e}")
+                    rr.status = "fail"
+                    rr.detail = str(e)
+                if rr.status == "ok":
+                    result.succeeded.append(rr)
+                elif rr.status == "skip":
+                    result.skipped.append(rr)
+                else:
+                    result.failed.append(rr)
+                r.status(rr.status, f"{rr.name}{(' — ' + rr.detail) if rr.detail else ''}")
+                return rr
+
+            global _EXEC_PARALLEL
             try:
-                for plan, rr in to_execute:
-                    if prog2 is not None and prog2_task is not None:
-                        prog2.update(prog2_task, description=f"执行中 {rr.name}")
+                if exec_conc > 1 and len(to_execute) > 1:
+                    _EXEC_PARALLEL = True
                     try:
-                        outcome = operation.execute(Path(rr.path), plan, r, root)
-                        rr.status = outcome.status
-                        rr.detail = outcome.detail
+                        with ThreadPoolExecutor(max_workers=exec_conc) as pool:
+                            futs = [pool.submit(_exec_one, plan, rr) for plan, rr in to_execute]
+                            for fut in as_completed(futs):
+                                del fut  # 结果已由 _exec_one 写回 result
+                                if prog2 is not None and prog2_task is not None:
+                                    prog2.advance(prog2_task)
                     except KeyboardInterrupt:
-                        r.warn(f"\n用户中断（执行 {rr.name}）")
-                        if prog2 is not None:
-                            prog2.stop()
+                        # with 退出会等 worker 跑完，Ctrl-C 会卡住——直接退（与 detect 段一致）
+                        r.warn("\n用户中断（执行阶段，并发）")
                         os._exit(130)
-                    except Exception as e:
-                        r.err(f"执行异常 ({rr.name}): {e}")
-                        rr.status = "fail"
-                        rr.detail = str(e)
-                    if prog2 is not None and prog2_task is not None:
-                        prog2.advance(prog2_task)
-                    if rr.status == "ok":
-                        result.succeeded.append(rr)
-                    elif rr.status == "skip":
-                        result.skipped.append(rr)
-                    else:
-                        result.failed.append(rr)
-                    r.status(rr.status, f"{rr.name}{(' — ' + rr.detail) if rr.detail else ''}")
+                    finally:
+                        _EXEC_PARALLEL = False
+                else:
+                    for plan, rr in to_execute:
+                        if prog2 is not None and prog2_task is not None:
+                            prog2.update(prog2_task, description=f"执行中 {rr.name}")
+                        try:
+                            _exec_one(plan, rr)
+                        except KeyboardInterrupt:
+                            r.warn(f"\n用户中断（执行 {rr.name}）")
+                            if prog2 is not None:
+                                prog2.stop()
+                            os._exit(130)
+                        if prog2 is not None and prog2_task is not None:
+                            prog2.advance(prog2_task)
             finally:
                 if prog2 is not None:
                     prog2.stop()
@@ -403,8 +432,25 @@ def run_batch(
 # 用 closure 捕获参数，替代旧实现的模块级 _TARGET/_FORCE/_DRY_RUN/_EXTRA 全局态。
 
 from lib.exec import NET_TIMEOUT, run as _run  # noqa: E402, I001
-from lib.git import get_current_branch as _get_current_branch  # noqa: E402
 
+# execute 阶段并发开关（BatchRunner 控制）：并发时子进程/git 输出改为捕获、
+# 完成后整段回放（带仓库名前缀），避免多仓输出行级交错；串行保持直吐实时流。
+_EXEC_PARALLEL = False
+
+
+def _run_exec(cmd, *, label: str, r=None, **kw):
+    """execute 阶段的子进程调用统一走这里（串行直吐 / 并发捕获回放）。"""
+    global _EXEC_PARALLEL
+    if _EXEC_PARALLEL:
+        kw["capture_output"] = True
+        p = _run(cmd, **kw)
+        out = ((p.stdout or "") + (p.stderr or "")).strip()
+        if r is not None and out:
+            r.output(out[:2000], prefix=f"  {label} | ")
+        return p
+    kw.setdefault("capture_output", False)
+    return _run(cmd, **kw)
+from lib.git import get_current_branch as _get_current_branch  # noqa: E402
 
 _ERROR_PATTERN = re.compile(
     r"conflict|rejected|fatal|error:|denied|timeout|unresolved|diverged|non-fast-forward",
@@ -497,8 +543,8 @@ def _push_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list
         cmd = _single_repo_cmd("push", target)
         r.step(f"执行 {' '.join(cmd)} …")
         # capture_output=False: 子进程直吐 stderr, 实时流式（串行无交错风险）
-        rc = _run([*cmd, *extra], cwd=str(repo), check=False,
-                  capture_output=False, env={**os.environ, "_GITWF_BATCH": "1"}).returncode
+        rc = _run_exec([*cmd, *extra], label=repo.name, r=r, cwd=str(repo), check=False,
+                       env={**os.environ, "_GITWF_BATCH": "1"}).returncode
         if rc == 0:
             return "ok", ""
         return "fail", f"{' '.join(cmd)} 退出码 {rc}"
@@ -649,8 +695,8 @@ def _merge_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: lis
                     return "fail", f"自动提交失败（退出码 {rc}）"
         cmd = _single_repo_cmd("merge", target)
         r.step(f"执行 {' '.join(cmd)} …")
-        rc = _run([*cmd, *extra], cwd=str(repo), check=False,
-                  capture_output=False, env={**os.environ, "_GITWF_BATCH": "1"}).returncode
+        rc = _run_exec([*cmd, *extra], label=repo.name, r=r, cwd=str(repo), check=False,
+                       env={**os.environ, "_GITWF_BATCH": "1"}).returncode
         if rc == 0:
             return "ok", ""
         return "fail", f"{' '.join(cmd)} 退出码 {rc}"
@@ -737,14 +783,14 @@ def _switch_one_factory(target: str) -> DetectFn:
         mode = plan.detail  # detect 把执行模式塞进 detail: local/remote/create/sync-behind
         if mode == "local":
             r.step(f"本地分支 {target} 已存在 → switch")
-            sw = _run(["git", "switch", target], cwd=str(repo), check=False, capture_output=False).returncode
+            sw = _run_exec(["git", "switch", target], label=repo.name, r=r, cwd=str(repo), check=False).returncode
             if sw == 0:
                 return "ok", f"切换到 {target}"
             return "fail", f"切换失败 (rc={sw})"
         if mode == "remote":
             r.step(f"远端分支 origin/{target} 存在 → track & switch")
-            sw = _run(["git", "switch", "-c", target, f"origin/{target}"],
-                      cwd=str(repo), check=False, capture_output=False).returncode
+            sw = _run_exec(["git", "switch", "-c", target, f"origin/{target}"],
+                           label=repo.name, r=r, cwd=str(repo), check=False).returncode
             if sw == 0:
                 return "ok", f"追踪并切换到 {target}"
             return "fail", f"切换失败 (rc={sw})"
@@ -760,8 +806,8 @@ def _switch_one_factory(target: str) -> DetectFn:
         # create
         base = _resolve_main_branch(repo)
         r.step(f"分支不存在 → 从 origin/{base} 创建")
-        sw = _run(["git", "switch", "-c", target, f"origin/{base}"],
-                  cwd=str(repo), check=False, capture_output=False).returncode
+        sw = _run_exec(["git", "switch", "-c", target, f"origin/{base}"],
+                       label=repo.name, r=r, cwd=str(repo), check=False).returncode
         if sw == 0:
             return "ok", f"从 origin/{base} 创建并切换到 {target}"
         return "fail", f"创建失败 (rc={sw})"
@@ -896,8 +942,8 @@ def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
             if co.returncode != 0:
                 return "fail", _extract_error((co.stderr or "") + (co.stdout or ""), co.returncode, f"checkout {target} 失败")
         r.step(f"reset --hard {remote_ref} …")
-        _run(["git", "reset", "--hard", "-q", remote_ref],
-             cwd=str(repo), check=False, capture_output=False)
+        _run_exec(["git", "reset", "--hard", "-q", remote_ref],
+                  label=repo.name, r=r, cwd=str(repo), check=False)
         sha_p = _run(["git", "rev-parse", "--short", remote_ref],
                      cwd=str(repo), check=False, capture_output=True)
         sha = (sha_p.stdout or "").strip()
@@ -1016,8 +1062,8 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
         if mode == "create":
             base = _resolve_main_branch(repo)
             r.step(f"本地无 {target} → 从 origin/{base} 创建")
-            create = _run(["git", "switch", "-c", target, f"origin/{base}"],
-                          cwd=str(repo), check=False, capture_output=False).returncode
+            create = _run_exec(["git", "switch", "-c", target, f"origin/{base}"],
+                               label=repo.name, r=r, cwd=str(repo), check=False).returncode
             if create != 0:
                 return "fail", f"创建 {target} 失败 (rc={create})"
         else:
@@ -1032,16 +1078,16 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
 
         if remote_exists:
             r.step(f"pull --ff-only {remote_ref} …")
-            pull = _run(["git", "pull", "--ff-only", "-q", "origin", target],
-                        cwd=str(repo), check=False, capture_output=False, timeout=NET_TIMEOUT).returncode
+            pull = _run_exec(["git", "pull", "--ff-only", "-q", "origin", target],
+                             label=repo.name, r=r, cwd=str(repo), check=False, timeout=NET_TIMEOUT).returncode
             if pull != 0:
                 if not single:
                     return "skip", f"远端有分叉/冲突 (pull rc={pull})"
                 # 单仓: ff-only 失败 → pull --no-rebase 合并分叉
                 r.step(f"pull --no-rebase（合并分叉）{remote_ref} …")
-                pull_merge = _run(
+                pull_merge = _run_exec(
                     ["git", "pull", "--no-rebase", "--no-edit", "origin", target],
-                    cwd=str(repo), check=False, capture_output=False, timeout=NET_TIMEOUT,
+                    label=repo.name, r=r, cwd=str(repo), check=False, timeout=NET_TIMEOUT,
                 ).returncode
                 if pull_merge != 0:
                     return "skip", f"自动 merge 失败（需手动解决冲突）(rc={pull_merge})"
@@ -1054,7 +1100,7 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
         push_args += ["origin", target]
 
         r.step(f"push {target} → origin/{target} …")
-        push = _run(push_args, cwd=str(repo), check=False, capture_output=False, timeout=NET_TIMEOUT).returncode
+        push = _run_exec(push_args, label=repo.name, r=r, cwd=str(repo), check=False, timeout=NET_TIMEOUT).returncode
         if push != 0:
             return "fail", f"push 失败 (rc={push})"
 
@@ -1212,8 +1258,8 @@ def _delete_branch_remote_one_factory(target: str, remote: str) -> DetectFn:
     """
     def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
         r.step(f"git push {remote} --delete {target} …")
-        p = _run(["git", "push", remote, "--delete", target],
-                 cwd=str(repo), check=False, capture_output=False, timeout=NET_TIMEOUT).returncode
+        p = _run_exec(["git", "push", remote, "--delete", target],
+                      label=repo.name, r=r, cwd=str(repo), check=False, timeout=NET_TIMEOUT).returncode
         if p != 0:
             return "fail", f"删除失败 (rc={p})"
         # 清理本地 tracking ref

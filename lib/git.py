@@ -213,7 +213,8 @@ def fetch_all(root: Path = Path(".")) -> int:
 
     r = reporter(stderr=True)
     r.rule("Git Fetch All", style="blue")
-    concurrency = max(1, int(os.environ.get("BATCH_CONCURRENCY", "4")))
+    from lib.notify import debug_concurrency
+    concurrency = debug_concurrency(int(os.environ.get("BATCH_CONCURRENCY", "4")))
     r.info(f"扫描 {len(repos)} 个仓库（{root}，fetch 并发 {concurrency}）")
 
     def _fetch_one(repo: Path):

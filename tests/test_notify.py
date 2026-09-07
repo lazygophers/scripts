@@ -105,6 +105,14 @@ class TestConsumeDebug(unittest.TestCase):
         notify_mod.set_debug(False)
         self.assertFalse(notify_mod.is_debug())
 
+    def test_debug_concurrency_forces_serial(self):
+        # debug 模式看的就是日志，并发日志交错没法读 → 强制串行
+        notify_mod.set_debug(True)
+        self.assertEqual(notify_mod.debug_concurrency(4), 1)
+        notify_mod.set_debug(False)
+        self.assertEqual(notify_mod.debug_concurrency(4), 4)
+        self.assertEqual(notify_mod.debug_concurrency(0), 1)  # default 下限 1
+
 
 class TestConsumeNoSay(unittest.TestCase):
     def setUp(self):

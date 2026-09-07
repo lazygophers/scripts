@@ -39,6 +39,14 @@ def is_debug() -> bool:
     return _DEBUG
 
 
+def debug_concurrency(default: int) -> int:
+    """并发度取值：debug 模式强制串行（1），否则用 default。
+
+    并发 worker 的日志会交错，debug 看的就是日志 —— 交错没法读。
+    """
+    return 1 if _DEBUG else max(1, int(default))
+
+
 def consume_no_say(argv: list[str]) -> list[str]:
     """剥离 argv 中所有 --no-say 并禁用语音，返回剩余 argv。
 

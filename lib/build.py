@@ -526,7 +526,9 @@ def check_build(*, project_dir: Path = Path("."),
             log(f"未检测到已知项目类型: {project_dir.name}")
         return []
 
-    parallel = os.environ.get("CHECKWORK_PARALLEL", "") == "1"
+    # debug 模式强制串行：并发检查的日志交错没法读
+    parallel = (os.environ.get("CHECKWORK_PARALLEL", "") == "1"
+                and os.environ.get("SCRIPTS_DEBUG", "") != "1")
 
     if parallel and len(types) > 1:
         return _run_checks_parallel(types, project_dir, log=log)
