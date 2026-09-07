@@ -337,6 +337,16 @@ class DnsProxy:
             self.sock.close()
             self.sock = None
 
+    def health_check(self, *, timeout: float = 2.0) -> bool | None:
+        """向上游 DNS 发一次探测查询（静默），用于判断隧道是否黑洞。
+
+        没有 upstream 或没有可探测域名时不探测，返回 None。
+        """
+        ups = self.upstreams
+        if not ups or not self.domains:
+            return None
+        return probe_upstream(ups, self.domains[0], timeout=timeout)
+
     def _serve(self) -> None:
         assert self.sock is not None
         while not self._stop.is_set():
@@ -408,6 +418,39 @@ class DnsProxy:
         return None
 
 
+def build_probe_query(qname: str) -> bytes:
+    """构造一个最小 DNS A 查询（健康探测用，无需 dnslib）。"""
+    header = b"\x00\x00\x01\x00" + b"\x00\x01" + b"\x00\x00" * 3
+    q = b"".join(bytes([len(part)]) + part.encode("ascii")
+                 for part in qname.split(".") if part) + b"\x00"
+    return header + q + b"\x00\x01\x00\x01"
+
+
+def probe_upstream(upstreams, qname: str, *, timeout: float = 2.0) -> bool:
+    """并行问所有 upstream，任一回应即认为隧道活着。静默，不碰 reporter。"""
+    query = build_probe_query(qname)
+    socks: list[socket.socket] = []
+    try:
+        for up in upstreams:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.setblocking(False)
+            try:
+                s.sendto(query, (up, 53))
+            except OSError:
+                s.close()
+                continue
+            socks.append(s)
+        deadline = time.monotonic() + timeout
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            ready, _, _ = select.select(socks, [], [], remaining)
+            return bool(ready)
+        return False
+    finally:
+        for s in socks:
+            s.close()
+
+
 # ---------------------------------------------------------------- 编排
 
 class SplitTunnel:
@@ -424,6 +467,12 @@ class SplitTunnel:
         self.reporter = reporter
         self.table: RouteTable | None = None
         self.proxy: DnsProxy | None = None
+
+    def health_check(self, *, timeout: float = 2.0) -> bool | None:
+        """转发到 DnsProxy.health_check；代理没起来时返回 None（不探测）。"""
+        if self.proxy is None:
+            return None
+        return self.proxy.health_check(timeout=timeout)
 
     def note_pushed_dns(self, servers: list[str]) -> list[str]:
         """记下 VPN push 的内网 DNS；公网 DNS 交给默认上游，避免被 VPN 配置覆盖。"""

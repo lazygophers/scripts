@@ -516,3 +516,96 @@ class TestBinReexecsThroughSudo(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDriveDnsProbe(unittest.TestCase):
+    """_drive 的 DNS 健康探测：CONNECTED 后隧道黑洞 → 连续失败触发 _hard_reset。"""
+
+    _TIMEOUT = object()  # readline 该超时一次（socket.timeout）而不是给行
+
+    def _drive_with(self, health_values, mgmt_lines):
+        """health_values: probe 返回序列；mgmt_lines: readline 依次返回。"""
+        import socket as _socket
+        from unittest import mock
+
+        lines = iter(mgmt_lines)
+        mgmt = mock.Mock()
+
+        def _readline(timeout=1.0):
+            try:
+                nxt = next(lines)
+            except StopIteration:
+                raise OSError("mgmt closed")  # 让 _drive 走 OSError 退出路径，避免死循环
+            if nxt is TestDriveDnsProbe._TIMEOUT:
+                raise _socket.timeout()
+            return nxt
+        mgmt.readline = mock.Mock(side_effect=_readline)
+
+        clock = {"now": 1000.0}
+
+        class _T:
+            @staticmethod
+            def time():
+                clock["now"] += 35.0  # 每次调用都跨过 30s 探测间隔
+                return clock["now"]
+
+            @staticmethod
+            def sleep(_s):
+                pass
+
+            @staticmethod
+            def monotonic():
+                return clock["now"]
+
+        proc = mock.Mock()
+        proc.poll.return_value = None
+        proc.pid = 4242
+        proc.wait.return_value = 0
+        split = mock.Mock()
+        vals = list(health_values)
+        split.health_check = mock.Mock(
+            side_effect=lambda *a, **k: vals.pop(0) if vals else True)
+        reporter = _FakeReporter()
+        with mock.patch.object(ov, "time", _T), \
+             mock.patch.object(ov.os, "getpgid", return_value=1), \
+             mock.patch.object(ov.os, "killpg") as killpg:
+            rc, connected, _ = ov._drive(
+                mgmt, proc, reporter, username="u", password="p",
+                secret="", verbose=False, split=split)
+        return rc, connected, reporter, killpg
+
+    def test_blackhole_triggers_hard_reset(self):
+        T = self._TIMEOUT
+        rc, connected, reporter, killpg = self._drive_with(
+            [False, False, False],
+            [">STATE:1234,CONNECTED,SUCCESS,10.8.0.5,1.2.3.4", T, T, T])
+        self.assertEqual(rc, ov._HARD_RESET_RC)
+        self.assertTrue(connected)
+        killpg.assert_called_once()
+        self.assertTrue(any("黑洞" in msg for _, msg in reporter.calls))
+
+    def test_one_blip_does_not_reset(self):
+        # 第二次探活成功清零计数，之后只用掉 2 次失败（序列耗尽后恒 True）→ 不 reset
+        T = self._TIMEOUT
+        rc, connected, reporter, killpg = self._drive_with(
+            [False, True, False, False],
+            [">STATE:1234,CONNECTED,SUCCESS,10.8.0.5,1.2.3.4", T, T, T, T])
+        self.assertEqual(rc, 0)  # health_check 耗尽后恒 True，循环走出 readline EOF 路径
+        killpg.assert_not_called()
+
+    def test_probe_not_run_without_split(self):
+        # split=None：不探测，正常退出路径
+        import socket as _socket
+        from unittest import mock
+        mgmt = mock.Mock()
+        mgmt.readline = mock.Mock(side_effect=_socket.timeout())
+        proc = mock.Mock()
+        proc.poll.side_effect = [None, 0]
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        reporter = _FakeReporter()
+        rc, connected, _ = ov._drive(
+            mgmt, proc, reporter, username="u", password="p",
+            secret="", verbose=False, split=None)
+        # proc.poll() 返回 0 → `returncode or 1` = 1（既有语义：意外退出交外层重连）
+        self.assertEqual(rc, 1)

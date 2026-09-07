@@ -412,6 +412,13 @@ RECONNECT_DEADLINE_SECS = 120
 # 里，否则外层不重连直接退出
 _HARD_RESET_RC = 10
 
+# DNS 健康探测：openvpn 状态还是 CONNECTED 但隧道黑洞（对端不回包）时，
+# 自身的 ping-restart 和状态机 watchdog 都救不了，只有真的拿 DNS 查询
+# 探一下才知道。分流模式下每 DNS_PROBE_INTERVAL 秒探一次上游 DNS，
+# 连续 DNS_PROBE_FAILS 次无回应就按断线处理（_hard_reset 重拉整组）。
+DNS_PROBE_INTERVAL = 30
+DNS_PROBE_FAILS = 3
+
 
 def _hard_reset(proc, reporter, connected_ever: bool,
                 last_otp_counter: int | None) -> tuple[int, bool, int | None]:
@@ -598,6 +605,14 @@ def _connect_once(cfg: dict, reporter, *, verbose: bool = False,
         *extra,
     ]
 
+    stale = running_processes()
+    if stale:
+        # 上次 connect 的前台进程没了（终端被关 / 被 kill -9）会留下孤儿 openvpn
+        # 占着 tun 网卡，新旧两个进程打架、DNS 全挂 —— 先清理再连
+        reporter.warn(f"发现残留 openvpn 进程（上次没有正常断开）: "
+                      f"{', '.join(str(pid) for pid, _ in stale)}，先清理再连")
+        disconnect(reporter)
+
     reporter.step(f"正在启动 VPN: {profile_path}")
     reporter.info("系统会要求输入本机密码；这是为了创建 VPN 网卡和写入路由")
 
@@ -689,10 +704,22 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
     connected_ever = False
     reconnecting = False
     deadline: float | None = None
+    probe_next: float | None = None  # 连上后才开始计时
+    probe_fails = 0
 
     while True:
         if proc.poll() is not None:
             return proc.returncode or 1, connected_ever, last_otp_counter
+        if probe_next is not None and split is not None and time.time() >= probe_next:
+            probe_next = time.time() + DNS_PROBE_INTERVAL
+            if split.health_check() is False:
+                probe_fails += 1
+                if probe_fails >= DNS_PROBE_FAILS:
+                    reporter.warn(f"DNS 探测连续 {probe_fails} 次无回应（隧道疑似黑洞），"
+                                  "kill 掉 openvpn 整组进程重新拉起")
+                    return _hard_reset(proc, reporter, connected_ever, last_otp_counter)
+            else:
+                probe_fails = 0
         try:
             line = mgmt.readline(timeout=1.0)
         except socket.timeout:
@@ -752,6 +779,8 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
                 reconnecting = False
                 deadline = None
                 connected_ever = True
+                probe_next = time.time() + DNS_PROBE_INTERVAL
+                probe_fails = 0
                 local_ip = fields[3] if len(fields) > 3 else ""
                 remote = fields[4] if len(fields) > 4 else ""
                 reporter.ok(f"VPN 已连接。本机 VPN IP: {local_ip or '(未显示)'}；VPN 服务器: {remote or '(未显示)'}")

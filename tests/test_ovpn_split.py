@@ -754,3 +754,62 @@ class TestSplitTunnelOnIps(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProbeUpstream(unittest.TestCase):
+    """probe_upstream：任一 upstream 回应即活；全静默即死。"""
+
+    def test_any_ready_socket_means_alive(self):
+        socks = [_FakeSock(), _FakeSock()]
+        with mock.patch.object(S.socket, "socket", side_effect=list(socks)), \
+             mock.patch.object(S.select, "select", return_value=([socks[0]], [], [])):
+            self.assertTrue(S.probe_upstream(["223.5.5.5", "1.1.1.1"], "a.com"))
+        self.assertTrue(all(s.sent for s in socks))
+
+    def test_timeout_means_dead(self):
+        socks = [_FakeSock()]
+        with mock.patch.object(S.socket, "socket", side_effect=list(socks)), \
+             mock.patch.object(S.select, "select", return_value=([], [], [])):
+            self.assertFalse(S.probe_upstream(["192.0.2.1"], "a.com", timeout=0.01))
+        self.assertTrue(socks[0].closed)
+
+    def test_query_wire_format(self):
+        import io as _io
+        buf = _io.BytesIO()
+        socks = []
+        sent = {}
+
+        class _CapSock:
+            def setblocking(self, _b):
+                pass
+
+            def sendto(self, q, addr):
+                sent["q"], sent["addr"] = q, addr
+
+            def close(self):
+                pass
+
+        with mock.patch.object(S.socket, "socket", return_value=_CapSock()), \
+             mock.patch.object(S.select, "select", return_value=([], [], [])):
+            self.assertFalse(S.probe_upstream(["10.8.0.1"], "a.b.com", timeout=0.01))
+        q, addr = sent["q"], sent["addr"]
+        self.assertEqual(addr, ("10.8.0.1", 53))
+        self.assertEqual(q[:12], b"\x00\x00\x01\x00" + b"\x00\x01" + b"\x00\x00" * 3)
+        self.assertIn(b"\x01a\x01b\x03com\x00", q)  # QNAME 编码正确
+        self.assertTrue(q.endswith(b"\x00\x01\x00\x01"))  # A/IN
+
+
+class TestHealthCheck(unittest.TestCase):
+    def test_dns_proxy_no_upstream_or_domain_returns_none(self):
+        self.assertIsNone(S.DnsProxy(5354, [], [], None).health_check())
+        self.assertIsNone(S.DnsProxy(5354, ["10.8.0.1"], [], None).health_check())
+
+    def test_dns_proxy_alive(self):
+        proxy = S.DnsProxy(5354, ["10.8.0.1"], ["a.com"], None)
+        with mock.patch.object(S, "probe_upstream", return_value=True) as p:
+            self.assertTrue(proxy.health_check())
+        p.assert_called_once_with(["10.8.0.1"], "a.com", timeout=2.0)
+
+    def test_split_tunnel_without_proxy_returns_none(self):
+        st = S.SplitTunnel({"routes": {"domains": ["a.com"]}}, _FakeReporter())
+        self.assertIsNone(st.health_check())

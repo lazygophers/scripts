@@ -756,6 +756,7 @@ class TestConnectOnce(unittest.TestCase):
         patches = [
             mock.patch("lib.ovpn_split.SplitTunnel", return_value=self.split),
             mock.patch("lib.ovpn_split.clean_resolver_files"),
+            mock.patch.object(ovpn, "running_processes", return_value=[]),
             mock.patch.object(ovpn.time, "sleep"),
             mock.patch.object(ovpn, "ensure_openvpn", return_value="/usr/sbin/openvpn"),
         ]
@@ -911,3 +912,27 @@ class TestConnectOnce(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestConnectOnceStaleCleanup(unittest.TestCase):
+    """_connect_once 启动前清孤儿 openvpn（上次终端被关留下的进程）。"""
+
+    def test_stale_processes_are_cleaned_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            profile = pathlib.Path(td) / "p.ovpn"
+            profile.write_text("client\n")
+            proc = FakeProc(returncode=0)
+            mgmt = mock.MagicMock()
+            with mock.patch("lib.ovpn_split.SplitTunnel"), \
+                 mock.patch("lib.ovpn_split.clean_resolver_files"), \
+                 mock.patch.object(ovpn.time, "sleep"), \
+                 mock.patch.object(ovpn, "ensure_openvpn", return_value="/usr/sbin/openvpn"), \
+                 mock.patch.object(ovpn, "running_processes", return_value=[(87102, "openvpn --config old.ovpn")]), \
+                 mock.patch.object(ovpn, "disconnect", return_value=0) as disc, \
+                 mock.patch.object(ovpn.subprocess, "Popen", return_value=proc), \
+                 mock.patch.object(ovpn, "ManagementClient", return_value=mgmt), \
+                 mock.patch.object(ovpn, "_drive", return_value=(0, True, None)):
+                rc, connected, _ = ovpn._connect_once(
+                    {"config": str(profile), "username": "u", "password": "p"}, _r())
+            self.assertEqual((rc, connected), (0, True))
+            disc.assert_called_once()
