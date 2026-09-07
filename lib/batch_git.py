@@ -494,13 +494,14 @@ def _push_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list
                 rc = run_commit(cwd=str(repo))
                 if rc != 0:
                     return "fail", f"自动提交失败（退出码 {rc}）"
-        r.step(f"执行 push_{target} …")
+        cmd = _single_repo_cmd("push", target)
+        r.step(f"执行 {' '.join(cmd)} …")
         # capture_output=False: 子进程直吐 stderr, 实时流式（串行无交错风险）
-        rc = _run([f"push_{target}", *extra], cwd=str(repo), check=False,
+        rc = _run([*cmd, *extra], cwd=str(repo), check=False,
                   capture_output=False, env={**os.environ, "_GITWF_BATCH": "1"}).returncode
         if rc == 0:
             return "ok", ""
-        return "fail", f"push_{target} 退出码 {rc}"
+        return "fail", f"{' '.join(cmd)} 退出码 {rc}"
 
     def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
         # fetch
@@ -646,12 +647,13 @@ def _merge_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: lis
                 rc = run_commit(cwd=str(repo))
                 if rc != 0:
                     return "fail", f"自动提交失败（退出码 {rc}）"
-        r.step(f"执行 merge_{target} …")
-        rc = _run([f"merge_{target}", *extra], cwd=str(repo), check=False,
+        cmd = _single_repo_cmd("merge", target)
+        r.step(f"执行 {' '.join(cmd)} …")
+        rc = _run([*cmd, *extra], cwd=str(repo), check=False,
                   capture_output=False, env={**os.environ, "_GITWF_BATCH": "1"}).returncode
         if rc == 0:
             return "ok", ""
-        return "fail", f"merge_{target} 退出码 {rc}"
+        return "fail", f"{' '.join(cmd)} 退出码 {rc}"
 
     def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
         r.step("fetch origin …")
@@ -830,6 +832,14 @@ def switch_branch_all(target: str) -> int:
 # 非字面分支名。_sync_one_factory 遇到此值时逐仓探测真实主分支。
 _MAIN_SENTINEL = "master"
 
+
+def _single_repo_cmd(action: str, target: str) -> list[str]:
+    """批量调单仓的入口命令：有专用 push_<target>/merge_<target> 入口用它，
+    否则回退通用 push_branch/merge_branch <target>（分支名作首参）。"""
+    bin_dir = Path(__file__).resolve().parent.parent / "bin"
+    if (bin_dir / f"{action}_{target}").exists():
+        return [f"{action}_{target}"]
+    return [f"{action}_branch", target]
 
 def _resolve_main_branch(repo: Path) -> str:
     """探测仓库真实主分支。

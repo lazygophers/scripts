@@ -113,12 +113,24 @@ def project_done_message(suffix: str) -> str:
     return f"{safe_project_context()} {suffix}"
 
 
+SAY_TIMEOUT_SECS = 30
+
+
 def notify(msg: str, *, say_cmd: str = "say") -> None:
-    """直接调用 say 播报（--no-say / SCRIPTS_NO_SAY=1 时仅打印）。"""
+    """直接调用 say 播报（--no-say / SCRIPTS_NO_SAY=1 时仅打印）。
+
+    带 timeout：macOS TTS 偶发卡死时 say 永不退出，曾把整个测试套件挂死
+    （系统边界，必须设超时）。超时只丢语音，不丢消息——文本已打印。
+    """
     reporter(stderr=True).info(msg)
     if _SAY_DISABLED:
         return
-    run([say_cmd, msg], check=False, capture_output=True)
+    from lib.exec import CommandTimeout
+
+    try:
+        run([say_cmd, msg], check=False, capture_output=True, timeout=SAY_TIMEOUT_SECS)
+    except CommandTimeout:
+        reporter(stderr=True).warn(f"语音通知超时（{SAY_TIMEOUT_SECS}s），已跳过")
 
 
 def notify_via_n(msg: str, *, script_dir=None) -> None:
@@ -137,7 +149,7 @@ def say_content(content: str) -> int:
         return 1
 
     r.step("正在播报通知...")
-    p = run_logged(["say", content], check=False, capture_output=True, r=r, title="say")
+    p = run_logged(["say", content], check=False, capture_output=True, r=r, title="say", timeout=120)
     if p.returncode == 0:
         r.ok("通知播报成功 ✓")
         return 0

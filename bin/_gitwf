@@ -4,6 +4,7 @@
 通过 argv[0] 的 basename 推断 action 与 target 分支:
   merge_canary/merge_develop/merge_master/merge_test  → merge_to / merge_all
   push_canary/push_develop/push_master/push_test      → push_to / push_all
+  merge_branch/push_branch → 分支名来自必填首参（例: merge_branch feature/x）
 
 自动识别单仓/批量:
   - 当前目录是 git 仓库（有 .git）→ 单仓: merge_to / push_to
@@ -17,19 +18,23 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.fire_base import BaseCli, run_cli, timed_cli
 
-
 _NAME_MAP = {
+    "merge_branch": ("merge", None),
     "merge_canary": ("merge", "canary"),
     "merge_dev": ("merge", "dev"),
     "merge_develop": ("merge", "develop"),
     "merge_master": ("merge", "master"),
     "merge_test": ("merge", "test"),
+    "push_branch": ("push", None),
     "push_canary": ("push", "canary"),
     "push_dev": ("push", "dev"),
     "push_develop": ("push", "develop"),
     "push_master": ("push", "master"),
     "push_test": ("push", "test"),
 }
+
+# *_branch 入口经 __main__ 摘出的分支名（空 = 没传，_dispatch 报用法）
+_BRANCH_ARG = ""
 
 
 class GitWfCli(BaseCli):
@@ -63,6 +68,12 @@ class GitWfCli(BaseCli):
             self._r.err(f"未知入口名 {name!r}，已知: {sorted(_NAME_MAP)}")
             return 2
         action, target = _NAME_MAP[name]
+        if target is None:
+            # *_branch 入口：分支名是必填首参，由 __main__ 在 fire 解析前摘出
+            target = _BRANCH_ARG
+            if not target:
+                self._r.err(f"用法: {name} <分支名> [here|all|auto]  例: {name} feature/x")
+                return 2
         # 让 run_workflow 显示用户输入的入口名
         sys.argv[0] = name
 
@@ -81,4 +92,24 @@ class GitWfCli(BaseCli):
 
 
 if __name__ == "__main__":
+    # *_branch 入口的分支名必须在 fire 解析前摘出，否则会被当成子命令。
+    # 通用 flag（--skills/--dry-run/--no-say/--debug）先剥再找首个位置参：
+    # --skills/裸 --dry-run 就地退出 0（test_all_shells_common_flags 契约），
+    # 剥完没有位置参但带 -h/--help 时放行走 fire help，否则报用法 exit 2。
+    if pathlib.Path(sys.argv[0]).name in ("merge_branch", "push_branch"):
+        from lib.notify import consume_debug, consume_dry_run, consume_no_say
+        from lib.skills_help import consume_skills
+
+        _desc = GitWfCli.__doc__ or ""
+        sys.argv[:] = consume_debug(consume_no_say(sys.argv))
+        sys.argv[:] = consume_dry_run(sys.argv, description=_desc)
+        sys.argv[:] = consume_skills(sys.argv, description=_desc)
+        _pos = next((i for i, a in enumerate(sys.argv[1:], 1) if not a.startswith("-")), None)
+        if _pos is not None:
+            _BRANCH_ARG = sys.argv.pop(_pos)
+        elif not any(a in ("-h", "--help") for a in sys.argv[1:]):
+            print(f"用法: {pathlib.Path(sys.argv[0]).name} <分支名> [here|all|auto]  例: "
+                  f"{pathlib.Path(sys.argv[0]).name} feature/x",
+                  file=sys.stderr)
+            raise SystemExit(2)
     run_cli(GitWfCli())

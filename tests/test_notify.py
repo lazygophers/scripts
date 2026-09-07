@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import lib.notify as notify_mod
+from lib.exec import CommandTimeout
 
 
 class TestProjectDoneMessage(unittest.TestCase):
@@ -20,6 +21,15 @@ class TestProjectDoneMessage(unittest.TestCase):
 
 
 class TestNotify(unittest.TestCase):
+    def setUp(self):
+        # SCRIPTS_NO_SAY=1 全量跑时 _SAY_DISABLED=True，会吞掉 run 调用；
+        # 这里测的是 say 路径，重置后还原
+        self._prev = notify_mod._SAY_DISABLED
+        notify_mod._SAY_DISABLED = False
+
+    def tearDown(self):
+        notify_mod._SAY_DISABLED = self._prev
+
     @patch("lib.notify.run")
     def test_notify_calls_say(self, mock_run):
         notify_mod.notify("hello")
@@ -34,8 +44,26 @@ class TestNotify(unittest.TestCase):
         call_args = mock_run.call_args[0][0]
         self.assertEqual(call_args[0], "espeak")
 
+    @patch("lib.notify.run")
+    def test_notify_has_timeout(self, mock_run):
+        # TTS 卡死时 say 永不退出，notify 必须带超时（曾挂死整个测试套件）
+        notify_mod.notify("hello")
+        self.assertGreaterEqual(mock_run.call_args[1].get("timeout", 0), 1)
+
+    @patch("lib.notify.run", side_effect=CommandTimeout("x"))
+    def test_notify_timeout_does_not_raise(self, mock_run):
+        notify_mod.notify("hello")  # 超时只丢语音不丢消息，不抛
+
 
 class TestNotifyViaN(unittest.TestCase):
+    def setUp(self):
+        # 同 TestNotify：notify_via_n 走 notify，受 _SAY_DISABLED 影响
+        self._prev = notify_mod._SAY_DISABLED
+        notify_mod._SAY_DISABLED = False
+
+    def tearDown(self):
+        notify_mod._SAY_DISABLED = self._prev
+
     @patch("lib.notify.run")
     def test_delegates_to_notify(self, mock_run):
         # notify_via_n 应直接调 notify（忽略 script_dir）

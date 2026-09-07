@@ -16,8 +16,8 @@ _gitwf = SourceFileLoader("_gitwf_test_mod", str(GITWF_PATH)).load_module()
 class TestNameMap(unittest.TestCase):
     def test_all_new_names_present(self):
         expected = {
-            "merge_canary", "merge_dev", "merge_develop", "merge_master", "merge_test",
-            "push_canary", "push_dev", "push_develop", "push_master", "push_test",
+            "merge_branch", "merge_canary", "merge_dev", "merge_develop", "merge_master", "merge_test",
+            "push_branch", "push_canary", "push_dev", "push_develop", "push_master", "push_test",
         }
         self.assertEqual(set(_gitwf._NAME_MAP), expected)
 
@@ -29,6 +29,8 @@ class TestNameMap(unittest.TestCase):
             "push_develop": ("push", "develop"),
             "push_dev": ("push", "dev"),
             "push_test": ("push", "test"),
+            "merge_branch": ("merge", None),
+            "push_branch": ("push", None),
         }
         for name, expected in cases.items():
             self.assertEqual(_gitwf._NAME_MAP[name], expected, f"{name} mapping")
@@ -146,3 +148,31 @@ class TestPushTargetsDispatched(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBranchEntry(unittest.TestCase):
+    """merge_branch/push_branch：分支名必填，来自模块级 _BRANCH_ARG。"""
+
+    @patch("lib.git_workflow.push_to", return_value=0)
+    def test_branch_arg_dispatches(self, mock_push):
+        cli = _gitwf.GitWfCli()
+        with patch("sys.argv", ["push_branch"]), \
+             patch.object(_gitwf, "_BRANCH_ARG", "feature/x"):
+            self.assertEqual(cli.here(), 0)
+        mock_push.assert_called_once()
+        self.assertEqual(mock_push.call_args[0][0], "feature/x")
+
+    def test_missing_branch_arg_returns_2(self):
+        cli = _gitwf.GitWfCli()
+        with patch("sys.argv", ["merge_branch"]), \
+             patch.object(_gitwf, "_BRANCH_ARG", ""), \
+             patch.object(cli, "_r") as m_r:
+            self.assertEqual(cli.here(), 2)
+        self.assertIn("分支名", m_r.err.call_args[0][0])
+
+    def test_no_args_exits_2_with_usage(self):
+        import subprocess
+        r = subprocess.run([str(GITWF_PATH.parent / "merge_branch")],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("用法", r.stderr)

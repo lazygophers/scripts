@@ -8,8 +8,9 @@ import subprocess
 import sys
 
 from rich.box import ROUNDED
-from lib.ui import Reporter, reporter
 from rich.table import Table
+
+from lib.ui import Reporter, reporter
 
 # 名称 → (分类, 一句话功能)
 # 描述取自各 bin 入口 docstring 末段（薄壳自描述）。
@@ -26,6 +27,8 @@ TOOLS: dict[str, tuple[str, str]] = {
     "push_develop": ("git-wf", "批量 push 当前分支到 origin/develop"),
     "push_master": ("git-wf", "批量 push 当前分支到默认主分支（master/main）"),
     "push_test": ("git-wf", "批量 push 当前分支到 origin/test"),
+    "merge_branch": ("git-wf", "merge 当前分支到指定分支（分支名必填首参）"),
+    "push_branch": ("git-wf", "push 当前分支到指定分支（分支名必填首参）"),
     "switch_branch": ("git-wf", "批量切换所有仓库到指定分支"),
     "sync_branch": ("git-wf", "批量同步各仓库指定分支到 origin/<branch>"),
     "sync_master": ("git-wf", "批量同步主分支（master/main）到 origin/<主分支>"),
@@ -38,7 +41,6 @@ TOOLS: dict[str, tuple[str, str]] = {
     "issue": ("git-ops", "自动创建 Issue（调 claude 生成 title/body）"),
     "fetch_all": ("git-ops", "一键拉取所有仓库远程更新"),
     "list_branch": ("git-ops", "列出所有仓库的本地分支"),
-    "push_branch": ("git-ops", "批量推送当前分支到远端同名分支"),
     # process: 进程管理
     "kk": ("process", "按进程名终止进程（正则）"),
     "kkp": ("process", "按端口号终止占用进程"),

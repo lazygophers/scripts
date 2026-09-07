@@ -23,7 +23,7 @@ def _all_shells() -> list[str]:
     """返回 bin/ 下所有可执行文件名（排除目录）。"""
     shells = []
     for p in sorted(BIN_DIR.iterdir()):
-        if p.is_file() and os.access(p, X_OK := os.R_OK | os.W_OK | os.X_OK):
+        if p.is_file() and os.access(p, os.R_OK | os.W_OK | os.X_OK):
             shells.append(p.name)
     return shells
 
@@ -187,27 +187,21 @@ class TestBatchGitCliBlackbox(unittest.TestCase):
         self.assertIn("main", remote_heads)
         self.assertNotIn("remote-delete-me", remote_heads)
 
-    def test_push_branch_batch_pushes_current_test_branch(self):
-        self._git(self.repo, "switch", "-c", "push-me")
-        (self.repo / "push.txt").write_text("push\n")
-        self._git(self.repo, "add", "push.txt")
-        self._git(self.repo, "commit", "-m", "push branch")
-        p = self._run_bin("push_branch", "current")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        remote_heads = self._git(None, "--git-dir", str(self.remote), "for-each-ref", "--format=%(refname:short)", "refs/heads").stdout
-        self.assertIn("push-me", remote_heads)
-        self.assertIn("main", remote_heads)
+    def test_push_branch_missing_arg_prints_usage(self):
+        p = self._run_bin("push_branch")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("用法", p.stderr)
 
-    def test_push_branch_batch_creates_missing_named_branch(self):
-        p = self._run_bin("push_branch", "to", "test")
+    def test_push_branch_pushes_current_branch_to_named_target(self):
+        self._git(self.repo, "switch", "-c", "feat")
+        (self.repo / "feat.txt").write_text("feat\n")
+        self._git(self.repo, "add", "feat.txt")
+        self._git(self.repo, "commit", "-m", "feat work")
+        p = self._run_bin("push_branch", "feat-target")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(self._branch(), "test")
-        self.assertEqual(
-            self._git(self.repo, "rev-parse", "test").stdout.strip(),
-            self._git(self.repo, "rev-parse", "main").stdout.strip(),
-        )
         remote_heads = self._git(None, "--git-dir", str(self.remote), "for-each-ref", "--format=%(refname:short)", "refs/heads").stdout
-        self.assertIn("test", remote_heads)
+        self.assertIn("feat-target", remote_heads)
+        self.assertIn("main", remote_heads)
 
 
 if __name__ == "__main__":
