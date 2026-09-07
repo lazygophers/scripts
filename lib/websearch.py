@@ -406,41 +406,52 @@ def load_searx_instances(timeout: float = 15) -> list[str]:
         return cache["instances"]
 
 
-# 引擎定义:(名称, 取结果函数名, 签名 (query, timeout))。
+# 引擎定义:(名称, 取结果函数名, 签名 (query, timeout, limit, page))。
 # 存函数名而非引用,调用时经模块属性解析 —— 方便测试 mock.patch。
 # 单引擎失败(被拦/网络)只跳过,不影响其余引擎;并行查询。
-def _e_ddg(query, timeout, limit):
-    return parse_ddg(_fetch("https://html.duckduckgo.com/html/?q=" + quote_plus(query), timeout))
+def _e_ddg(query, timeout, limit, page):
+    off = (page - 1) * limit
+    return parse_ddg(_fetch("https://html.duckduckgo.com/html/?q=" + quote_plus(query)
+                            + (f"&s={off}" if off else ""), timeout))
 
 
-def _e_ddg_lite(query, timeout, limit):
-    return parse_ddg_lite(_fetch("https://lite.duckduckgo.com/lite/?q=" + quote_plus(query), timeout))
+def _e_ddg_lite(query, timeout, limit, page):
+    off = (page - 1) * limit
+    return parse_ddg_lite(_fetch("https://lite.duckduckgo.com/lite/?q=" + quote_plus(query)
+                                 + (f"&s={off}" if off else ""), timeout))
 
 
-def _e_bing(query, timeout, limit):
-    return parse_bing(_fetch("https://www.bing.com/search?q=" + quote_plus(query), timeout))
+def _e_bing(query, timeout, limit, page):
+    off = (page - 1) * limit
+    return parse_bing(_fetch("https://www.bing.com/search?q=" + quote_plus(query)
+                             + (f"&first={off + 1}" if off else ""), timeout))
 
 
-def _e_google(query, timeout, limit):
+def _e_google(query, timeout, limit, page):
     # 注意: Google 按出口 IP 风控,被标记的 IP 会拿到「请启用 JS」/ reCAPTCHA
     # 中间页(解析为 0 条,自动跳过该引擎);渲染也过不了 reCAPTCHA,不做回退
-    return parse_google(_fetch("https://www.google.com/search?q=" + quote_plus(query), timeout))
+    off = (page - 1) * limit
+    return parse_google(_fetch("https://www.google.com/search?q=" + quote_plus(query)
+                               + (f"&start={off}" if off else ""), timeout))
 
 
-def _e_yandex(query, timeout, limit):
-    return parse_yandex(_fetch("https://yandex.com/search/?text=" + quote_plus(query), timeout))
+def _e_yandex(query, timeout, limit, page):
+    # ponytail: yandex 翻页参数 p 未实测,拿不到就静默回第一页
+    return parse_yandex(_fetch("https://yandex.com/search/?text=" + quote_plus(query)
+                               + (f"&p={page - 1}" if page > 1 else ""), timeout))
 
 
-def _e_github(query, timeout, limit):
-    return parse_github(_fetch("https://github.com/search?type=repositories&q=" + quote_plus(query),
-                               timeout))
+def _e_github(query, timeout, limit, page):
+    return parse_github(_fetch("https://github.com/search?type=repositories&q=" + quote_plus(query)
+                               + (f"&p={page}" if page > 1 else ""), timeout))
 
 
-def _e_wikipedia(query, timeout, limit):
+def _e_wikipedia(query, timeout, limit, page):
     """Wikipedia 免 key 官方 API;zh 查空回退 en。"""
     from curl_cffi import requests
 
-    params = {"action": "query", "list": "search", "format": "json", "srlimit": limit}
+    params = {"action": "query", "list": "search", "format": "json", "srlimit": limit,
+              "sroffset": (page - 1) * limit}
     with requests.Session(impersonate="chrome", timeout=timeout) as s:
         for lang in ("zh", "en"):
             r = s.get(f"https://{lang}.wikipedia.org/w/api.php",
@@ -453,14 +464,15 @@ def _e_wikipedia(query, timeout, limit):
     return []
 
 
-def _e_sogou(query, timeout, limit):
+def _e_sogou(query, timeout, limit, page):
     """搜狗;结果页部分链接是 /link 跳转,GET 一次解 meta refresh 里的真 URL。"""
     import re
 
     from curl_cffi import requests
 
     items = parse_sogou(_fetch(
-        "https://www.sogou.com/web?query=" + quote_plus(query), timeout))
+        "https://www.sogou.com/web?query=" + quote_plus(query)
+        + (f"&page={page}" if page > 1 else ""), timeout))
     with requests.Session(impersonate="chrome", timeout=timeout) as s:
         for it in items:
             if it["url"].startswith("/link"):
@@ -474,11 +486,13 @@ def _e_sogou(query, timeout, limit):
     return [it for it in items if it["url"].startswith("http")]
 
 
-def _e_baidu(query, timeout, limit):
+def _e_baidu(query, timeout, limit, page):
     """百度;结果链接是 baidu.com/link?url= 302 跳转,逐条解出真 URL(约 40ms/条)。"""
     from curl_cffi import requests
 
-    items = parse_baidu(_fetch("https://www.baidu.com/s?wd=" + quote_plus(query), timeout))[:limit]
+    off = (page - 1) * limit
+    items = parse_baidu(_fetch("https://www.baidu.com/s?wd=" + quote_plus(query)
+                               + (f"&pn={off}" if off else ""), timeout))[:limit]
     with requests.Session(impersonate="chrome", timeout=timeout) as s:
         for it in items:
             if "baidu.com/link?" in it["url"]:
@@ -489,36 +503,40 @@ def _e_baidu(query, timeout, limit):
     return [it for it in items if it["url"].startswith("http")]
 
 
-def _e_360(query, timeout, limit):
-    return parse_360(_fetch("https://www.so.com/s?q=" + quote_plus(query), timeout))
+def _e_360(query, timeout, limit, page):
+    off = (page - 1) * limit
+    return parse_360(_fetch("https://www.so.com/s?q=" + quote_plus(query)
+                            + (f"&pn={off}" if off else ""), timeout))
 
 
-def _e_arxiv(query, timeout, limit):
+def _e_arxiv(query, timeout, limit, page):
     """arXiv 官方免 key API(Atom XML)。"""
     from curl_cffi import requests
 
     with requests.Session(impersonate="chrome", timeout=timeout) as s:
         r = s.get("https://export.arxiv.org/api/query",
-                  params={"search_query": "all:" + query, "max_results": limit})
+                  params={"search_query": "all:" + query, "max_results": limit,
+                          "start": (page - 1) * limit})
         if r.status_code != 200:
             raise SearchError(f"HTTP {r.status_code}")
         return parse_arxiv(r.text)
 
 
-def _e_crossref(query, timeout, limit):
+def _e_crossref(query, timeout, limit, page):
     """Crossref 官方免 key API(跨库论文 DOI 元数据)。"""
     from curl_cffi import requests
 
     with requests.Session(impersonate="chrome", timeout=timeout) as s:
         r = s.get("https://api.crossref.org/works",
                   params={"query": query, "rows": limit,
+                          "offset": (page - 1) * limit,
                           "select": "title,URL,abstract"})
         if r.status_code != 200:
             raise SearchError(f"HTTP {r.status_code}")
         return parse_crossref(r.json())
 
 
-def _e_pubmed(query, timeout, limit):
+def _e_pubmed(query, timeout, limit, page):
     """PubMed 官方免 key API(esearch 拿 id → esummary 拿标题)。
 
     eutils 对 chrome TLS 指纹直接 reset,这里用朴素请求。
@@ -527,7 +545,8 @@ def _e_pubmed(query, timeout, limit):
 
     with requests.Session(timeout=timeout) as s:
         r = s.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-                  params={"db": "pubmed", "term": query, "retmode": "json", "retmax": limit})
+                  params={"db": "pubmed", "term": query, "retmode": "json", "retmax": limit,
+                          "retstart": (page - 1) * limit})
         if r.status_code != 200:
             raise SearchError(f"HTTP {r.status_code}")
         ids = r.json().get("esearchresult", {}).get("idlist", [])
@@ -563,14 +582,15 @@ def _promote_searx(url: str, instances: list[str]) -> None:
     SEARX_CACHE.write_text(json.dumps(cache))
 
 
-def _e_searx(query, timeout, limit):
+def _e_searx(query, timeout, limit, page):
     """SearXNG 元搜索:实例列表来自 searx.space(本地缓存),逐个试到出结果。"""
     instances = load_searx_instances(timeout)
     errors = []
     for url in instances[:SEARX_MAX_ATTEMPTS]:
         try:
             data = _fetch_json(url.rstrip("/") + "/search",
-                               {"q": query, "format": "json", "language": "auto"},
+                               {"q": query, "format": "json", "language": "auto",
+                                "pageno": page},
                                min(timeout, 6), {"Accept": "application/json"})
             items = parse_searx(data)
             if items:
@@ -631,9 +651,9 @@ def _active_engines(engine: str | None) -> list[str]:
 
 
 def search(query: str, limit: int = 20, engine: str | None = None,
-           timeout: float = 15) -> list[dict]:
-    """并行检索参与引擎(limit = 每引擎抓取条数),按 URL 合并去重,
-    返回全部去重结果(首见顺序保留)。"""
+           timeout: float = 15, page: int = 1) -> list[dict]:
+    """并行检索参与引擎(limit = 每引擎抓取条数,page = 第几页,
+    偏移 = (page-1)*limit),按 URL 合并去重,返回全部去重结果(首见顺序保留)。"""
     from concurrent.futures import ThreadPoolExecutor
 
     mod = sys.modules[__name__]
@@ -643,7 +663,7 @@ def search(query: str, limit: int = 20, engine: str | None = None,
     def _run(nf):
         name, fn = nf
         try:
-            return name, fn(query, timeout, limit), ""
+            return name, fn(query, timeout, limit, page), ""
         except Exception as e:  # 网络错 / 反爬拦,该引擎记错继续
             return name, [], str(e)
 
@@ -731,6 +751,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("query", nargs="+", help="搜索词(多词直接跟在后面)")
     p.add_argument("-n", "--limit", type=int, default=20,
                    help="每个引擎抓几条(默认 20;合并去重后可能少于引擎总数)")
+    p.add_argument("-p", "--page", type=int, default=1,
+                   help="取第几页(默认 1;偏移 = (page-1)×limit)")
     p.add_argument("--engine", choices=[n for n, _ in ENGINES],
                    help="只用指定引擎(默认全部引擎)")
     p.add_argument("-f", "--format", choices=list(FORMATTERS), default="plain",
@@ -811,7 +833,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(rest)
     try:
         results = search(" ".join(args.query), limit=args.limit,
-                         engine=args.engine, timeout=args.timeout)
+                         engine=args.engine, timeout=args.timeout, page=args.page)
     except SearchError as e:
         print(f"[websearch] 检索失败: {e}", file=sys.stderr)
         return 1

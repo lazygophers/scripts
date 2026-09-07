@@ -228,7 +228,7 @@ class TestParsers(unittest.TestCase):
         sess.__enter__.return_value.get.return_value = resp
         with mock.patch.object(websearch, "_fetch", return_value=BAIDU_HTML), \
              mock.patch("curl_cffi.requests.Session", return_value=sess):
-            items = websearch._e_baidu("q", 5, 10)
+            items = websearch._e_baidu("q", 5, 10, 1)
         urls = [i["url"] for i in items]
         self.assertIn("https://example.com/real", urls)
         self.assertIn("https://example.com/direct", urls)
@@ -368,7 +368,7 @@ class TestSearch(unittest.TestCase):
         seen = {}
 
         def fake(name, n):
-            def fn(query, timeout, limit):
+            def fn(query, timeout, limit, page):
                 seen[name] = limit
                 return [{"url": f"https://example.com/{name}{i}"} for i in range(n)]
             return fn
@@ -558,6 +558,22 @@ class TestCli(unittest.TestCase):
         args = websearch.build_parser().parse_args(["q"])
         self.assertEqual(args.limit, 20)
         self.assertEqual(websearch.search.__defaults__[0], 20)  # 库调用默认值同源
+
+    def test_page_forwarded_to_engines(self):
+        m = mock.Mock(return_value=[{"url": "https://example.com/p", "title": "T", "snippet": ""}])
+        with mock.patch.object(websearch, "_active_engines", return_value=["ddg"]), \
+             mock.patch.object(websearch, "_e_ddg", m):
+            websearch.search("q", limit=5, page=3)
+        m.assert_called_once_with("q", mock.ANY, 5, 3)
+
+    def test_page_1_builds_no_offset_urls(self):
+        # page=1 时不带翻页参数;page=2 时按引擎规则加偏移
+        with mock.patch.object(websearch, "_fetch", return_value=DDG_HTML) as f:
+            websearch._e_ddg("q", 5, 10, 1)
+        self.assertNotIn("&s=", f.call_args[0][0])
+        with mock.patch.object(websearch, "_fetch", return_value=DDG_HTML) as f:
+            websearch._e_ddg("q", 5, 10, 2)
+        self.assertIn("&s=10", f.call_args[0][0])
 
     def test_main_failure_exit_1(self):
         err = io.StringIO()
