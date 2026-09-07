@@ -10,6 +10,8 @@
 
 inject 幂等：重跑不会重复追加。完成后重启 shell 或 `source ~/.zshrc` 即可在任意目录直接调用。
 
+macOS 上 inject 还会询问是否启用 Touch ID sudo 授权（指纹优先，失败回落密码）：确认后写一行 `auth sufficient pam_tid.so` 到 `/etc/pam.d/sudo_local`（Apple 预留的本地覆盖点，系统升级不冲掉；只对本地图形会话生效，SSH 远程回落密码）。
+
 ## 功能表
 
 | 脚本             | 功能                                                         | 示例                          |

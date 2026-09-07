@@ -9,6 +9,9 @@
     ~/.bashrc / ~/.zshrc / ~/.profile / ~/.bash_profile
 
 幂等: rc 中已有 source 行则跳过。
+
+macOS: 询问是否启用 Touch ID sudo 授权（写 /etc/pam.d/sudo_local,
+指纹优先、失败回落密码, 升级不冲掉）。
 """
 from __future__ import annotations
 
@@ -93,6 +96,42 @@ def _prompt_ai_config(r) -> tuple[str | None, str | None]:
         r.step("输入取消，保留现有 AI 配置")
         return cur_url or None, cur_tok or None
     return (base_url.strip() or None), (token.strip() or None)
+
+
+def _setup_touch_id_sudo(r) -> None:
+    """在 macOS 上可选启用 Touch ID sudo 授权（指纹优先，密码回落）。
+
+    写 /etc/pam.d/sudo_local（Apple 官方预留的本地覆盖点，升级不冲掉），
+    一行 `auth sufficient pam_tid.so`；已存在则跳过。
+    """
+    import platform
+    import subprocess
+
+    from lib.ui import ask_confirm
+
+    sudo_local = pathlib.Path("/etc/pam.d/sudo_local")
+    tid_module = pathlib.Path("/usr/lib/pam/pam_tid.so.2")
+    sudo_pam = pathlib.Path("/etc/pam.d/sudo")
+    if platform.system() != "Darwin" or not tid_module.exists():
+        return
+    if sudo_pam.exists() and "sudo_local" not in sudo_pam.read_text(encoding="utf-8"):
+        return  # 系统未预留 sudo_local 入口，不动
+    if sudo_local.exists():
+        if "pam_tid.so" in sudo_local.read_text(encoding="utf-8"):
+            r.step("Touch ID sudo 已启用, 跳过")
+        else:
+            r.warn(f"{sudo_local} 已存在但不含 pam_tid, 跳过（请手动检查）")
+        return
+    if not ask_confirm("启用 Touch ID sudo 授权?（指纹优先, 失败回落密码; 需输一次 sudo 密码）", default=False):
+        r.step("跳过 Touch ID sudo")
+        return
+    content = "auth       sufficient     pam_tid.so\n"
+    proc = subprocess.run(["sudo", "tee", str(sudo_local)], input=content, text=True)
+    if proc.returncode == 0:
+        r.ok(f"写入 {sudo_local}（Touch ID sudo 已启用）")
+        r.step("验证: 跑任意 sudo 命令, 应弹 Touch ID 而非要密码")
+    else:
+        r.warn(f"写入失败 (exit {proc.returncode}), 跳过")
 
 
 def _write_scripts_sh(r, *, ai_base_url: str | None = None,
@@ -212,6 +251,7 @@ class InjectCli(BaseCli):
         r.rule("inject bin/ → PATH", style="blue")
         r.kv("bin 目录", {"路径": str(bin_dir)})
         ai_base_url, ai_token = _prompt_ai_config(r)
+        _setup_touch_id_sudo(r)
         _write_completion_files(r)
         _write_scripts_sh(r, ai_base_url=ai_base_url, ai_token=ai_token)
         results = {"wrote": [], "skipped": [], "missing": []}
