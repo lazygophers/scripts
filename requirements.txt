@@ -2,5 +2,5 @@
 fire>=0.5
 rich>=13.0
 pyyaml>=6
-graphifyy>=0.9.55
+graphifyy[all]>=0.9.55  # [all]：sql/tree-sitter 等语言支持齐全，缺了会整类文件贡献 0 节点、触发 graphify 防丢数据护栏
 watchdog>=4

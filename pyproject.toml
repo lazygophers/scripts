@@ -9,8 +9,8 @@ dependencies = ["fire>=0.5", "rich>=13.0", "pyyaml>=6"]
 
 [project.optional-dependencies]
 # graphwatch 监听需要 graphify（PyPI 包名 graphifyy）+ 其硬依赖 watchdog，默认不装
-graphify = ["graphifyy>=0.9.55", "watchdog>=4"]
-all = ["graphifyy>=0.9.55", "watchdog>=4"]
+graphify = ["graphifyy[all]>=0.9.55", "watchdog>=4"]
+all = ["graphifyy[all]>=0.9.55", "watchdog>=4"]
 dev = ["fire>=0.5", "rich>=13.0", "pyyaml>=6"]
 
 [build-system]
