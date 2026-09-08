@@ -2,7 +2,24 @@
 
 [简体中文](README.md) | [English](README.en.md) | [Français](README.fr.md) | [Español](README.es.md) | [Русский](README.ru.md) | [العربية](README.ar.md)
 
-مجموعة من أدوات كفاءة التطوير — اختصارات نصية برمجية متنوعة. مدخلات خفيفة Bash/Python، المنطق الرئيسي في `lib/`.
+مجموعة من أدوات كفاءة التطوير — اختصارات نصية برمجية متنوعة. لا يحوي `bin/` سوى أغلفة رقيقة، والتنفيذ في `lib/cli/`، والقدرات المشتركة في `lib/`.
+
+---
+
+## بلا تثبيت: التشغيل مباشرة من GitHub
+
+```bash
+uvx git+https://github.com/lazygophers/scripts                     # سرد كل الأدوات (مثل lazyhelp)
+uvx --from git+https://github.com/lazygophers/scripts checkwork    # تشغيل أداة واحدة
+```
+
+‏`uvx` يأتي مع [uv](https://docs.astral.sh/uv/): ينزّل الأداة، يشغّلها مرة واحدة ولا يترك أثرًا — بلا استنساخ المستودع. بدون اسم أمر يشغّل مدخل `scripts`، وهو `lazyhelp`. مع `--from` يطلب uv اسم أمر صريحًا.
+
+للإبقاء عليها ثبّتها مرة واحدة (`uv tool install` تثبيت دائم، وتبقى الأوامر في PATH):
+
+```bash
+uv tool install git+https://github.com/lazygophers/scripts
+```
 
 ---
 
@@ -10,8 +27,8 @@
 
 ```bash
 ./bin/inject            # إنشاء ~/.scripts.sh و source إلى جميع rc (~/.bashrc / ~/.zshrc / ~/.profile / ~/.bash_profile)
-./bin/inject --show     # معاينة المحتوى المكتوب
-./bin/inject --uninstall  # إلغاء التثبيت
+./bin/inject show     # معاينة المحتوى المكتوب
+./bin/inject uninstall  # إلغاء التثبيت
 ```
 
 inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف تكرارات. بعد الإكمال، أعد تشغيل shell أو `source ~/.zshrc`، ثم اتصل بـ `checkwork` / `merge_canary` / ... من أي دليل.

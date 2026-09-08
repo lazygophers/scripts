@@ -1,11 +1,21 @@
 # النصوص البرمجية
 
+## بلا تثبيت: التشغيل مباشرة من GitHub
+
+```bash
+uvx git+https://github.com/lazygophers/scripts                     # سرد كل الأدوات (مثل lazyhelp)
+uvx --from git+https://github.com/lazygophers/scripts checkwork    # تشغيل أداة واحدة
+uv tool install git+https://github.com/lazygophers/scripts         # تثبيت دائم، تبقى الأوامر في PATH
+```
+
+‏`uvx` يأتي مع [uv](https://docs.astral.sh/uv/): ينزّل الأداة، يشغّلها مرة واحدة ولا يترك أثرًا — بلا استنساخ المستودع. بدون اسم أمر يشغّل مدخل `scripts`، وهو `lazyhelp`؛ ومع `--from` يطلب uv اسم أمر صريحًا.
+
 ## التثبيت
 
 ```bash
 ./bin/inject            # إنشاء ~/.scripts.sh و source إلى جميع rc
-./bin/inject --show     # معاينة المحتوى المكتوب
-./bin/inject --uninstall  # إلغاء التثبيت
+./bin/inject show     # معاينة المحتوى المكتوب
+./bin/inject uninstall  # إلغاء التثبيت
 ```
 
 inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف تكرارات. بعد إعادة تشغيل shell أو `source ~/.zshrc`، يمكنك الاتصال مباشرة من أي دليل.

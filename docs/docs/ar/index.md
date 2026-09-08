@@ -4,7 +4,7 @@ title: Scripts (AR)
 hero:
   name: Scripts
   text: نص برمجي لأدوات كفاءة التطوير
-  tagline: مدخلات خفيفة Bash/Python، المنطق الرئيسي في lib/
+  tagline: bin/ غلاف رقيق فقط، والشيفرة في lib/cli/؛ سطر uvx واحد يشغّلها عن بُعد
   actions:
     - theme: brand
       text: مقدمة

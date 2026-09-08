@@ -1,11 +1,21 @@
 # 脚本功能
 
+## 免安装: 直接从 GitHub 跑
+
+```bash
+uvx git+https://github.com/lazygophers/scripts                     # 列出全部工具（等同 lazyhelp）
+uvx --from git+https://github.com/lazygophers/scripts checkwork    # 跑其中任意一个
+uv tool install git+https://github.com/lazygophers/scripts         # 常驻安装，命令留在 PATH 上
+```
+
+`uvx` 是 [uv](https://docs.astral.sh/uv/) 自带的命令：临时下载一个工具跑一次，跑完不留痕，不用 clone 仓库。不带命令名时跑的是与包同名的 `scripts` 入口，它就是 `lazyhelp`；带 `--from` 时 uv 强制要求写命令名。
+
 ## 安装
 
 ```bash
 ./bin/inject            # 生成 ~/.scripts.sh 并 source 到所有 rc
-./bin/inject --show     # 预览将写入的内容
-./bin/inject --uninstall  # 卸载
+./bin/inject show     # 预览将写入的内容
+./bin/inject uninstall  # 卸载
 ```
 
 inject 幂等：重跑不会重复追加。完成后重启 shell 或 `source ~/.zshrc` 即可在任意目录直接调用。

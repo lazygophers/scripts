@@ -4,7 +4,7 @@ title: Scripts (RU)
 hero:
   name: Scripts
   text: Скрипты для повышения эффективности разработки
-  tagline: Лёгкие входы Bash/Python, основная логика в lib/
+  tagline: bin/ — только обёртка, код в lib/cli/; одна строка uvx запускает удалённо
   actions:
     - theme: brand
       text: Введение

@@ -4,7 +4,7 @@ title: Scripts (ES)
 hero:
   name: Scripts
   text: Utilidades de eficiencia de desarrollo
-  tagline: Entradas ligeras Bash/Python, lógica principal en lib/
+  tagline: bin/ es solo una cáscara, el código está en lib/cli/; una línea uvx lo ejecuta en remoto
   actions:
     - theme: brand
       text: Introducción

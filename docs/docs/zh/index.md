@@ -4,7 +4,7 @@ title: Scripts 文档
 hero:
   name: Scripts
   text: 开发效率工具集
-  tagline: Bash/Python 薄壳入口，核心逻辑沉淀在 lib/
+  tagline: bin/ 只是薄壳，实现在 lib/cli/；uvx 一行远程直跑
   actions:
     - theme: brand
       text: 简介

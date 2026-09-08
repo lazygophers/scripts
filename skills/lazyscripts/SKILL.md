@@ -5,7 +5,11 @@ description: bin/ 全部脚本的合计入口：git 工作流（merge_*/push_*/s
 
 # scripts
 
-`bin/` 共 40+ 工具，覆盖日常开发全部场景。前提：已 `./bin/inject` 注入 PATH，或直接 `./bin/<name>` 运行。
+`bin/` 共 44 个工具，覆盖日常开发全部场景。三种跑法任选：
+
+- 已 `./bin/inject` 注入 PATH → 直接 `<name>`
+- 仓库已 clone → `./bin/<name>`
+- 什么都没装 → `uvx --from git+https://github.com/lazygophers/scripts <name>`（不带 `<name>` 时列出全部工具）
 
 按场景挑文件读：
 

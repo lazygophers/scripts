@@ -4,7 +4,7 @@ title: Scripts Docs
 hero:
   name: Scripts
   text: Dev Efficiency Toolkit
-  tagline: Bash/Python thin entrypoints, core logic in lib/
+  tagline: bin/ is only a thin shell, the code lives in lib/cli/; one uvx line runs it remotely
   actions:
     - theme: brand
       text: Introduction

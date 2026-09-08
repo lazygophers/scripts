@@ -2,7 +2,24 @@
 
 [简体中文](README.md) | [English](README.en.md) | [Français](README.fr.md) | [Español](README.es.md) | [Русский](README.ru.md) | [العربية](README.ar.md)
 
-开发效率工具集 — 各种快捷脚本的集合。Bash/Python 混合薄壳入口, 核心逻辑沉淀在 `lib/`。
+开发效率工具集 — 各种快捷脚本的集合。`bin/` 只是薄壳, 实现全在 `lib/cli/`, 共享能力在 `lib/`。
+
+---
+
+## 免安装: 直接从 GitHub 跑
+
+```bash
+uvx git+https://github.com/lazygophers/scripts                     # 列出全部工具（等同 lazyhelp）
+uvx --from git+https://github.com/lazygophers/scripts checkwork    # 跑其中任意一个
+```
+
+`uvx` 是 [uv](https://docs.astral.sh/uv/) 自带的命令：临时下载一个工具跑一次，跑完不留痕，不用 clone 仓库。不带命令名时跑的是与包同名的 `scripts` 入口，它就是 `lazyhelp`。带 `--from` 时 uv 强制要求写命令名。
+
+常用就装到本地（`uv tool install` 是常驻安装，命令一直留在 PATH 上）：
+
+```bash
+uv tool install git+https://github.com/lazygophers/scripts
+```
 
 ---
 
@@ -10,8 +27,8 @@
 
 ```bash
 ./bin/inject            # 生成 ~/.scripts.sh + completion，并 source 到所有 rc (~/.bashrc / ~/.zshrc / ~/.profile / ~/.bash_profile)
-./bin/inject --show     # 预览将写入的内容
-./bin/inject --uninstall  # 卸载
+./bin/inject show     # 预览将写入的内容
+./bin/inject uninstall  # 卸载
 ```
 
 inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.zshrc` 即可在任意目录直接调用 `checkwork` / `merge_canary` / ...；同时会装好 zsh/bash/fish completion。

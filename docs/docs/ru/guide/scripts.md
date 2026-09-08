@@ -1,11 +1,21 @@
 # Скрипты
 
+## Без установки: запуск прямо из GitHub
+
+```bash
+uvx git+https://github.com/lazygophers/scripts                     # список всех инструментов (то же, что lazyhelp)
+uvx --from git+https://github.com/lazygophers/scripts checkwork    # запустить один
+uv tool install git+https://github.com/lazygophers/scripts         # постоянная установка, команды остаются в PATH
+```
+
+`uvx` идёт вместе с [uv](https://docs.astral.sh/uv/): скачивает инструмент, запускает один раз и ничего не оставляет — клонировать репозиторий не нужно. Без имени команды запускается точка входа `scripts`, то есть `lazyhelp`; с `--from` uv обязательно требует имя команды.
+
 ## Установка
 
 ```bash
 ./bin/inject            # сгенерировать ~/.scripts.sh и source во все rc
-./bin/inject --show     # предпросмотр содержимого для записи
-./bin/inject --uninstall  # удалить
+./bin/inject show     # предпросмотр содержимого для записи
+./bin/inject uninstall  # удалить
 ```
 
 inject идемпотентен : повторный запуск не добавит дубликаты. После перезапуска оболочки или `source ~/.zshrc` можно вызывать напрямую из любого каталога.

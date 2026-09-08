@@ -2,7 +2,24 @@
 
 [简体中文](README.md) | [English](README.en.md) | [Français](README.fr.md) | [Español](README.es.md) | [Русский](README.ru.md) | [العربية](README.ar.md)
 
-Colección de utilidades de eficiencia de desarrollo — varios accesos directos de scripts. Entradas ligeras Bash/Python, lógica principal en `lib/`.
+Colección de utilidades de eficiencia de desarrollo — varios accesos directos de scripts. `bin/` solo contiene entradas ligeras; las implementaciones están en `lib/cli/` y las capacidades compartidas en `lib/`.
+
+---
+
+## Sin instalación: ejecutar directamente desde GitHub
+
+```bash
+uvx git+https://github.com/lazygophers/scripts                     # listar todas las herramientas (igual que lazyhelp)
+uvx --from git+https://github.com/lazygophers/scripts checkwork    # ejecutar una sola
+```
+
+`uvx` viene con [uv](https://docs.astral.sh/uv/): descarga una herramienta, la ejecuta una vez y no deja nada — sin clonar el repositorio. Sin nombre de comando ejecuta el punto de entrada `scripts`, que es `lazyhelp`. Con `--from`, uv exige un nombre de comando explícito.
+
+Para conservarlas, instala una vez (`uv tool install` es una instalación permanente; los comandos quedan en el PATH):
+
+```bash
+uv tool install git+https://github.com/lazygophers/scripts
+```
 
 ---
 
@@ -10,8 +27,8 @@ Colección de utilidades de eficiencia de desarrollo — varios accesos directos
 
 ```bash
 ./bin/inject            # Generar ~/.scripts.sh y source a todos los rc (~/.bashrc / ~/.zshrc / ~/.profile / ~/.bash_profile)
-./bin/inject --show     # Previsualizar el contenido a escribir
-./bin/inject --uninstall  # Desinstalar
+./bin/inject show     # Previsualizar el contenido a escribir
+./bin/inject uninstall  # Desinstalar
 ```
 
 inject es idempotente : reejecutar no duplicará. Después de completar, reinicie shell o `source ~/.zshrc`, luego llame a `checkwork` / `merge_canary` / ... desde cualquier directorio.

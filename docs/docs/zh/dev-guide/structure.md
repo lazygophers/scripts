@@ -8,7 +8,10 @@ scripts/
 │   ├── switch_branch, sync_master, sync_branch, fetch_all, delete_branch, delete_branch_remote
 │   ├── loop, unsleep, websearch, webgrab, archery, grafana, ovpn, ...
 │   └── inject                    # 把 bin/ 注入 shell PATH
-├── lib/                          # 全部核心逻辑（扁平，不用子目录）
+├── lib/                          # 全部核心逻辑
+│   ├── cli/{名}.py               # 单个命令的 CLI（原来写在 bin/ 里的那部分）
+│   ├── cli/gitwf.py              # merge_*/push_* 的共用实现 + 12 个入口函数
+│   ├── cli/ipv6.py               # disable-ipv6 / enable-ipv6（改成 Python，不再是 bash）
 │   ├── {名}.py                   # 每个命令的业务模块（git_workflow / batch_git / build / ...）
 │   ├── fire_base.py              # BaseCli + run_cli + timed_cli，薄壳统一骨架
 │   ├── lazyhelp.py               # 工具目录注册表（TOOLS = 名称 → 分类 + 一句话功能）
@@ -23,12 +26,14 @@ scripts/
 ## 调用链
 
 ```
-bin/{脚本}            (3 行 path hack + import)
-  → run_cli(<名>Cli())      # lib/fire_base.py，fire 子命令分发
-    → lib/{名}.py 的业务函数
-      → 共享 lib/ui.py / lib/exec.py / ...
+bin/{脚本}                       # clone 下来直接跑：3 行薄壳
+  或装好后的 `{脚本}` 命令           # uvx / uv tool install：[project.scripts]
+    → lib/cli/{脚本}.py 的 main()
+      → run_cli(<名>Cli())         # lib/fire_base.py，fire 子命令分发
+        → lib/{名}.py 的业务函数
+          → 共享 lib/ui.py / lib/exec.py / ...
 ```
 
-`bin/` 里**没有业务逻辑，也没有 symlink**：每个薄壳都是 `from lib.cli.<模块> import <函数> as main` + `raise SystemExit(main())`。实现放在 `lib/cli/<名>.py`（一个命令一个模块），再去调共享的 `lib/{域}.py`。`merge_*` / `push_*` 是 `lib/cli/gitwf.py` 上的 12 个薄壳，各自显式传 `(name, action, target)`，不再靠 argv[0] 猜。同一批函数也注册成 `[project.scripts]`，所以 `uvx --from git+https://github.com/lazygophers/scripts <名>` 不用 clone 就能跑任意工具。
+`bin/` 里**没有业务逻辑，也没有 symlink**：每个薄壳都是 `from lib.cli.<模块> import <函数> as main` + `raise SystemExit(main())`。实现放在 `lib/cli/<名>.py`（一个命令一个模块），再去调共享的 `lib/{域}.py`。`merge_*` / `push_*` 是 `lib/cli/gitwf.py` 上的 12 个薄壳，各自显式传 `(name, action, target)`，不再靠 argv[0] 猜。同一批函数也注册成 `[project.scripts]`，所以 `uvx --from git+https://github.com/lazygophers/scripts <名>` 不用 clone 就能跑任意工具。不带命令名跑 `uvx git+https://github.com/lazygophers/scripts` 时用的是 `scripts` 入口，它是 `lazyhelp` 的别名。
 
 新增公开工具要在 `lib/lazyhelp.py` 的 `TOOLS` 注册（分类 + 一句话功能），有 AI 使用指引就同步 `lib/skills_help.py` 的 `COMMAND_SKILLS`。

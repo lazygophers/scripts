@@ -4,7 +4,7 @@ title: Scripts (FR)
 hero:
   name: Scripts
   text: Outils d'efficacité de développement
-  tagline: Entrées légères Bash/Python, logique principale dans lib/
+  tagline: bin/ n'est qu'une coquille, le code est dans lib/cli/ ; une ligne uvx l'exécute à distance
   actions:
     - theme: brand
       text: Introduction
