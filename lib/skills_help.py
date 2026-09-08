@@ -148,7 +148,8 @@ COMMAND_SKILLS: dict[str, list[str]] = {
     ],
     "push_test": ["推当前分支到 test: `push_test here` / `push_test all` / `push_test auto`。"],
     "squash_pr": [
-        "把 source 分支改动压成单个 commit 并开/更新 PR: `squash_pr run`。",
+        "把当前分支的改动压成单个 commit 并开/更新 PR: `squash_pr <target>`；source 恒为当前分支，不接受指定。",
+        "第二个位置参数是 PR 分支名（默认 `<当前分支>_pr`）: `squash_pr canary feat-x_pr`。",
         "可能 force-push PR 分支；用前确认分支影响面。",
     ],
     "switch_branch": [

@@ -1,7 +1,8 @@
 """squash_pr 工作流：把 source 自分叉以来的改动压成单 commit → 对接 mr 开 PR。
 
 流程（见 prd FR1-FR10）：
-  护栏(flat clean) → fetch → 冲突预演#1 → 准备 <source>_pr 分支
+  护栏(flat clean) → fetch → 冲突预演#1 → 准备 PR 分支（默认 <source>_pr，
+  调用方可用 pr_branch= 指定别的名字）
   （已存在则复用：重置到 source，push 时 --force-with-lease，保持同一 PR）
   → reset --soft merge-base → 聚合 message → 单 commit → 冲突预演#2
   → push → (可选) lib 源码调 mr_wf.run_mr(target)
@@ -175,7 +176,7 @@ def _detect_conflict_via_merge(branch_a: str, branch_b: str, *,
 class _RollbackState:
     """回滚状态：记录哪些产物需要清理。
 
-    pr_branch_preexisting_local / pr_branch_remote_preexisting 标记分支
+    pr_branch_preexisting_local / pr_branch_remote_preexisting 标记 PR 分支
     是本次流程新建还是复用：新建的删除，复用的还原/不动。
     """
     original_branch: str = ""
@@ -198,7 +199,7 @@ class SquashResult:
 
 def _rollback(state: _RollbackState, *, r: Reporter, remote: str = REMOTE,
               cwd: str | None = None) -> None:
-    """回滚：回起始分支；新建的 <source>_pr 删本地/远端，复用的还原且远端不动。"""
+    """回滚：回起始分支；新建的 PR 分支删本地/远端，复用的还原且远端不动。"""
     # 复用的远端分支不能删——删 head 分支会关掉已存在的 PR。
     # （回滚路径不会出现在成功 force push 之后：push 后仅剩 mr 步，失败不回滚）
     if state.pr_branch_pushed and not state.pr_branch_remote_preexisting:
@@ -237,20 +238,29 @@ def run_squash_pr(
     source: str,
     target: str,
     *,
+    pr_branch: str | None = None,
     dry_run: bool = False,
     no_mr: bool = False,
     remote: str = REMOTE,
     r: Reporter | None = None,
     cwd: str | None = None,
 ) -> SquashResult:
-    """执行 squash_pr 主流程。返回 SquashResult（returncode 0 = 成功）。"""
+    """执行 squash_pr 主流程。返回 SquashResult（returncode 0 = 成功）。
+
+    pr_branch 缺省为 <source>_pr；显式传入时用它承载单 commit。
+    """
     if r is None:
         r = reporter(stderr=True)
     # 规范化：剥 <remote>/ 前缀（用户可能传 origin/staging 等）
     source = _strip_remote_prefix(source, remote)
     target = _strip_remote_prefix(target, remote)
-    pr_branch = pr_branch_name(source)
+    pr_branch = _strip_remote_prefix(pr_branch, remote) if pr_branch else pr_branch_name(source)
     state = _RollbackState(pr_branch=pr_branch)
+    # PR 分支承载 squash 后的单 commit 且会被 force push:
+    # 指成 source 会改写源分支历史, 指成 target 会覆盖目标分支。
+    if pr_branch in (source, target):
+        return _fail(f"PR 分支不能是 {pr_branch!r}（source/target 本身）", state, r=r, cwd=cwd,
+                     notify_msg="PR 分支名非法")
 
     r.rule("squash_pr", style="blue")
     r.kv("概览", {
@@ -294,7 +304,7 @@ def run_squash_pr(
         elif sres.last_output.strip():
             r.output(sres.last_output)
     else:
-        r.info(f"{source} 无远端分支，将仅用本地状态（push 时创建 <source>_pr）")
+        r.info(f"{source} 无远端分支，将仅用本地状态（push 时创建 {pr_branch}）")
 
     # source 落后 origin/<source>？（远端不存在则跳过）
     ahead_behind = run(
@@ -417,7 +427,7 @@ def run_squash_pr(
         return _fail(f"commit 失败: {cp.stderr}".rstrip(), state, r=r, cwd=cwd,
                      notify_msg="commit 失败")
 
-    # FR7 — 冲突预演 #2：<source>_pr vs origin/<target>
+    # FR7 — 冲突预演 #2：<pr_branch> vs origin/<target>
     r.step(f"冲突预演 #2: {pr_branch} vs {remote}/{target}")
     has_conflict2, files2 = detect_conflict(pr_branch, f"{remote}/{target}", cwd=cwd, r=r)
     if has_conflict2:

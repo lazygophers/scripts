@@ -51,7 +51,7 @@ Siete categorías por uso. Índice en terminal: `lazyhelp`; uso completo: `<herr
 | `commit` | Commit automático (claude genera el mensaje) | `commit` |
 | `mr` | Crea PR/MR automático (claude genera título/cuerpo, draft por defecto) | `mr [base]` |
 | `issue` | Crea Issue automático (claude genera título/cuerpo) | `issue` |
-| `squash_pr` | Comprime source en un commit → abre PR vía mr | `squash_pr [source] <target>` |
+| `squash_pr` | Comprime la rama actual en un commit → abre PR vía mr (2º argumento: nombre de la rama PR, por defecto `<actual>_pr`) | `squash_pr <target> [pr_branch]` |
 | `fetch_all` | Fetch por lotes de todos los repos Git | `fetch_all` |
 | `list_branch` | Lista ramas locales (un repo o escaneo global, duplicados ⟱) | `list_branch` |
 

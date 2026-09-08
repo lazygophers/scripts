@@ -260,6 +260,46 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
                             cwd=work, capture_output=True, text=True, check=True).stdout.strip()
         return mb
 
+    def test_custom_pr_branch_is_created_and_pushed(self):
+        """显式 pr_branch：单 commit 落在这个名字上，<source>_pr 不出现。"""
+        td, work, origin = self._make_repo()
+        with td:
+            self._chdir(work)
+            mb = self._build_source_target(work)
+            res = run_squash_pr("source", "target", pr_branch="release/x",
+                                no_mr=True, r=MagicMock(), cwd=work)
+            self.assertEqual(res.returncode, 0, f"应成功，实返回 {res.returncode}")
+            self.assertEqual(res.pr_branch, "release/x")
+            ls = subprocess.run(["git", "ls-remote", "--heads", origin],
+                                capture_output=True, text=True, check=True).stdout
+            self.assertIn("release/x", ls)
+            self.assertNotIn("source_pr", ls)
+            # 该分支相对 merge-base 只有一个 commit
+            log = subprocess.run(
+                ["git", "log", "--oneline", f"{mb}..origin/release/x"],
+                cwd=work, capture_output=True, text=True, check=True).stdout
+            self.assertEqual(len(log.strip().splitlines()), 1, log)
+
+    def test_pr_branch_equal_to_source_is_rejected(self):
+        """PR 分支 = source：会改写源分支历史，必须拒绝。"""
+        td, work, _origin = self._make_repo()
+        with td:
+            self._chdir(work)
+            self._build_source_target(work)
+            res = run_squash_pr("source", "target", pr_branch="source",
+                                no_mr=True, r=MagicMock(), cwd=work)
+            self.assertEqual(res.returncode, 1)
+
+    def test_pr_branch_equal_to_target_is_rejected(self):
+        """PR 分支 = target：force push 会覆盖目标分支，必须拒绝。"""
+        td, work, _origin = self._make_repo()
+        with td:
+            self._chdir(work)
+            self._build_source_target(work)
+            res = run_squash_pr("source", "target", pr_branch="target",
+                                no_mr=True, r=MagicMock(), cwd=work)
+            self.assertEqual(res.returncode, 1)
+
     def test_normal_path_produces_single_commit_pr_branch(self):
         td, work, origin = self._make_repo()
         with td:
@@ -520,6 +560,55 @@ class TestAggregateIntegrationWithGit(unittest.TestCase):
             msg = aggregate_message(subjects, "source", "target")
             first_line = msg.splitlines()[0]
             self.assertEqual(first_line, "feat: a + feat: b")
+
+
+class TestCliArgs(unittest.TestCase):
+    """bin/squash_pr 的参数语义：source 恒为当前分支，第二个位置参数是 PR 分支名。"""
+
+    def _cli(self):
+        from lib.cli.squash_pr import SquashPrCli
+        return SquashPrCli()
+
+    def test_second_positional_is_pr_branch(self):
+        from unittest.mock import patch
+        cli = self._cli()
+        with patch("lib.cli.squash_pr.get_current_branch", return_value="feat/x"), \
+             patch("lib.cli.squash_pr.run_squash_pr") as m_run:
+            m_run.return_value = MagicMock(returncode=0)
+            cli("canary", "release/x")
+        self.assertEqual(m_run.call_args[0], ("feat/x", "canary"))
+        self.assertEqual(m_run.call_args[1]["pr_branch"], "release/x")
+
+    def test_pr_branch_defaults_to_none(self):
+        """不传第二个参数 → pr_branch=None，由 workflow 落到 <source>_pr。"""
+        from unittest.mock import patch
+        cli = self._cli()
+        with patch("lib.cli.squash_pr.get_current_branch", return_value="feat/x"), \
+             patch("lib.cli.squash_pr.run_squash_pr") as m_run:
+            m_run.return_value = MagicMock(returncode=0)
+            cli("canary")
+        self.assertIsNone(m_run.call_args[1]["pr_branch"])
+
+    def test_pr_branch_flag_equals_second_positional(self):
+        from unittest.mock import patch
+        cli = self._cli()
+        with patch("lib.cli.squash_pr.get_current_branch", return_value="feat/x"), \
+             patch("lib.cli.squash_pr.run_squash_pr") as m_run:
+            m_run.return_value = MagicMock(returncode=0)
+            cli("canary", pr_branch="release/x")
+        self.assertEqual(m_run.call_args[1]["pr_branch"], "release/x")
+
+    def test_missing_target_returns_1(self):
+        cli = self._cli()
+        cli._r = MagicMock()
+        self.assertEqual(cli(), 1)
+
+    def test_detached_head_returns_1(self):
+        from unittest.mock import patch
+        cli = self._cli()
+        cli._r = MagicMock()
+        with patch("lib.cli.squash_pr.get_current_branch", return_value=""):
+            self.assertEqual(cli("canary"), 1)
 
 
 if __name__ == "__main__":

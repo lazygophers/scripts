@@ -39,7 +39,7 @@ TOOLS: dict[str, tuple[str, str]] = {
     "commit": ("Git 协作", "自动提交变更（调 claude 生成 message；单仓或批量扫描子目录）"),
     "mr": ("Git 协作", "自动创建 PR/MR（调 claude 生成 title/body，默认 draft）"),
     "issue": ("Git 协作", "自动创建 Issue（调 claude 生成 title/body）"),
-    "squash_pr": ("Git 协作", "压 source 自分叉以来的改动为单 commit → 开 PR"),
+    "squash_pr": ("Git 协作", "压当前分支自分叉以来的改动为单 commit → 开 PR"),
     "fetch_all": ("Git 协作", "一键拉取所有仓库远程更新（fetch all）"),
     "list_branch": ("Git 协作", "列出所有仓库的本地分支（跨仓同名分支标 ⟱）"),
     # 构建与检查: 编译闸门 / 端点探测 / CI 轮询
