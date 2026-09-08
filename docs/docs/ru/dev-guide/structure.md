@@ -1,30 +1,34 @@
-# Структура каталогов
+# Структура
 
 ```
 scripts/
-├── bin/                          # Скрипты лёгкого входа (chmod +x)
+├── bin/                          # тонкие обёртки (chmod +x)
 │   ├── checkwork, cpd, kk, kkp, n, ...
-│   ├── merge_canary, merge_develop, merge_master, merge_test   # вызывает lib git_workflow.merge_to(target)
-│   ├── push_canary, push_develop, push_master, push_test       # push_to одиночный репо / автоматическое пакетно вне git
+│   ├── merge_* / push_*          # всё symlink'и → bin/_gitwf, диспетчер по имени входа
 │   ├── switch_branch, sync_master, sync_branch, fetch_all, delete_branch, delete_branch_remote
-│   ├── loop, unsleep, reindex
-│   └── inject                    # внедрить bin/ в PATH оболочки
-├── lib/
-│   ├── commands/{домен}/{команда}.py    # Бизнес-логика каждой команды, экспортирует main(argv) -> int
-│   │   ├── build/  file/  git/  process/  misc/  system/
-│   │   └── git/merge.py + git/push.py также экспортирует run(target, argv)
-│   └── {домен}.py                    # Общая библиотека (git/exec/ui/notify/build/process/...)
-├── tests/                        # Набор unittest
-├── commit / mr / issue          # Скрипты bash, для переписывания в py (временно хранятся в корне)
-└── README.md
+│   ├── loop, unsleep, websearch, webgrab, archery, grafana, ovpn, ...
+│   └── inject                    # внедряет bin/ в PATH оболочки
+├── lib/                          # вся логика (плоско, без подпапок)
+│   ├── {имя}.py                  # бизнес-модуль на команду (git_workflow / batch_git / build / ...)
+│   ├── fire_base.py              # BaseCli + run_cli + timed_cli, общий каркас обёрток
+│   ├── lazyhelp.py               # реестр инструментов (TOOLS = имя → категория + описание)
+│   ├── skills_help.py            # ИИ-руководство --skills (COMMAND_SKILLS)
+│   └── ui / notify / exec / process   # общие библиотеки
+├── skills/lazyscripts/           # индекс AI-skill (SKILL.md + файлы по темам)
+├── docs/                         # сайт документации Rspress (6 языков в docs/docs/<lang>/)
+├── tests/                        # набор unittest
+└── README.md (+ 5 переводов)
 ```
 
 ## Цепочка вызовов
 
 ```
-bin/{скрипт}            (3 строки хака пути + import)
-  → lib.commands.{домен}.{команда}.main(argv)
-    → Общая библиотека lib/{домен}.py
+bin/{скрипт}            (3 строки path-хака + import)
+  → run_cli(<Имя>Cli())      # lib/fire_base.py, диспетчер подкоманд fire
+    → бизнес-функция в lib/{имя}.py
+      → общие lib/ui.py / lib/exec.py / ...
 ```
 
-Лёгкие входы только передают argv в бизнес-модуль, **не пишут бизнес-логику**. Общие возможности (операции git, выполнение команд, UI, уведомления, обнаружение сборки, управление процессами...) оседают в `lib/{домен}.py`, повторно используемые между командами.
+Обёртка только передаёт argv в `run_cli` — **без бизнес-логики**. `merge_*` / `push_*` — symlink'и на `bin/_gitwf`; basename argv[0] задаёт действие и целевую ветку. Общие возможности живут в `lib/{домен}.py`.
+
+Новый публичный инструмент регистрируется в `TOOLS` из `lib/lazyhelp.py`; ИИ-руководство — в `COMMAND_SKILLS` из `lib/skills_help.py`.

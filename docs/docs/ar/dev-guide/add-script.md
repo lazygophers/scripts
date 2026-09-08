@@ -1,59 +1,57 @@
-# إضافة نص برمجي
+# إضافة سكربت
 
-خطوتان، بدون تداخل. أدناه `{مجال}` يمثل أحد `build` / `file` / `git` / `process` / `misc` / `system`، `{اسم}` يمثل اسم نصك البرمجي.
+خطوتان مستقلتان. `{اسم}` هو اسم السكربت.
 
-## 1. كتابة منطق الأعمال في `lib/commands/{مجال}/{اسم}.py`
+## 1. اكتب منطق العمل في `lib/{الاسم}.py`
 
 ```python
-#!/usr/bin/env python3
-"""foo - ما يفعله."""
-import argparse
-import sys
+"""What foo does (one line; quoted by the lazyhelp catalog)."""
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="foo")
-    parser.parse_args(argv[1:])
-    # ... منطق الأعمال ...
+def run() -> int:
+    # ... business logic ...
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
 ```
 
-تصنيف المجالات : `build` / `file` / `git` / `process` / `misc` / `system`. للمجالات الجديدة، لا تنس إضافة `lib/commands/{مجال}/__init__.py`.
-
-## 2. إضافة المدخل الخفيف `bin/{اسم}`
+## 2. أضف المدخل الرقيق `bin/{الاسم}`
 
 ```python
 #!/usr/bin/env python3
-"""foo المدخل الخفيف."""
+"""foo — what it does (fire refactor)"""
+from __future__ import annotations
+
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.commands.{مجال}.foo import main
-from lib.ui import timed
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.foo import run as do_foo
 
-raise SystemExit(timed(main, label="{اسم}")(sys.argv))
+
+class FooCli(BaseCli):
+    """What it does"""
+
+    @timed_cli
+    def run(self):
+        """Run foo"""
+        return do_foo()
+
+
+if __name__ == "__main__":
+    run_cli(FooCli())
 ```
 
 ```bash
-chmod +x bin/{اسم}
+chmod +x bin/{الاسم}
 ```
 
-تم. **لا حاجة لتسجيل أي قواميس أو قوائم.**
+## 3. سجِّل في الفهرس والإرشاد
 
+- أضف سطرًا إلى `TOOLS` في `lib/lazyhelp.py`: `"foo": ("الفئة", "وصف من سطر")` (استخدم فئة موجودة من `CATEGORIES_ORDER` أو أضف جديدة).
+- للإرشاد الموجه للـ AI أضف `"foo": ["أمثلة قابلة للنسخ الحرفي", ...]` إلى `COMMAND_SKILLS` في `lib/skills_help.py` (اختياري — وإلا يُستخدم الوصف).
 
-> غلاف `timed` إلزامي: كل مدخل `bin/*` يغلّف استدعاء المستوى الأعلى به بحيث يُطبع البداية/النهاية/المدة في stderr (خافت) عند الخروج.
-## النصوص البرمجية المستعارة (عدة أسماء لنفس المنطق بمعاملات مختلفة)
+تغليف `timed_cli` إلزامي: يطبع في stderr سطر بداية/نهاية/مدة باهتًا عند الخروج.
 
-انظر `merge_canary` / `merge_develop` / ... : في `lib/commands/git/merge.py` اعرض `run(target, argv)`، كل مدخل خفيف ينقل هدف ثابت :
+## عدة أسماء مداخل، منطق واحد
 
-```python
-# bin/merge_canary
-from lib.commands.git.merge import run
-from lib.ui import timed
-raise SystemExit(timed(run, label="merge_canary")("canary", sys.argv))
-```
+انظر `merge_canary` / `merge_develop` / ...: اكتب موزّعًا واحدًا `bin/_foo` يستنتج الوسيط من basename الخاص بـ argv[0]، ثم اجعل الأسماء الأخرى symlinks إليه.

@@ -26,3 +26,14 @@ webgrab https://www.xiaohongshu.com/explore/x  # 之后抓取自动带登录态
 ```
 
 要手动过滑块验证：加 `--headed` 显示浏览器窗口。
+
+## websearch
+
+多引擎网页检索，全引擎免 key 并行，按 URL 合并去重，输出标题/URL/摘要。只有摘要、要看正文接 `webgrab`。
+
+```bash
+websearch rust async runtime            # 默认全引擎并行
+websearch -n 5 -f json <query>          # 限每引擎 5 条，JSON 输出（plain|json|tsv|csv|table）
+websearch --engine github <query>       # 只用单引擎；websearch engines 看引擎与 searx 实例
+websearch set engines ddg bing          # 改默认引擎集
+```

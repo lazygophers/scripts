@@ -1,6 +1,22 @@
 [
-  { "type": "file", "name": "structure", "label": "structure" },
-  { "type": "file", "name": "add-script", "label": "addScript" },
-  { "type": "file", "name": "testing", "label": "testing" },
-  { "type": "file", "name": "contributing", "label": "contributing" }
+  {
+    "type": "file",
+    "name": "structure",
+    "label": "目录结构"
+  },
+  {
+    "type": "file",
+    "name": "add-script",
+    "label": "加新脚本"
+  },
+  {
+    "type": "file",
+    "name": "testing",
+    "label": "测试"
+  },
+  {
+    "type": "file",
+    "name": "contributing",
+    "label": "参与贡献"
+  }
 ]

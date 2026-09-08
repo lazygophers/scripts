@@ -1,57 +1,57 @@
-# Добавить скрипт
+# Добавление скрипта
 
-Два шага, без помех. Ниже `{домен}` представляет один из `build` / `file` / `git` / `process` / `misc` / `system`, `{имя}` представляет имя вашего скрипта.
+Два шага, независимых друг от друга. `{имя}` — имя вашего скрипта.
 
-## 1. Написать бизнес-логику в `lib/commands/{домен}/{имя}.py`
+## 1. Написать логику в `lib/{имя}.py`
 
 ```python
-#!/usr/bin/env python3
-"""foo - что делает."""
-import argparse
-import sys
+"""What foo does (one line; quoted by the lazyhelp catalog)."""
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="foo")
-    parser.parse_args(argv[1:])
-    # ... бизнес-логика ...
+def run() -> int:
+    # ... business logic ...
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
 ```
 
-Классификация доменов : `build` / `file` / `git` / `process` / `misc` / `system`. Для новых доменов не забудьте добавить `lib/commands/{домен}/__init__.py`.
-
-## 2. Добавить лёгкий вход `bin/{имя}`
+## 2. Добавить обёртку `bin/{имя}`
 
 ```python
 #!/usr/bin/env python3
-"""foo Лёгкий вход."""
+"""foo — what it does (fire refactor)"""
+from __future__ import annotations
+
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.commands.{домен}.foo import main
-from lib.ui import timed
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.foo import run as do_foo
 
-raise SystemExit(timed(main, label="{имя}")(sys.argv))
+
+class FooCli(BaseCli):
+    """What it does"""
+
+    @timed_cli
+    def run(self):
+        """Run foo"""
+        return do_foo()
+
+
+if __name__ == "__main__":
+    run_cli(FooCli())
 ```
 
 ```bash
 chmod +x bin/{имя}
 ```
 
-Готово. **Не требуется регистрация в словарях или списках.**
+## 3. Зарегистрировать в каталоге и руководстве
 
-## Скрипты псевдонимов (несколько имён для той же логики с разными параметрами)
+- Добавьте строку в `TOOLS` из `lib/lazyhelp.py`: `"foo": ("категория", "описание в одну строку")` (используйте существующую категорию из `CATEGORIES_ORDER` или создайте новую).
+- Для ИИ-руководства добавьте `"foo": ["примеры, которые можно копировать как есть", ...]` в `COMMAND_SKILLS` из `lib/skills_help.py` (опционально — иначе используется описание).
 
-См. `merge_canary` / `merge_develop` / ... : в `lib/commands/git/merge.py` экспортируйте `run(target, argv)`, каждый лёгкий вход передаёт фиксированную цель :
+Обёртка `timed_cli` обязательна: печатает в stderr тусклую строку старт/финиш/время при выходе.
 
-```python
-# bin/merge_canary
-from lib.commands.git.merge import run
-from lib.ui import timed
-raise SystemExit(timed(run, label="merge_canary")("canary", sys.argv))
-```
+## Несколько имён входа, одна логика
+
+См. `merge_canary` / `merge_develop` / ...: напишите один диспетчер `bin/_foo`, выводящий аргумент из basename argv[0], и сделайте остальные имена symlink'ами на него.

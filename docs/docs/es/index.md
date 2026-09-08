@@ -13,16 +13,25 @@ hero:
       text: Scripts
       link: /guide/scripts
 features:
-  - title: Flujo de trabajo Git
-    details: merge_* / push_* / switch_branch / sync_master — repositorio único o por lotes, a un comando.
+  - title: Flujo Git
+    details: merge_* / push_* / switch_branch / sync_master — un repo o lote, un solo comando.
     icon: 🔀
-  - title: Verificación de construcción
-    details: checkwork automatiza las verificaciones de compilación con notificaciones de voz ; consciente de Go / Node.
+  - title: Colaboración Git
+    details: commit / mr / issue / squash_pr con información generada por IA; fetch_all / list_branch.
+    icon: 🤝
+  - title: Build y Verificación
+    details: checkwork compuerta multi-lenguaje + avisos de voz; check_ai; cicd.
     icon: 🔨
-  - title: Gestión de procesos
-    details: kk por nombre, kkp por puerto, con autoexclusión y prompts de confirmación.
+  - title: Datos y Red
+    details: archery para SQL, grafana para dashboards, ovpn para VPN, ipinfo.
+    icon: 🗄️
+  - title: Búsqueda Web
+    details: websearch multi-motor sin clave; webgrab anti-bot a Markdown.
+    icon: 🔍
+  - title: Procesos y Ejecución
+    details: kk por nombre, kkp por puerto; loop reintentos; unsleep anti-suspensión.
     icon: ⚙️
-  - title: Notificaciones y Utilidades
-    details: n difusión de voz, loop ejecutor de comandos, unsleep anti-inactividad, cpd copia profunda.
+  - title: Archivos y Sistema
+    details: cpd copia profunda, n locución, inject PATH, graphwatch.
     icon: 📦
 ---

@@ -1,59 +1,57 @@
-# Add a Script
+# Adding a Script
 
-Two steps, independently. Below, `{domain}` is one of `build` / `file` / `git` / `process` / `misc` / `system`, and `{name}` is your script name.
+Two steps, independent of each other. `{name}` is your script name.
 
-## 1. Put business logic in `lib/commands/{domain}/{name}.py`
+## 1. Write business logic in `lib/{name}.py`
 
 ```python
-#!/usr/bin/env python3
-"""foo - what it does."""
-import argparse
-import sys
+"""What foo does (one line; quoted by the lazyhelp catalog)."""
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="foo")
-    parser.parse_args(argv[1:])
+def run() -> int:
     # ... business logic ...
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
 ```
 
-Domains: `build` / `file` / `git` / `process` / `misc` / `system`. New domain needs `lib/commands/{domain}/__init__.py`.
-
-## 2. Add thin entrypoint `bin/{name}`
+## 2. Add the thin shell `bin/{name}`
 
 ```python
 #!/usr/bin/env python3
-"""foo thin entrypoint."""
+"""foo — what it does (fire refactor)"""
+from __future__ import annotations
+
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.commands.{domain}.foo import main
-from lib.ui import timed
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.foo import run as do_foo
 
-raise SystemExit(timed(main, label="{name}")(sys.argv))
+
+class FooCli(BaseCli):
+    """What it does"""
+
+    @timed_cli
+    def run(self):
+        """Run foo"""
+        return do_foo()
+
+
+if __name__ == "__main__":
+    run_cli(FooCli())
 ```
 
 ```bash
 chmod +x bin/{name}
 ```
 
-Done. **No registry/list to update.**
+## 3. Register catalog & guidance
 
-> The `timed` wrapper is mandatory: every `bin/*` entry wraps its top-level call with it so start/end/elapsed prints to stderr (dim) on exit.
+- Add one line to `TOOLS` in `lib/lazyhelp.py`: `"foo": ("category", "one-line description")` (use an existing `CATEGORIES_ORDER` category, or add one).
+- For AI-facing guidance add `"foo": ["copy-pasteable examples", ...]` to `COMMAND_SKILLS` in `lib/skills_help.py` (optional — falls back to the description).
 
-## Alias Scripts (multiple names, same logic, different args)
+`timed_cli` wrapping is mandatory: it prints a dim start/end/elapsed line to stderr on exit.
 
-See `merge_canary` / `merge_develop` / ...: expose `run(target, argv)` in `lib/commands/git/merge.py`, each thin entrypoint passes a fixed target:
+## Multiple entry names, same logic
 
-```python
-# bin/merge_canary
-from lib.commands.git.merge import run
-from lib.ui import timed
-raise SystemExit(timed(run, label="merge_canary")("canary", sys.argv))
-```
+See `merge_canary` / `merge_develop` / ...: write one `bin/_foo` dispatcher that infers the argument from argv[0]'s basename, then symlink the other names to it.

@@ -58,12 +58,12 @@ class TestRenderTable(unittest.TestCase):
 
     def test_render_table_groups_by_category(self) -> None:
         rows = [(name, cat, desc) for name, (cat, desc) in sorted(TOOLS.items())
-                if cat == "git-wf"]
+                if cat == "Git 工作流"]
         buf = io.StringIO()
         r = Reporter(file=buf)
         _render_table(rows, r)
         out = buf.getvalue()
-        self.assertIn("git-wf", out)
+        self.assertIn("Git 工作流", out)
         self.assertIn("merge_canary", out)
 
 
@@ -102,7 +102,7 @@ class TestMainDefault(unittest.TestCase):
         self.assertEqual(rc, 0)
         out = err.getvalue()
         self.assertIn("工具速查", out)
-        self.assertIn("git-wf", out)
+        self.assertIn("Git 工作流", out)
         # 用法提示
         self.assertIn("lazyhelp <工具名>", out)
         # 全部工具名都应在概览中出现

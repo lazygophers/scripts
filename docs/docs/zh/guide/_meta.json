@@ -1,4 +1,12 @@
 [
-  { "type": "file", "name": "introduction", "label": "introduction" },
-  { "type": "file", "name": "scripts", "label": "scripts" }
+  {
+    "type": "file",
+    "name": "introduction",
+    "label": "简介"
+  },
+  {
+    "type": "file",
+    "name": "scripts",
+    "label": "脚本功能"
+  }
 ]

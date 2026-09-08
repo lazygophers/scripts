@@ -1,4 +1,10 @@
 [
-  { "text": "guide", "link": "/guide/introduction" },
-  { "text": "devGuide", "link": "/dev-guide/structure" }
+  {
+    "text": "指南",
+    "link": "/guide/introduction"
+  },
+  {
+    "text": "开发指南",
+    "link": "/dev-guide/structure"
+  }
 ]

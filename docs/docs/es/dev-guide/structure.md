@@ -1,30 +1,34 @@
-# Estructura de directorios
+# Estructura
 
 ```
 scripts/
-├── bin/                          # Scripts de entrada ligera (chmod +x)
+├── bin/                          # scripts de entrada finos (chmod +x)
 │   ├── checkwork, cpd, kk, kkp, n, ...
-│   ├── merge_canary, merge_develop, merge_master, merge_test   # llama lib git_workflow.merge_to(target)
-│   ├── push_canary, push_develop, push_master, push_test       # push_to repo único / automático por lotes fuera git
+│   ├── merge_* / push_*          # todos symlinks → bin/_gitwf, despacho según el nombre
 │   ├── switch_branch, sync_master, sync_branch, fetch_all, delete_branch, delete_branch_remote
-│   ├── loop, unsleep, reindex
-│   └── inject                    # inyectar bin/ en PATH shell
-├── lib/
-│   ├── commands/{dominio}/{comando}.py    # Lógica de negocio de cada comando, expone main(argv) -> int
-│   │   ├── build/  file/  git/  process/  misc/  system/
-│   │   └── git/merge.py + git/push.py también expone run(target, argv)
-│   └── {dominio}.py                    # Biblioteca compartida (git/exec/ui/notify/build/process/...)
-├── tests/                        # Suite unittest
-├── commit / mr / issue          # Scripts bash, para reescribir en py (guardados temporalmente en raíz)
-└── README.md
+│   ├── loop, unsleep, websearch, webgrab, archery, grafana, ovpn, ...
+│   └── inject                    # inyecta bin/ en el PATH del shell
+├── lib/                          # toda la lógica (plana, sin subdirectorios)
+│   ├── {nombre}.py               # módulo de negocio por comando (git_workflow / batch_git / build / ...)
+│   ├── fire_base.py              # BaseCli + run_cli + timed_cli, esqueleto común
+│   ├── lazyhelp.py               # registro de herramientas (TOOLS = nombre → categoría + descripción)
+│   ├── skills_help.py            # guía --skills para IA (COMMAND_SKILLS)
+│   └── ui / notify / exec / process   # librerías compartidas
+├── skills/lazyscripts/           # índice de skill IA (SKILL.md + archivos por tema)
+├── docs/                         # sitio de docs Rspress (seis idiomas en docs/docs/<lang>/)
+├── tests/                        # suite unittest
+└── README.md (+ 5 traducciones)
 ```
 
-## Cadena de llamadas
+## Cadena de llamada
 
 ```
-bin/{script}            (3 líneas de hack de ruta + import)
-  → lib.commands.{dominio}.{comando}.main(argv)
-    → Biblioteca compartida lib/{dominio}.py
+bin/{script}            (3 líneas de path hack + import)
+  → run_cli(<Nombre>Cli())      # lib/fire_base.py, despacho de subcomandos fire
+    → función de negocio en lib/{nombre}.py
+      → lib/ui.py / lib/exec.py / ... compartidas
 ```
 
-Las entradas ligeras solo transmiten argv al módulo de negocio, **no escriben lógica de negocio**. Las capacidades compartidas (operaciones git, ejecución de comandos, UI, notificaciones, detección de construcción, gestión de procesos...) se sedimentan en `lib/{dominio}.py`, reutilizables entre comandos.
+La entrada fina solo entrega argv a `run_cli` — **sin lógica de negocio aquí**. `merge_*` / `push_*` son symlinks a `bin/_gitwf`; el basename de argv[0] decide la acción y la rama objetivo. Las capacidades compartidas viven en `lib/{dominio}.py`.
+
+Toda herramienta pública nueva debe registrarse en `TOOLS` de `lib/lazyhelp.py`; la guía IA va en `COMMAND_SKILLS` de `lib/skills_help.py`.

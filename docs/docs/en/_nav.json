@@ -1,4 +1,10 @@
 [
-  { "text": "guide", "link": "/guide/introduction" },
-  { "text": "devGuide", "link": "/dev-guide/structure" }
+  {
+    "text": "Guide",
+    "link": "/guide/introduction"
+  },
+  {
+    "text": "Developer Guide",
+    "link": "/dev-guide/structure"
+  }
 ]

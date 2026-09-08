@@ -20,31 +20,83 @@ inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف 
 
 ## وظائف النصوص البرمجية
 
-| النص البرمجي             | الوظيفة                                                         | مثال                          |
-| :--------------- | :----------------------------------------------------------- | :---------------------------- |
-| `checkwork`      | فحص التجميع المؤتمت + الإشعارات الصوتية            | `checkwork`                   |
-| `cpd`            | نسخ عميق (إضافة/تحديث فقط افتراضيًا؛ `-f` يحذف الزائد)        | `cpd src/* dest/`             |
-| `kk`             | إنهاء العمليات بالاسم                                             | `kk nginx`                    |
-| `kkp`            | إنهاء العمليات بالمنفذ                                                | `kkp 8080`                    |
-| `n`              | بث صوتي macOS (`say`)                                       | `n "اكتمل البناء"`                |
-| `loop`           | تنفيذ الأوامر في حلقة، تتبع النجاح/الفشل                                  | `loop 10 curl url`            |
-| `merge_canary`   | دمج الفرع الحالي → canary، البقاء في canary                           | `merge_canary [--dry-run]`     |
-| `merge_develop`  | دمج الفرع الحالي → develop، البقاء في develop                         | `merge_develop`                |
-| `merge_master`     | دمج الفرع الحالي → الفرع الرئيسي (اكتشاف تلقائي master/main)، البقاء في الهدف                        | `merge_master`                   |
-| `merge_test`     | دمج الفرع الحالي → test، البقاء في test                               | `merge_test`                   |
-| `push_canary`    | دمج الفرع الحالي → canary، دفع ثم العودة                      | `push_canary [--stay]`         |
-| `push_develop` / `push_master` / `push_test` | نفس الشيء، الأهداف develop / الفرع الرئيسي (اكتشاف تلقائي) / test على التوالي      |                               |
-| `push_*` (دفعات)  | عند تنفيذ push_* خارج دليل git، تلقائيًا بالدفعات : مسح مستودعات Git في الدلائل الفرعية والدفع واحدة تلو الأخرى | `push_canary [--dry-run]` |
-| `switch_branch`  | تبديل الفروع بالدفعات (إنشاؤها من الفرع الافتراضي (اكتشاف تلقائي) إذا لم تكن موجودة)                 | `switch_branch <branch>`      |
-| `sync_master`    | مزامنة master بالدفعات = `sync_branch master`                                              | `sync_master`                 |
-| `sync_branch`    | مزامنة بالدفعات الفرع الحالية (أو المحددة) إلى origin/<branch> | `sync_branch [branch] [--force]` |
-| `delete_branch` | حذف فرع محلي (مستودع واحد; دفعة إن لم في dir git) | `delete_branch <name> [--force] [-y]` |
-| `delete_branch_remote` | حذف فرع بعيد (مستودع واحد; دفعة إن لم في dir git) | `delete_branch_remote <name> [--remote <r>] [-y]` |
-| `fetch_all`  | جلب بالدفعات جميع مستودعات Git                                     | `fetch_all`               |
-| `list_branch`  | سرد الفروع المحلية (مستودع واحد أو فحص الكل، الأسماء المكررة عبر المستودعات مميزة ⟱؛ مجمّعة حسب المستودع) | `list_branch` |
-| `unsleep`        | منع السكون macOS caffeinate                                      | `unsleep -t 3600`             |
-| `reindex`        | إعادة فهرسة المشروع (local-only، .gitignore)                        | `reindex`                     |
-| `inject`         | حقن bin/ في PATH shell                                      | `inject`                      |
+سبع فئات حسب الاستخدام. الفهرس في الطرفية: `lazyhelp`؛ الاستخدام الكامل: `<أداة> --help`؛ دليل للـ AI: `<أداة> --skills`.
+
+### مسارات Git
+
+| السكربت | الوظيفة | مثال |
+| :--- | :--- | :--- |
+| `merge_canary` | دمج الفرع الحالي → canary، والبقاء عليه | `merge_canary [--dry-run]` |
+| `merge_develop` / `merge_dev` / `merge_test` | نفس الشيء، الأهداف develop / dev / test | `merge_develop` |
+| `merge_master` | دمج الفرع الحالي → الفرع الرئيسي (master/main تلقائيًا)، والبقاء على الهدف | `merge_master` |
+| `merge_branch` | دمج الفرع الحالي → فرع محدد (اسم الفرع وسيط أول إلزامي) | `merge_branch feature/x` |
+| `push_canary` | دمج الفرع الحالي → canary، ثم الدفع والعودة | `push_canary [--stay]` |
+| `push_develop` / `push_dev` / `push_test` | نفس الشيء، الأهداف develop / dev / test |  |
+| `push_master` | نفس الشيء، الهدف هو الفرع الرئيسي المكتشف تلقائيًا |  |
+| `push_branch` | دفع الفرع الحالي إلى فرع محدد (اسم الفرع وسيط أول إلزامي) | `push_branch feature/x` |
+| `switch_branch` | تبديل الفروع دفعيًا (إنشاؤه من الرئيسي إن لم يوجد) | `switch_branch <branch>` |
+| `sync_branch` | مزامنة الفرع الحالي (أو المحدد) مع origin/<branch> دفعيًا | `sync_branch [branch] [--force]` |
+| `sync_master` | مزامنة الفرع الرئيسي دفعيًا (كشف تلقائي) | `sync_master` |
+| `delete_branch` | حذف فرع محلي (مستودع واحد؛ دفعيًا خارج git) | `delete_branch <name> [--force] [-y]` |
+| `delete_branch_remote` | حذف فرع بعيد (مستودع واحد؛ دفعيًا خارج git) | `delete_branch_remote <name> [--remote <r>] [-y]` |
+
+> تشغيل الأوامر أعلاه خارج مستودع git يفعّل الوضع الدفعي: يمسح مستودعات git في المجلدات الفرعية وينفّذها واحدة تلو الأخرى.
+
+### تعاون Git
+
+| السكربت | الوظيفة | مثال |
+| :--- | :--- | :--- |
+| `commit` | تنفيذ تلقائي (claude يولّد الرسالة) | `commit` |
+| `mr` | إنشاء PR/MR تلقائيًا (claude يولّد العنوان/المحتوى، draft افتراضيًا) | `mr [base]` |
+| `issue` | إنشاء Issue تلقائيًا (claude يولّد العنوان/المحتوى) | `issue` |
+| `squash_pr` | ضغط source في commit واحد → فتح PR عبر mr | `squash_pr [source] <target>` |
+| `fetch_all` | جلب جميع مستودعات Git دفعيًا | `fetch_all` |
+| `list_branch` | سرد الفروع المحلية (مستودع واحد أو مسح الكل، المكررة ⟱) | `list_branch` |
+
+### البناء والفحص
+
+| السكربت | الوظيفة | مثال |
+| :--- | :--- | :--- |
+| `checkwork` | بوابة بناء متعددة اللغات قبل push (Go/Rust/Python/Java/Node) + إشعار صوتي | `checkwork` |
+| `check_ai` | فحص اتصال نقاط AI API (POST فارغ) | `check_ai` |
+| `cicd` | استقصاء CI/CD للفرع الحالي، طباعة النتيجة النهائية | `cicd` |
+
+### البيانات والشبكة
+
+| السكربت | الوظيفة | مثال |
+| :--- | :--- | :--- |
+| `archery` | CLI لمنصة Archery SQL (استعلامات / workflow، دخول لكل نطاق) | `archery query execute 'select 1' --instance-name prod --db-name orders` |
+| `grafana` | CLI لواجهة Grafana HTTP (دخول لكل نطاق) | `grafana health` |
+| `ovpn` | عميل OpenVPN (تعبئة تلقائية للاعتماديات وTOTP، split tunneling) | `ovpn connect` |
+| `vpn-prio` | تعديل أولوية خدمات الشبكة في macOS (خفض مسار OpenVPN الافتراضي) | `vpn-prio --help` |
+| `ipinfo` | استعلام IP الشبكة المحلية + نوع الشبكة (كشف hotspot) | `ipinfo` |
+| `disable-ipv6` / `enable-ipv6` | تعطيل/تمكين IPv6 على جميع خدمات الشبكة (يتطلب sudo) | `sudo disable-ipv6` |
+
+### بحث الويب
+
+| السكربت | الوظيفة | مثال |
+| :--- | :--- | :--- |
+| `websearch` | بحث ويب متعدد المحركات (بدون مفاتيح، متوازٍ، إزالة التكرار بالرابط) | `websearch rust async` |
+| `webgrab` | تحويل الصفحة إلى Markdown (تجاوز anti-bot + تصيير Playwright + 34 موقعًا + تسجيل دائم) | `webgrab https://example.com` |
+
+### العمليات والتشغيل
+
+| السكربت | الوظيفة | مثال |
+| :--- | :--- | :--- |
+| `kk` | إنهاء العمليات بالاسم | `kk nginx` |
+| `kkp` | إنهاء العمليات بالمنفذ | `kkp 8080` |
+| `loop` | تنفيذ أمر في حلقة مع تتبع النجاح/الفشل | `loop 10 curl url` |
+| `unsleep` | منع سكون macOS (caffeinate) | `unsleep timed 2h` |
+
+### الملفات والنظام
+
+| السكربت | الوظيفة | مثال |
+| :--- | :--- | :--- |
+| `cpd` | نسخ عميق (افتراضيًا إضافة/تحديث فقط؛ `-f` يحذف الزائد) | `cpd src/* dest/` |
+| `n` | بث صوتي في macOS (`say`) | `n "build complete"` |
+| `inject` | حقن bin/ في PATH الغلاف | `inject` |
+| `graphwatch` | خدمة graphify: إعادة بناء تلقائية لرسم المعرفة | `graphwatch add <dir>` |
+| `lazyhelp` | فهرس الأدوات في الطرفية + تمرير `--help` | `lazyhelp help <tool>` |
 
 > **ملاحظات الترحيل (الأسماء القديمة محذوفة)** : `mergec`/`mergedev`/`mergem`/`merget` → `merge_canary`/`merge_develop`/`merge_master`/`merge_test` ; `pushc`/`pushdev`/`pushm`/`pusht` → `push_canary`/`push_develop`/`push_master`/`push_test` ; `pushc_all` دُمج في `push_*` (التنفيذ خارج دليل git للدفعة التلقائية، التنفيذ التلقائي بدون تأكيد، `--dry-run` معاينة).
 

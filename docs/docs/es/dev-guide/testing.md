@@ -4,4 +4,4 @@
 python3 -m unittest discover -s tests -q
 ```
 
-La suite de pruebas se encuentra en `tests/` en la raíz del repositorio. Se recomienda añadir pruebas unitarias correspondientes para comandos nuevos, manteniendo la granularidad de prueba separada entre entrada ligera y lógica de negocio (la lógica de negocio se prueba bajo `lib/commands/`, las entradas ligeras solo transmiten datos y no necesitan pruebas separadas).
+La suite está en `tests/` en la raíz. Los comandos nuevos deberían añadir tests unitarios: la lógica se prueba en `lib/{nombre}.py`; las entradas finas solo transmiten. `tests/test_lazyhelp.py` verifica que bin/ coincida con `TOOLS` — recuerda registrar las nuevas entradas.

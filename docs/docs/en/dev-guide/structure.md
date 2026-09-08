@@ -4,27 +4,31 @@
 scripts/
 ├── bin/                          # thin entrypoint scripts (chmod +x)
 │   ├── checkwork, cpd, kk, kkp, n, ...
-│   ├── merge_canary, merge_develop, merge_master, merge_test   # call lib git_workflow.merge_to(target)
-│   ├── push_canary, push_develop, push_master, push_test       # single-repo push_to / auto-batch in non-git dir
+│   ├── merge_* / push_*          # all symlinks → bin/_gitwf, dispatched by entry name
 │   ├── switch_branch, sync_master, sync_branch, fetch_all, delete_branch, delete_branch_remote
-│   ├── loop, unsleep, reindex
+│   ├── loop, unsleep, websearch, webgrab, archery, grafana, ovpn, ...
 │   └── inject                    # inject bin/ into shell PATH
-├── lib/
-│   ├── commands/{domain}/{command}.py   # business logic per command, exposes main(argv) -> int
-│   │   ├── build/  file/  git/  process/  misc/  system/
-│   │   └── git/merge.py + git/push.py also expose run(target, argv)
-│   └── {domain}.py                     # shared libs (git/exec/ui/notify/build/process/...)
+├── lib/                          # all core logic (flat, no subdirs)
+│   ├── {name}.py                 # business module per command (git_workflow / batch_git / build / ...)
+│   ├── fire_base.py              # BaseCli + run_cli + timed_cli, the common thin-shell skeleton
+│   ├── lazyhelp.py               # tool registry (TOOLS = name → category + one-line description)
+│   ├── skills_help.py            # AI-facing --skills guidance (COMMAND_SKILLS)
+│   └── ui / notify / exec / process   # shared libs, reused across commands
+├── skills/lazyscripts/           # AI skill index (SKILL.md + per-topic files)
+├── docs/                         # Rspress docs site (six-language sources in docs/docs/<lang>/)
 ├── tests/                        # unittest suite
-├── commit / mr / issue          # bash scripts, pending py rewrite (temporarily at repo root)
-└── README.md
+└── README.md (+ 5 translations)
 ```
 
 ## Call Chain
 
 ```
-bin/{script}          (3-line path hack + import)
-  → lib.commands.{domain}.{command}.main(argv)
-    → shared lib/{domain}.py
+bin/{script}            (3-line path hack + import)
+  → run_cli(<Name>Cli())      # lib/fire_base.py, fire subcommand dispatch
+    → business function in lib/{name}.py
+      → shared lib/ui.py / lib/exec.py / ...
 ```
 
-The thin entrypoint only forwards argv to the business module — **no business logic here**. Shared capabilities (git ops, command exec, UI, notifications, build detection, process management, ...) live in `lib/{domain}.py` and are reused across commands.
+The thin entrypoint only hands argv to `run_cli` — **no business logic here**. `merge_*` / `push_*` are symlinks to `bin/_gitwf`; argv[0]'s basename decides action and target branch. Shared capabilities (git ops, command exec, UI, notifications, build detection, process management, ...) live in `lib/{domain}.py` and are reused across commands.
+
+New public tools must be registered in `TOOLS` of `lib/lazyhelp.py` (category + one-line description); AI guidance goes into `COMMAND_SKILLS` of `lib/skills_help.py`.

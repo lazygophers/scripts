@@ -12,30 +12,83 @@ inject es idempotente : reejecutar no añadirá duplicados. Después de reinicia
 
 ## Tabla de funcionalidades
 
-| Script             | Función                                                         | Ejemplo                          |
-| :--------------- | :----------------------------------------------------------- | :---------------------------- |
-| `checkwork`      | Verificación automatizada de compilación + notificaciones de voz            | `checkwork`                   |
-| `cpd`            | Copia profunda (por defecto solo añadir/actualizar ; `-f` elimina excesivos)        | `cpd src/* dest/`             |
-| `kk`             | Terminar procesos por nombre                                              | `kk nginx`                    |
-| `kkp`            | Terminar procesos por puerto                                                | `kkp 8080`                    |
-| `n`              | Difusión de voz macOS (`say`)                                       | `n "construcción terminada"`                |
-| `loop`           | Ejecutar comandos en bucle, seguir éxito/fracaso                                  | `loop 10 curl url`            |
-| `merge_canary`   | Fusionar rama actual → canary, quedarse en canary                           | `merge_canary [--dry-run]`     |
-| `merge_develop`  | Fusionar rama actual → develop, quedarse en develop                         | `merge_develop`                |
-| `merge_master`     | Fusionar rama actual → rama principal (auto-detect master/main), quedarse en objetivo                        | `merge_master`                   |
-| `merge_test`     | Fusionar rama actual → test, quedarse en test                               | `merge_test`                   |
-| `push_canary`    | Fusionar rama actual → canary, empujar luego volver a rama original                      | `push_canary [--stay]`         |
-| `push_develop` / `push_master` / `push_test` | Ídem, objetivos develop / rama principal (auto-detect) / test respectivamente      |                               |
-| `push_*` (lotes)  | Al ejecutar push_* en directorio no-git, automáticamente por lotes : escanear repositorios Git en subdirectorios y empujar uno por uno | `push_canary [--dry-run]` |
-| `switch_branch`  | Cambiar ramas por lotes (crea desde rama por defecto (auto-detectada) si inexistente)                 | `switch_branch <branch>`      |
-| `sync_master`    | Sincronizar master por lotes                                              | `sync_master`                 |
-| `sync_branch`    | Sincronizar por lotes rama actual (o dada) a origin/<branch>                             | `sync_branch [branch] [--force]` |
-| `delete_branch` | Eliminar rama local (único/lote) | `delete_branch <name> [--force] [-y]` |
-| `delete_branch_remote` | Eliminar rama remota (único/lote) | `delete_branch_remote <name> [--remote <r>] [-y]` |
-| `fetch_all`  | Recuperar por lotes todos los repositorios Git                                     | `fetch_all`               |
-| `unsleep`        | Evitar suspensión macOS caffeinate                                      | `unsleep -t 3600`             |
-| `reindex`        | Reindexar proyecto (local-only, .gitignore)                        | `reindex`                     |
-| `inject`         | Inyectar bin/ en PATH shell                                      | `inject`                      |
+Siete categorías por uso. Índice en terminal: `lazyhelp`; uso completo: `<herramienta> --help`; guía para IA: `<herramienta> --skills`.
+
+### Flujo Git
+
+| Script | Función | Ejemplo |
+| :--- | :--- | :--- |
+| `merge_canary` | Fusiona la rama actual → canary, permanece en canary | `merge_canary [--dry-run]` |
+| `merge_develop` / `merge_dev` / `merge_test` | Igual, objetivos develop / dev / test | `merge_develop` |
+| `merge_master` | Fusiona la rama actual → rama principal (master/main detectado), permanece en el objetivo | `merge_master` |
+| `merge_branch` | Fusiona la rama actual → rama indicada (nombre obligatorio como 1er argumento) | `merge_branch feature/x` |
+| `push_canary` | Fusiona la rama actual → canary, empuja y vuelve | `push_canary [--stay]` |
+| `push_develop` / `push_dev` / `push_test` | Igual, objetivos develop / dev / test |  |
+| `push_master` | Igual, objetivo la rama principal detectada |  |
+| `push_branch` | Empuja la rama actual a la rama indicada (nombre obligatorio como 1er argumento) | `push_branch feature/x` |
+| `switch_branch` | Cambio de rama por lotes (crea desde la principal si no existe) | `switch_branch <branch>` |
+| `sync_branch` | Sincroniza por lotes la rama actual (o dada) con origin/<branch> | `sync_branch [branch] [--force]` |
+| `sync_master` | Sincroniza por lotes la rama principal (detectada) | `sync_master` |
+| `delete_branch` | Borra rama local (un repo; lote fuera de git) | `delete_branch <name> [--force] [-y]` |
+| `delete_branch_remote` | Borra rama remota (un repo; lote fuera de git) | `delete_branch_remote <name> [--remote <r>] [-y]` |
+
+> Ejecutados fuera de un repo git, estos comandos pasan a modo lote: escanean subdirectorios git y ejecutan uno por uno.
+
+### Colaboración Git
+
+| Script | Función | Ejemplo |
+| :--- | :--- | :--- |
+| `commit` | Commit automático (claude genera el mensaje) | `commit` |
+| `mr` | Crea PR/MR automático (claude genera título/cuerpo, draft por defecto) | `mr [base]` |
+| `issue` | Crea Issue automático (claude genera título/cuerpo) | `issue` |
+| `squash_pr` | Comprime source en un commit → abre PR vía mr | `squash_pr [source] <target>` |
+| `fetch_all` | Fetch por lotes de todos los repos Git | `fetch_all` |
+| `list_branch` | Lista ramas locales (un repo o escaneo global, duplicados ⟱) | `list_branch` |
+
+### Build y Verificación
+
+| Script | Función | Ejemplo |
+| :--- | :--- | :--- |
+| `checkwork` | Compuerta de build multi-lenguaje pre-push (Go/Rust/Python/Java/Node) + aviso de voz | `checkwork` |
+| `check_ai` | Test de conectividad de endpoints de API de IA (POST vacío) | `check_ai` |
+| `cicd` | Sondea el CI/CD de la rama actual, muestra el resultado final | `cicd` |
+
+### Datos y Red
+
+| Script | Función | Ejemplo |
+| :--- | :--- | :--- |
+| `archery` | CLI de Archery SQL (consultas / workflow, login por dominio) | `archery query execute 'select 1' --instance-name prod --db-name orders` |
+| `grafana` | CLI de la API HTTP de Grafana (login por dominio) | `grafana health` |
+| `ovpn` | Cliente OpenVPN (credenciales y TOTP automáticos, split tunneling) | `ovpn connect` |
+| `vpn-prio` | Ajusta la prioridad de servicios de red de macOS (baja la ruta OpenVPN) | `vpn-prio --help` |
+| `ipinfo` | IP LAN + tipo de red (detección de hotspot) | `ipinfo` |
+| `disable-ipv6` / `enable-ipv6` | Desactiva/activa IPv6 en todos los servicios de red (requiere sudo) | `sudo disable-ipv6` |
+
+### Búsqueda Web
+
+| Script | Función | Ejemplo |
+| :--- | :--- | :--- |
+| `websearch` | Búsqueda web multi-motor (sin clave, paralela, deduplicada por URL) | `websearch rust async` |
+| `webgrab` | Página web → Markdown (anti-bot + render Playwright + 34 sitios + login persistente) | `webgrab https://example.com` |
+
+### Procesos y Ejecución
+
+| Script | Función | Ejemplo |
+| :--- | :--- | :--- |
+| `kk` | Termina procesos por nombre | `kk nginx` |
+| `kkp` | Termina procesos por puerto | `kkp 8080` |
+| `loop` | Ejecuta un comando en bucle, registra éxito/fallo | `loop 10 curl url` |
+| `unsleep` | Anti-suspensión macOS (caffeinate) | `unsleep timed 2h` |
+
+### Archivos y Sistema
+
+| Script | Función | Ejemplo |
+| :--- | :--- | :--- |
+| `cpd` | Copia profunda (por defecto añade/actualiza; `-f` borra extras) | `cpd src/* dest/` |
+| `n` | Locución de voz de macOS (`say`) | `n "build complete"` |
+| `inject` | Inyecta bin/ en el PATH del shell | `inject` |
+| `graphwatch` | Demonio graphify: reconstruye el grafo de conocimiento automáticamente | `graphwatch add <dir>` |
+| `lazyhelp` | Índice de herramientas en terminal + reenvío de `--help` | `lazyhelp help <tool>` |
 
 ## Notas de migración (nombres antiguos eliminados)
 

@@ -142,11 +142,16 @@ def _render_fire_help(lines, out) -> None:
 
     common = [line.strip() for line in description if line.strip() and line.strip() != desc]
     if common:
-        for line in common[:8]:
-            console.print(f"[dim]{line}[/dim]")
+        for line in common:
+            console.print(Text(line, style="dim"))
 
     _render_help_table(console, "命令组", groups)
     _render_help_table(console, "命令", commands)
+    for section, title in (("POSITIONAL ARGUMENTS", "位置参数"), ("ARGUMENTS", "参数"), ("FLAGS", "选项"), ("NOTES", "说明")):
+        body = _help_section(text, section).strip()
+        if body:
+            console.print(Text(title, style="bold blue"))
+            console.print(Text(body))
 
 
 def _help_section(text: str, name: str) -> str:

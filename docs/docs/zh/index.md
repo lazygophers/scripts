@@ -16,13 +16,22 @@ features:
   - title: Git 工作流
     details: merge_* / push_* / switch_branch / sync_master，单仓与批量一键完成。
     icon: 🔀
-  - title: 构建检查
-    details: checkwork 自动化编译检查 + 语音通知，Go / Node 多类型识别。
+  - title: Git 协作
+    details: commit / mr / issue / squash_pr 自动生成信息，fetch_all / list_branch 一键巡检。
+    icon: 🤝
+  - title: 构建与检查
+    details: checkwork 多语言编译闸门 + 语音通知；check_ai 端点探测；cicd 轮询等结果。
     icon: 🔨
-  - title: 进程管理
-    details: kk 按名、kkp 按端口，自排除 + 确认提示，安全终止。
+  - title: 数据与网络
+    details: archery 查 SQL、grafana 查仪表盘、ovpn 连 VPN、ipinfo 看网络。
+    icon: 🗄️
+  - title: 网页检索
+    details: websearch 多引擎检索免 key；webgrab 反爬抓取转 Markdown。
+    icon: 🔍
+  - title: 进程与运行
+    details: kk 按名、kkp 按端口安全终止；loop 循环重试；unsleep 防休眠。
     icon: ⚙️
-  - title: 通知与工具
-    details: n 语音播报、loop 循环执行、unsleep 防休眠、cpd 深度复制。
+  - title: 文件与系统
+    details: cpd 深度复制、n 语音播报、inject 注入 PATH、graphwatch 图谱保鲜。
     icon: 📦
 ---

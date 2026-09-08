@@ -18,8 +18,8 @@ description: bin/ 全部脚本的合计入口：git 工作流（merge_*/push_*/s
 | Archery 数据库查询、SQL 上线工单 | [archery.md](archery.md) |
 | Grafana API 查仪表盘 | [grafana.md](grafana.md) |
 | 连/断 OpenVPN、分流规则、VPN 路由问题 | [ovpn.md](ovpn.md) |
-| 抓网页转 Markdown（带反爬处理） | [webgrab.md](webgrab.md) |
-| 杀进程、深度复制、循环重试、防休眠、语音播报、IP/网络 | [system-utils.md](system-utils.md) |
+| 抓网页转 Markdown（带反爬处理）、多引擎网页搜索 | [webgrab.md](webgrab.md) |
+| 杀进程、深度复制、循环重试、防休眠、语音播报、IP/网络、知识图谱守护 | [system-utils.md](system-utils.md) |
 
 查目录：`lazyhelp`（人类速查表）；`<工具> --skills`（AI 向指引，含可照抄示例）；`lazyhelp help <工具>`（完整 --help）。
 

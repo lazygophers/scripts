@@ -4,8 +4,8 @@
 
 ## Highlights
 
-- **Thin entrypoints**: scripts under `bin/` are just 3 lines of path hack + import; all business logic lives under `lib/commands/`.
-- **Domain-classified**: `build` / `file` / `git` / `process` / `misc` / `system`, mutually isolated.
+- **Thin entrypoints**: scripts under `bin/` are just 3 lines of path hack + import; all business logic lives in flat modules under `lib/`.
+- **Task-based taxonomy**: Git Workflow / Git Collaboration / Build & Check / Data & Network / Web Search / Process & Runtime / Files & System — one page via `lazyhelp` in the terminal.
 - **Batch operations**: `merge_*` / `push_*` / `switch_branch` / `sync_master` cover both single-repo and multi-repo batch.
 - **Safety first**: process management self-exclusion, working-tree cleanliness checks and rollback before Git operations.
 

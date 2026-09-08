@@ -1,4 +1,10 @@
 [
-  { "text": "guide", "link": "/guide/introduction" },
-  { "text": "devGuide", "link": "/dev-guide/structure" }
+  {
+    "text": "الدليل",
+    "link": "/guide/introduction"
+  },
+  {
+    "text": "دليل المطوّر",
+    "link": "/dev-guide/structure"
+  }
 ]

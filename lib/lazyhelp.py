@@ -14,60 +14,61 @@ from lib.ui import Reporter, reporter
 
 # 名称 → (分类, 一句话功能)
 # 描述取自各 bin 入口 docstring 末段（薄壳自描述）。
-# 分类用于分组渲染；新增工具在此追加即可。
+# 分类按「拿它做什么」划分；新增工具在此追加即可。
 TOOLS: dict[str, tuple[str, str]] = {
-    # git-wf: 批量分支 / 工作流
-    "merge_canary": ("git-wf", "批量 merge 当前分支到 origin/canary"),
-    "merge_dev": ("git-wf", "批量 merge 当前分支到 origin/dev"),
-    "merge_develop": ("git-wf", "批量 merge 当前分支到 origin/develop"),
-    "merge_master": ("git-wf", "批量 merge 当前分支到默认主分支（master/main）"),
-    "merge_test": ("git-wf", "批量 merge 当前分支到 origin/test"),
-    "push_canary": ("git-wf", "批量 push 当前分支到 origin/canary"),
-    "push_dev": ("git-wf", "批量 push 当前分支到 origin/dev"),
-    "push_develop": ("git-wf", "批量 push 当前分支到 origin/develop"),
-    "push_master": ("git-wf", "批量 push 当前分支到默认主分支（master/main）"),
-    "push_test": ("git-wf", "批量 push 当前分支到 origin/test"),
-    "merge_branch": ("git-wf", "merge 当前分支到指定分支（分支名必填首参）"),
-    "push_branch": ("git-wf", "push 当前分支到指定分支（分支名必填首参）"),
-    "switch_branch": ("git-wf", "批量切换所有仓库到指定分支"),
-    "sync_branch": ("git-wf", "批量同步各仓库指定分支到 origin/<branch>"),
-    "sync_master": ("git-wf", "批量同步主分支（master/main）到 origin/<主分支>"),
-    "delete_branch": ("git-wf", "删除本地分支（单仓 / 批量）"),
-    "delete_branch_remote": ("git-wf", "删除远端分支（单仓 / 批量）"),
-    "squash_pr": ("git-wf", "压 source 自分叉以来的改动为单 commit → 开 PR"),
-    # git-ops: 单仓 / PR / Issue
-    "commit": ("git-ops", "自动提交变更（单仓或批量扫描子目录）"),
-    "mr": ("git-ops", "自动创建 PR/MR（调 claude 生成 title/body）"),
-    "issue": ("git-ops", "自动创建 Issue（调 claude 生成 title/body）"),
-    "fetch_all": ("git-ops", "一键拉取所有仓库远程更新"),
-    "list_branch": ("git-ops", "列出所有仓库的本地分支"),
-    # process: 进程管理
-    "kk": ("process", "按进程名终止进程（正则）"),
-    "kkp": ("process", "按端口号终止占用进程"),
-    # build/check: 编译 / 复制 / 检测
-    "checkwork": ("build/check", "多语言编译检查（Go/Rust/Python/Java/Node）"),
-    "check_ai": ("build/check", "AI API 端点连通性检测（空 POST）"),
-    "cicd": ("build/check", "轮询当前分支 CI/CD，完成后输出最终结果"),
-    "cpd": ("build/check", "深度覆盖复制（新增/更新/删除可选）"),
-    "webgrab": ("build/check", "抓网页转 Markdown（反爬直抓 + Playwright 渲染 + 34 站点适配 + 登录态持久化）"),
-    "websearch": ("build/check", "多引擎网页检索（DDG/Bing 全查后按 URL 合并，免 key），输出标题/URL/摘要"),
-    # loop/runtime: 循环执行 / 防休眠
-    "loop": ("loop/runtime", "循环执行命令并追踪结果（成功即停或指定次数）"),
-    "unsleep": ("loop/runtime", "防止 macOS 系统休眠（指定时长或跟随命令）"),
-    # system: 系统 / 注入 / 通知
-    "n": ("system", "macOS 语音播报（`say`）"),
-    "disable-ipv6": ("system", "关闭本机所有网络服务的 IPv6"),
-    "enable-ipv6": ("system", "开启本机所有网络服务的 IPv6"),
-    "ipinfo": ("system", "查询内网 IP + 网络类型（含热点识别）"),
-    "vpn-prio": ("system", "调整 macOS 网络服务优先级（压低 OpenVPN default 路由）"),
-    "ovpn": ("system", "连 OpenVPN，自动填账号密码与二步验证码"),
-    "archery": ("system", "Archery SQL 平台命令行客户端（按域名分别登录）"),
-    "grafana": ("system", "Grafana HTTP API 命令行客户端（按域名分别登录）"),
-    "graphwatch": ("system", "graphify 全局 watch 守护服务：注册目录自动重建知识图谱"),
-    "inject": ("system", "把 bin/ 注入 shell PATH（写入 ~/.zshrc 等; macOS 可选启用 Touch ID sudo）"),
+    # Git 工作流: 分支合并 / 推送 / 切换 / 删除 / 同步
+    "merge_canary": ("Git 工作流", "合并当前分支到 canary（单仓 / 批量自动识别）"),
+    "merge_dev": ("Git 工作流", "合并当前分支到 dev（单仓 / 批量自动识别）"),
+    "merge_develop": ("Git 工作流", "合并当前分支到 develop（单仓 / 批量自动识别）"),
+    "merge_master": ("Git 工作流", "合并当前分支到默认主分支（master/main 自动识别）"),
+    "merge_test": ("Git 工作流", "合并当前分支到 test（单仓 / 批量自动识别）"),
+    "merge_branch": ("Git 工作流", "合并当前分支到指定分支（分支名必填首参）"),
+    "push_canary": ("Git 工作流", "推送当前分支到 canary 后切回原分支（单仓 / 批量）"),
+    "push_dev": ("Git 工作流", "推送当前分支到 dev 后切回原分支（单仓 / 批量）"),
+    "push_develop": ("Git 工作流", "推送当前分支到 develop 后切回原分支（单仓 / 批量）"),
+    "push_master": ("Git 工作流", "推送当前分支到默认主分支后切回原分支（单仓 / 批量）"),
+    "push_test": ("Git 工作流", "推送当前分支到 test 后切回原分支（单仓 / 批量）"),
+    "push_branch": ("Git 工作流", "推送当前分支到指定分支（分支名必填首参）"),
+    "switch_branch": ("Git 工作流", "批量切换所有仓库到指定分支（不存在则从默认主分支创建）"),
+    "sync_branch": ("Git 工作流", "批量同步各仓库指定分支到 origin/<branch>"),
+    "sync_master": ("Git 工作流", "批量同步各仓库默认主分支（master/main 自动识别）"),
+    "delete_branch": ("Git 工作流", "删除本地分支（单仓 here / 批量 all）"),
+    "delete_branch_remote": ("Git 工作流", "删除远端分支（单仓 here / 批量 all）"),
+    # Git 协作: 提交 / PR / Issue / 巡检
+    "commit": ("Git 协作", "自动提交变更（调 claude 生成 message；单仓或批量扫描子目录）"),
+    "mr": ("Git 协作", "自动创建 PR/MR（调 claude 生成 title/body，默认 draft）"),
+    "issue": ("Git 协作", "自动创建 Issue（调 claude 生成 title/body）"),
+    "squash_pr": ("Git 协作", "压 source 自分叉以来的改动为单 commit → 开 PR"),
+    "fetch_all": ("Git 协作", "一键拉取所有仓库远程更新（fetch all）"),
+    "list_branch": ("Git 协作", "列出所有仓库的本地分支（跨仓同名分支标 ⟱）"),
+    # 构建与检查: 编译闸门 / 端点探测 / CI 轮询
+    "checkwork": ("构建与检查", "多语言编译检查（Go/Rust/Python/Java/Node），push 前闸门"),
+    "check_ai": ("构建与检查", "AI API 端点连通性检测（空 POST）"),
+    "cicd": ("构建与检查", "轮询当前分支 CI/CD，完成后输出最终结果"),
+    # 数据与网络: 数据库 / 监控 / VPN / 本机网络
+    "archery": ("数据与网络", "Archery SQL 平台命令行客户端（查询 / 上线工单，按域名分别登录）"),
+    "grafana": ("数据与网络", "Grafana HTTP API 命令行客户端（按域名分别登录）"),
+    "ovpn": ("数据与网络", "OpenVPN 客户端（自动填账号密码与二步验证码，支持分流）"),
+    "vpn-prio": ("数据与网络", "调整 macOS 网络服务优先级（压低 OpenVPN default 路由）"),
+    "ipinfo": ("数据与网络", "查询内网 IP + 网络类型（含热点识别）"),
+    "disable-ipv6": ("数据与网络", "关闭本机所有网络服务的 IPv6（需 sudo）"),
+    "enable-ipv6": ("数据与网络", "开启本机所有网络服务的 IPv6（需 sudo）"),
+    # 网页检索: 搜索 / 抓取
+    "websearch": ("网页检索", "多引擎网页检索（全引擎免 key 并行，按 URL 合并去重）"),
+    "webgrab": ("网页检索", "抓网页转 Markdown（反爬直抓 + Playwright 渲染 + 34 站点适配 + 登录态持久化）"),
+    # 进程与运行: 进程终止 / 循环 / 防休眠
+    "kk": ("进程与运行", "按进程名终止进程（正则）"),
+    "kkp": ("进程与运行", "按端口号终止占用进程"),
+    "loop": ("进程与运行", "循环执行命令并追踪结果（成功即停或指定次数）"),
+    "unsleep": ("进程与运行", "防止 macOS 系统休眠（指定时长或跟随命令）"),
+    # 文件与系统: 复制 / 通知 / 注入 / 知识图谱
+    "cpd": ("文件与系统", "深度覆盖复制（新增/更新/删除可选，md5 校验）"),
+    "n": ("文件与系统", "macOS 语音播报（`say`）"),
+    "inject": ("文件与系统", "把 bin/ 注入 shell PATH（写入 ~/.zshrc 等；macOS 可选启用 Touch ID sudo）"),
+    "graphwatch": ("文件与系统", "graphify 全局 watch 守护服务：注册目录自动重建知识图谱"),
 }
 
-CATEGORIES_ORDER = ["git-wf", "git-ops", "process", "build/check", "loop/runtime", "system"]
+CATEGORIES_ORDER = ["Git 工作流", "Git 协作", "构建与检查", "数据与网络", "网页检索", "进程与运行", "文件与系统"]
 
 
 def _bin_dir() -> pathlib.Path:

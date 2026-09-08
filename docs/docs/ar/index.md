@@ -13,16 +13,25 @@ hero:
       text: النصوص البرمجية
       link: /guide/scripts
 features:
-  - title: سير عمل Git
-    details: merge_* / push_* / switch_branch / sync_master — مستودع واحد أو بالدفعات، بأمر واحد.
+  - title: مسارات Git
+    details: merge_* / push_* / switch_branch / sync_master — مستودع واحد أو دفعة، بأمر واحد.
     icon: 🔀
-  - title: فحص البناء
-    details: checkwork يؤتمت فحوصات التجميع مع إشعارات صوتية؛ يدعم Go / Node.
+  - title: تعاون Git
+    details: commit / mr / issue / squash_pr مع توليد AI للمعلومات؛ fetch_all / list_branch.
+    icon: 🤝
+  - title: البناء والفحص
+    details: checkwork بوابة متعددة اللغات + إشعار صوتي؛ check_ai؛ cicd.
     icon: 🔨
-  - title: إدارة العمليات
-    details: kk بالاسم، kkp بالمنفذ، مع الاستبعاد الذاتي وتأكيدات المطالبة.
+  - title: البيانات والشبكة
+    details: archery لـ SQL، وgrafana للوحات، وovpn للـ VPN، وipinfo.
+    icon: 🗄️
+  - title: بحث الويب
+    details: websearch متعدد المحركات بدون مفاتيح؛ webgrab مضاد للبوت إلى Markdown.
+    icon: 🔍
+  - title: العمليات والتشغيل
+    details: kk بالاسم، وkkp بالمنفذ؛ loop لإعادة المحاولة؛ unsleep لمنع السكون.
     icon: ⚙️
-  - title: الإشعارات والأدوات المساعدة
-    details: n بث صوتي، loop مشغل الأوامر، unsleep anti-idle، cpd نسخ عميق.
+  - title: الملفات والنظام
+    details: cpd نسخ عميق، وn بث صوتي، وinject للمسار، وgraphwatch.
     icon: 📦
 ---

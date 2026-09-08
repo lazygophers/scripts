@@ -1,59 +1,57 @@
 # Añadir un script
 
-Dos pasos, sin interferencia. A continuación `{dominio}` representa uno de `build` / `file` / `git` / `process` / `misc` / `system`, `{nombre}` representa su nombre de script.
+Dos pasos, independientes entre sí. `{nombre}` es el nombre de tu script.
 
-## 1. Escribir la lógica de negocio en `lib/commands/{dominio}/{nombre}.py`
+## 1. Escribir la lógica de negocio en `lib/{nombre}.py`
 
 ```python
-#!/usr/bin/env python3
-"""foo - lo que hace."""
-import argparse
-import sys
+"""What foo does (one line; quoted by the lazyhelp catalog)."""
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="foo")
-    parser.parse_args(argv[1:])
-    # ... lógica de negocio ...
+def run() -> int:
+    # ... business logic ...
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
 ```
 
-Clasificación de dominios : `build` / `file` / `git` / `process` / `misc` / `system`. Para dominios nuevos, no olvide añadir `lib/commands/{dominio}/__init__.py`.
-
-## 2. Añadir la entrada ligera `bin/{nombre}`
+## 2. Añadir la entrada fina `bin/{nombre}`
 
 ```python
 #!/usr/bin/env python3
-"""foo Entrada ligera."""
+"""foo — what it does (fire refactor)"""
+from __future__ import annotations
+
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.commands.{dominio}.foo import main
-from lib.ui import timed
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.foo import run as do_foo
 
-raise SystemExit(timed(main, label="{nombre}")(sys.argv))
+
+class FooCli(BaseCli):
+    """What it does"""
+
+    @timed_cli
+    def run(self):
+        """Run foo"""
+        return do_foo()
+
+
+if __name__ == "__main__":
+    run_cli(FooCli())
 ```
 
 ```bash
 chmod +x bin/{nombre}
 ```
 
-Terminado. **No es necesario registrar ningún diccionario o lista.**
+## 3. Registrar catálogo y guía
 
+- Añade una línea a `TOOLS` en `lib/lazyhelp.py`: `"foo": ("categoría", "descripción de una línea")` (usa una categoría existente de `CATEGORIES_ORDER`, o crea una).
+- Para la guía IA añade `"foo": ["ejemplos copiables tal cual", ...]` a `COMMAND_SKILLS` en `lib/skills_help.py` (opcional — si no, se usa la descripción).
 
-> El envoltorio `timed` es obligatorio: cada entrada `bin/*` envuelve su llamada de nivel superior con él para que inicio/fin/duración se imprima en stderr (tenue) al salir.
-## Scripts de alias (múltiples nombres para la misma lógica con diferentes parámetros)
+Envolver con `timed_cli` es obligatorio: imprime en stderr una línea tenue de inicio/fin/duración al salir.
 
-Referencia `merge_canary` / `merge_develop` / ... : en `lib/commands/git/merge.py` exponga `run(target, argv)`, cada entrada ligera transmite un objetivo fijo :
+## Varios nombres de entrada, misma lógica
 
-```python
-# bin/merge_canary
-from lib.commands.git.merge import run
-from lib.ui import timed
-raise SystemExit(timed(run, label="merge_canary")("canary", sys.argv))
-```
+Véase `merge_canary` / `merge_develop` / ...: escribe un dispatcher único `bin/_foo` que deduzca el argumento del basename de argv[0], y crea symlinks para los demás nombres.

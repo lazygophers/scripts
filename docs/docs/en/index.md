@@ -16,13 +16,22 @@ features:
   - title: Git Workflow
     details: merge_* / push_* / switch_branch / sync_master — single repo or batch, one command away.
     icon: 🔀
-  - title: Build Checking
-    details: checkwork automates compilation checks with voice notifications; Go / Node aware.
+  - title: Git Collaboration
+    details: commit / mr / issue / squash_pr with AI-generated info; fetch_all / list_branch inspections.
+    icon: 🤝
+  - title: Build & Check
+    details: checkwork multi-language build gate with voice alerts; check_ai probes; cicd polls results.
     icon: 🔨
-  - title: Process Management
-    details: kk by name, kkp by port, with self-exclusion and confirmation prompts.
+  - title: Data & Network
+    details: archery for SQL, grafana for dashboards, ovpn for VPN, ipinfo for network info.
+    icon: 🗄️
+  - title: Web Search
+    details: websearch multi-engine key-free search; webgrab anti-bot fetching to Markdown.
+    icon: 🔍
+  - title: Process & Runtime
+    details: kk by name, kkp by port; loop retry runner; unsleep anti-idle.
     icon: ⚙️
-  - title: Notifications & Utils
-    details: n voice broadcast, loop command runner, unsleep anti-idle, cpd deep copy.
+  - title: Files & System
+    details: cpd deep copy, n voice broadcast, inject PATH setup, graphwatch graph freshness.
     icon: 📦
 ---

@@ -1,30 +1,34 @@
-# بنية الدليل
+# البنية
 
 ```
 scripts/
-├── bin/                          # نصوص برمجية للمدخل الخفيف (chmod +x)
+├── bin/                          # مداخل رقيقة (chmod +x)
 │   ├── checkwork, cpd, kk, kkp, n, ...
-│   ├── merge_canary, merge_develop, merge_master, merge_test   # يستدعي lib git_workflow.merge_to(target)
-│   ├── push_canary, push_develop, push_master, push_test       # push_to مستودع واحد / تلقائي بالدفعات خارج git
+│   ├── merge_* / push_*          # كلها symlinks → bin/_gitwf، تُوزَّع حسب اسم المدخل
 │   ├── switch_branch, sync_master, sync_branch, fetch_all, delete_branch, delete_branch_remote
-│   ├── loop, unsleep, reindex
-│   └── inject                    # حقن bin/ في PATH shell
-├── lib/
-│   ├── commands/{مجال}/{أمر}.py    # منطق الأعمال لكل أمر، يعرض main(argv) -> int
-│   │   ├── build/  file/  git/  process/  misc/  system/
-│   │   └── git/merge.py + git/push.py يعرض أيضًا run(target, argv)
-│   └── {مجال}.py                    # المكتبة المشتركة (git/exec/ui/notify/build/process/...)
+│   ├── loop, unsleep, websearch, webgrab, archery, grafana, ovpn, ...
+│   └── inject                    # حقن bin/ في PATH الغلاف
+├── lib/                          # كل المنطق (مسطح، بلا مجلدات فرعية)
+│   ├── {اسم}.py                  # وحدة عمل لكل أمر (git_workflow / batch_git / build / ...)
+│   ├── fire_base.py              # BaseCli + run_cli + timed_cli، الهيكل الموحد
+│   ├── lazyhelp.py               # سجل الأدوات (TOOLS = اسم → فئة + سطر وصف)
+│   ├── skills_help.py            # إرشاد --skills للـ AI (COMMAND_SKILLS)
+│   └── ui / notify / exec / process   # مكتبات مشتركة
+├── skills/lazyscripts/           # فهرس skill للـ AI (SKILL.md + ملفات حسب الموضوع)
+├── docs/                         # موقع وثائق Rspress (ست لغات في docs/docs/<lang>/)
 ├── tests/                        # مجموعة unittest
-├── commit / mr / issue          # نصوص برمجية bash، لإعادة كتابتها في py (مخزنة مؤقتًا في الجذر)
-└── README.md
+└── README.md (+ 5 ترجمات)
 ```
 
 ## سلسلة الاستدعاء
 
 ```
-bin/{script}            (3 أسطر من اختراق المسار + استيراد)
-  → lib.commands.{مجال}.{أمر}.main(argv)
-    → المكتبة المشتركة lib/{مجال}.py
+bin/{سكربت}            (3 أسطر + import)
+  → run_cli(<الاسم>Cli())      # lib/fire_base.py، توزيع أوامر fire الفرعية
+    → دالة العمل في lib/{الاسم}.py
+      → المشتركة lib/ui.py / lib/exec.py / ...
 ```
 
-المدخلات الخفيفة فقط تنقل argv إلى وحدة الأعمال، **لا تكتب منطق الأعمال**. القدرات المشتركة (عمليات git، تنفيذ الأوامر، UI، الإشعارات، اكتشاف البناء، إدارة العمليات...) تستقر في `lib/{مجال}.py`، قابلة لإعادة الاستخدام عبر الأوامر.
+المدخل الرقيق يمرر argv فقط إلى `run_cli` — **بلا منطق عمل هنا**. ‏`merge_*` / `push_*` روابط إلى `bin/_gitwf`؛ اسم argv[0] يحدد الإجراء والفرع الهدف. القدرات المشتركة في `lib/{النطاق}.py`.
+
+كل أداة عامة جديدة تُسجَّل في `TOOLS` داخل `lib/lazyhelp.py`؛ وإرشاد AI في `COMMAND_SKILLS` داخل `lib/skills_help.py`.

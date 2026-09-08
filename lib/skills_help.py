@@ -116,6 +116,9 @@ COMMAND_SKILLS: dict[str, list[str]] = {
         "全局 flag 放在被包裹命令前面，避免吞掉命令自己的 flag。",
     ],
     "merge_canary": ["单仓合入: `merge_canary here`；批量: `merge_canary all`；自动: `merge_canary auto`。"],
+    "merge_branch": [
+        "合并当前分支到指定分支（分支名是必填首参）: `merge_branch feat/x`（单仓）；批量: `merge_branch feat/x all`；自动: `merge_branch feat/x auto`。",
+    ],
     "merge_dev": ["单仓合入: `merge_dev here`；批量: `merge_dev all`；自动: `merge_dev auto`。"],
     "merge_develop": ["单仓合入: `merge_develop here`；批量: `merge_develop all`；自动: `merge_develop auto`。"],
     "merge_master": [
@@ -139,7 +142,7 @@ COMMAND_SKILLS: dict[str, list[str]] = {
         "碰配置的命令需要 root，可能经 sudo 重启自身；无特权查看用 `ovpn status`。",
     ],
     "push_branch": [
-        "跨仓库推当前分支（先 pull --ff-only 再 push）: `push_branch current`；指定分支: `push_branch to <分支>`。",
+        "推当前分支到指定分支（分支名是必填首参）: `push_branch feat/x`（单仓）；批量: `push_branch feat/x all`；自动: `push_branch feat/x auto`。",
         "本地检查通过后用；这会把 commit 发布到远端。",
     ],
     "push_canary": ["推当前分支到 canary: `push_canary here` / `push_canary all` / `push_canary auto`。"],
