@@ -46,12 +46,25 @@ def subcommands(script: pathlib.Path) -> list[str]:
     return sorted(names)
 
 
+def impl_path(script: pathlib.Path) -> pathlib.Path:
+    """薄壳只写一行 `from lib.cli.<mod> import ...`，子命令要去那个实现模块里找。"""
+    try:
+        tree = ast.parse(script.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return script
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("lib.cli."):
+            mod = pathlib.Path(__file__).resolve().parent / "cli" / f"{node.module.split('.')[-1]}.py"
+            if mod.exists():
+                return mod
+    return script
+
+
 def completion_map(path: pathlib.Path | None = None) -> dict[str, list[str]]:
     path = path or bin_dir()
     result: dict[str, list[str]] = {}
     for name in tool_names(path):
-        target = (path / name).resolve()
-        result[name] = subcommands(target)
+        result[name] = subcommands(impl_path((path / name).resolve()))
     return result
 
 

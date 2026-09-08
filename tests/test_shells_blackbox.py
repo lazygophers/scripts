@@ -28,11 +28,6 @@ def _all_shells() -> list[str]:
     return shells
 
 
-# bash-only 入口（fire/python 测试套不适用；sys.executable 跑会 SyntaxError）。
-# 单独覆盖在 test_disable_ipv6_runs_in_bash 类。
-_BASH_ONLY_BINS = {"disable-ipv6", "enable-ipv6"}
-
-
 class TestShellCommonFlags(unittest.TestCase):
     """所有薄壳通用参数必须正常退出。"""
 
@@ -52,7 +47,7 @@ class TestShellCommonFlags(unittest.TestCase):
         )
 
     def test_all_shells_common_flags_exit_zero(self):
-        shells = [s for s in _all_shells() if s not in _BASH_ONLY_BINS]
+        shells = _all_shells()
         self.assertGreater(len(shells), 10, "应检测到多个薄壳")
         failures = []
         for name in shells:
@@ -67,7 +62,7 @@ class TestShellCommonFlags(unittest.TestCase):
 
     def test_debug_flag_combines_with_help(self):
         """--debug 必须被剥掉而不是挡住后面的 --help（每个 bin 都支持 --debug）。"""
-        shells = [s for s in _all_shells() if s not in _BASH_ONLY_BINS]
+        shells = _all_shells()
         failures = []
         for name in shells:
             with self.subTest(shell=name):

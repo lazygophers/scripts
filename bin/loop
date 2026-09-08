@@ -1,80 +1,9 @@
 #!/usr/bin/env python3
-"""loop — 循环执行命令并追踪结果（fire 重构）
-
-- run [count] <cmd...>: 循环执行命令（成功即停；count 省略则无限）
-- infinite <cmd...>: 无限循环（成功即停）
-- force [count] <cmd...>: 强制跑满次数（失败也继续）
-"""
-from __future__ import annotations
-
+"""loop — 循环执行命令并追踪结果（fire 重构）"""
 import pathlib
-import shlex
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.fire_base import BaseCli, run_cli, timed_cli
-from lib.loop import run_loop
+from lib.cli.loop import main
 
-
-def _split_count_cmd(args: tuple[str, ...]) -> tuple[int | None, list[str]]:
-    """首 token 为数字则视为 count；否则整组视为命令。"""
-    if args and args[0].lstrip("-").isdigit():
-        return int(args[0]), list(args[1:])
-    return None, list(args)
-
-
-def _normalize_cmd(cmd: list[str]) -> list[str]:
-    """单元素含空格时拆 argv；含 shell 特殊字符则 sh -c 包裹。"""
-    if len(cmd) == 1 and " " in cmd[0]:
-        shell_special = {"|", "&", ";", "<", ">", "(", ")"}
-        if any(c in cmd[0] for c in shell_special):
-            return ["sh", "-c", cmd[0]]
-        return shlex.split(cmd[0])
-    return cmd
-
-
-class LoopCli(BaseCli):
-    """循环执行命令并追踪结果"""
-
-    def __call__(self, *args: str, force: bool = False, timeout: int | None = None):
-        """裸调用 `loop [count] <cmd...>` 等同 `loop run [count] <cmd...>`"""
-        return self.run(*args, force=force, timeout=timeout)
-
-    @timed_cli
-    def run(self, *args: str, force: bool = False, timeout: int | None = None):
-        """循环执行（成功即停；首 token 为数字时视为 count）
-
-        用法: loop run [count] <cmd...> [--force] [--timeout N]
-        """
-        count, cmd = _split_count_cmd(args)
-        if not cmd:
-            self._r.err("loop: 缺少命令")
-            return 1
-        return run_loop(_normalize_cmd(cmd), count=count, force=force, timeout=timeout)
-
-    @timed_cli
-    def infinite(self, *cmd: str, force: bool = False):
-        """无限循环
-
-        用法: loop infinite <cmd...> [--force]
-        """
-        if not cmd:
-            self._r.err("loop: 缺少命令")
-            return 1
-        return run_loop(_normalize_cmd(list(cmd)), count=None, infinite=True, force=force)
-
-    @timed_cli
-    def force(self, *args: str, timeout: int | None = None):
-        """强制跑满次数（失败也继续）
-
-        用法: loop force [count] <cmd...> [--timeout N]
-        """
-        count, cmd = _split_count_cmd(args)
-        if not cmd:
-            self._r.err("loop: 缺少命令")
-            return 1
-        return run_loop(_normalize_cmd(cmd), count=count, force=True, timeout=timeout)
-
-
-if __name__ == "__main__":
-    run_cli(LoopCli())
+raise SystemExit(main())

@@ -1,0 +1,397 @@
+"""ovpn — 连 OpenVPN，自动填账号密码和二步验证码
+
+子命令:
+  connect     连接（默认）；配置缺失时自动先跑 login
+  disconnect  断开正在运行的连接
+  status      查看连接状态（进程 + utun 网卡 + IP）
+  login       交互式录入 用户名 / 密码 / 二步验证密钥 / .ovpn 路径
+  show        查看当前配置（密码与密钥打码）
+  code        只打印当前二步验证码（不连 VPN）
+  route       管理分流规则（只让指定域名 / 网段走 VPN）
+
+配置文件: ~/.config/lazygophers/scripts/ovpn.yaml（属主 root，权限 0600）
+
+里面是明文密码和二步验证密钥，所以只有 root 读得到。connect / login / show /
+code / route 碰配置，非 root 运行时会自动用 sudo 重跑自己（会提示输本机密码）；
+status 不读配置，普通用户就能跑。
+"""
+from __future__ import annotations
+
+import os
+import pathlib
+import sys
+
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.ovpn import (
+    CONFIG_PATH,
+    load_config,
+    normalize_secret,
+    require_root,
+    running_processes,
+    save_config,
+    secure_config,
+    totp,
+    tun_interfaces,
+)
+from lib.ovpn import connect as do_connect
+from lib.ovpn import disconnect as do_disconnect
+from lib.ovpn_split import DEFAULT_DNS_PORT, normalize_domain
+from lib.ui import ask_confirm, ask_text
+
+# 提权重跑的是用户实际敲的那个命令（仓库里的 bin/<name>，或装成包后 PATH 上的入口），
+# 不是 lib/cli/ 下的实现模块——后者单独 python 起不来。
+SCRIPT_PATH = pathlib.Path(sys.argv[0]).resolve()
+# run_cli 会从 sys.argv 里剥掉 --debug / --no-say，提权重跑要的是没被动过的原始 argv
+ORIG_ARGV = list(sys.argv)
+
+
+def _mask(value: str) -> str:
+    if not value:
+        return "(未设置)"
+    if len(value) <= 4:
+        return "*" * len(value)
+    return value[:2] + "*" * (len(value) - 4) + value[-2:]
+
+
+def _ask_secret(prompt: str, *, default: str = "") -> str | None:
+    """密码类输入：明文回显（终端不回显时无法确认粘贴是否成功，故不隐藏）。
+
+    直接回车沿用已有值。设 `SCRIPTS_HIDE_SECRET=1` 可切回不回显模式。
+    """
+    if os.environ.get("SCRIPTS_HIDE_SECRET") == "1":
+        from rich.console import Console
+        from rich.prompt import Prompt
+
+        hint = "（不回显，回车沿用已有值）" if default else "（不回显）"
+        got = Prompt.ask(f"{prompt}{hint}", password=True, default="", show_default=False,
+                         console=Console())
+        if got is None:
+            return None
+        return got.strip() or default
+
+    got = ask_text(prompt, default=default)
+    if got is None:
+        return None
+    return got.strip() or default
+
+
+class OvpnCli(BaseCli):
+    """ovpn — 连 OpenVPN，自动填账号密码和二步验证码"""
+
+    def _need_root(self, cmd: str) -> bool:
+        """凭据文件是 root:0600，碰配置的子命令要 root：不是就用 sudo 重跑自己。
+
+        返回值永远是 False（重跑走 execvp 不返回），留着是为了调用点读起来直白。
+        """
+        del cmd
+        require_root(SCRIPT_PATH, ORIG_ARGV[1:])
+        if secure_config():
+            self._r.info(f"已把 {CONFIG_PATH} 收归 root:0600")
+        return False
+
+    @timed_cli
+    def login(self):
+        """交互式录入凭据，写入 ~/.config/lazygophers/scripts/ovpn.yaml
+
+        逐项询问（已有值直接回车沿用）：
+          .ovpn 配置文件路径 / 用户名 / 密码 / 是否有二步验证 → 二步验证密钥
+
+        二步验证密钥支持裸 base32，也支持 otpauth://totp/...?secret=XXX 整串。
+
+        用法: sudo ovpn login
+        """
+        if self._need_root("login"):
+            return 13
+        cfg = load_config()
+
+        profile = ask_text("VPN 配置文件 (.ovpn) 路径", default=str(cfg.get("config") or ""))
+        if profile is None:
+            self._r.err("已取消")
+            return 1
+        profile = profile.strip()
+        if profile and not pathlib.Path(profile).expanduser().is_file():
+            self._r.warn(f"文件当前不存在: {profile}（先记下，连的时候会再检查）")
+
+        username = ask_text("用户名", default=str(cfg.get("username") or ""))
+        if username is None:
+            self._r.err("已取消")
+            return 1
+
+        password = _ask_secret("密码", default=str(cfg.get("password") or ""))
+        if password is None:
+            self._r.err("已取消")
+            return 1
+
+        has_totp = ask_confirm("是否需要二步验证 (TOTP)？", default=bool(cfg.get("totp_secret")))
+        if has_totp is None:
+            self._r.err("已取消")
+            return 1
+
+        secret = ""
+        if has_totp:
+            raw = _ask_secret("二步验证密钥 (base32 或 otpauth:// 整串)",
+                              default=str(cfg.get("totp_secret") or ""))
+            if raw is None:
+                self._r.err("已取消")
+                return 1
+            secret = normalize_secret(raw)
+            if secret:
+                try:
+                    self._r.ok(f"密钥可用，当前验证码 {totp(secret)}")
+                except ValueError as e:
+                    self._r.err(str(e))
+                    return 2
+
+        cfg.update({
+            "config": profile.strip(),
+            "username": username.strip(),
+            "password": password,
+            "totp_secret": secret,
+        })
+        save_config(cfg)
+        self._r.ok(f"已写入 {CONFIG_PATH}（权限 0600）")
+        return 0
+
+    @timed_cli
+    def route(self, action: str = "list", *items: str, dns_port: int = 0):
+        """管理分流规则：只让指定域名 / 网段走 VPN，其余流量走本地网络
+
+        配置里只要有一条规则，connect 就自动进入分流模式：加 `--route-nopull`
+        拒收服务端 push 的所有路由，默认出口留给本地网络；域名靠本地 DNS 代理
+        （/etc/resolver + 127.0.0.1:<dns_port>）发现 IP 后动态加主机路由。
+
+        动作:
+          list             列出当前规则（默认）
+          add <规则>...    加域名或 CIDR 网段，自动按格式归类
+          remove <规则>... 删规则
+          clear            清空所有规则（等于关掉分流，恢复全量走 VPN）
+
+        域名写 `*.example.com`、`.example.com`、`example.com` 都一样 —— macOS 的
+        resolver 对该域名及其所有子域生效。**通配符要加引号**，否则 shell 会先展开。
+
+        用法:
+          ovpn route
+          ovpn route add '*.startpago.com' '*.betcatpay.com' 10.8.0.0/16
+          ovpn route remove betcatpay.com
+          ovpn route clear
+          ovpn route list --dns-port 5354
+        """
+        import ipaddress
+
+        if self._need_root("route ..."):
+            return 13
+        cfg = load_config()
+        routes = dict(cfg.get("routes") or {})
+        domains = [str(x) for x in (routes.get("domains") or [])]
+        cidrs = [str(x) for x in (routes.get("cidrs") or [])]
+
+        if dns_port:
+            cfg["dns_port"] = int(dns_port)
+
+        if action == "add":
+            if not items:
+                self._r.err("没给规则。例: ovpn route add '*.startpago.com'")
+                return 1
+            for raw in items:
+                try:
+                    net = str(ipaddress.ip_network(raw, strict=False))
+                except ValueError:
+                    d = normalize_domain(raw)
+                    if not d:
+                        self._r.warn(f"看不懂的规则，跳过: {raw}")
+                        continue
+                    if d not in domains:
+                        domains.append(d)
+                        self._r.ok(f"已加域名 {d}（含所有子域）")
+                    else:
+                        self._r.info(f"域名已存在: {d}")
+                else:
+                    if net not in cidrs:
+                        cidrs.append(net)
+                        self._r.ok(f"已加网段 {net}")
+                    else:
+                        self._r.info(f"网段已存在: {net}")
+        elif action == "remove":
+            if not items:
+                self._r.err("没给规则。例: ovpn route remove betcatpay.com")
+                return 1
+            for raw in items:
+                d = normalize_domain(raw)
+                hit = False
+                if d in domains:
+                    domains.remove(d)
+                    hit = True
+                for c in list(cidrs):
+                    if c == raw or (raw and c.startswith(raw)):
+                        cidrs.remove(c)
+                        hit = True
+                self._r.ok(f"已删 {raw}") if hit else self._r.warn(f"没有这条规则: {raw}")
+        elif action == "clear":
+            domains, cidrs = [], []
+            self._r.ok("已清空分流规则（下次 connect 恢复全量走 VPN）")
+        elif action != "list":
+            self._r.err(f"未知动作: {action}（可用: list / add / remove / clear）")
+            return 1
+
+        if action != "list" or dns_port:
+            cfg["routes"] = {"domains": sorted(set(domains)), "cidrs": sorted(set(cidrs))}
+            save_config(cfg)
+
+        self._r.kv("分流规则", {
+            "域名": ", ".join(sorted(set(domains))) or "(无)",
+            "网段": ", ".join(sorted(set(cidrs))) or "(无)",
+            "DNS 代理端口": str(cfg.get("dns_port") or DEFAULT_DNS_PORT),
+            "分流模式": "开（只有上面的规则走 VPN）" if (domains or cidrs) else "关（全量走 VPN）",
+        })
+        return 0
+
+    @timed_cli
+    def connect(self, verbose: bool = False, reconnect: bool = True,
+                reconnect_max: int = 0, split: bool = True):
+        """连接 VPN；断线自动重连，配置缺失自动 login，openvpn 缺失自动 brew 安装
+
+        流程：读配置 → 缺 config/用户名/密码 就转 login → 没有 openvpn 二进制
+        就跑 `brew install openvpn` → 启动 openvpn（management-hold +
+        management-query-passwords）→ 自动回填用户名 / 密码 / 二步验证码 →
+        前台驻留，Ctrl-C 断开。
+
+        断线重连分两层：openvpn 自身的 SIGUSR1 重启（不退进程，重新走 AUTH），
+        以及进程整个挂掉后本命令重新拉起（退避 5s 起步、翻倍、上限 60s，
+        连上一次后重置）。凭据错、Ctrl-C 不重连。
+
+        参数:
+          --verbose         打印 openvpn 与 management 的原始日志
+          --no-reconnect    关掉自动重连，断了就退出
+          --reconnect-max N 连续失败 N 次后放弃（默认 0 = 不限次数）
+          --no-split        本次忽略分流规则，全量流量走 VPN
+
+        配置里有分流规则（`ovpn route add ...`）时默认进入分流模式：加
+        `--route-nopull` 拒收服务端 push 的路由，只有规则命中的域名 / 网段走 VPN。
+
+        用法: ovpn connect [--verbose] [--no-reconnect] [--reconnect-max 10] [--no-split]
+        """
+        if self._need_root("connect"):
+            return 13
+        cfg = load_config()
+        missing = [k for k in ("config", "username", "password") if not str(cfg.get(k) or "").strip()]
+        if missing:
+            self._r.warn(f"配置不完整（缺 {', '.join(missing)}），先进入 login")
+            rc = self.login()
+            if rc:
+                return rc
+            cfg = load_config()
+
+        if not split:
+            cfg["split_tunnel"] = False
+
+        try:
+            return do_connect(cfg, self._r, verbose=verbose,
+                              reconnect=reconnect, reconnect_max=reconnect_max)
+        except KeyboardInterrupt:
+            self._r.warn("已中断，正在断开")
+            return 130
+
+    @timed_cli
+    def disconnect(self):
+        """断开正在运行的 openvpn 连接（需要 sudo）
+
+        只终止命令行里带 `--config` 的 openvpn 进程，不动 OpenVPN Connect.app
+        的常驻守护进程。先 SIGTERM，3 秒不退再 SIGKILL。
+
+        用法: ovpn disconnect
+        """
+        return do_disconnect(self._r)
+
+    @timed_cli
+    def status(self):
+        """查看连接状态：openvpn 进程 + 已配置 IP 的 utun 网卡
+
+        用法: ovpn status
+        """
+        procs = running_processes()
+        tuns = tun_interfaces()
+        if not procs:
+            self._r.warn("未连接（没有带 --config 的 openvpn 进程）")
+        else:
+            self._r.ok(f"已连接  {len(procs)} 个 openvpn 进程")
+            for pid, cmd in procs:
+                self._r.output(f"pid {pid}  {cmd}", prefix="  ")
+        self._r.kv("utun 网卡", {name: ip for name, ip in tuns} or {"(无)": "没有已配置 IP 的 utun"})
+        return 0 if procs else 1
+
+    @timed_cli
+    def show(self):
+        """查看当前配置（密码与二步验证密钥打码）
+
+        用法: sudo ovpn show
+        """
+        if self._need_root("show"):
+            return 13
+        cfg = load_config()
+        if not cfg:
+            self._r.warn(f"还没有配置：{CONFIG_PATH} 不存在。跑 `ovpn login`")
+            return 1
+        routes = cfg.get("routes") or {}
+        domains = [str(x) for x in (routes.get("domains") or [])]
+        cidrs = [str(x) for x in (routes.get("cidrs") or [])]
+        self._r.kv(str(CONFIG_PATH), {
+            "配置文件": str(cfg.get("config") or "(未设置)"),
+            "用户名": str(cfg.get("username") or "(未设置)"),
+            "密码": _mask(str(cfg.get("password") or "")),
+            "二步验证密钥": _mask(str(cfg.get("totp_secret") or "")),
+            "额外参数": " ".join(str(x) for x in (cfg.get("extra_args") or [])) or "(无)",
+            "自动重连": "开" if cfg.get("auto_reconnect", True) else "关",
+            "重连上限": str(cfg.get("reconnect_max", 0) or "不限"),
+            "分流域名": ", ".join(domains) or "(无)",
+            "分流网段": ", ".join(cidrs) or "(无)",
+            "分流模式": ("关（配置里 split_tunnel=false）"
+                     if not cfg.get("split_tunnel", True)
+                     else ("开（只有上面的规则走 VPN）" if (domains or cidrs) else "关（无规则，全量走 VPN）")),
+        })
+        return 0
+
+    @timed_cli
+    def code(self):
+        """只打印当前二步验证码（不连 VPN），用于验证密钥填对没有
+
+        用法: sudo ovpn code
+        """
+        if self._need_root("code"):
+            return 13
+        secret = str(load_config().get("totp_secret") or "")
+        if not secret:
+            self._r.err("配置里没有二步验证密钥。跑 `ovpn login`")
+            return 1
+        try:
+            print(totp(secret))
+        except ValueError as e:
+            self._r.err(str(e))
+            return 2
+        return 0
+
+    def __call__(self, *names: str, verbose: bool = False, reconnect: bool = True,
+                 reconnect_max: int = 0, split: bool = True):
+        """无参 → connect；带参 → 按顺序跑对应子命令。
+
+        裸调用时接受 connect 的全部 flag（`ovpn --verbose` 必须生效，
+        而不是被 fire 当成消费不掉的尾巴在退出后报错）。
+        """
+        targets = names or ("connect",)
+        rc = 0
+        for name in targets:
+            method = getattr(self, name, None)
+            if not callable(method):
+                print(f"未知子命令: {name}", file=sys.stderr)
+                return 1
+            if name == "connect":
+                rc = method(verbose=verbose, reconnect=reconnect,
+                            reconnect_max=reconnect_max, split=split) or 0
+            else:
+                rc = method() or 0
+            if rc:
+                return rc
+        return rc
+
+
+def main():
+    run_cli(OvpnCli())

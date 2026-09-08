@@ -1,68 +1,9 @@
 #!/usr/bin/env python3
-"""delete_branch_remote — 删除远端分支（fire 重构）
-
-单仓（cwd 是 git 仓库）→ 仅删当前仓库；否则批量扫描所有 Git 仓库。
-"""
-from __future__ import annotations
-
-import os
+"""delete_branch_remote — 删除远端分支（fire 重构）"""
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.batch_git import (
-    _delete_branch_remote_one_factory,
-    delete_branch_remote_all,
-    run_single_repo,
-)
-from lib.fire_base import BaseCli, run_cli, timed_cli
-from lib.ui import reporter
+from lib.cli.delete_branch_remote import main
 
-_STATUS_EXIT = {"ok": 0, "skip": 0, "fail": 1}
-
-
-class DeleteBranchRemoteCli(BaseCli):
-    """删除远端分支（单仓或批量）"""
-
-    def __call__(self, *args: str, remote: str = "origin", yes: bool = False):
-        """裸调用 `delete_branch_remote <branch>` 等同 `delete_branch_remote here <branch>`（cwd 是 git 仓库时），
-        否则自动转发到 `delete_branch_remote all <branch>`。
-        """
-        if not args:
-            self._r.err("delete_branch_remote: 缺少分支名")
-            return 1
-        branch = args[0]
-        if (pathlib.Path.cwd() / ".git").exists():
-            return self.here(branch, remote=remote)
-        return self.all(branch, remote=remote, yes=yes)
-
-    @timed_cli
-    def here(self, branch: str, remote: str = "origin"):
-        """仅在当前仓库删除远端分支"""
-        return self._delete_one(branch, remote)
-
-    @timed_cli
-    def all(self, branch: str, remote: str = "origin", yes: bool = False):
-        """批量扫描所有 Git 仓库删除远端分支
-
-        用法: delete_branch_remote all <branch> [--remote <name>] [-y]
-        """
-        if yes:
-            os.environ["BATCH_NO_CONFIRM"] = "1"
-        return delete_branch_remote_all(branch, remote=remote)
-
-    def _delete_one(self, branch: str, remote: str) -> int:
-        # 容忍带远端前缀的写法 (origin/feature/x → feature/x)
-        prefix = f"{remote}/"
-        if branch.startswith(prefix):
-            branch = branch[len(prefix):]
-        r = reporter(stderr=True)
-        op = _delete_branch_remote_one_factory(branch, remote=remote)
-        status, detail = run_single_repo(op, pathlib.Path.cwd(), r, pathlib.Path.cwd())
-        if detail:
-            (r.ok if status == "ok" else r.warn if status == "skip" else r.err)(detail)
-        return _STATUS_EXIT.get(status, 1)
-
-
-if __name__ == "__main__":
-    run_cli(DeleteBranchRemoteCli())
+raise SystemExit(main())

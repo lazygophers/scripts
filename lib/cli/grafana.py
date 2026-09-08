@@ -1,0 +1,179 @@
+"""grafana — Grafana HTTP API 命令行客户端，按域名分别保存登录。"""
+
+from __future__ import annotations
+
+import json
+import sys
+from functools import wraps
+
+from lib.fire_base import run_cli, timed_cli
+from lib.grafana import (
+    GrafanaError,
+    client_for,
+    config_lock,
+    default_config_path,
+    host_key,
+    load_config,
+    normalize_url,
+    parse_data,
+    profiles,
+    put_profile,
+    resolve_profile,
+    save_config,
+)
+from lib.ui import Reporter, ask_text, reporter, timed
+
+
+def _print_help() -> None:
+    r = reporter(stderr=True)
+    r.rule("grafana", style="blue")
+    r.step("Grafana HTTP API 客户端")
+    r.step("用法: grafana <command> [flags]")
+    r.summary("常用", [
+        ("login", "录入一个 Grafana 站点", "blue"),
+        ("hosts", "列出已配置站点", "blue"),
+        ("health", "查看 Grafana 健康状态", "blue"),
+        ("search", "搜索仪表盘", "blue"),
+        ("api", "直接调用任意 Grafana API", "blue"),
+    ])
+    r.step("提示: 裸跑 `grafana` 会显示 `--skills`。")
+
+
+def emit(data) -> None:
+    if data is None:
+        return
+    if isinstance(data, str):
+        print(data)
+    else:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def cmd(method):
+    @timed_cli
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except GrafanaError as e:
+            self._r.err(str(e))
+            return 2
+
+    return wrapper
+
+
+class _Group:
+    def __init__(self, reporter_obj: Reporter | None = None) -> None:
+        self._r = reporter_obj or reporter(stderr=True)
+
+    def _client(self, host: str = ""):
+        return client_for(host, reporter=self._r)
+
+
+class AuthCli(_Group):
+    """认证状态"""
+
+    @cmd
+    def state(self, host: str = ""):
+        """查看当前 token 是否可用。"""
+        emit(self._client(host).health())
+        return 0
+
+
+class GrafanaCli(_Group):
+    """Grafana HTTP API 客户端"""
+
+    def __init__(self, reporter_obj: Reporter | None = None) -> None:
+        super().__init__(reporter_obj)
+        self.auth = AuthCli(self._r)
+
+    @cmd
+    def hosts(self, host: str = ""):
+        """列出已配置站点。"""
+        cfg = load_config()
+        known = profiles(cfg)
+        if not known:
+            self._r.warn(f"还没有配置任何站点（{default_config_path()}）。跑 `grafana login`")
+            return 1
+        current = str(cfg.get("current") or "")
+        for name, profile in sorted(known.items()):
+            marker = "★" if name == current else " "
+            self._r.step(f"{marker} {name} -> {profile.get('url') or name}")
+        return 0
+
+    @cmd
+    def use(self, host: str):
+        """切换默认站点。"""
+        with config_lock():
+            cfg = load_config()
+            key, profile = resolve_profile(cfg, host)
+            cfg["current"] = key
+            cfg = put_profile(cfg, key, profile)
+            save_config(cfg)
+        self._r.ok(f"已切换到 {host_key(host)}")
+        return 0
+
+    @cmd
+    def login(self, url: str = "", token: str = "", username: str = "", password: str = "",
+              insecure: bool = False, host: str = ""):
+        """录入一个 Grafana 站点。"""
+        if host:
+            url = host
+        if not url:
+            url = ask_text("Grafana 站点地址", default="") or ""
+            if not url.strip():
+                self._r.err("已取消")
+                return 1
+        if not token and not username:
+            token = ask_text("Grafana token（没有就回车用用户名密码）", default="") or ""
+        if not token and not username:
+            username = ask_text("Grafana 用户名", default="") or ""
+            if not username.strip():
+                self._r.err("已取消")
+                return 1
+        if not token and not password:
+            password = ask_text("Grafana 密码", default="") or ""
+            if not password:
+                self._r.err("已取消")
+                return 1
+        profile = {
+            "url": normalize_url(url),
+            "token": token,
+            "username": username,
+            "password": password,
+            "insecure": bool(insecure),
+        }
+        key = host_key(url)
+        with config_lock():
+            cfg = load_config()
+            cfg = put_profile(cfg, key, profile)
+            cfg["current"] = key
+            save_config(cfg)
+        self._r.ok(f"已保存 {key}")
+        return 0
+
+    @cmd
+    def health(self, host: str = ""):
+        """查看 Grafana 健康状态。"""
+        emit(self._client(host).health())
+        return 0
+
+    @cmd
+    def search(self, query: str, host: str = ""):
+        """搜索仪表盘。"""
+        emit(self._client(host).search(query))
+        return 0
+
+    @cmd
+    def api(self, method: str, path: str, data="", host: str = "", **params):
+        """直接调用任意 Grafana API。"""
+        emit(self._client(host).request(method, path, json_body=parse_data(data), params=params or None))
+        return 0
+
+
+def main():
+    if len(sys.argv) == 2 and sys.argv[1] in {"-h", "--help"}:
+        _print_help()
+        raise SystemExit(0)
+    if len(sys.argv) <= 1:
+        sys.argv.append("--skills")
+    timed(run_cli, label="grafana")(GrafanaCli())

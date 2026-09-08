@@ -1,56 +1,9 @@
-#!/usr/bin/env bash
-# enable-ipv6.sh — 开启本机所有网络服务的 IPv6（自动模式）
-set -euo pipefail
+#!/usr/bin/env python3
+"""enable-ipv6 薄壳入口 — 开启本机所有网络服务的 IPv6（需 sudo）"""
+import pathlib
+import sys
 
-# --debug：打执行轨迹，且剥掉自己，让后面的 case 还能匹配 --help/--skills
-for _a in "$@"; do
-  [[ $_a == --debug ]] && { set -x; export SCRIPTS_DEBUG=1; }
-done
-_debug_stripped=()
-for _a in "$@"; do [[ $_a != --debug ]] && _debug_stripped+=("$_a"); done
-# bash 3.2（macOS 自带）set -u 下空数组展开报 unbound，空时不动参数集
-((${#_debug_stripped[@]})) && set -- "${_debug_stripped[@]}"
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.ipv6 import enable_ipv6 as main
 
-case " ${*:1} " in
-  *" --skills "*)
-    cat <<'EOF'
-# enable-ipv6 skills
-
-受众：使用本命令的 AI agent。
-概述：开启本机所有网络服务的 IPv6（自动模式）。
-
-何时用：
-- 用 networksetup 恢复本机所有 macOS 网络服务的 IPv6 自动模式。
-- 需要 sudo/root；改主机网络配置。
-
-通用约定：
-- 组参前先跑 `--help` 看人类可读用法。
-- 改主机网络配置前先和用户确认。
-EOF
-    exit 0
-    ;;
-  *" --help "*|*" -h "*)
-    cat <<'EOF'
-enable-ipv6 — 开启本机所有网络服务的 IPv6（自动模式）
-
-用法: enable-ipv6
-
-选项:
-  -h, --help    显示帮助并退出
-  --debug       打印每条命令的执行轨迹（set -x）
-  --skills      显示给 AI 看的命令能力说明并退出
-EOF
-    exit 0
-    ;;
-esac
-
-[[ $EUID -eq 0 ]] || { echo "需 sudo 运行"; exit 1; }
-
-networksetup -listallnetworkservices | tail -n +2 | sed 's/^\*//' | while IFS= read -r svc; do
-  [[ -z "$svc" ]] && continue
-  if networksetup -setv6automatic "$svc" 2>/dev/null; then
-    echo "on: $svc"
-  else
-    echo "skip: $svc"
-  fi
-done
+raise SystemExit(main())

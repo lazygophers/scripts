@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import importlib.machinery
-import importlib.util
+import importlib
 import pathlib
 import tempfile
 import unittest
@@ -22,14 +21,10 @@ class ReporterStub:
 
 
 def load_inject():
-    path = pathlib.Path(__file__).resolve().parent.parent / "bin" / "inject"
-    loader = importlib.machinery.SourceFileLoader("inject_mod", str(path))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("无法加载 bin/inject")
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
+    """每次给一份新模块：下面的用例会直接改模块级路径常量，不能互相串。"""
+    import lib.cli.inject
+
+    return importlib.reload(lib.cli.inject)
 
 
 class TestInjectCompletion(unittest.TestCase):

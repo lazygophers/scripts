@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -71,26 +72,38 @@ TOOLS: dict[str, tuple[str, str]] = {
 CATEGORIES_ORDER = ["Git 工作流", "Git 协作", "构建与检查", "数据与网络", "网页检索", "进程与运行", "文件与系统"]
 
 
-def _bin_dir() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parent.parent / "bin"
+def _bin_dir() -> pathlib.Path | None:
+    """仓库内的 bin/ 目录；装成 Python 包后不存在（命令在 PATH 上），返回 None。"""
+    d = pathlib.Path(__file__).resolve().parent.parent / "bin"
+    return d if d.is_dir() else None
 
 
 def _all_bins() -> list[str]:
-    """bin/ 下所有可执行名（按字母排序）；含 _gitwf 与 lazyhelp。"""
+    """所有命令名（按字母排序）。仓库内直接扫 bin/，装成包后退回 TOOLS 注册表。"""
     bin_dir = _bin_dir()
+    if bin_dir is None:
+        return sorted(TOOLS)
     return sorted(
         p.name for p in bin_dir.iterdir()
-        if not p.name.startswith(".") and (p.is_file() or p.is_symlink())
+        if not p.name.startswith(".") and p.is_file()
     )
 
 
+def _resolve(name: str) -> str | None:
+    """命令的可执行路径：优先仓库内 bin/<name>，否则查 PATH。"""
+    bin_dir = _bin_dir()
+    if bin_dir is not None and (bin_dir / name).exists():
+        return str(bin_dir / name)
+    return shutil.which(name)
+
+
 def show_full(name: str, *, extra_args: list[str] | None = None) -> int:
-    """调 bin/<name> --help 输出完整说明（extra_args 透传给子命令）。"""
-    target = _bin_dir() / name
-    if not target.exists():
+    """调 <name> --help 输出完整说明（extra_args 透传给子命令）。"""
+    target = _resolve(name)
+    if target is None:
         print(f"lazyhelp: 未在 bin/ 中找到 {name!r}", file=sys.stderr)
         return 2
-    args = [str(target), "--help", *(extra_args or [])]
+    args = [target, "--help", *(extra_args or [])]
     env = os.environ.copy()
     env.setdefault("SCRIPTS_NO_SAY", "1")  # 抑制嵌套 say 噪音
     try:

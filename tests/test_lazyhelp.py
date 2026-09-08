@@ -15,12 +15,11 @@ from lib.ui import Reporter
 
 class TestRegistry(unittest.TestCase):
     def test_all_bin_entries_registered(self) -> None:
-        """每个 bin/ 入口（薄壳 + 内部 _gitwf）都应在 TOOLS 中声明（除 lazyhelp 自己）。"""
+        """每个 bin/ 薄壳都应在 TOOLS 中声明（除 lazyhelp 自己）。"""
         bin_dir = pathlib.Path(__file__).resolve().parent.parent / "bin"
         actual = {p.name for p in bin_dir.iterdir()
                   if not p.name.startswith(".") and p.is_file() or p.is_symlink()}
         actual.discard("lazyhelp")  # 自指，排除
-        actual.discard("_gitwf")  # 内部 symlink 入口（merge_*/push_* 复用），不直接展示
         registered = set(TOOLS)
         missing = actual - registered
         extra = registered - actual
@@ -42,7 +41,6 @@ class TestAllBins(unittest.TestCase):
         self.assertIn("lazyhelp", names)
         self.assertIn("cpd", names)
         self.assertIn("merge_master", names)
-        self.assertIn("_gitwf", names)
 
     def test_sorted(self) -> None:
         names = _all_bins()
@@ -114,11 +112,6 @@ class TestMainDispatch(unittest.TestCase):
     def test_known_tool_runs_help(self) -> None:
         # 实跑：cpd 的 --help 退出码 0
         rc = main(["lazyhelp", "cpd"])
-        self.assertEqual(rc, 0)
-
-    def test_internal_symlink_runs_help(self) -> None:
-        # _gitwf 在 bin/ 但不在 TOOLS — 仍应透传
-        rc = main(["lazyhelp", "_gitwf"])
         self.assertEqual(rc, 0)
 
     def test_unknown_tool_falls_back_to_overview(self) -> None:

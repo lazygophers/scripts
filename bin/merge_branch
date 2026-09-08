@@ -1,1 +1,9 @@
-_gitwf
+#!/usr/bin/env python3
+"""merge_branch 薄壳入口 — merge 当前分支 → 目标分支由首参指定"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.gitwf import merge_branch as main
+
+raise SystemExit(main())

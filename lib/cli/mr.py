@@ -1,0 +1,56 @@
+"""mr — 自动创建 PR/MR（调 claude 生成 title/body）（fire 重构）"""
+from __future__ import annotations
+
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.mr_wf import run_mr
+
+
+class MrCli(BaseCli):
+    """自动创建 PR/MR（调 claude 生成 title/body）"""
+
+    def __call__(
+        self,
+        *args: str,
+        dry_run: bool = False,
+        publish: bool = False,
+        reviews: str | None = None,
+        labels: str | None = None,
+        assignee: str | None = None,
+        settings: str | None = None,
+    ):
+        """裸调用 `mr [<base>]` 等同 `mr create [<base>]`"""
+        base = args[0] if args else None
+        return self.create(
+            base, dry_run=dry_run, publish=publish,
+            reviews=reviews, labels=labels, assignee=assignee, settings=settings,
+        )
+
+    @timed_cli
+    def create(
+        self,
+        base: str | None = None,
+        *,
+        dry_run: bool = False,
+        publish: bool = False,
+        reviews: str | None = None,
+        labels: str | None = None,
+        assignee: str | None = None,
+        settings: str | None = None,
+    ):
+        """创建 PR/MR
+
+        用法: mr create [<base>] [--publish] [--reviews ...] [--labels ...] [--assignee ...] [--settings FILE]
+        """
+        return run_mr(
+            base,
+            dry_run=dry_run,
+            draft=not publish,
+            reviews=reviews,
+            labels=labels,
+            assignee=assignee,
+            settings_file=settings,
+        )
+
+
+def main():
+    run_cli(MrCli())

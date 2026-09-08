@@ -13,40 +13,50 @@ def run() -> int:
     return 0
 ```
 
-## 2. Ajouter l'entrée fine `bin/{nom}`
+## 2. Écrire la CLI dans `lib/cli/{nom}.py`
 
 ```python
-#!/usr/bin/env python3
-"""foo — what it does (fire refactor)"""
+"""foo — ce que ça fait"""
 from __future__ import annotations
 
-import pathlib
-import sys
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.foo import run as do_foo
 
 
 class FooCli(BaseCli):
-    """What it does"""
+    """ce que ça fait"""
 
     @timed_cli
     def run(self):
-        """Run foo"""
+        """Exécuter foo"""
         return do_foo()
 
 
-if __name__ == "__main__":
+def main():
     run_cli(FooCli())
+```
+
+## 3. Ajouter l'entrée fine `bin/{nom}`
+
+```python
+#!/usr/bin/env python3
+"""foo entrée fine — ce que ça fait"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.foo import main
+
+raise SystemExit(main())
 ```
 
 ```bash
 chmod +x bin/{nom}
 ```
 
-## 3. Enregistrer catalogue & guidance
+## 4. Enregistrer la commande, le catalogue et la guidance
 
+- Ajoutez une ligne à `[project.scripts]` dans `pyproject.toml` : `foo = "lib.cli.foo:main"`. Sans elle, la commande n'existe pas après installation et `uvx --from git+https://github.com/lazygophers/scripts foo` échoue.
 - Ajoutez une ligne dans `TOOLS` de `lib/lazyhelp.py` : `"foo": ("catégorie", "description en une ligne")` (utilisez une catégorie existante de `CATEGORIES_ORDER`, sinon créez-en une).
 - Pour la guidance IA, ajoutez `"foo": ["exemples copiables tels quels", ...]` dans `COMMAND_SKILLS` de `lib/skills_help.py` (optionnel — à défaut, la description est utilisée).
 
@@ -54,4 +64,4 @@ L'enveloppement `timed_cli` est obligatoire : il affiche en stderr une ligne gri
 
 ## Plusieurs noms d'entrée, même logique
 
-Voir `merge_canary` / `merge_develop` / ... : écrivez un dispatcher unique `bin/_foo` qui déduit l'argument du basename de argv[0], puis créez des symlinks pour les autres noms.
+Voir `merge_canary` / `merge_develop` / ... : mettez la classe partagée dans un seul `lib/cli/gitwf.py`, puis exportez une fonction sans argument par nom, qui passe ses propres paramètres (`def merge_canary(): _run("merge_canary", "merge", "canary")`). Chaque nom a sa propre entrée `bin/` et sa propre ligne `[project.scripts]` — jamais de symlink, jamais de déduction via argv[0].

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Tests for lib.cicd / bin.cicd."""
+"""Tests for lib.cicd / lib.cli.cicd."""
 import subprocess
 import sys
 import unittest
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,22 +15,22 @@ from lib.cicd import (
     _run_status,
     _validate_config,
     build_logs_command,
-    build_run_status_command,
     build_play_command,
+    build_run_status_command,
     build_status_command,
     check_once,
     check_run_once,
     classify_status,
     logs_cicd,
-    resolve_provider,
     play_cicd,
+    resolve_provider,
     status_cicd,
     watch_cicd,
 )
+from lib.cli import cicd as _cicd_bin
 from lib.exec import CommandTimeout
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-_cicd_bin = SourceFileLoader("cicd_bin_test_mod", str(REPO_ROOT / "bin" / "cicd")).load_module()
 
 
 def _gh_info() -> ProviderInfo:

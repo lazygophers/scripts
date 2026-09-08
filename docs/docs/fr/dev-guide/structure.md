@@ -4,7 +4,7 @@
 scripts/
 ├── bin/                          # scripts d'entrée fins (chmod +x)
 │   ├── checkwork, cpd, kk, kkp, n, ...
-│   ├── merge_* / push_*          # tous des symlinks → bin/_gitwf, dispatch selon le nom
+│   ├── merge_* / push_*          # 12 vrais fichiers, chacun appelle son entrée dans lib/cli/gitwf.py
 │   ├── switch_branch, sync_master, sync_branch, fetch_all, delete_branch, delete_branch_remote
 │   ├── loop, unsleep, websearch, webgrab, archery, grafana, ovpn, ...
 │   └── inject                    # injecte bin/ dans le PATH du shell
@@ -29,6 +29,6 @@ bin/{script}            (3 lignes de path hack + import)
       → lib/ui.py / lib/exec.py / ... partagés
 ```
 
-L'entrée fine transmet juste argv à `run_cli` — **aucune logique métier ici**. `merge_*` / `push_*` sont des symlinks vers `bin/_gitwf` ; le basename de argv[0] détermine l'action et la branche cible. Les capacités partagées (opérations git, exécution, UI, notifications, ...) vivent dans `lib/{domaine}.py`.
+`bin/` ne contient **ni logique métier ni symlink** : chaque shell est `from lib.cli.<module> import <fn> as main` + `raise SystemExit(main())`. L'implémentation vit dans `lib/cli/<nom>.py` (un module par commande) et appelle les helpers partagés de `lib/{domaine}.py`. `merge_*` / `push_*` sont 12 shells au-dessus de `lib/cli/gitwf.py` ; chacun passe `(name, action, target)` explicitement. Les mêmes fonctions sont déclarées dans `[project.scripts]`, donc `uvx --from git+https://github.com/lazygophers/scripts <nom>` lance n'importe quel outil sans cloner.
 
 Tout nouvel outil public doit être enregistré dans `TOOLS` de `lib/lazyhelp.py` (catégorie + description) ; la guidance IA va dans `COMMAND_SKILLS` de `lib/skills_help.py`.

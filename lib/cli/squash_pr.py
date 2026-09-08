@@ -1,0 +1,57 @@
+"""squash_pr — 把 source 自分叉以来的改动压成单 commit → 对接 mr 开 PR（fire 重构）
+
+产出一个仅含单 commit 的 <source>_pr 分支，push 后调 mr <target> 开 PR。
+源分支与 target 分支本身不动。
+"""
+from __future__ import annotations
+
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.git import get_current_branch
+from lib.squash_pr_wf import run_squash_pr
+
+
+class SquashPrCli(BaseCli):
+    """压 source 自分叉以来的改动为单 commit → 开 PR"""
+
+    def __call__(
+        self,
+        *args: str,
+        source: str | None = None,
+        dry_run: bool = False,
+        push_only: bool = False,
+    ):
+        """裸调用 `squash_pr <target> [source]` 等同 `squash_pr run <target> [source]`
+
+        args: 第一项 target；若有第二项视为 source（向后兼容，亦可用 --source=）。"""
+        if not args:
+            self._r.err("squash_pr: 缺少 target 分支名")
+            return 1
+        target = args[0]
+        if len(args) >= 2:
+            source = args[1]
+        return self.run(target, source, dry_run=dry_run, push_only=push_only)
+
+    @timed_cli
+    def run(
+        self,
+        target: str,
+        source: str | None = None,
+        *,
+        dry_run: bool = False,
+        push_only: bool = False,
+    ):
+        """执行 squash → push → 开 PR
+
+        用法: squash_pr run <target> [source] [--dry-run] [--push-only]
+        """
+        if source is None:
+            source = get_current_branch()
+        if not source:
+            self._r.err("squash_pr: 无法获取当前分支作为 source，请显式传入")
+            return 1
+        res = run_squash_pr(source, target, dry_run=dry_run, no_mr=push_only)
+        return res.returncode
+
+
+def main():
+    run_cli(SquashPrCli())

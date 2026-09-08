@@ -1,1 +1,9 @@
-_gitwf
+#!/usr/bin/env python3
+"""push_test 薄壳入口 — push 当前分支 → 目标分支 test"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.gitwf import push_test as main
+
+raise SystemExit(main())

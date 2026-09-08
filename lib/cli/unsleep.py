@@ -1,0 +1,46 @@
+"""unsleep — 防止 macOS 系统休眠（fire 重构）
+
+- 无参数: 无限制防休眠（Ctrl+C 结束）
+- -t N: 持续 N 秒
+- 位置参数: 跟随命令运行，命令结束即结束
+"""
+from __future__ import annotations
+
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.system import prevent_sleep
+
+
+class UnsleepCli(BaseCli):
+    """防止 macOS 系统休眠"""
+
+    def __call__(self):
+        """裸调用 `unsleep` 等同 `unsleep forever`"""
+        return self.forever()
+
+    @timed_cli
+    def forever(self):
+        """无限制防休眠（Ctrl+C 结束）"""
+        return prevent_sleep(duration=None, command=None)
+
+    @timed_cli
+    def timed(self, seconds: int):
+        """指定时长防休眠
+
+        用法: unsleep timed <秒数>
+        """
+        return prevent_sleep(duration=seconds, command=None)
+
+    @timed_cli
+    def with_command(self, *cmd: str):
+        """跟随命令运行（命令结束即结束防休眠）
+
+        用法: unsleep with_command <cmd> [args...]
+        """
+        if not cmd:
+            self._r.err("unsleep with_command: 缺少命令")
+            return 1
+        return prevent_sleep(duration=None, command=list(cmd))
+
+
+def main():
+    run_cli(UnsleepCli())

@@ -1,0 +1,28 @@
+"""switch_branch — 批量切换分支（fire 重构）"""
+from __future__ import annotations
+
+from lib.batch_git import switch_branch_all
+from lib.fire_base import BaseCli, run_cli, timed_cli
+
+
+class SwitchBranchCli(BaseCli):
+    """批量切换所有仓库到指定分支"""
+
+    def __call__(self, *args: str):
+        """裸调用 `switch_branch <branch>` 等同 `switch_branch to <branch>`"""
+        if not args:
+            self._r.err("switch_branch: 缺少分支名")
+            return 1
+        return self.to(args[0])
+
+    @timed_cli
+    def to(self, branch: str):
+        """切换到指定分支
+
+        用法: switch_branch to <branch>
+        """
+        return switch_branch_all(branch)
+
+
+def main():
+    run_cli(SwitchBranchCli())

@@ -1,27 +1,9 @@
 #!/usr/bin/env python3
 """list_branch — 列出所有仓库的本地分支（fire 重构）"""
-from __future__ import annotations
-
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.fire_base import BaseCli, run_cli, timed_cli
-from lib.git import list_branch
+from lib.cli.list_branch import main
 
-
-class ListBranchCli(BaseCli):
-    """列出所有仓库的本地分支"""
-
-    def __call__(self):
-        """裸调用 `list_branch` 等同 `list_branch all`"""
-        return self.all()
-
-    @timed_cli
-    def all(self):
-        """扫描当前目录所有 Git 仓库并列分支"""
-        return list_branch()
-
-
-if __name__ == "__main__":
-    run_cli(ListBranchCli())
+raise SystemExit(main())

@@ -59,10 +59,7 @@ class TestAllBinsSkillsFlag(unittest.TestCase):
             "SCRIPTS_NO_SAY": "1",
         }
         cwd = tempfile.mkdtemp(prefix="skills_cwd_")
-        if name in {"disable-ipv6", "enable-ipv6"}:
-            cmd = [str(BIN_DIR / name), "--skills"]
-        else:
-            cmd = [sys.executable, str(BIN_DIR / name), "--skills"]
+        cmd = [sys.executable, str(BIN_DIR / name), "--skills"]
         return subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=cwd, timeout=10)
 
     def test_all_bins_support_skills(self) -> None:

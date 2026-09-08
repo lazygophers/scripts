@@ -13,40 +13,50 @@ def run() -> int:
     return 0
 ```
 
-## 2. Добавить обёртку `bin/{имя}`
+## 2. Написать CLI в `lib/cli/{имя}.py`
 
 ```python
-#!/usr/bin/env python3
-"""foo — what it does (fire refactor)"""
+"""foo — что делает"""
 from __future__ import annotations
 
-import pathlib
-import sys
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.foo import run as do_foo
 
 
 class FooCli(BaseCli):
-    """What it does"""
+    """что делает"""
 
     @timed_cli
     def run(self):
-        """Run foo"""
+        """Запустить foo"""
         return do_foo()
 
 
-if __name__ == "__main__":
+def main():
     run_cli(FooCli())
+```
+
+## 3. Добавить обёртку `bin/{имя}`
+
+```python
+#!/usr/bin/env python3
+"""foo обёртка — что делает"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.foo import main
+
+raise SystemExit(main())
 ```
 
 ```bash
 chmod +x bin/{имя}
 ```
 
-## 3. Зарегистрировать в каталоге и руководстве
+## 4. Зарегистрировать команду, каталог и руководство
 
+- Добавьте строку в `[project.scripts]` в `pyproject.toml`: `foo = "lib.cli.foo:main"`. Без неё после установки команды не существует, и `uvx --from git+https://github.com/lazygophers/scripts foo` падает.
 - Добавьте строку в `TOOLS` из `lib/lazyhelp.py`: `"foo": ("категория", "описание в одну строку")` (используйте существующую категорию из `CATEGORIES_ORDER` или создайте новую).
 - Для ИИ-руководства добавьте `"foo": ["примеры, которые можно копировать как есть", ...]` в `COMMAND_SKILLS` из `lib/skills_help.py` (опционально — иначе используется описание).
 
@@ -54,4 +64,4 @@ chmod +x bin/{имя}
 
 ## Несколько имён входа, одна логика
 
-См. `merge_canary` / `merge_develop` / ...: напишите один диспетчер `bin/_foo`, выводящий аргумент из basename argv[0], и сделайте остальные имена symlink'ами на него.
+См. `merge_canary` / `merge_develop` / ...: общий класс держите в одном `lib/cli/gitwf.py`, а для каждого имени экспортируйте функцию без аргументов, которая явно передаёт свои параметры (`def merge_canary(): _run("merge_canary", "merge", "canary")`). У каждого имени своя обёртка в `bin/` и своя строка в `[project.scripts]` — никаких symlink'ов и никакого разбора argv[0].

@@ -7,6 +7,55 @@ requires-python = ">=3.9"
 # pyyaml=配置读写(archery/graphwatch)
 dependencies = ["fire>=0.5", "rich>=13.0", "pyyaml>=6"]
 
+# 每个命令一个 console_scripts 入口, 指向 lib/cli/<name>.py 里的函数。
+# bin/<name> 只是同一个函数的薄壳(clone 后可直接跑), 实现只有 lib/ 一份。
+# 装好后可远程执行: uvx --from git+https://github.com/lazygophers/scripts <命令名>
+[project.scripts]
+archery = "lib.cli.archery:main"
+check_ai = "lib.cli.check_ai:main"
+checkwork = "lib.cli.checkwork:main"
+cicd = "lib.cli.cicd:main"
+commit = "lib.cli.commit:main"
+cpd = "lib.cli.cpd:main"
+delete_branch = "lib.cli.delete_branch:main"
+delete_branch_remote = "lib.cli.delete_branch_remote:main"
+disable-ipv6 = "lib.cli.ipv6:disable_ipv6"
+enable-ipv6 = "lib.cli.ipv6:enable_ipv6"
+fetch_all = "lib.cli.fetch_all:main"
+grafana = "lib.cli.grafana:main"
+graphwatch = "lib.cli.graphwatch:main"
+inject = "lib.cli.inject:main"
+ipinfo = "lib.cli.ipinfo:main"
+issue = "lib.cli.issue:main"
+kk = "lib.cli.kk:main"
+kkp = "lib.cli.kkp:main"
+lazyhelp = "lib.cli.lazyhelp:main"
+list_branch = "lib.cli.list_branch:main"
+loop = "lib.cli.loop:main"
+merge_branch = "lib.cli.gitwf:merge_branch"
+merge_canary = "lib.cli.gitwf:merge_canary"
+merge_dev = "lib.cli.gitwf:merge_dev"
+merge_develop = "lib.cli.gitwf:merge_develop"
+merge_master = "lib.cli.gitwf:merge_master"
+merge_test = "lib.cli.gitwf:merge_test"
+mr = "lib.cli.mr:main"
+n = "lib.cli.n:main"
+ovpn = "lib.cli.ovpn:main"
+push_branch = "lib.cli.gitwf:push_branch"
+push_canary = "lib.cli.gitwf:push_canary"
+push_dev = "lib.cli.gitwf:push_dev"
+push_develop = "lib.cli.gitwf:push_develop"
+push_master = "lib.cli.gitwf:push_master"
+push_test = "lib.cli.gitwf:push_test"
+squash_pr = "lib.cli.squash_pr:main"
+switch_branch = "lib.cli.switch_branch:main"
+sync_branch = "lib.cli.sync_branch:main"
+sync_master = "lib.cli.sync_master:main"
+unsleep = "lib.cli.unsleep:main"
+vpn-prio = "lib.cli.vpn_prio:main"
+webgrab = "lib.cli.webgrab:main"
+websearch = "lib.cli.websearch:main"
+
 [project.optional-dependencies]
 # graphwatch 监听需要 graphify（PyPI 包名 graphifyy）+ 其硬依赖 watchdog，默认不装
 graphify = ["graphifyy[all]>=0.9.55", "watchdog>=4"]
@@ -18,12 +67,11 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["lib"]
+packages = ["lib", "lib.cli"]
 
 [tool.setuptools.package-dir]
 lib = "lib"
 
-# scripts 入口由 bin/ 下的可执行文件提供, 不走 console_scripts (保留 shebang 直执行模式)
 [tool.ruff]
 line-length = 120
 target-version = "py39"

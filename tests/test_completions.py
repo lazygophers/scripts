@@ -6,7 +6,7 @@ import pathlib
 import tempfile
 import unittest
 
-from lib.completions import bash_completion, completion_map, fish_completion, fish_completion_for, subcommands, tool_names, zsh_completion
+from lib.completions import bash_completion, completion_map, fish_completion, fish_completion_for, impl_path, subcommands, tool_names, zsh_completion
 
 
 class TestCompletions(unittest.TestCase):
@@ -17,14 +17,20 @@ class TestCompletions(unittest.TestCase):
         self.assertIn("merge_master", names)
 
     def test_subcommands_extract_fire_methods(self) -> None:
-        commands = subcommands(pathlib.Path(__file__).resolve().parent.parent / "bin" / "inject")
+        commands = subcommands(pathlib.Path(__file__).resolve().parent.parent / "lib" / "cli" / "inject.py")
         self.assertIn("run", commands)
         self.assertIn("show", commands)
         self.assertIn("uninstall", commands)
 
-    def test_completion_map_follows_symlink_target(self) -> None:
+    def test_impl_path_follows_shell_to_lib_cli(self) -> None:
+        """bin/ 薄壳没有子命令，impl_path 要指到 lib/cli/ 下的实现模块。"""
+        shell = pathlib.Path(__file__).resolve().parent.parent / "bin" / "merge_master"
+        self.assertEqual(impl_path(shell).name, "gitwf.py")
+
+    def test_completion_map_follows_shell_to_impl(self) -> None:
         data = completion_map(pathlib.Path(__file__).resolve().parent.parent / "bin")
         self.assertIn("auto", data["merge_master"])
+        self.assertIn("run", data["inject"])
 
     def test_completion_scripts_include_shell_commands(self) -> None:
         data = {"inject": ["run", "show"], "unsleep": ["timed", "with-command", "with_command"]}

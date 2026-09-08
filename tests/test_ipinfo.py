@@ -226,11 +226,11 @@ class TestIsHotspotWifi(unittest.TestCase):
 
 
 class TestCliImport(unittest.TestCase):
-    """bin/ipinfo 反射注册表：确认子命令存在且 wan/proxy 已移除。"""
+    """lib/cli/ipinfo.py 反射注册表：确认子命令存在且 wan/proxy 已移除。"""
 
     def _load(self):
-        from importlib.machinery import SourceFileLoader
-        return SourceFileLoader("ipinfo_test_mod", str(Path(__file__).resolve().parent.parent / "bin" / "ipinfo")).load_module()
+        from lib.cli import ipinfo as mod
+        return mod
 
     def test_cli_subcommands(self):
         cli = self._load().IpinfoCli()
@@ -264,13 +264,11 @@ class TestCliImport(unittest.TestCase):
 
 
 class TestCliOutput(unittest.TestCase):
-    """bin/ipinfo 的实际打印内容（mock lib.ipinfo 的三个函数）。"""
+    """lib/cli/ipinfo.py 的实际打印内容（mock lib.ipinfo 的三个函数）。"""
 
     def setUp(self):
-        from importlib.machinery import SourceFileLoader
-        self.mod = SourceFileLoader(
-            "ipinfo_out_mod", str(Path(__file__).resolve().parent.parent / "bin" / "ipinfo")
-        ).load_module()
+        from lib.cli import ipinfo as mod
+        self.mod = mod
 
     def _capture(self, fn, *args):
         import io

@@ -4,7 +4,7 @@
 scripts/
 ├── bin/                          # thin entrypoint scripts (chmod +x)
 │   ├── checkwork, cpd, kk, kkp, n, ...
-│   ├── merge_* / push_*          # all symlinks → bin/_gitwf, dispatched by entry name
+│   ├── merge_* / push_*          # 12 real files, each calling its own lib/cli/gitwf.py entry
 │   ├── switch_branch, sync_master, sync_branch, fetch_all, delete_branch, delete_branch_remote
 │   ├── loop, unsleep, websearch, webgrab, archery, grafana, ovpn, ...
 │   └── inject                    # inject bin/ into shell PATH
@@ -29,6 +29,6 @@ bin/{script}            (3-line path hack + import)
       → shared lib/ui.py / lib/exec.py / ...
 ```
 
-The thin entrypoint only hands argv to `run_cli` — **no business logic here**. `merge_*` / `push_*` are symlinks to `bin/_gitwf`; argv[0]'s basename decides action and target branch. Shared capabilities (git ops, command exec, UI, notifications, build detection, process management, ...) live in `lib/{domain}.py` and are reused across commands.
+`bin/` holds **no business logic and no symlinks**: every shell is `from lib.cli.<module> import <fn> as main` + `raise SystemExit(main())`. The implementation is `lib/cli/<name>.py` (one module per command), which calls the shared `lib/{domain}.py` helpers. `merge_*` / `push_*` are 12 shells over `lib/cli/gitwf.py`; each passes `(name, action, target)` explicitly instead of sniffing argv[0]. The same functions are registered as `[project.scripts]`, so `uvx --from git+https://github.com/lazygophers/scripts <name>` runs any tool without cloning.
 
 New public tools must be registered in `TOOLS` of `lib/lazyhelp.py` (category + one-line description); AI guidance goes into `COMMAND_SKILLS` of `lib/skills_help.py`.

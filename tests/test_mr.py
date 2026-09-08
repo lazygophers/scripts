@@ -3,16 +3,15 @@
 import json
 import sys
 import unittest
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.ai_workflow import ProviderInfo
+from lib.cli import mr as _mr_bin
 from lib.mr_wf import _find_existing_pr
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-_mr_bin = SourceFileLoader("mr_bin_test_mod", str(REPO_ROOT / "bin" / "mr")).load_module()
 
 
 def _gh_info() -> ProviderInfo:

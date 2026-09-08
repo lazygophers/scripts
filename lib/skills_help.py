@@ -16,11 +16,6 @@ COMMON_SKILLS = [
 
 # 示例命令是 AI 可直接照抄跑的；子命令名与各 bin 的 --help 对齐
 COMMAND_SKILLS: dict[str, list[str]] = {
-    "_gitwf": [
-        "merge_*/push_* symlink 的内部入口；优先用公开的 symlink 名调用。",
-        "action 和目标分支由 argv[0] 的文件名解析。",
-        "auto 模式：cwd 是 git 仓库走单仓 here，否则批量 all。例: `merge_master auto`。",
-    ],
     "archery": [
         "常规 SQL 查询走 `archery query execute 'select 1' --instance-name prod-mysql --db-name orders`；stdout 默认 TSV。",
         "大 SQL 文件走 `archery query execute @query.sql --instance-name prod-mysql --db-name orders --limit-num 100`。",

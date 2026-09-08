@@ -1,0 +1,82 @@
+"""delete_branch — 删除本地分支（fire 重构）
+
+单仓（cwd 是 git 仓库）→ 仅删当前仓库；否则批量扫描所有 Git 仓库。
+"""
+from __future__ import annotations
+
+import os
+import pathlib
+import sys
+
+from lib.batch_git import (
+    _delete_branch_one_factory,
+    delete_branch_all,
+    run_single_repo,
+)
+from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib.ui import reporter
+
+_STATUS_EXIT = {"ok": 0, "skip": 0, "fail": 1}
+
+
+def _consume_yes(argv: list[str]) -> list[str]:
+    if "-y" not in argv[1:] and "--yes" not in argv[1:]:
+        return argv
+    os.environ["BATCH_NO_CONFIRM"] = "1"
+    return [argv[0]] + [a for a in argv[1:] if a not in {"-y", "--yes"}]
+
+
+class DeleteBranchCli(BaseCli):
+    """删除本地分支（单仓或批量）"""
+
+    def __call__(self, *args: str, force: bool = False, yes: bool = False):
+        """裸调用 `delete_branch <branch...>` 等同逐个执行 `delete_branch here <branch>`（cwd 是 git 仓库时），
+        否则自动转发到 `delete_branch all <branch...>`。
+        """
+        if not args:
+            self._r.err("delete_branch: 缺少分支名")
+            return 1
+        branches = list(args)
+        if (pathlib.Path.cwd() / ".git").exists():
+            return self.here(*branches, force=force)
+        return self.all(*branches, force=force, yes=yes)
+
+    @timed_cli
+    def here(self, *branches: str, force: bool = False):
+        """仅在当前仓库删除本地分支"""
+        if not branches:
+            self._r.err("delete_branch: 缺少分支名")
+            return 1
+        rc = 0
+        for branch in branches:
+            rc |= self._delete_one(branch, force)
+        return rc
+
+    @timed_cli
+    def all(self, *branches: str, force: bool = False, yes: bool = False):
+        """批量扫描所有 Git 仓库删除指定分支
+
+        用法: delete_branch all <branch...> [--force] [-y]
+        """
+        if not branches:
+            self._r.err("delete_branch: 缺少分支名")
+            return 1
+        if yes:
+            os.environ["BATCH_NO_CONFIRM"] = "1"
+        rc = 0
+        for branch in branches:
+            rc |= delete_branch_all(branch, force=force)
+        return rc
+
+    def _delete_one(self, branch: str, force: bool) -> int:
+        r = reporter(stderr=True)
+        op = _delete_branch_one_factory(branch, force)
+        status, detail = run_single_repo(op, pathlib.Path.cwd(), r, pathlib.Path.cwd())
+        if detail:
+            (r.ok if status == "ok" else r.warn if status == "skip" else r.err)(detail)
+        return _STATUS_EXIT.get(status, 1)
+
+
+def main():
+    sys.argv = _consume_yes(sys.argv)
+    run_cli(DeleteBranchCli())

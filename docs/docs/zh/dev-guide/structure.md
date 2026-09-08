@@ -4,7 +4,7 @@
 scripts/
 ├── bin/                          # 薄壳入口脚本 (chmod +x)
 │   ├── checkwork, cpd, kk, kkp, n, ...
-│   ├── merge_* / push_*          # 全部 symlink → bin/_gitwf，按入口名分发
+│   ├── merge_* / push_*          # 12 个真实文件，各自调 lib/cli/gitwf.py 里同名入口函数
 │   ├── switch_branch, sync_master, sync_branch, fetch_all, delete_branch, delete_branch_remote
 │   ├── loop, unsleep, websearch, webgrab, archery, grafana, ovpn, ...
 │   └── inject                    # 把 bin/ 注入 shell PATH
@@ -29,6 +29,6 @@ bin/{脚本}            (3 行 path hack + import)
       → 共享 lib/ui.py / lib/exec.py / ...
 ```
 
-薄壳只负责把 argv 交给 `run_cli`，**不写业务逻辑**。`merge_*` / `push_*` 是指向 `bin/_gitwf` 的 symlink，由 argv[0] 的文件名决定 action 与目标分支。共享能力（git 操作、命令执行、UI、通知、构建检测、进程管理……）沉淀在 `lib/{域}.py`，跨命令复用。
+`bin/` 里**没有业务逻辑，也没有 symlink**：每个薄壳都是 `from lib.cli.<模块> import <函数> as main` + `raise SystemExit(main())`。实现放在 `lib/cli/<名>.py`（一个命令一个模块），再去调共享的 `lib/{域}.py`。`merge_*` / `push_*` 是 `lib/cli/gitwf.py` 上的 12 个薄壳，各自显式传 `(name, action, target)`，不再靠 argv[0] 猜。同一批函数也注册成 `[project.scripts]`，所以 `uvx --from git+https://github.com/lazygophers/scripts <名>` 不用 clone 就能跑任意工具。
 
 新增公开工具要在 `lib/lazyhelp.py` 的 `TOOLS` 注册（分类 + 一句话功能），有 AI 使用指引就同步 `lib/skills_help.py` 的 `COMMAND_SKILLS`。

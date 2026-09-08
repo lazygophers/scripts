@@ -7,7 +7,6 @@ networksetup 是否被调用、dry-run 是否只打印不执行。所有外部�
 from __future__ import annotations
 
 import contextlib
-import importlib.machinery
 import io
 import os
 import sys
@@ -17,11 +16,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-vp = importlib.machinery.SourceFileLoader(
-    "vp_cli_under_test",
-    str(Path(__file__).resolve().parent.parent / "bin" / "vpn-prio"),
-).load_module()
-
+from lib.cli import vpn_prio as vp
 
 SERVICES_OUT = (
     "(1) Tailscale\n"

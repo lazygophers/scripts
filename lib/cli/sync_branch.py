@@ -1,0 +1,33 @@
+"""sync_branch — 批量同步分支到 origin/<branch>（fire 重构）"""
+from __future__ import annotations
+
+from lib.batch_git import sync_branch_all
+from lib.fire_base import BaseCli, run_cli, timed_cli
+
+
+class SyncBranchCli(BaseCli):
+    """批量同步分支到 origin/<branch>"""
+
+    def __call__(self, force: bool = False):
+        """裸调用 `sync_branch` 等同 `sync_branch current`（同步当前分支）"""
+        return self.current(force=force)
+
+    @timed_cli
+    def current(self, force: bool = False):
+        """同步各仓库当前分支（硬对齐 origin/<当前分支>）
+
+        用法: sync_branch current [--force]
+        """
+        return sync_branch_all(branch=None, force=force)
+
+    @timed_cli
+    def to(self, branch: str, force: bool = False):
+        """同步指定分支
+
+        用法: sync_branch to <branch> [--force]
+        """
+        return sync_branch_all(branch=branch, force=force)
+
+
+def main():
+    run_cli(SyncBranchCli())

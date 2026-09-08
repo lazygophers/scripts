@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-"""Tests for bin/_gitwf 分派：fire 重构后用 here / all / auto 三个子命令。"""
+"""Tests for lib/cli/gitwf.py 分派：here / all / auto 三个子命令 + 12 个入口函数。"""
 import unittest
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest.mock import patch
 
+from lib.cli import gitwf
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GITWF_PATH = REPO_ROOT / "bin" / "_gitwf"
-
-# bin/ 不在 package 内，且文件名以 _ 开头不在 importlib 默认后缀表内，
-# 用 SourceFileLoader 直接按路径加载。
-_gitwf = SourceFileLoader("_gitwf_test_mod", str(GITWF_PATH)).load_module()
+BIN_DIR = REPO_ROOT / "bin"
 
 
-class TestNameMap(unittest.TestCase):
-    def test_all_new_names_present(self):
+class TestEntryFunctions(unittest.TestCase):
+    """每个入口函数把 (name, action, target) 显式传给 _run。"""
+
+    def test_all_entry_names_present(self):
         expected = {
             "merge_branch", "merge_canary", "merge_dev", "merge_develop", "merge_master", "merge_test",
             "push_branch", "push_canary", "push_dev", "push_develop", "push_master", "push_test",
         }
-        self.assertEqual(set(_gitwf._NAME_MAP), expected)
+        for name in expected:
+            self.assertTrue(callable(getattr(gitwf, name, None)), f"缺少入口函数 {name}")
 
     def test_action_target_pairs(self):
         cases = {
@@ -32,8 +32,10 @@ class TestNameMap(unittest.TestCase):
             "merge_branch": ("merge", None),
             "push_branch": ("push", None),
         }
-        for name, expected in cases.items():
-            self.assertEqual(_gitwf._NAME_MAP[name], expected, f"{name} mapping")
+        for name, (action, target) in cases.items():
+            with patch.object(gitwf, "_run") as m_run:
+                getattr(gitwf, name)()
+            m_run.assert_called_once_with(name, action, target)
 
 
 class TestDispatchHere(unittest.TestCase):
@@ -41,7 +43,7 @@ class TestDispatchHere(unittest.TestCase):
 
     @patch("lib.git_workflow.merge_to", return_value=0)
     def test_here_merge(self, mock_merge):
-        cli = _gitwf.GitWfCli()
+        cli = gitwf.GitWfCli("merge_canary", "merge", "canary")
         with patch("sys.argv", ["merge_canary"]):
             rc = cli.here()
         self.assertEqual(rc, 0)
@@ -50,7 +52,7 @@ class TestDispatchHere(unittest.TestCase):
 
     @patch("lib.git_workflow.push_to", return_value=0)
     def test_here_push(self, mock_push):
-        cli = _gitwf.GitWfCli()
+        cli = gitwf.GitWfCli("push_develop", "push", "develop")
         with patch("sys.argv", ["push_develop"]):
             rc = cli.here()
         self.assertEqual(rc, 0)
@@ -63,7 +65,7 @@ class TestDispatchAll(unittest.TestCase):
 
     @patch("lib.batch_git.merge_all", return_value=0)
     def test_all_merge(self, mock_merge_all):
-        cli = _gitwf.GitWfCli()
+        cli = gitwf.GitWfCli("merge_master", "merge", "master")
         with patch("sys.argv", ["merge_master"]):
             rc = cli.all()
         self.assertEqual(rc, 0)
@@ -72,7 +74,7 @@ class TestDispatchAll(unittest.TestCase):
 
     @patch("lib.batch_git.push_all", return_value=0)
     def test_all_push(self, mock_push_all):
-        cli = _gitwf.GitWfCli()
+        cli = gitwf.GitWfCli("push_test", "push", "test")
         with patch("sys.argv", ["push_test"]):
             rc = cli.all()
         self.assertEqual(rc, 0)
@@ -85,18 +87,18 @@ class TestDispatchAuto(unittest.TestCase):
 
     @patch("lib.git_workflow.merge_to", return_value=0)
     def test_auto_in_repo_calls_here(self, mock_merge):
-        cli = _gitwf.GitWfCli()
+        cli = gitwf.GitWfCli("merge_canary", "merge", "canary")
         with patch("sys.argv", ["merge_canary"]), \
-             patch.object(_gitwf.pathlib.Path, "cwd", return_value=REPO_ROOT):
+             patch.object(gitwf.pathlib.Path, "cwd", return_value=REPO_ROOT):
             rc = cli.auto()
         self.assertEqual(rc, 0)
         mock_merge.assert_called_once()
 
     @patch("lib.batch_git.push_all", return_value=0)
     def test_auto_outside_repo_calls_all(self, mock_push_all):
-        cli = _gitwf.GitWfCli()
+        cli = gitwf.GitWfCli("push_test", "push", "test")
         with patch("sys.argv", ["push_test"]), \
-             patch.object(_gitwf.pathlib.Path, "cwd", return_value=Path("/tmp")):
+             patch.object(gitwf.pathlib.Path, "cwd", return_value=Path("/tmp")):
             rc = cli.auto()
         self.assertEqual(rc, 0)
         mock_push_all.assert_called_once()
@@ -106,27 +108,17 @@ class TestBareCall(unittest.TestCase):
     """裸调用 `merge_*` 等同 `auto`。"""
 
     def test_bare_call_delegates_to_auto(self):
-        cli = _gitwf.GitWfCli()
+        cli = gitwf.GitWfCli("merge_canary", "merge", "canary")
         with patch.object(cli, "auto", return_value=0) as m_auto:
             self.assertEqual(cli(auto_commit=True), 0)
         m_auto.assert_called_once_with(auto_commit=True)
 
     @patch("lib.git_workflow.merge_to", return_value=0)
     def test_auto_commit_appends_flag(self, mock_merge):
-        cli = _gitwf.GitWfCli()
+        cli = gitwf.GitWfCli("merge_canary", "merge", "canary")
         with patch("sys.argv", ["merge_canary"]):
             cli.here(auto_commit=True)
         self.assertIn("--auto-commit", mock_merge.call_args[0][1])
-
-
-class TestUnknownEntryName(unittest.TestCase):
-    def test_unknown_basename_returns_2(self):
-        cli = _gitwf.GitWfCli()
-        with patch("sys.argv", ["totally_unknown"]), \
-             patch.object(cli, "_r") as m_r:
-            self.assertEqual(cli.here(), 2)
-        m_r.err.assert_called_once()
-        self.assertIn("totally_unknown", m_r.err.call_args[0][0])
 
 
 class TestPushTargetsDispatched(unittest.TestCase):
@@ -140,39 +132,47 @@ class TestPushTargetsDispatched(unittest.TestCase):
                              ("push_master", "master"),
                              ("push_test", "test")]:
             mock_push.reset_mock()
-            cli = _gitwf.GitWfCli()
+            cli = gitwf.GitWfCli(name, "push", target)
             with patch("sys.argv", [name]):
                 cli.here()
             self.assertEqual(mock_push.call_args[0][0], target, name)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestBranchEntry(unittest.TestCase):
-    """merge_branch/push_branch：分支名必填，来自模块级 _BRANCH_ARG。"""
+    """merge_branch/push_branch：分支名必填，由 _pop_branch_arg 从 argv 摘出。"""
 
     @patch("lib.git_workflow.push_to", return_value=0)
     def test_branch_arg_dispatches(self, mock_push):
-        cli = _gitwf.GitWfCli()
-        with patch("sys.argv", ["push_branch"]), \
-             patch.object(_gitwf, "_BRANCH_ARG", "feature/x"):
+        cli = gitwf.GitWfCli("push_branch", "push", "feature/x")
+        with patch("sys.argv", ["push_branch"]):
             self.assertEqual(cli.here(), 0)
         mock_push.assert_called_once()
         self.assertEqual(mock_push.call_args[0][0], "feature/x")
 
     def test_missing_branch_arg_returns_2(self):
-        cli = _gitwf.GitWfCli()
+        cli = gitwf.GitWfCli("merge_branch", "merge", "")
         with patch("sys.argv", ["merge_branch"]), \
-             patch.object(_gitwf, "_BRANCH_ARG", ""), \
              patch.object(cli, "_r") as m_r:
             self.assertEqual(cli.here(), 2)
         self.assertIn("分支名", m_r.err.call_args[0][0])
 
+    def test_pop_branch_arg_takes_first_positional(self):
+        with patch("sys.argv", ["merge_branch", "feature/x", "here"]):
+            self.assertEqual(gitwf._pop_branch_arg("merge_branch"), "feature/x")
+
+    def test_pop_branch_arg_missing_exits_2(self):
+        with patch("sys.argv", ["merge_branch"]):
+            with self.assertRaises(SystemExit) as cm:
+                gitwf._pop_branch_arg("merge_branch")
+        self.assertEqual(cm.exception.code, 2)
+
     def test_no_args_exits_2_with_usage(self):
         import subprocess
-        r = subprocess.run([str(GITWF_PATH.parent / "merge_branch")],
+        r = subprocess.run([str(BIN_DIR / "merge_branch")],
                            capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 2)
         self.assertIn("用法", r.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

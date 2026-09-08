@@ -1,7 +1,6 @@
 """vpn-prio 单元测试（mock pgrep + networksetup + netstat）。"""
 from __future__ import annotations
 
-import importlib.machinery
 import sys
 import unittest
 from pathlib import Path
@@ -9,16 +8,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from lib.cli import vpn_prio as vp
 
-def _load_module():
-    """从 bin/vpn-prio 加载模块（路径含连字符，普通 import 不行）。"""
-    return importlib.machinery.SourceFileLoader(
-        "vp_under_test",
-        str(Path(__file__).resolve().parent.parent / "bin" / "vpn-prio"),
-    ).load_module()
-
-
-vp = _load_module()
 _bridge100_default_state = vp._bridge100_default_state
 _desired_order = vp._desired_order
 _detect_openvpn = vp._detect_openvpn
@@ -113,7 +104,7 @@ class TestBridge100DefaultState(unittest.TestCase):
 
 class TestCliImport(unittest.TestCase):
     def _load(self):
-        return _load_module()
+        return vp
 
     def test_subcommands_present(self):
         cli = self._load().VpnPrioCli()

@@ -1,1 +1,9 @@
-_gitwf
+#!/usr/bin/env python3
+"""push_master 薄壳入口 — push 当前分支 → 目标分支为远端默认分支（master/main）"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.gitwf import push_master as main
+
+raise SystemExit(main())

@@ -4,7 +4,7 @@
 scripts/
 ├── bin/                          # مداخل رقيقة (chmod +x)
 │   ├── checkwork, cpd, kk, kkp, n, ...
-│   ├── merge_* / push_*          # كلها symlinks → bin/_gitwf، تُوزَّع حسب اسم المدخل
+│   ├── merge_* / push_*          # ‏12 ملفًا حقيقيًا، كلٌّ ينادي دالته في lib/cli/gitwf.py
 │   ├── switch_branch, sync_master, sync_branch, fetch_all, delete_branch, delete_branch_remote
 │   ├── loop, unsleep, websearch, webgrab, archery, grafana, ovpn, ...
 │   └── inject                    # حقن bin/ في PATH الغلاف
@@ -29,6 +29,6 @@ bin/{سكربت}            (3 أسطر + import)
       → المشتركة lib/ui.py / lib/exec.py / ...
 ```
 
-المدخل الرقيق يمرر argv فقط إلى `run_cli` — **بلا منطق عمل هنا**. ‏`merge_*` / `push_*` روابط إلى `bin/_gitwf`؛ اسم argv[0] يحدد الإجراء والفرع الهدف. القدرات المشتركة في `lib/{النطاق}.py`.
+لا يحتوي `bin/` على **منطق عمل ولا روابط رمزية**: كل غلاف هو `from lib.cli.<module> import <fn> as main` + `raise SystemExit(main())`. التنفيذ في `lib/cli/<name>.py` (وحدة لكل أمر)، وهي تنادي المساعدات المشتركة في `lib/{النطاق}.py`. ‏`merge_*` / `push_*` هي 12 غلافًا فوق `lib/cli/gitwf.py`، وكل واحد يمرر `(name, action, target)` صراحةً. نفس الدوال مسجّلة في `[project.scripts]`، لذا `uvx --from git+https://github.com/lazygophers/scripts <name>` يشغّل أي أداة دون استنساخ المستودع.
 
 كل أداة عامة جديدة تُسجَّل في `TOOLS` داخل `lib/lazyhelp.py`؛ وإرشاد AI في `COMMAND_SKILLS` داخل `lib/skills_help.py`.

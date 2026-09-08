@@ -1,92 +1,9 @@
 #!/usr/bin/env python3
-"""ipinfo — 内网 IP + 网络类型
-
-子命令:
-  all  一次性展示全部（默认）
-  lan  仅内网 IP
-  net  仅网络类型（type 是别名）
-"""
-from __future__ import annotations
-
+"""ipinfo — 内网 IP + 网络类型"""
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.fire_base import BaseCli, run_cli, timed_cli
-from lib.ipinfo import is_hotspot_wifi, lan_ip, net_type
+from lib.cli.ipinfo import main
 
-
-def _fmt_types(types: list[str]) -> str:
-    """网络类型数组 → 人读字符串。Wi-Fi 时若检测到热点则加 (热点) 标记。"""
-    parts = []
-    for t in types:
-        if t == "Wi-Fi" and is_hotspot_wifi():
-            parts.append("Wi-Fi (热点)")
-        else:
-            parts.append(t)
-    return ", ".join(parts)
-
-
-def _kv(label: str, value: str) -> str:
-    return f"{label:<{len(label)}}  {value}"
-
-
-class IpinfoCli(BaseCli):
-    """ipinfo — 内网 IP + 网络类型"""
-
-    @timed_cli
-    def all(self):
-        """一次性展示全部（默认入口）
-
-        展示:
-          内网 IP   本机局域网地址
-          网络类型  活动接口列表，Wi-Fi 若是热点会标 (热点)
-
-        用法: ipinfo all
-        """
-        print(_kv("内网 IP", lan_ip() or "(无)"))
-        print(_kv("网络类型", _fmt_types(net_type())))
-        return 0
-
-    @timed_cli
-    def lan(self):
-        """仅显示本机内网 IP
-
-        用法: ipinfo lan
-        """
-        print(lan_ip() or "(无)")
-        return 0
-
-    @timed_cli
-    def net(self):
-        """仅显示网络类型（逗号分隔多个活动接口）
-
-        识别接口: Wi-Fi / USB Ethernet / Ethernet / Thunderbolt Bridge / Thunderbolt。
-        按优先级排序: Wi-Fi > USB > Ethernet > Thunderbolt。
-        Wi-Fi 若是热点（iPhone/Android 个人热点 → bridge1..bridge99 有 IPv4）则标 (热点)。
-
-        用法: ipinfo net
-        """
-        print(_fmt_types(net_type()))
-        return 0
-
-    def __call__(self, *names: str):
-        """直接调用 `ipinfo [name1 name2 ...]` → 顺序执行并打印
-
-        无参 → all；多参 → 按顺序跑对应子命令。
-        支持别名：`type` → net。
-        """
-        aliases = {"type": "net"}
-        targets = names or ("all",)
-        for name in targets:
-            name = aliases.get(name, name)
-            method = getattr(self, name, None)
-            if not callable(method):
-                print(f"未知子命令: {name}", file=sys.stderr)
-                return None
-            method()
-        return None
-
-
-if __name__ == "__main__":
-    run_cli(IpinfoCli())
+raise SystemExit(main())
