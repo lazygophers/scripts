@@ -11,6 +11,9 @@ dependencies = ["fire>=0.5", "rich>=13.0", "pyyaml>=6"]
 # bin/<name> 只是同一个函数的薄壳(clone 后可直接跑), 实现只有 lib/ 一份。
 # 装好后可远程执行: uvx --from git+https://github.com/lazygophers/scripts <命令名>
 [project.scripts]
+# uvx 不带命令名时(`uvx git+https://github.com/lazygophers/scripts`)找的是与包同名的
+# 可执行文件, 所以 `scripts` 是 lazyhelp 的别名: 直接列出全部工具。
+scripts = "lib.cli.lazyhelp:main"
 archery = "lib.cli.archery:main"
 check_ai = "lib.cli.check_ai:main"
 checkwork = "lib.cli.checkwork:main"
