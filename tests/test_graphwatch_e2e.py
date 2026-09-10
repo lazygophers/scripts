@@ -78,6 +78,14 @@ class TestRebuild(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.home = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
+        # 隔离 GRAPHWATCH_HOME：不隔离就会读到本机真实配置里的 backend，社区命名
+        # 会真的打 LLM API（慢 + 花钱），测试结果还随本机配置漂移。
+        self._env = os.environ.pop("GRAPHWATCH_HOME", None)
+        os.environ["GRAPHWATCH_HOME"] = str(self.home / "cfg")
+        if self._env is None:
+            self.addCleanup(os.environ.pop, "GRAPHWATCH_HOME", None)
+        else:
+            self.addCleanup(os.environ.__setitem__, "GRAPHWATCH_HOME", self._env)
 
     def test_rebuild_full_pipeline_with_wiki(self):
         repo = self.home / "repo"
@@ -89,6 +97,13 @@ class TestRebuild(unittest.TestCase):
         wiki_index = repo / "graphify-out" / "wiki" / "index.md"
         self.assertTrue(graph.is_file(), "首次重建应产出 graph.json")
         self.assertTrue(wiki_index.is_file(), "重建应产出 wiki/index.md")
+        # 用户 2026-09-10 选定的全套产出物（不含 svg）
+        out = repo / "graphify-out"
+        for name in ("GRAPH_REPORT.md", "graph.html", "graph.graphml", "GRAPH_TREE.html"):
+            self.assertTrue((out / name).is_file(), f"重建应产出 {name}")
+        self.assertTrue((out / "obsidian" / "graph.canvas").is_file(), "重建应产出 obsidian canvas")
+        self.assertFalse((out / "graph.svg").exists(), "用户没选 svg，不该产出")
+        self.assertTrue((out / ".graphify_labels.json").is_file(), "社区名应落盘，避免下轮重复花钱")
 
         (repo / "b.py").write_text("def beta():\n    return 2\n", encoding="utf-8")
         self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0)

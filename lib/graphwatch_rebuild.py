@@ -7,9 +7,10 @@ export / wiki / llm）。所有函数都收显式 root，不需要 chdir 到项�
 
 流程：detect_incremental（无变更直接返回）→ AST 抽取（code）+ 语义抽取
 （doc/paper/image，配置了 backend 才跑，deep 模式）→ build_merge 并入
-现有 graph.json（删除文件 prune）→ cluster → to_json（#479 收缩护栏）
-→ to_wiki → save_manifest。GRAPH_REPORT.md 不重生成（人工报告，要刷新跑
-`graphify cluster-only <dir>`）。
+现有 graph.json（删除文件 prune）→ cluster → 社区命名（只补没名字的，见
+graphwatch_artifacts）→ to_json（#479 收缩护栏）→ to_wiki → 其余导出物
+（GRAPH_REPORT.md / graph.html / graph.graphml / GRAPH_TREE.html /
+obsidian，见 graphwatch_artifacts.write_artifacts）→ save_manifest。
 """
 from __future__ import annotations
 
@@ -18,69 +19,34 @@ import sys
 import time
 from pathlib import Path
 
-# graphwatch 配置里的 base_url 怎么喂给 graphify：每个后端只认自己的环境变量
-# （graphify/llm.py BACKENDS）。azure/bedrock/claude-cli 无此参数。
-BASE_URL_ENV: dict[str, str] = {
-    "claude": "ANTHROPIC_BASE_URL",
-    "kimi": "KIMI_BASE_URL",
-    "gemini": "GEMINI_BASE_URL",
-    "openai": "OPENAI_BASE_URL",
-    "ollama": "OLLAMA_BASE_URL",
-}
-
 _EMPTY = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 0, "output_tokens": 0}
 
 
 def _semantic(files: list[Path], root: Path) -> dict:
     """语义抽取（deep 模式）。backend 没配或调用失败 → 空（manifest 不盖章，下次变更重试）。"""
-    import os
-
+    from lib.graphwatch_artifacts import backend_env
     from lib.graphwatch_config import load_config
 
     cfg = load_config()
-    backend = str(cfg.get("backend") or "")
-    if not backend:
+    if not str(cfg.get("backend") or ""):
         return dict(_EMPTY)
 
     from graphify.llm import extract_corpus_parallel
 
-    env_var = BASE_URL_ENV.get(backend)
-    base_url = str(cfg.get("base_url") or "")
-    restore = None
-    if env_var and base_url:
-        restore = (env_var, os.environ.get(env_var), base_url)
-        os.environ[env_var] = base_url
-    # 后台重建不许被慢后端拖死：单请求 180s、SDK 不重试（graphify 默认 600s × 6 次
-    # 重试，代理卡住时一次语义抽取能挂一小时）。setdefault：用户显式设过的不覆盖。
-    os.environ.setdefault("GRAPHIFY_API_TIMEOUT", "180")
-    os.environ.setdefault("GRAPHIFY_MAX_RETRIES", "1")
-    # BACKENDS 的 base_url 在 graphify.llm import 时定格，daemon 进程里该 import
-    # 可能早于上面这行 env 注入，只设环境变量不生效——必须直接改 dict。
-    # ponytail: 用户清空 base_url 后不还原（重启 daemon 才回官方默认）
-    import graphify.llm as _gllm
-
-    if base_url and backend in _gllm.BACKENDS:
-        _gllm.BACKENDS[backend]["base_url"] = base_url
     try:
-        return extract_corpus_parallel(
-            files,
-            backend=backend,
-            api_key=str(cfg.get("api_key") or "") or None,
-            model=str(cfg.get("model") or "") or None,
-            root=root,
-            deep_mode=True,
-            cache_root=root,
-        )
+        with backend_env(cfg) as backend:
+            return extract_corpus_parallel(
+                files,
+                backend=backend,
+                api_key=str(cfg.get("api_key") or "") or None,
+                model=str(cfg.get("model") or "") or None,
+                root=root,
+                deep_mode=True,
+                cache_root=root,
+            )
     except Exception as e:  # noqa: BLE001
         print(f"[graphwatch] 语义抽取失败（{type(e).__name__}: {e}），本轮只做 AST", file=sys.stderr)
         return dict(_EMPTY)
-    finally:
-        if restore is not None:
-            var, old, _ = restore
-            if old is None:
-                os.environ.pop(var, None)
-            else:
-                os.environ[var] = old
 
 
 def rebuild(folder: str) -> int:
@@ -88,9 +54,11 @@ def rebuild(folder: str) -> int:
     from graphify.build import build_merge
     from graphify.cluster import cluster, score_all
     from graphify.detect import detect_incremental, save_manifest
-    from graphify.export import to_json
+    from graphify.export import backup_if_protected, to_json
     from graphify.extract import extract
     from graphify.wiki import to_wiki
+
+    from lib.graphwatch_artifacts import resolve_labels, save_labels, write_artifacts
 
     root = Path(folder)
     out = root / "graphify-out"
@@ -157,14 +125,23 @@ def rebuild(folder: str) -> int:
     cohesion = score_all(G, communities)
     _stage(f"聚类 {len(communities)} 社区", t0)
 
-    # 社区名保留上次的（labels 文件是社区重命名的人工产物，daemon 不丢）
-    labels: dict[int, str] = {}
+    # 社区名保留上次的（labels 文件是社区重命名的人工产物，daemon 不丢），只给
+    # 没名字的新社区补名——LLM 命名会参考项目根 CONTEXT.md 的术语表。
+    saved: dict[int, str] = {}
     labels_path = out / ".graphify_labels.json"
     if labels_path.is_file():
         try:
-            labels = {int(k): v for k, v in json.loads(labels_path.read_text(encoding="utf-8")).items()}
+            saved = {int(k): v for k, v in json.loads(labels_path.read_text(encoding="utf-8")).items()}
         except (ValueError, OSError):
-            labels = {}
+            saved = {}
+    labels = resolve_labels(G, communities, saved, root)
+    # 覆盖任何产出物之前先快照（graphify 的日期备份，自带触发条件：花过 LLM token
+    # 或社区名被策展过；GRAPHIFY_NO_BACKUP=1 可关）。以前 rebuild 只写 graph.json
+    # 和 wiki 没调它，现在连 GRAPH_REPORT.md 和 labels 一起覆盖，必须补上。
+    backup_if_protected(out)
+    if labels != saved:
+        save_labels(out, communities, labels)
+        _stage(f"社区命名（新增 {len(set(labels) - set(saved))} 个）", t0)
 
     wrote = to_json(G, communities, str(graph_path), community_labels=labels or None)
     if not wrote:
@@ -181,6 +158,14 @@ def rebuild(folder: str) -> int:
     n = to_wiki(G, communities, out / "wiki", community_labels=labels or None,
                 cohesion=cohesion, god_nodes_data=gods)
     _stage(f"写 graph.json + wiki {n} 篇", t0)
+
+    # 其余产出物：报告 / 网页图 / graphml / 折叠树 / obsidian（用户 2026-09-10 选定，不含 svg）
+    write_artifacts(
+        G, communities, cohesion, labels, gods, out, root,
+        changed=len(changed) + len(deleted),
+        tokens={"input": new_extraction["input_tokens"], "output": new_extraction["output_tokens"]},
+        stage=lambda msg: _stage(msg, t0),
+    )
 
     # manifest：只盖章真产出语义输出的文件（#2015），失败的下轮重试（#1948）
     from graphify.cli import _stamped_manifest_files

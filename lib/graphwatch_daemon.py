@@ -243,7 +243,7 @@ def _watchdog_listener(folder: str, debounce: float, on_change) -> object:
 
 
 def _run_update(folder: str) -> int:
-    """跑一次增量重建（进程内 graphify 库调用，deep + wiki，见 graphwatch_rebuild）。"""
+    """跑一次增量重建（进程内 graphify 库调用，deep 抽取 + 全套产出物，见 graphwatch_rebuild）。"""
     from lib.graphwatch_rebuild import rebuild
 
     return rebuild(folder)
