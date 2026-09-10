@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import stat
 import sys
@@ -173,6 +174,10 @@ class TestGraphifyDependency(GraphwatchCase):
 
 
 class TestWatchdogDependency(GraphwatchCase):
+    @unittest.skipUnless(
+        importlib.util.find_spec("graphify"),
+        "graphify 未安装时 ensure_graphify 先报缺 graphify，轮不到 watchdog 这条分支",
+    )
     def test_missing_watchdog_guidance(self):
         import builtins
         import unittest.mock

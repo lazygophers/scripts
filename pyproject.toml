@@ -4,8 +4,10 @@ version = "0.1.0"
 description = "脚本工具集：版本控制、构建检查、进程管理、系统通知"
 requires-python = ">=3.9"
 # fire=CLI 框架(fire_base 顶层 import), rich=强制输出(ui.py 缺席即报错),
-# pyyaml=配置读写(archery/graphwatch)
-dependencies = ["fire>=0.5", "rich>=13.0", "pyyaml>=6"]
+# pyyaml=配置读写(archery/graphwatch), requests=HTTP(archery/grafana)
+# 下界跟到 2026-09-10 的最新版, 但保持 requires-python >=3.9 装得上;
+# 只在 extras 里出现的包(graphifyy/playwright)才要求 3.10+。
+dependencies = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.32"]
 
 # 每个命令一个 console_scripts 入口, 指向 lib/cli/<name>.py 里的函数。
 # bin/<name> 只是同一个函数的薄壳(clone 后可直接跑), 实现只有 lib/ 一份。
@@ -61,9 +63,14 @@ websearch = "lib.cli.websearch:main"
 
 [project.optional-dependencies]
 # graphwatch 监听需要 graphify（PyPI 包名 graphifyy）+ 其硬依赖 watchdog，默认不装
-graphify = ["graphifyy[all]>=0.9.55", "watchdog>=4"]
-all = ["graphifyy[all]>=0.9.55", "watchdog>=4"]
-dev = ["fire>=0.5", "rich>=13.0", "pyyaml>=6"]
+graphify = ["graphifyy[all]>=0.9.57", "watchdog>=6"]
+# webgrab / websearch 抓网页要的四件套，默认不装；playwright 装完还要 `playwright install chromium`
+web = ["curl-cffi>=0.16.3", "beautifulsoup4>=4.15.0", "markdownify>=1.2.3", "playwright>=1.62"]
+all = [
+    "graphifyy[all]>=0.9.57", "watchdog>=6",
+    "curl-cffi>=0.16.3", "beautifulsoup4>=4.15.0", "markdownify>=1.2.3", "playwright>=1.62",
+]
+dev = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.32"]
 
 [build-system]
 requires = ["setuptools>=68"]
