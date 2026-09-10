@@ -4,7 +4,6 @@ commit / mr / issue 三个脚本的公共逻辑。
 """
 from __future__ import annotations
 
-import json
 import re
 import shlex
 import subprocess

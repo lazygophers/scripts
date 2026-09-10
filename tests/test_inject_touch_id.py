@@ -59,7 +59,6 @@ class TestSetupTouchIdSudo(unittest.TestCase):
              confirm: bool = False):
         inject = load_inject()
         r = RecordingReporter()
-        sudo_local = "/etc/pam.d/sudo_local"
         with unittest.mock.patch.object(inject, "pathlib", _fake_pathlib(monkey_files)), \
              unittest.mock.patch("platform.system", return_value="Darwin" if darwin else "Linux"), \
              unittest.mock.patch("subprocess.run") as sub_run, \

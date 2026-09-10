@@ -3,7 +3,6 @@
 import io
 import sys
 import unittest
-from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -100,6 +99,7 @@ class TestRenderBranchTable(unittest.TestCase):
     def _plain_reporter(self):
         """Rich Reporter：输出到 StringIO buffer，便于字符串断言。"""
         import io
+
         from lib.ui import reporter
         buf = io.StringIO()
         r = reporter(stderr=False)

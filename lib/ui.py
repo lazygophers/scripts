@@ -10,9 +10,9 @@ import sys
 from collections.abc import Sequence
 
 try:
+    from rich.box import ROUNDED
     from rich.console import Console
     from rich.panel import Panel
-    from rich.box import ROUNDED
     from rich.progress import (
         BarColumn,
         Progress,
@@ -390,18 +390,26 @@ def _format_elapsed(seconds: float) -> str:
     return f"{h}h{m}m{s}s"
 
 
-def print_runtime(start: float, end: float, *, label: str | None = None) -> None:
+def print_runtime(start: float, end: float, *, label: str | None = None,
+                  elapsed: float | None = None) -> None:
     """灰度打印运行耗时（耗时为核心，起止时间括号附注）。
 
     强制 Rich：耗时数字微亮，起止时间 dim；走 rich.Console 到 stderr。
     格式: ⏱ <label> · <耗时> · <起>–<止>
+
+    `start` / `end` 是墙上时钟（`time.time()`），只用来显示几点开始、几点结束。
+    耗时优先用 `elapsed`——调用方用 `time.monotonic()` 量出来的秒数。墙上时钟会被
+    NTP 校时或夏令时往前往后跳，拿两个墙上时刻相减算时长，跑得久的命令会报出
+    离谱甚至为负的耗时。不给 `elapsed` 时仍退回相减，保持老调用方能用。
     """
     from datetime import datetime
+
     from rich.text import Text
+
     fmt = "%H:%M:%S"
     start_s = datetime.fromtimestamp(start).strftime(fmt)
     end_s = datetime.fromtimestamp(end).strftime(fmt)
-    elapsed = _format_elapsed(end - start)
+    elapsed = _format_elapsed(end - start if elapsed is None else elapsed)
     head = f"⏱ {label}" if label else "⏱"
     con = Console(stderr=True)
     t = Text()
@@ -429,6 +437,7 @@ def timed(fn, *, label: str | None = None):
             return fn(*args, **kwargs)
         finally:
             end_wall = time.time()
-            print_runtime(start_wall, end_wall, label=label)
+            print_runtime(start_wall, end_wall, label=label,
+                          elapsed=time.monotonic() - start)
 
     return wrapper

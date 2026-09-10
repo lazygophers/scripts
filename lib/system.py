@@ -7,7 +7,6 @@ import sys
 
 from .ui import reporter
 
-
 INHIBIT_ARGS = ["systemd-inhibit", "--what=sleep", "--why=unsleep", "--"]
 
 

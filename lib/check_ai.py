@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
                "  check_ai https://api.x.ai/v1 -n 3    # 直接指定 URL（空 POST 连通性）\n"
                "  check_ai claude --proxy http://127.0.0.1:7890",
     )
-    parser.add_argument("target", help="端点名 (%s) 或完整 URL" % "/".join(ENDPOINTS))
+    parser.add_argument("target", help=f"端点名 ({'/'.join(ENDPOINTS)}) 或完整 URL")
     parser.add_argument("-n", "--count", type=int, default=5, help="检测次数（默认 5）")
     parser.add_argument("-i", "--infinite", action="store_true", help="不间断检测（Ctrl+C 结束）")
     parser.add_argument("-t", "--timeout", type=float, default=15.0,

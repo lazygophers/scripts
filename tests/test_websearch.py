@@ -1,10 +1,10 @@
 """websearch 单元测试:解析器、去重、引擎合并、CLI 输出。"""
 
 import io
-import pathlib
 import json
+import pathlib
 import unittest
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 from lib import websearch

@@ -399,7 +399,6 @@ def _classify_node_build_script(cmd: str) -> str:
         # 无害前置命令 (rm -rf dist / mkdir / cp ...)
         if head in ("rm", "mkdir", "cp", "mv", "echo", "node", "tsx"):
             return True
-        joined = " ".join(tokens).lower()
         # 单命令编译工具 (tsc / esbuild ...)
         if head in _NODE_BUILD_SINGLE:
             return True
@@ -572,8 +571,8 @@ def run_checkwork() -> int:
     当前目录是 git 仓库 → 仅检查当前目录；否则扫描所有子目录 git 根逐个检查
     （与 push_*/merge_* 批量语义对齐：在父目录跑即覆盖全部子仓库）。
     """
-    from lib.notify import notify_via_n, project_done_message
     from lib.batch_git import BatchRunner, CallbackBatchOperation, RepoPlan
+    from lib.notify import notify_via_n, project_done_message
 
     r = reporter(stderr=True)
     r.rule("编译检查", style="blue")
