@@ -49,6 +49,17 @@ def _semantic(files: list[Path], root: Path) -> dict:
     if env_var and base_url:
         restore = (env_var, os.environ.get(env_var), base_url)
         os.environ[env_var] = base_url
+    # 后台重建不许被慢后端拖死：单请求 180s、SDK 不重试（graphify 默认 600s × 6 次
+    # 重试，代理卡住时一次语义抽取能挂一小时）。setdefault：用户显式设过的不覆盖。
+    os.environ.setdefault("GRAPHIFY_API_TIMEOUT", "180")
+    os.environ.setdefault("GRAPHIFY_MAX_RETRIES", "1")
+    # BACKENDS 的 base_url 在 graphify.llm import 时定格，daemon 进程里该 import
+    # 可能早于上面这行 env 注入，只设环境变量不生效——必须直接改 dict。
+    # ponytail: 用户清空 base_url 后不还原（重启 daemon 才回官方默认）
+    import graphify.llm as _gllm
+
+    if base_url and backend in _gllm.BACKENDS:
+        _gllm.BACKENDS[backend]["base_url"] = base_url
     try:
         return extract_corpus_parallel(
             files,

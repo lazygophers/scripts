@@ -26,6 +26,48 @@ except ImportError:
     HAS_GRAPHIFY = False
 
 from lib import graphwatch, graphwatch_daemon
+from lib import graphwatch_rebuild
+
+
+@unittest.skipUnless(HAS_GRAPHIFY, "graphifyy 未安装，集成缝跳过")
+class TestSemanticBaseUrl(unittest.TestCase):
+    """_semantic 必须让配置的 base_url 生效，即使 graphify.llm 在 env 注入前就被 import。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+        self._env = os.environ.pop("GRAPHWATCH_HOME", None)
+        os.environ["GRAPHWATCH_HOME"] = str(self.home)
+        self.addCleanup(self._tmp.cleanup)
+        if self._env is None:
+            self.addCleanup(os.environ.pop, "GRAPHWATCH_HOME", None)
+        else:
+            self.addCleanup(os.environ.__setitem__, "GRAPHWATCH_HOME", self._env)
+        cfg = graphwatch.load_config()
+        cfg.update({"backend": "openai", "api_key": "k", "base_url": "http://proxy.invalid/v1"})
+        graphwatch.save_config(cfg)
+        import graphify.llm as gllm
+
+        self._saved = (gllm.BACKENDS["openai"]["base_url"], gllm.extract_corpus_parallel)
+        self.addCleanup(self._restore, gllm)
+
+    def _restore(self, gllm):
+        gllm.BACKENDS["openai"]["base_url"], gllm.extract_corpus_parallel = self._saved
+
+    def test_base_url_patched_even_when_llm_preimported(self):
+        import graphify.llm as gllm
+
+        gllm.BACKENDS["openai"]["base_url"] = "https://api.openai.com/v1"  # 模拟 import 早于 env 注入定格
+        captured = {}
+
+        def fake_extract(files, **kw):
+            captured["base_url"] = gllm.BACKENDS[kw["backend"]]["base_url"]
+            return {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 0, "output_tokens": 0}
+
+        gllm.extract_corpus_parallel = fake_extract
+        graphwatch_rebuild._semantic([Path("a.md")], Path("."))
+        self.assertEqual(captured["base_url"], "http://proxy.invalid/v1",
+                         "BACKENDS 必须在调用前改成配置的 base_url")
 
 
 @unittest.skipUnless(HAS_GRAPHIFY, "graphifyy 未安装，集成缝跳过")
