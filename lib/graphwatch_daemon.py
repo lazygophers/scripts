@@ -243,16 +243,10 @@ def _watchdog_listener(folder: str, debounce: float, on_change) -> object:
 
 
 def _run_update(folder: str) -> int:
-    """跑一次增量重建（graphify update，无 LLM）。返回退出码。"""
-    import subprocess
+    """跑一次增量重建（进程内 graphify 库调用，deep + wiki，见 graphwatch_rebuild）。"""
+    from lib.graphwatch_rebuild import rebuild
 
-    r = subprocess.run(
-        [sys.executable, "-m", "graphify", "update", folder],
-        stdout=getattr(run_daemon, "_log_file", None) or sys.stderr,
-        stderr=getattr(run_daemon, "_log_file", None) or sys.stderr,
-        check=False,
-    )
-    return r.returncode
+    return rebuild(folder)
 
 
 def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_factory=None,
@@ -262,9 +256,10 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
     监听（watchdog，轻量）与重建（graphify update 子进程，重）分离：
     重建进全局队列，由 rebuild_concurrency 个 worker 执行（默认 1 = 串行，
     最小 1）。同一目录的变更在队列里去重合并，重建中再变更则重跑一轮。
-    主循环每 poll_interval 醒一次热加载配置；stop_event 停一切。
+    取活不按入队顺序，按各目录「最后变化时间」：越久没变的越先重建——
+    串行时新鲜项目不至于插队饿死老项目。主循环每 poll_interval 醒一次
+    热加载配置；stop_event 停一切。
     """
-    import queue
     import threading
 
     if stop_event is None:
@@ -293,8 +288,6 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
         notifier = Notifier()
 
     log_path().parent.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_path(), "a", encoding="utf-8")
-    run_daemon._log_file = log_file
 
     def _dlog(msg: str) -> None:
         # 只走 stderr：服务模式 launchd 的 StandardErrorPath 重定向进日志文件，
@@ -306,28 +299,35 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
 
     listeners: dict[str, object] = {}
     workers: list[threading.Thread] = []
-    work: queue.Queue[str] = queue.Queue()
     queued: set[str] = set()
     in_flight: set[str] = set()
     dirty: set[str] = set()
-    state_lock = threading.Lock()
+    change_time: dict[str, float] = {}
+    work_cv = threading.Condition()
 
-    def _enqueue(folder: str) -> None:
-        """重建入队：已在队列/执行中则标 dirty，完成后自动重跑。"""
-        with state_lock:
+    def _enqueue(folder: str, changed_at: float | None = None) -> None:
+        """重建入队：已在队列/执行中则标 dirty，完成后自动重跑。
+
+        changed_at 记录该目录最近一次变化时间（变更事件 / 补课触发文件
+        mtime），worker 取活按它排最旧优先；None 只标 dirty 不改时间。
+        """
+        with work_cv:
+            if changed_at is not None:
+                change_time[folder] = changed_at
             if folder in queued or folder in in_flight:
                 dirty.add(folder)
                 return
             queued.add(folder)
-        work.put(folder)
+            work_cv.notify()
 
     def _worker() -> None:
         while not stop_event.is_set():
-            try:
-                folder = work.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            with state_lock:
+            with work_cv:
+                while not queued and not stop_event.is_set():
+                    work_cv.wait(timeout=0.5)
+                if not queued:
+                    continue  # stop_event 触发退出
+                folder = min(queued, key=lambda f: change_time.get(f, 0.0))
                 queued.discard(folder)
                 in_flight.add(folder)
             _dlog(f"重建开始: {folder}")
@@ -336,7 +336,7 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
             except Exception as e:  # noqa: BLE001
                 _dlog(f"重建异常: {folder}: {type(e).__name__}: {e}")
                 rc = 1
-            with state_lock:
+            with work_cv:
                 in_flight.discard(folder)
                 redo = folder in dirty
                 dirty.discard(folder)
@@ -361,7 +361,7 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
                 continue
             _dlog(f"开始监听 {f}")
             try:
-                obs = listener_factory(f, debounce, lambda ff=f: _enqueue(ff))
+                obs = listener_factory(f, debounce, lambda ff=f: _enqueue(ff, time.time()))
                 obs.start()
                 listeners[f] = obs
                 threading.Timer(poll_interval, lambda ff=f: _catchup(ff)).start()
@@ -369,12 +369,19 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
                 _dlog(f"监听启动失败（下一轮重试）: {f}: {e}")
 
     def _catchup(folder: str) -> None:
-        """新挂载的目录若图谱落后于源码，直接入队重建（首轮补课）。"""
+        """新挂载的目录若图谱落后于源码，直接入队重建（首轮补课）。
+
+        优先级用触发文件 mtime：graph 落后越久，越排前面。"""
         if stop_event.is_set():
             return
-        if stale_trigger(folder) is not None:
+        trigger = stale_trigger(folder)
+        if trigger is not None:
+            try:
+                changed_at = trigger.stat().st_mtime
+            except OSError:
+                changed_at = None
             _dlog(f"补课：{folder} 图谱落后于源码，入队重建")
-            _enqueue(folder)
+            _enqueue(folder, changed_at)
 
     last_sig: tuple[tuple[str, ...], float, int] | None = None
 
@@ -444,7 +451,6 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
             _stop_listener(obs)
         release_singleton_lock(lock)
         _dlog("graphwatch daemon：已退出，监听已停，锁已释放")
-        log_file.close()
 
 
 def daemon_alive() -> bool:
@@ -466,11 +472,13 @@ def tail_log(n: int = 10) -> list[str]:
 
 
 def stale_trigger(folder: str) -> Path | None:
-    """返回触发「过期」的那个源文件（比 graph.json 新），新鲜则 None。
+    """返回最新那个过期源文件（比 graph.json 新），新鲜则 None。
 
     daemon 启动/热加载新目录时用它补课；status/list 也用它算新鲜度。
-    os.walk 原地剪掉产物/依赖目录（不递归进去——实测它们占 60-97% 的
-    文件数，rglob 全枚举再过滤等于白扫），每文件只 stat 一次。
+    扫全部而不是命中即返回：worker 的重建优先级取该文件 mtime，取
+    「最后变化」必须是最新的那个。os.walk 原地剪掉产物/依赖目录（不
+    递归进去——实测它们占 60-97% 的文件数，rglob 全枚举再过滤等于白
+    扫），每文件只 stat 一次。
     """
     root = Path(folder)
     graph = root / "graphify-out" / "graph.json"
@@ -480,6 +488,7 @@ def stale_trigger(folder: str) -> Path | None:
     excluded = {"graphify-out", ".git"} | STALE_EXCLUDED_DIRS
     import stat as _stat
 
+    newest: tuple[float, Path] | None = None
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in excluded]
         for name in filenames:
@@ -491,8 +500,9 @@ def stale_trigger(folder: str) -> Path | None:
             except OSError:
                 continue
             if _stat.S_ISREG(st.st_mode) and st.st_mtime > gm:
-                return Path(dirpath) / name
-    return None
+                if newest is None or st.st_mtime > newest[0]:
+                    newest = (st.st_mtime, Path(dirpath) / name)
+    return newest[1] if newest is not None else None
 
 
 def folder_freshness(folder: str, daemon_running: bool | None = None) -> tuple[str, str]:

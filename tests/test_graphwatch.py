@@ -805,17 +805,23 @@ class TestFreshnessUpdating(GraphwatchCase):
 
 
 class TestStartupCatchup(GraphwatchCase):
-    def _stale_repo(self):
-        """造一个「图谱过期」的目录：graph.json 比源文件旧。"""
+    def _stale_repo(self, name: str = "repo", age: float = 0):
+        """造一个「图谱过期」的目录：graph.json 比源文件旧。
+
+        age = 源文件最后变化距今的秒数（默认 0 = 刚变）。"""
         import os as _os
 
-        repo = self.mkdir()
-        (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+        repo = self.mkdir(name)
+        src = repo / "a.py"
+        src.write_text("x = 1\n", encoding="utf-8")
         g = repo / "graphify-out"
         g.mkdir()
         (g / "graph.json").write_text("{}", encoding="utf-8")
         old = 1000000000  # 2001 年
         _os.utime(g / "graph.json", (old, old))
+        if age:
+            at = time.time() - age
+            _os.utime(src, (at, at))
         return repo
 
     def test_stale_trigger_finds_file(self):
@@ -823,6 +829,15 @@ class TestStartupCatchup(GraphwatchCase):
         t = graphwatch.stale_trigger(str(repo))
         self.assertIsNotNone(t)
         self.assertEqual(t.name, "a.py")
+
+    def test_stale_trigger_returns_newest_file(self):
+        import os as _os
+        repo = self._stale_repo()
+        old = time.time() - 7200
+        _os.utime(repo / "a.py", (old, old))
+        (repo / "b.py").write_text("y = 2\n", encoding="utf-8")  # 比 a.py 新
+        t = graphwatch.stale_trigger(str(repo))
+        self.assertEqual(t.name, "b.py", "多个过期文件时应返回最新的那个")
 
     def test_fresh_repo_no_trigger(self):
         repo = self.mkdir()
@@ -849,6 +864,46 @@ class TestStartupCatchup(GraphwatchCase):
         stop.set()
         thread.join(timeout=5)
         self.assertEqual(runner.calls, [str(repo.resolve())], "启动补课应入队重建过期目录")
+
+    def test_catchup_rebuilds_stalest_first(self):
+        import threading
+
+        blocker = self.mkdir("blocker")  # 新鲜目录：手动触发一次重建，挡住 worker
+        recent = self._stale_repo("recent", age=60)
+        old = self._stale_repo("old", age=7200)
+        # 注册顺序故意反着：recent 先入队，但 old 更久没变，应先重建
+        for r in (blocker, recent, old):
+            graphwatch.add_folder(r)
+        fac = FakeListenerFactory()
+        gate = threading.Event()
+        calls: list[str] = []
+
+        def runner(folder):
+            calls.append(folder)
+            if len(calls) == 1:
+                gate.wait(5)  # 挡住第一个重建，让 old/recent 都排进队列再取活
+            return 0
+
+        stop = threading.Event()
+        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
+            stop_event=stop, ensure=lambda: None, listener_factory=fac, rebuild_runner=runner,
+            poll_interval=0.3), daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and str(blocker.resolve()) not in fac.listeners:
+            time.sleep(0.05)
+        fac.listeners[str(blocker.resolve())].fire_change()
+        while time.monotonic() < deadline and not calls:
+            time.sleep(0.05)
+        time.sleep(1.0)  # 等 recent/old 的 catchup 都入队（0.3s 间隔）
+        gate.set()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and len(calls) < 3:
+            time.sleep(0.05)
+        stop.set()
+        thread.join(timeout=5)
+        self.assertEqual(calls, [str(blocker.resolve()), str(old.resolve()), str(recent.resolve())],
+                         "挡住队头后，越久没变化的目录越先重建")
 
     def test_hot_add_nudges_stale_folder(self):
         import threading

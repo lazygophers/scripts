@@ -7,6 +7,7 @@ graphifyy 未安装的环境自动 skip，不挡 CI。
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -24,7 +25,47 @@ try:
 except ImportError:
     HAS_GRAPHIFY = False
 
-from lib import graphwatch
+from lib import graphwatch, graphwatch_daemon
+
+
+@unittest.skipUnless(HAS_GRAPHIFY, "graphifyy 未安装，集成缝跳过")
+class TestRebuild(unittest.TestCase):
+    """重建管线（lib/graphwatch_rebuild.py）：/graphify --mode deep --wiki --update 的源码调用等价物。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_rebuild_full_pipeline_with_wiki(self):
+        repo = self.home / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+
+        self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0)
+        graph = repo / "graphify-out" / "graph.json"
+        wiki_index = repo / "graphify-out" / "wiki" / "index.md"
+        self.assertTrue(graph.is_file(), "首次重建应产出 graph.json")
+        self.assertTrue(wiki_index.is_file(), "重建应产出 wiki/index.md")
+
+        (repo / "b.py").write_text("def beta():\n    return 2\n", encoding="utf-8")
+        self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0)
+        data = json.loads(graph.read_text(encoding="utf-8"))
+        labels = {n.get("label", n["id"]) for n in data["nodes"]}
+        self.assertIn("beta", " ".join(labels), "增量重建应纳入新文件的节点")
+        # manifest 必须落在项目自己的 graphify-out，而不是 daemon 的 cwd
+        self.assertTrue((repo / "graphify-out" / "manifest.json").is_file())
+
+    def test_rebuild_no_change_is_noop(self):
+        repo = self.home / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+        graphwatch_daemon._run_update(str(repo))
+        mtime = (repo / "graphify-out" / "graph.json").stat().st_mtime
+        time.sleep(0.05)
+        self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0)
+        self.assertEqual((repo / "graphify-out" / "graph.json").stat().st_mtime, mtime,
+                         "无变更时不应重写 graph.json")
 
 
 @unittest.skipUnless(HAS_GRAPHIFY, "graphifyy 未安装，集成缝跳过")
