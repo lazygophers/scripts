@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 # graphwatch 配置里的 base_url 怎么喂给 graphify：每个后端只认自己的环境变量
@@ -97,6 +98,14 @@ def rebuild(folder: str) -> int:
     graph_path = out / "graph.json"
     manifest_path = out / "manifest.json"  # graphify 默认 manifest 路径相对 cwd，必须显式传绝对
 
+    def _stage(msg: str, since: list) -> None:
+        """阶段进度行：消息 + 上一阶段耗时，重建卡在哪一步一眼可见。"""
+        now = time.time()
+        print(f"[graphwatch] {root.name}: {msg}（{now - since[0]:.0f}s）", file=sys.stderr, flush=True)
+        since[0] = now
+
+    t0 = [time.time()]
+    _stage("扫描变更", t0)
     inc = detect_incremental(root, str(manifest_path))
     new_files = inc.get("new_files") or {}
     deleted = list(inc.get("deleted_files") or [])
@@ -107,12 +116,17 @@ def rebuild(folder: str) -> int:
 
     code = [Path(f) for f in new_files.get("code", [])]
     sem_files = [Path(f) for t in ("document", "paper", "image") for f in new_files.get(t, [])]
-    print(f"[graphwatch] {root}: {len(code)} code / {len(sem_files)} doc+ / {len(deleted)} deleted",
-          file=sys.stderr)
-    # parallel=False：AST 进程池在 macOS spawn 下会重新执行入口脚本（bin/graphwatch），
-    # 子进程撞单例锁 → BrokenProcessPool 降级。daemon 本来就串行重建，直接关池。
-    ast = extract(code, cache_root=root, root=root, parallel=False) if code else dict(_EMPTY)
+    _stage(f"{len(code)} code / {len(sem_files)} doc+ / {len(deleted)} deleted", t0)
+    if code:
+        # parallel=False：AST 进程池在 macOS spawn 下会重新执行入口脚本（bin/graphwatch），
+        # 子进程撞单例锁 → BrokenProcessPool 降级。daemon 本来就串行重建，直接关池。
+        ast = extract(code, cache_root=root, root=root, parallel=False)
+        _stage(f"AST 抽取 {len(code)} 文件", t0)
+    else:
+        ast = dict(_EMPTY)
     sem = _semantic(sem_files, root) if sem_files else dict(_EMPTY)
+    if sem_files:
+        _stage(f"语义抽取 {len(sem_files)} 文件（deep）", t0)
 
     # Part C 合并（SKILL.md：AST 节点在前，语义按 id 去重）
     seen = {n["id"] for n in ast["nodes"]}
@@ -138,8 +152,10 @@ def rebuild(folder: str) -> int:
     if G.number_of_nodes() == 0:
         print(f"[graphwatch] {root}: 图为空，拒绝写出（防覆盖已有图）", file=sys.stderr)
         return 1
+    _stage(f"合并图谱 {G.number_of_nodes()} 节点", t0)
     communities = cluster(G)
     cohesion = score_all(G, communities)
+    _stage(f"聚类 {len(communities)} 社区", t0)
 
     # 社区名保留上次的（labels 文件是社区重命名的人工产物，daemon 不丢）
     labels: dict[int, str] = {}
@@ -164,8 +180,7 @@ def rebuild(folder: str) -> int:
         gods = []
     n = to_wiki(G, communities, out / "wiki", community_labels=labels or None,
                 cohesion=cohesion, god_nodes_data=gods)
-    print(f"[graphwatch] {root}: 图 {G.number_of_nodes()} 节点 / {len(communities)} 社区，wiki {n} 篇",
-          file=sys.stderr)
+    _stage(f"写 graph.json + wiki {n} 篇", t0)
 
     # manifest：只盖章真产出语义输出的文件（#2015），失败的下轮重试（#1948）
     from graphify.cli import _stamped_manifest_files
