@@ -160,6 +160,8 @@ class GrafanaClient:
 
         if self._session is None:
             self._session = requests.Session()
+            # ponytail: 直连 VPS，忽略 HTTP(S)_PROXY（本地代理对站点返回 502）；真要过代理再加 profile 开关
+            self._session.trust_env = False
         return self._session
 
     @property
