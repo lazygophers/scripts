@@ -109,7 +109,9 @@ def rebuild(folder: str) -> int:
     sem_files = [Path(f) for t in ("document", "paper", "image") for f in new_files.get(t, [])]
     print(f"[graphwatch] {root}: {len(code)} code / {len(sem_files)} doc+ / {len(deleted)} deleted",
           file=sys.stderr)
-    ast = extract(code, cache_root=root, root=root) if code else dict(_EMPTY)
+    # parallel=False：AST 进程池在 macOS spawn 下会重新执行入口脚本（bin/graphwatch），
+    # 子进程撞单例锁 → BrokenProcessPool 降级。daemon 本来就串行重建，直接关池。
+    ast = extract(code, cache_root=root, root=root, parallel=False) if code else dict(_EMPTY)
     sem = _semantic(sem_files, root) if sem_files else dict(_EMPTY)
 
     # Part C 合并（SKILL.md：AST 节点在前，语义按 id 去重）
