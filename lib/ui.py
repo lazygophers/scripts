@@ -261,6 +261,15 @@ def ask_text(prompt: str, *, default: str = "") -> str | None:
         return None
 
 
+def ask_secret(prompt: str) -> str | None:
+    """密码 / 授权码输入，敲的时候不回显。非交互（EOF）返回 None。"""
+    from rich.prompt import Prompt
+    try:
+        return Prompt.ask(prompt, password=True, console=Console())
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
 def ask_select(
     prompt: str,
     options: Sequence[str],

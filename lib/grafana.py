@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import base64
-import contextlib
 import json
-import os
 import pathlib
 import urllib.parse
+
+from lib.profile_store import ProfileStore
 
 CONFIG_PATH = pathlib.Path.home() / ".config" / "lazygophers" / "scripts" / "grafana.yaml"
 DEFAULT_TIMEOUT = 30
@@ -21,48 +21,6 @@ class GrafanaError(Exception):
 
 def default_config_path() -> pathlib.Path:
     return CONFIG_PATH
-
-
-def load_config(path: pathlib.Path | None = None) -> dict:
-    import yaml
-
-    target = path or default_config_path()
-    if not target.exists():
-        return {}
-    data = yaml.safe_load(target.read_text(encoding="utf-8"))
-    return data if isinstance(data, dict) else {}
-
-
-def save_config(data: dict, path: pathlib.Path | None = None) -> None:
-    import yaml
-
-    target = path or default_config_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, target)
-    finally:
-        tmp.unlink(missing_ok=True)
-    os.chmod(target, 0o600)
-
-
-@contextlib.contextmanager
-def config_lock(path: pathlib.Path | None = None):
-    import fcntl
-
-    target = path or default_config_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(target.with_name(f".{target.name}.lock")), os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        os.close(fd)
 
 
 def normalize_url(raw: str) -> str:
@@ -81,38 +39,18 @@ def host_key(raw: str) -> str:
     return urllib.parse.urlsplit(normalize_url(raw)).netloc.lower()
 
 
-def profiles(cfg: dict) -> dict:
-    got = cfg.get("profiles")
-    return dict(got) if isinstance(got, dict) else {}
-
-
-def resolve_profile(cfg: dict, host: str = "") -> tuple[str, dict]:
-    all_p = profiles(cfg)
-    if not all_p:
-        raise GrafanaError(f"还没有配置任何站点（{CONFIG_PATH} 为空）。跑 `grafana login`")
-    if host:
-        key = host_key(host)
-        if key not in all_p:
-            known = ", ".join(sorted(all_p)) or "(无)"
-            raise GrafanaError(f"没有这个站点的配置: {key}（已配置: {known}）。跑 `grafana login --url {host}`")
-        return key, dict(all_p[key])
-    current = str(cfg.get("current") or "")
-    if current and current in all_p:
-        return current, dict(all_p[current])
-    if len(all_p) == 1:
-        only = next(iter(all_p))
-        return only, dict(all_p[only])
-    known = ", ".join(sorted(all_p))
-    raise GrafanaError(f"配了多个站点但没指定用哪个（{known}）。跑 `grafana use <域名>` 或加 --host")
-
-
-def put_profile(cfg: dict, key: str, profile: dict) -> dict:
-    all_p = profiles(cfg)
-    all_p[key] = profile
-    cfg["profiles"] = all_p
-    if not cfg.get("current"):
-        cfg["current"] = key
-    return cfg
+# 配置存储与 profile 解析都在 lib/profile_store.py（archery / email 共用同一份）。
+# 这里保留模块级的函数名，调用点和测试照旧用 grafana.load_config(...) 这种写法。
+_STORE = ProfileStore(
+    "grafana.yaml", error=GrafanaError, key_fn=host_key,
+    tool="grafana", path_resolver=default_config_path,
+)
+load_config = _STORE.load
+save_config = _STORE.save
+config_lock = _STORE.lock
+profiles = _STORE.profiles
+resolve_profile = _STORE.resolve
+put_profile = _STORE.put
 
 
 def parse_data(value) -> dict:

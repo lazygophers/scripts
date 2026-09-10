@@ -49,6 +49,7 @@ TOOLS: dict[str, tuple[str, str]] = {
     # 数据与网络: 数据库 / 监控 / VPN / 本机网络
     "archery": ("数据与网络", "Archery SQL 平台命令行客户端（查询 / 上线工单，按域名分别登录）"),
     "grafana": ("数据与网络", "Grafana HTTP API 命令行客户端（按域名分别登录）"),
+    "email": ("数据与网络", "多邮箱收发（QQ/Gmail/163/126/iCloud/Fastmail/Zoho，按邮箱分别登录）"),
     "ovpn": ("数据与网络", "OpenVPN 客户端（自动填账号密码与二步验证码，支持分流）"),
     "vpn-prio": ("数据与网络", "调整 macOS 网络服务优先级（压低 OpenVPN default 路由）"),
     "ipinfo": ("数据与网络", "查询内网 IP + 网络类型（含热点识别）"),

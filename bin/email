@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""email — 多邮箱收发邮件：QQ / Gmail / 163 / 126 / iCloud / Fastmail / Zoho。"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.email import main
+
+raise SystemExit(main())

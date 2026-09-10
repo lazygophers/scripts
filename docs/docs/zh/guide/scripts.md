@@ -71,6 +71,7 @@ macOS 上 inject 还会询问是否启用 Touch ID sudo 授权（指纹优先，
 | :--- | :--- | :--- |
 | `archery` | Archery SQL 平台 CLI (查询/上线工单, 按域名分别登录) | `archery query execute 'select 1' --instance-name prod --db-name orders` |
 | `grafana` | Grafana HTTP API CLI (按域名分别登录) | `grafana health` |
+| `email` | 多邮箱收发 (QQ/Gmail/163/126/iCloud/Fastmail/Zoho，按邮箱分别登录) | `email inbox` |
 | `ovpn` | OpenVPN 客户端 (自动填账密与二步验证码, 支持分流) | `ovpn connect` |
 | `vpn-prio` | 调整 macOS 网络服务优先级 (压低 OpenVPN 默认路由) | `vpn-prio --help` |
 | `ipinfo` | 查询内网 IP + 网络类型 (含热点识别) | `ipinfo` |
