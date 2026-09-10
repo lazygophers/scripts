@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -96,6 +97,28 @@ def read_glossary(root: Path) -> str:
         return ""
 
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def json_payload(text: str) -> str:
+    """从模型回复里抠出那个 JSON 对象，剥掉推理段和 markdown 围栏。
+
+    配推理模型（Qwen3 / DeepSeek-R1 之流）时回复长这样：
+    ``<think>The user wants me to name clusters...</think>\\n{"0": "认证"}``。
+    graphify 的 `_parse_label_response` 直接 `json.loads`，一见 `<think>` 就抛
+    `ValueError: label response is not parseable JSON`。
+
+    `<think>` 没闭合说明 max_tokens 在推理途中就用完了，后面根本没有 JSON——
+    返回空串，调用方据此给出「换个非推理模型」而不是一句看不懂的解析错误。
+    """
+    s = _THINK_RE.sub("", text)
+    lowered = s.lower()
+    if "<think>" in lowered:
+        s = s[: lowered.index("<think>")]
+    start, end = s.find("{"), s.rfind("}")
+    return s[start : end + 1] if start != -1 and end > start else s.strip()
+
+
 def _llm_labels(G, communities: dict, root: Path) -> dict[int, str]:
     """让 LLM 给这批社区起名，prompt 里带上 CONTEXT.md 的术语表。
 
@@ -141,7 +164,12 @@ def _llm_labels(G, communities: dict, root: Path) -> dict[int, str]:
                 model=model,
                 max_tokens=min(256 + 48 * len(cids), 8192),
             )
-        return _parse_label_response(text, cids)
+        payload = json_payload(text)
+        if not payload:
+            print("[graphwatch] 社区命名跳过：模型回复整段都是推理内容（<think> 未闭合），"
+                  "没有 JSON。换一个非推理模型再试，沿用 hub 名", file=sys.stderr)
+            return {}
+        return _parse_label_response(payload, cids)
     except Exception as e:  # noqa: BLE001
         print(f"[graphwatch] 社区命名失败（{type(e).__name__}: {e}），沿用 hub 名", file=sys.stderr)
         return {}

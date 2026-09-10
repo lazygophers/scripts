@@ -229,12 +229,42 @@ class TestLlmLabels(unittest.TestCase):
         self.assertEqual(art._llm_labels(self.G, self.communities, self.root), {},
                          "命名失败不许炸掉整轮重建")
 
+    def test_reasoning_model_think_block_is_stripped(self):
+        self.gllm._call_llm = lambda p, **kw: '<think>Let me analyze these clusters.</think>{"0": "认证中间件"}'
+        self.assertEqual(art._llm_labels(self.G, self.communities, self.root).get(0), "认证中间件")
+
+    def test_all_reasoning_no_json_degrades_quietly(self):
+        self.gllm._call_llm = lambda p, **kw: "<think>The user wants me to name clusters in a"
+        self.assertEqual(art._llm_labels(self.G, self.communities, self.root), {},
+                         "推理占满 max_tokens 时不许抛，沿用 hub 名")
+
     def test_empty_communities_skip_call(self):
         def boom(*a, **k):
             raise AssertionError("没有可命名的社区不该调 LLM")
 
         self.gllm._call_llm = boom
         self.assertEqual(art._llm_labels(self.G, {}, self.root), {})
+
+
+class TestJsonPayload(unittest.TestCase):
+    """推理模型的 <think> 段必须剥掉，否则 graphify 的 JSON 解析直接抛。"""
+
+    def test_plain_json_passes_through(self):
+        self.assertEqual(art.json_payload('{"0": "认证"}'), '{"0": "认证"}')
+
+    def test_strips_closed_think_block(self):
+        text = '<think>The user wants me to name clusters.</think>\n{"0": "认证"}'
+        self.assertEqual(json.loads(art.json_payload(text)), {"0": "认证"})
+
+    def test_strips_markdown_fence(self):
+        self.assertEqual(json.loads(art.json_payload('```json\n{"1": "订单"}\n```')), {"1": "订单"})
+
+    def test_unclosed_think_means_no_json(self):
+        # max_tokens 在推理途中用完，后面根本没有 JSON
+        self.assertEqual(art.json_payload("<think>The user wants me to name clusters in a"), "")
+
+    def test_prose_without_json_returns_stripped_text(self):
+        self.assertEqual(art.json_payload("  sorry, I cannot  "), "sorry, I cannot")
 
 
 @unittest.skipUnless(HAS_GRAPHIFY, "graphifyy 未安装，跳过")

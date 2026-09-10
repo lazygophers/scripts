@@ -25,8 +25,7 @@ try:
 except ImportError:
     HAS_GRAPHIFY = False
 
-from lib import graphwatch, graphwatch_daemon
-from lib import graphwatch_rebuild
+from lib import graphwatch, graphwatch_daemon, graphwatch_rebuild
 
 
 @unittest.skipUnless(HAS_GRAPHIFY, "graphifyy 未安装，集成缝跳过")
@@ -112,6 +111,26 @@ class TestRebuild(unittest.TestCase):
         self.assertIn("beta", " ".join(labels), "增量重建应纳入新文件的节点")
         # manifest 必须落在项目自己的 graphify-out，而不是 daemon 的 cwd
         self.assertTrue((repo / "graphify-out" / "manifest.json").is_file())
+
+    def test_deleting_files_shrinks_the_graph_instead_of_failing(self):
+        """删文件导致图变小时必须照写。graphify 的 #479 收缩护栏对 daemon 是死路：
+        它会让每一轮都撞同一堵墙、每一轮报一次失败，图永远停在删除之前。"""
+        repo = self.home / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+        (repo / "extra.py").write_text(
+            "def beta():\n    return 2\n\n\ndef gamma():\n    return 3\n", encoding="utf-8"
+        )
+        self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0)
+        graph = repo / "graphify-out" / "graph.json"
+        before = len(json.loads(graph.read_text(encoding="utf-8"))["nodes"])
+
+        (repo / "extra.py").unlink()
+        self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0, "删文件不该让重建失败")
+        after = json.loads(graph.read_text(encoding="utf-8"))["nodes"]
+        self.assertLess(len(after), before, "删掉的文件应该从图里被裁掉")
+        self.assertNotIn("gamma", " ".join(n.get("label", n["id"]) for n in after),
+                         "被删文件的节点不该还留在图里")
 
     def test_rebuild_no_change_is_noop(self):
         repo = self.home / "repo"

@@ -8,7 +8,7 @@ export / wiki / llm）。所有函数都收显式 root，不需要 chdir 到项�
 流程：detect_incremental（无变更直接返回）→ AST 抽取（code）+ 语义抽取
 （doc/paper/image，配置了 backend 才跑，deep 模式）→ build_merge 并入
 现有 graph.json（删除文件 prune）→ cluster → 社区命名（只补没名字的，见
-graphwatch_artifacts）→ to_json（#479 收缩护栏）→ to_wiki → 其余导出物
+graphwatch_artifacts）→ to_json（force=True，绕开 #479 收缩护栏）→ to_wiki → 其余导出物
 （GRAPH_REPORT.md / graph.html / graph.graphml / GRAPH_TREE.html /
 obsidian，见 graphwatch_artifacts.write_artifacts）→ save_manifest。
 """
@@ -54,7 +54,7 @@ def rebuild(folder: str) -> int:
     from graphify.build import build_merge
     from graphify.cluster import cluster, score_all
     from graphify.detect import detect_incremental, save_manifest
-    from graphify.export import backup_if_protected, to_json
+    from graphify.export import backup_if_protected, existing_graph_node_count, to_json
     from graphify.extract import extract
     from graphify.wiki import to_wiki
 
@@ -143,11 +143,15 @@ def rebuild(folder: str) -> int:
         save_labels(out, communities, labels)
         _stage(f"社区命名（新增 {len(set(labels) - set(saved))} 个）", t0)
 
-    wrote = to_json(G, communities, str(graph_path), community_labels=labels or None)
-    if not wrote:
-        # #479 收缩护栏：新图节点数比现有 graph.json 少则拒写。
-        print(f"[graphwatch] {root}: graphify 拒绝收缩 graph.json（删除代码请手动 --force）", file=sys.stderr)
-        return 1
+    # force=True：graphify 的 #479 收缩护栏（新图节点数变少就拒写）对 daemon 是死路——
+    # 删掉文件后每一轮都撞同一堵墙、每一轮报一次失败，图永远停在删除之前。这里的收缩
+    # 是有据可查的：prune_sources 明确列出了被删的文件。覆盖前已经 backup_if_protected，
+    # 写坏了能从日期目录回滚。收缩多少照样打出来，不静默。
+    before = existing_graph_node_count(graph_path)
+    to_json(G, communities, str(graph_path), community_labels=labels or None, force=True)
+    if isinstance(before, int) and G.number_of_nodes() < before:
+        print(f"[graphwatch] {root.name}: 图收缩 {before} → {G.number_of_nodes()} 节点"
+              f"（{len(deleted)} 个文件被删），已强制写入", file=sys.stderr)
 
     try:
         from graphify.analyze import god_nodes
