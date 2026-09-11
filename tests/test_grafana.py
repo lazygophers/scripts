@@ -164,6 +164,12 @@ class TestClient(ServerCase):
         self.assertIn("401", str(ctx.exception))
         self.assertIn("Unauthorized", str(ctx.exception))
 
+    def test_ignores_env_proxy(self):
+        dead_proxy = "http://127.0.0.1:1"
+        with unittest.mock.patch.dict(os.environ, {"http_proxy": dead_proxy, "HTTP_PROXY": dead_proxy}):
+            got = self.client().get("/api/health")
+        self.assertEqual(got["database"], "ok")
+
 
 class TestCliSmoke(ServerCase):
     def test_hosts_without_config(self):
