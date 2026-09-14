@@ -8,8 +8,16 @@
   python3 browser-extension/install/native_host.py --browsers chrome,firefox
   python3 browser-extension/install/native_host.py --extension-id <Edge 商店 ID>
 
-写的东西只有一份 JSON：manifest 里 `path` 指向 `browse` 这个可执行文件本身，浏览器
-fork 它时会带上 `--native-host`（T03 的入口），所以这里不需要告诉它 daemon 在哪。
+写两样东西：一份 JSON（manifest）和一个 wrapper 脚本。**native messaging 的 manifest
+没有 `args` 字段**（Chrome / Edge / Firefox 都没有），字段只有 name / description /
+path / type / allowed_origins（Firefox 是 allowed_extensions），所以 `--native-host`
+这个参数没地方传——manifest 的 `path` 只能指向一个自带该参数的 wrapper：
+
+    #!/bin/sh
+    exec /abs/path/to/browse --native-host "$@"
+
+浏览器是直接 fork 执行 `path` 的，所以 wrapper 必须有执行位；被它指向的 browse 不
+需要，native host 内部用 sys.executable 显式起（T03 `lib/browse_native_host.py`）。
 
 路径表出处：`.scratch/browser-control-extension/spec.md` 7.3，Firefox 一行出自
 <https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Native_manifests>。
@@ -111,6 +119,10 @@ BROWSERS: dict[str, dict[str, tuple[str, str, tuple[str, ...]]]] = {
 }
 
 WIN_MANIFEST_DIR = "AppData/Local/lazygophers/browse"
+# wrapper 的落点。位置必须稳定且是绝对路径——manifest 里写死的就是它，manifest 不
+# 接受相对路径，也不会去查 PATH。
+WRAPPER_DIR = ".local/state/lazygophers/scripts"
+WRAPPER_NAME = "browse-native-host"
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -155,6 +167,32 @@ def detect(home: pathlib.Path, plat: str) -> list[str]:
             if (home / probe).exists()]
 
 
+def wrapper_path(home: pathlib.Path, plat: str) -> pathlib.Path:
+    """manifest 的 path 指向的那个脚本。Windows 上 .sh 跑不了，用 .cmd。"""
+    if plat == "win32":
+        return home / WIN_MANIFEST_DIR / f"{WRAPPER_NAME}.cmd"
+    return home / WRAPPER_DIR / WRAPPER_NAME
+
+
+def write_wrapper(home: pathlib.Path, plat: str,
+                  browse_path: pathlib.Path) -> pathlib.Path:
+    """生成 wrapper 并给上执行位，返回它的绝对路径。"""
+    path = wrapper_path(home, plat)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if plat == "win32":
+        # 需要: 实机验证 .cmd 这一路。Windows 上 browse 是 uv 装出来的 browse.exe
+        # 或 py 启动器认的脚本，这里只负责把参数原样透传。
+        body = f'@echo off\r\n"{browse_path}" --native-host %*\r\n'
+        newline = ""
+    else:
+        body = f'#!/bin/sh\nexec "{browse_path}" --native-host "$@"\n'
+        newline = "\n"
+    path.write_text(body, encoding="utf-8", newline=newline)
+    # 浏览器直接 fork 执行这个文件，没有执行位就是启动失败。
+    path.chmod(0o755)
+    return path
+
+
 def win_manifest_path(home: pathlib.Path, flavor: str) -> pathlib.Path:
     suffix = ".firefox.json" if flavor == GECKO else ".json"
     return home / WIN_MANIFEST_DIR / f"{HOST_NAME}{suffix}"
@@ -189,12 +227,13 @@ def install(home: pathlib.Path, plat: str, browse_path: pathlib.Path, *,
             extension_ids: tuple[str, ...] = EXTENSION_IDS,
             gecko_ids: tuple[str, ...] = GECKO_IDS,
             reg_set=_reg_set) -> list[tuple[str, str]]:
-    """给每个选中的浏览器写 manifest，返回 [(浏览器, 落点描述)]。"""
+    """写 wrapper + 给每个选中的浏览器写 manifest，返回 [(浏览器, 落点描述)]。"""
     names = detect(home, plat) if browsers is None else browsers
+    wrapper = write_wrapper(home, plat, browse_path)
     done: list[tuple[str, str]] = []
     for name in names:
         flavor, _, dests = BROWSERS[plat][name]
-        manifest = build_manifest(flavor, browse_path, extension_ids, gecko_ids)
+        manifest = build_manifest(flavor, wrapper, extension_ids, gecko_ids)
         for dest in dests:
             if dest.startswith("reg:"):
                 path = win_manifest_path(home, flavor)
@@ -227,9 +266,13 @@ def uninstall(home: pathlib.Path, plat: str, *,
         if path.exists():
             path.unlink()
             removed.append(("windows", str(path)))
-    win_dir = home / WIN_MANIFEST_DIR
-    if win_dir.is_dir() and not any(win_dir.iterdir()):
-        win_dir.rmdir()
+    for wrapper in (wrapper_path(home, "win32"), wrapper_path(home, "linux")):
+        if wrapper.exists():
+            wrapper.unlink()
+            removed.append(("wrapper", str(wrapper)))
+    for stale in (home / WIN_MANIFEST_DIR, home / WRAPPER_DIR):
+        if stale.is_dir() and not any(stale.iterdir()):
+            stale.rmdir()
     return removed
 
 
@@ -304,7 +347,8 @@ def _main(argv: list[str]) -> int:
         return EXIT_FAILED
 
     if args.list_only:
-        out.info(f"browse 路径：{browse_path}")
+        out.info(f"browse：{browse_path}")
+        out.info(f"wrapper（manifest 的 path 指向它）：{wrapper_path(home, plat)}")
         for name in found:
             flavor, _, dests = table[name]
             for dest in dests:
@@ -321,7 +365,7 @@ def _main(argv: list[str]) -> int:
     )
     for name, where in done:
         out.ok(f"{name}: {where}")
-    out.info(f"manifest 里的 browse 路径：{browse_path}")
+    out.info(f"wrapper：{wrapper_path(home, plat)} -> {browse_path} --native-host")
     return EXIT_OK
 
 

@@ -53,6 +53,38 @@ class TempHome(unittest.TestCase):
     def read(self, rel: str) -> dict:
         return json.loads((self.home / rel / f"{nh.HOST_NAME}.json").read_text("utf-8"))
 
+    def wrapper(self, plat: str = "darwin") -> pathlib.Path:
+        return nh.wrapper_path(self.home, plat)
+
+
+class TestWrapper(TempHome):
+    """manifest 没有 args 字段，参数只能靠 wrapper 带进去。"""
+
+    def test_posix_content_and_exec_bit(self) -> None:
+        path = nh.write_wrapper(self.home, "darwin", BROWSE)
+        self.assertEqual(path, self.home / nh.WRAPPER_DIR / nh.WRAPPER_NAME)
+        self.assertEqual(path.read_text("utf-8"),
+                         '#!/bin/sh\nexec "/opt/lazygophers/bin/browse" --native-host "$@"\n')
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755)
+        self.assertTrue(path.stat().st_mode & stat.S_IXUSR)
+
+    def test_path_with_spaces_is_quoted(self) -> None:
+        path = nh.write_wrapper(self.home, "linux", pathlib.Path("/opt/my tools/browse"))
+        self.assertIn('exec "/opt/my tools/browse" --native-host "$@"',
+                      path.read_text("utf-8"))
+
+    def test_windows_is_a_cmd_with_crlf(self) -> None:
+        path = nh.write_wrapper(self.home, "win32", pathlib.Path(r"C:\bin\browse.exe"))
+        self.assertEqual(path.name, f"{nh.WRAPPER_NAME}.cmd")
+        self.assertEqual(path.read_bytes(),
+                         b'@echo off\r\n"C:\\bin\\browse.exe" --native-host %*\r\n')
+
+    def test_rewrite_updates_target(self) -> None:
+        nh.write_wrapper(self.home, "darwin", BROWSE)
+        path = nh.write_wrapper(self.home, "darwin", pathlib.Path("/usr/local/bin/browse"))
+        self.assertIn("/usr/local/bin/browse", path.read_text("utf-8"))
+        self.assertNotIn(str(BROWSE), path.read_text("utf-8"))
+
 
 class TestManifest(unittest.TestCase):
     def test_chromium_shape(self) -> None:
@@ -160,7 +192,11 @@ class TestInstallMac(TempHome):
         path = self.home / nh._MAC_CHROME / f"{nh.HOST_NAME}.json"
         self.assertTrue(path.is_file())
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
-        self.assertEqual(json.loads(path.read_text("utf-8"))["path"], str(BROWSE))
+        # manifest 的 path 指 wrapper，不是 browse 本身，且必须是绝对路径
+        written = json.loads(path.read_text("utf-8"))["path"]
+        self.assertEqual(written, str(self.wrapper()))
+        self.assertTrue(pathlib.Path(written).is_absolute())
+        self.assertTrue(self.wrapper().stat().st_mode & stat.S_IXUSR)
 
     def test_brave_writes_both_dirs(self) -> None:
         """brave-core 指 Chrome 目录、KeePassXC 指 BraveSoftware 目录，两个都写。"""
@@ -260,8 +296,17 @@ class TestInstallWindows(TempHome):
         nh.install(self.home, "win32", BROWSE, browsers=["chrome", "firefox"],
                    reg_set=reg.set)
         files = sorted(p.name for p in (self.home / nh.WIN_MANIFEST_DIR).iterdir())
-        self.assertEqual(files, ["com.lazygophers.browse.firefox.json",
+        self.assertEqual(files, [f"{nh.WRAPPER_NAME}.cmd",
+                                 "com.lazygophers.browse.firefox.json",
                                  "com.lazygophers.browse.json"])
+
+    def test_manifest_points_at_the_cmd_wrapper(self) -> None:
+        reg = FakeRegistry()
+        nh.install(self.home, "win32", BROWSE, browsers=["chrome"], reg_set=reg.set)
+        manifest = json.loads(nh.win_manifest_path(self.home, nh.CHROMIUM)
+                              .read_text("utf-8"))
+        self.assertEqual(manifest["path"], str(self.wrapper("win32")))
+        self.assertTrue(manifest["path"].endswith(".cmd"))
 
 
 class TestUninstall(TempHome):
@@ -270,13 +315,16 @@ class TestUninstall(TempHome):
         nh.install(self.home, "darwin", BROWSE, browsers=names)
         left_before = list(self.home.rglob(f"{nh.HOST_NAME}*.json"))
         self.assertTrue(left_before)
+        self.assertTrue(self.wrapper().exists())
         nh.uninstall(self.home, "darwin")
         self.assertEqual(list(self.home.rglob(f"{nh.HOST_NAME}*.json")), [])
+        self.assertFalse(self.wrapper().exists())
+        self.assertFalse((self.home / nh.WRAPPER_DIR).exists())
 
     def test_reports_what_it_removed(self) -> None:
         nh.install(self.home, "darwin", BROWSE, browsers=["vivaldi"])
         removed = nh.uninstall(self.home, "darwin")
-        self.assertEqual([n for n, _ in removed], ["vivaldi"])
+        self.assertEqual([n for n, _ in removed], ["vivaldi", "wrapper"])
 
     def test_is_safe_when_nothing_installed(self) -> None:
         self.assertEqual(nh.uninstall(self.home, "darwin"), [])
