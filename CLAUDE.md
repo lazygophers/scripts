@@ -177,3 +177,17 @@ CI/CD build 前置拦截器：防止 push 后 CI 连 build 都过不去。支持
 - Success/failure states are consistently reported with both visual and audio feedback
 - Color-coded output provides immediate visual feedback for different operation states
 - Voice notifications provide audio feedback for important events
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as local markdown under `.scratch/`, **not** GitHub Issues — and `.scratch/` is gitignored, so nothing there reaches a PR. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, used verbatim: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` plus `docs/adr/` at the repo root. See `docs/agents/domain.md`.
