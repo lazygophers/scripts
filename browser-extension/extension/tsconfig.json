@@ -11,6 +11,10 @@
     "noFallthroughCasesInSwitch": true,
     "exactOptionalPropertyTypes": true,
     "noEmit": true,
+    // Relative imports carry the real `.ts` extension so `node --test` can run
+    // the sources directly (its type stripping does not remap `.js` to `.ts`).
+    // esbuild resolves them the same way.
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true
   },

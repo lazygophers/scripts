@@ -14,7 +14,7 @@
  */
 
 // Type-only: this module must carry no runtime import (see above).
-import type { ErrorCode } from "./protocol.js";
+import type { ErrorCode } from "./protocol.ts";
 
 export type Scheme = "css" | "text" | "text*" | "xpath" | "js";
 

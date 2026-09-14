@@ -44,12 +44,14 @@ export type ErrorCode =
 
 /** Thrown by handlers to pick the error code instead of `unknown error`. */
 export class CommandError extends Error {
-  constructor(
-    readonly code: ErrorCode,
-    message: string,
-  ) {
+  // Assigned in the body, not as a constructor parameter property: Node's
+  // type-stripping (`node --test` on .ts sources) rejects those.
+  readonly code: ErrorCode;
+
+  constructor(code: ErrorCode, message: string) {
     super(message);
     this.name = "CommandError";
+    this.code = code;
   }
 }
 
