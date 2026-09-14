@@ -1,5 +1,5 @@
 import { emitEvent } from "../events.ts";
-import { CommandError } from "../protocol.ts";
+import { CommandError, optionalString } from "../protocol.ts";
 import { globToRegExp, requireApi } from "./context.ts";
 
 /**
@@ -39,10 +39,8 @@ export async function networkSubscribe(
   params: Record<string, unknown>,
 ): Promise<{ subscription: string; "lg:metadataOnly": true }> {
   requireApi("webRequest", "observing network traffic");
-  const { matchUrl, types } = params;
-  if (matchUrl !== undefined && typeof matchUrl !== "string") {
-    throw new CommandError("invalid argument", "matchUrl must be a glob string");
-  }
+  const { types } = params;
+  const matchUrl = optionalString(params.matchUrl, "matchUrl", ", a shell-style glob");
   if (types !== undefined && !Array.isArray(types)) {
     throw new CommandError("invalid argument", "types must be an array of resource types");
   }
@@ -62,10 +60,7 @@ export async function networkSubscribe(
 export async function networkUnsubscribe(
   params: Record<string, unknown>,
 ): Promise<{ removed: string[] }> {
-  const id = params.subscription;
-  if (id !== undefined && typeof id !== "string") {
-    throw new CommandError("invalid argument", "subscription must be a string id");
-  }
+  const id = optionalString(params.subscription, "subscription", ", a subscription id");
   const removed = id === undefined ? [...subscriptions.keys()] : [id];
   for (const key of removed) {
     if (!subscriptions.delete(key)) {

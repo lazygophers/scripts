@@ -34,14 +34,18 @@ const V1 = [
   "lg:downloads.start",
   "lg:downloads.list",
   "lg:downloads.cancel",
+  // Spec 6.4's discovery command, listed alongside the locator schemes rather
+  // than in the 5.1 block.
+  "lg:page.snapshot",
 ];
 
 /**
- * Not capabilities — the daemon asking the extension something. Spec 4.4's
- * confirmation is the only one, and it stays the only one: a second entry here
- * means someone added a reverse RPC that needs its own review.
+ * Not capabilities — the daemon asking the extension something. Every entry
+ * here is a reverse RPC and needs its own review: 4.4's confirmation, and 4.3's
+ * "which page would this land on", without which `deny_domains` cannot see
+ * `input.*` / `script.*` at all.
  */
-const CONTROL = ["lg:confirm.request"];
+const CONTROL = ["lg:confirm.request", "lg:context.url"];
 
 test("the command table is exactly the v1 capability list plus the control methods", () => {
   assert.deepEqual(Object.keys(HANDLERS).sort(), [...V1, ...CONTROL].sort());

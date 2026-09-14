@@ -1,4 +1,4 @@
-import { CommandError } from "../protocol.ts";
+import { optionalString, requireString } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
 import { requireApi } from "./context.ts";
 
@@ -9,10 +9,8 @@ export async function bookmarksSearch(
   requireApi("bookmarks", "reading bookmarks");
   await confirm({ action: "readBookmarks", method: "lg:bookmarks.search", url: null });
 
-  const { query, url, title } = params;
-  if (query !== undefined && typeof query !== "string") {
-    throw new CommandError("invalid argument", "query must be a string");
-  }
+  const { url, title } = params;
+  const query = optionalString(params.query, "query");
   const nodes =
     query !== undefined
       ? await chrome.bookmarks.search(query)
@@ -28,13 +26,9 @@ export async function bookmarksCreate(
   params: Record<string, unknown>,
 ): Promise<{ node: chrome.bookmarks.BookmarkTreeNode }> {
   requireApi("bookmarks", "creating bookmarks");
-  const { url, title, parentId, index } = params;
-  if (title !== undefined && typeof title !== "string") {
-    throw new CommandError("invalid argument", "title must be a string");
-  }
-  if (url !== undefined && typeof url !== "string") {
-    throw new CommandError("invalid argument", "url must be a string");
-  }
+  const { parentId, index } = params;
+  const title = optionalString(params.title, "title");
+  const url = optionalString(params.url, "url");
   await confirm({
     action: "writeBookmarks",
     method: "lg:bookmarks.create",
@@ -59,10 +53,7 @@ export async function bookmarksRemove(
   params: Record<string, unknown>,
 ): Promise<{ removed: string }> {
   requireApi("bookmarks", "removing bookmarks");
-  const id = params.id;
-  if (typeof id !== "string" || id === "") {
-    throw new CommandError("invalid argument", "id must be a non-empty bookmark id");
-  }
+  const id = requireString(params.id, "id", ", a bookmark id");
   await confirm({ action: "writeBookmarks", method: "lg:bookmarks.remove", url: null });
 
   if (params.recursive === true) {

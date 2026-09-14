@@ -1,4 +1,4 @@
-import { CommandError } from "../protocol.ts";
+import { CommandError, optionalString, requireString } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
 import { requireApi, resolveContext, targetUrl } from "./context.ts";
 import { runInPage, type PageResult } from "./inject.ts";
@@ -84,10 +84,7 @@ export async function storageGetLocalStorage(
     method: "storage.getLocalStorage",
     url: await targetUrl(target),
   });
-  const key = params.key;
-  if (key !== undefined && typeof key !== "string") {
-    throw new CommandError("invalid argument", "key must be a string");
-  }
+  const key = optionalString(params.key, "key");
   const entries = await runInPage(target, "ISOLATED", pageReadLocalStorage, [key ?? null]);
   return { entries };
 }
@@ -171,11 +168,4 @@ function cookieFilter(params: Record<string, unknown>): chrome.cookies.GetAllDet
     ...(typeof domain === "string" ? { domain } : {}),
     ...(typeof name === "string" ? { name } : {}),
   };
-}
-
-function requireString(value: unknown, name: string): string {
-  if (typeof value !== "string" || value === "") {
-    throw new CommandError("invalid argument", `${name} must be a non-empty string`);
-  }
-  return value;
 }

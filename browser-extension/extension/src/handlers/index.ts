@@ -10,10 +10,12 @@ import {
   browsingContextReload,
 } from "./browsingContext.ts";
 import { confirmRequest } from "./confirm.ts";
+import { contextUrl } from "./context.ts";
 import { downloadsCancel, downloadsList, downloadsStart } from "./downloads.ts";
 import { historyDelete, historySearch } from "./history.ts";
 import { inputClick, inputKey, inputScroll, inputType } from "./input.ts";
 import { networkSubscribe, networkUnsubscribe } from "./network.ts";
+import { pageSnapshot } from "./page.ts";
 import { scriptCallFunction, scriptEvaluate } from "./script.ts";
 import {
   storageDeleteCookies,
@@ -69,8 +71,13 @@ export const HANDLERS: Record<string, Handler> = {
   "lg:bookmarks.create": bookmarksCreate,
   "lg:bookmarks.remove": bookmarksRemove,
 
-  // Not a capability — the daemon asking the user a question (spec 4.4).
+  "lg:page.snapshot": pageSnapshot,
+
+  // Not capabilities — the daemon asking a question. `lg:confirm.request` puts
+  // it to the user (spec 4.4); `lg:context.url` asks which page a command would
+  // land on, which is what `deny_domains` needs (spec 4.3).
   "lg:confirm.request": confirmRequest,
+  "lg:context.url": contextUrl,
 
   "lg:downloads.start": downloadsStart,
   "lg:downloads.list": downloadsList,

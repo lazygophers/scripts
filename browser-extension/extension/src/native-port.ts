@@ -22,7 +22,20 @@ import {
  */
 const PING_INTERVAL_MS = 20_000;
 
+/** How many commands the panel's live log keeps (spec 4.5). */
+const LOG_SIZE = 20;
+
 export type ConnectionState = "connected" | "disconnected";
+
+/** One line of the panel log. Method and outcome only — never the payload. */
+export interface LogEntry {
+  at: number;
+  method: string;
+  ok: boolean;
+  ms: number;
+  /** Error code on failure, empty on success. */
+  error: string;
+}
 
 export class NativeConnection {
   private port: chrome.runtime.Port | null = null;
@@ -36,6 +49,9 @@ export class NativeConnection {
   // replies against the ids *it* issued.
   private outSeq = 0;
   private outbound = new Map<number, (reply: Success | ErrorReply) => void>();
+  // Newest last. The payload never enters it — same rule as the audit log
+  // (spec 4.6): what was done, not what was read.
+  private log: LogEntry[] = [];
 
   // Assigned in the body, not as constructor parameter properties: Node's
   // type-stripping (`node --test` on .ts sources) rejects those, same as
@@ -132,15 +148,30 @@ export class NativeConnection {
     }
     this.inFlight += 1;
     this.onInFlight(this.inFlight);
+    const started = Date.now();
     try {
       const result = await dispatch(msg.method, msg.params ?? {});
       this.send({ type: "success", id: msg.id, result });
+      this.record(msg.method, started, "");
     } catch (err) {
       const [error, message] = classify(err);
       this.send({ type: "error", id: msg.id, error, message });
+      this.record(msg.method, started, error);
     } finally {
       this.inFlight -= 1;
       this.onInFlight(this.inFlight);
+    }
+  }
+
+  /** The panel's live log, newest first (spec 4.5). */
+  recent(): LogEntry[] {
+    return [...this.log].reverse();
+  }
+
+  private record(method: string, started: number, error: string): void {
+    this.log.push({ at: started, method, ok: error === "", ms: Date.now() - started, error });
+    if (this.log.length > LOG_SIZE) {
+      this.log.shift();
     }
   }
 

@@ -80,15 +80,39 @@ RISKY_ACTIONS = frozenset(RISKY_METHODS.values())
 def risky_action(method: str, params: dict | None = None) -> str | None:
     """这条指令算高危动作吗，算就返回动作名。
 
-    `js=` 定位器在 MAIN world 求值（`handlers/input.ts:83`），spec 4.4 点名它也是
+    `js=` 定位器在 MAIN world 求值（`handlers/input.ts:88`），spec 4.4 点名它也是
     高危，所以 `input.*` 带 `js=` 的一样要确认 —— 光看方法名会漏。
+
+    **字段名是 `selector`**，线上就叫这个（CLI 的位置参数名见
+    `lib/cli/browse.py:82`，扩展侧读的是 `params.selector`，`handlers/input.ts:65`）。
     """
     if method in RISKY_METHODS:
         return RISKY_METHODS[method]
-    locator = (params or {}).get("locator")
-    if isinstance(locator, str) and locator.startswith("js="):
+    selector = (params or {}).get("selector")
+    if isinstance(selector, str) and selector.startswith("js="):
         return "evalMainWorld"
     return None
+
+
+# 这些指令冲着「某个页面」去，但 params 里没有 url / domain —— 目标页是扩展按
+# context > matchUrl > 当前活动标签页算出来的（`handlers/context.ts:41`）。deny_domains
+# 要拦得住它们，daemon 就得先问扩展一句「这条指令落在哪个页面上」，见
+# `browse_daemon.Daemon._gate`。清单与扩展侧调 `resolveContext` 的 handler 一一对应。
+PAGE_METHODS = frozenset({
+    "script.evaluate",
+    "script.callFunction",
+    "input.click",
+    "input.type",
+    "input.key",
+    "input.scroll",
+    "storage.getLocalStorage",
+    "storage.setLocalStorage",
+    "browsingContext.close",
+    "browsingContext.activate",
+    "browsingContext.reload",
+    "browsingContext.captureScreenshot",
+    "lg:page.snapshot",
+})
 
 
 def target_url(params: dict | None) -> str | None:
@@ -225,22 +249,47 @@ class Security:
 
     # -------------------------------------------------------- 决策
 
-    def check(self, method: str, params: dict | None = None) -> dict | None:
+    def needs_target_lookup(self, method: str, params: dict | None = None,
+                            mode: str | None = None) -> bool:
+        """要不要先问扩展「这条指令落在哪个页面上」。
+
+        两种情况才值得多花这个往返：
+
+        - **拒绝名单非空**：不知道目标页就没法判 deny_domains（判定结果见调用方，
+          问不到时 fail closed）。名单空着就没什么可拦。
+        - **这条指令要弹确认**：确认框上得写清楚是哪个站，否则用户在给一个没有主语的
+          请求点同意。顺带一件事：扩展侧的去抖缓存按 `动作+方法+URL` 做键，daemon 这边
+          留 `None` 而扩展那边填真实 URL，同一个问题会被当成两个，弹两次框。
+        """
+        if method not in PAGE_METHODS or target_url(params) is not None:
+            return False
+        if self.deny_domains:
+            return True
+        mode = self.confirm_mode if mode is None else mode
+        return mode != "silent" and risky_action(method, params) is not None
+
+    def check(self, method: str, params: dict | None = None, *,
+              url: str | None = None, mode: str | None = None) -> dict | None:
         """放行返回 None；要弹确认返回 ConfirmRequest；命中拒绝名单直接抛。
+
+        `url` 是调用方已经替这条指令解析出来的目标页（`needs_target_lookup` 为真时
+        daemon 会去问扩展）；不给就从 params 里取。`mode` 是这一次调用生效的确认模式，
+        不给就用加载时算好的那个。
 
         ConfirmRequest 的形状与扩展侧
         （`handlers/confirm.ts:26-32`）一致：`{action, method, url}`。
         """
-        url = target_url(params)
+        url = target_url(params) if url is None else url
         domain = domain_of(url)
         for pattern in self.deny_domains:
             if domain_matches(domain, pattern):
                 raise SecurityError(f"{domain} 命中拒绝名单（deny_domains: {pattern}）")
 
+        mode = self.confirm_mode if mode is None else mode
         action = risky_action(method, params)
-        if action is None or self.confirm_mode == "silent":
+        if action is None or mode == "silent":
             return None
-        if self.confirm_mode == "per_domain" and domain and domain in self.approvals():
+        if mode == "per_domain" and domain and domain in self.approvals():
             return None
         return {"action": action, "method": method, "url": url}
 

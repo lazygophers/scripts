@@ -1,11 +1,22 @@
 /**
- * The toolbar panel, spec 4.5: list the domains that `confirm_mode:
- * per_domain` has stopped asking about, and let the user take any of them
- * back. The list lives in `browse.yaml` on the Python side; the panel goes
- * through the service worker, which relays to the daemon.
+ * The toolbar panel, spec 4.5. Three things:
+ *
+ * - the last commands and how they ended (live log),
+ * - a brake that drops the native port right now,
+ * - the domains that `confirm_mode: per_domain` has stopped asking about,
+ *   each revocable.
+ *
+ * The allow list lives in `browse.yaml` on the Python side, so that part goes
+ * through the service worker to the daemon. The log and the brake are the
+ * service worker's own — they keep working when the daemon does not.
  */
+import type { LogEntry } from "./native-port.ts";
+
 const list = document.getElementById("list") as HTMLUListElement | null;
 const statusNode = document.getElementById("status");
+const logList = document.getElementById("log") as HTMLUListElement | null;
+const logStatus = document.getElementById("logStatus");
+const cut = document.getElementById("cut") as HTMLButtonElement | null;
 
 async function call(op: string, domain?: string): Promise<string[]> {
   const reply = await chrome.runtime.sendMessage({ type: "browse-approvals", op, domain });
@@ -51,4 +62,54 @@ async function run(body: () => Promise<string[]>): Promise<void> {
   }
 }
 
+function renderLog(entries: LogEntry[], state: string): void {
+  if (logStatus) {
+    logStatus.textContent =
+      state === "connected" ? "daemon connected" : "daemon not connected";
+  }
+  if (!logList) {
+    return;
+  }
+  logList.replaceChildren();
+  if (entries.length === 0) {
+    const row = document.createElement("li");
+    row.textContent = "Nothing run yet.";
+    logList.append(row);
+    return;
+  }
+  for (const entry of entries) {
+    const row = document.createElement("li");
+    const mark = document.createElement("span");
+    mark.className = entry.ok ? "ok" : "bad";
+    mark.textContent = entry.ok ? "✓" : "✗";
+    const name = document.createElement("span");
+    name.textContent = entry.ok ? entry.method : `${entry.method} — ${entry.error}`;
+    const ms = document.createElement("span");
+    ms.className = "ms";
+    ms.textContent = `${entry.ms}ms`;
+    row.append(mark, name, ms);
+    logList.append(row);
+  }
+}
+
+async function loadLog(): Promise<void> {
+  try {
+    const reply = await chrome.runtime.sendMessage({ type: "browse-log" });
+    renderLog((reply?.entries ?? []) as LogEntry[], String(reply?.state ?? ""));
+  } catch (err) {
+    if (logStatus) {
+      logStatus.textContent = err instanceof Error ? err.message : String(err);
+    }
+  }
+}
+
+cut?.addEventListener("click", () => {
+  cut.disabled = true;
+  void chrome.runtime.sendMessage({ type: "browse-disconnect" }).then(() => {
+    cut.textContent = "Disconnected";
+    void loadLog();
+  });
+});
+
 void run(() => call("list"));
+void loadLog();

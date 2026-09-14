@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import pathlib
 import stat
@@ -13,13 +12,7 @@ import unittest
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-_SPEC = importlib.util.spec_from_file_location(
-    "browse_install_native_host",
-    REPO_ROOT / "browser-extension" / "install" / "native_host.py",
-)
-assert _SPEC and _SPEC.loader
-nh = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(nh)
+from lib import browse_install as nh  # noqa: E402
 
 BROWSE = pathlib.Path("/opt/lazygophers/bin/browse")
 
@@ -382,17 +375,21 @@ class TestResolveBrowsePath(TempHome):
         with self.assertRaises(ValueError):
             nh.resolve_browse_path(str(self.home / "nope"))
 
-    def test_default_is_the_repo_bin(self) -> None:
-        self.assertEqual(nh.resolve_browse_path(None), (REPO_ROOT / "bin" / "browse").resolve())
-
-    def test_falls_back_to_path_lookup(self) -> None:
+    def test_path_lookup_wins(self) -> None:
+        """PATH 上装好的 browse 优先：uvx 那种临时环境里的路径活不过这次运行。"""
         import unittest.mock as mock
 
         found = self.home / "browse"
         found.write_text("#!/bin/sh\n", encoding="utf-8")
-        with mock.patch.object(nh, "REPO_ROOT", self.home / "nowhere"), \
-                mock.patch.object(nh.shutil, "which", lambda _: str(found)):
+        with mock.patch.object(nh.shutil, "which", lambda _: str(found)):
             self.assertEqual(nh.resolve_browse_path(None), found.resolve())
+
+    def test_falls_back_to_the_repo_bin(self) -> None:
+        import unittest.mock as mock
+
+        with mock.patch.object(nh.shutil, "which", lambda _: None):
+            self.assertEqual(nh.resolve_browse_path(None),
+                             (REPO_ROOT / "bin" / "browse").resolve())
 
     def test_raises_when_browse_is_nowhere(self) -> None:
         import unittest.mock as mock
@@ -459,7 +456,7 @@ class TestCli(TempHome):
         # 固定成 darwin：CLI 的行为与跑测试的机器是什么系统无关。
         with mock.patch.object(nh.pathlib.Path, "home", staticmethod(lambda: self.home)), \
                 mock.patch.object(nh, "platform_key", lambda *a: "darwin"):
-            return nh.main(["native_host.py", *args])
+            return nh.main(["browse install", *args])
 
     def test_install_and_uninstall_round_trip(self) -> None:
         self.touch_dir("Library/Application Support/Google/Chrome")

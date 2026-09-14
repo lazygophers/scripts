@@ -1,10 +1,13 @@
 """browse — 用命令行驱动浏览器扩展
 
 常用：
+  browse install                            # 第一次用：把 browse 注册给浏览器
   browse daemon start                       # 起中转服务（幂等；平时不用手动跑）
   browse browsingContext getTree --table    # 看浏览器连上没有、有哪些标签页
   browse browsingContext navigate https://example.com
+  browse page snapshot --table              # 这一页能点/能填的元素 + 可用 locator
   browse input click 'text=登录'
+  browse stop                               # 中止在途指令（daemon 留着）
   browse script evaluate 'document.title'
   browse network subscribe --match-url '*/api/*' --duration 30s   # 事件流 JSONL
   browse run 'browsingContext.navigate https://a.com' \
@@ -37,6 +40,7 @@ import time
 
 from lib import browse_daemon
 from lib.browse_daemon import (
+    ABORT_METHOD,
     IDLE_TIMEOUT,
     connect,
     pack,
@@ -51,6 +55,7 @@ from lib.browse_protocol import (
     ProtocolError,
     command,
 )
+from lib.browse_security import CONFIRM_MODES
 from lib.notify import consume_debug, consume_dry_run, consume_no_say
 from lib.skills_help import consume_skills
 from lib.ui import reporter, timed
@@ -98,11 +103,13 @@ METHODS: dict[str, tuple[str, ...]] = {
     "lg:downloads.start": ("url",),
     "lg:downloads.list": (),
     "lg:downloads.cancel": ("id",),
+    "lg:page.snapshot": (),
 }
 
 # 这些 --flag 是 CLI 自己的，不进 params。都与线上参数名不冲突（对着 METHODS 的
 # handlers 逐个核过），所以不需要再加前缀去区分。
-CLI_FLAGS = frozenset({"table", "socket", "concurrency", "failFast", "duration", "idleTimeout"})
+CLI_FLAGS = frozenset({"table", "socket", "concurrency", "failFast", "duration",
+                       "idleTimeout", "confirmMode"})
 
 DEFAULT_CONCURRENCY = 4
 # 自举起 daemon 后等它把 socket 建起来的上限。这不是轮询别人的异步结果，是本地进程
@@ -215,6 +222,23 @@ def parse_run_item(line: str) -> tuple[str, dict]:
     return method, params
 
 
+def confirm_mode_of(opts: dict) -> str:
+    """`--confirm-mode` 的值，没给就是空串。
+
+    这里只查拼写；「比配置松」这条由 daemon 判 —— 配置文件是它读的（spec 4.4：
+    命令行只能收紧不能放宽）。
+    """
+    raw = opts.get("confirmMode")
+    if raw in (None, True):
+        if raw is True:
+            raise UsageError(f"--confirm-mode 要带值：{' / '.join(CONFIRM_MODES)}")
+        return ""
+    mode = str(raw).strip()
+    if mode not in CONFIRM_MODES:
+        raise UsageError(f"--confirm-mode 只能是 {' / '.join(CONFIRM_MODES)}：{mode!r}")
+    return mode
+
+
 def parse_duration(raw) -> float:
     """`30s` / `2m` / `500ms` / `1.5`（裸数字当秒）→ 秒。"""
     text = str(raw).strip()
@@ -229,8 +253,12 @@ def pid_path(sock: pathlib.Path) -> pathlib.Path:
     return sock.with_name(sock.name + ".pid")
 
 
-def ensure_daemon(sock: pathlib.Path, *, spawn: bool = True) -> bool:
-    """socket 那头有活的 daemon 就直接用，没有就起一个并等它就绪。"""
+def ensure_daemon(sock: pathlib.Path, *, spawn: bool = True, confirm_mode: str = "") -> bool:
+    """socket 那头有活的 daemon 就直接用，没有就起一个并等它就绪。
+
+    `confirm_mode` 只在这一次真的把 daemon 拉起来时才写进它的启动参数——已经在跑的
+    daemon 不会被一条命令行改掉基线模式（单次收紧走握手，见 `execute`）。
+    """
     if probe(sock):
         return True
     if not spawn:
@@ -238,7 +266,8 @@ def ensure_daemon(sock: pathlib.Path, *, spawn: bool = True) -> bool:
     if not SCRIPT_PATH.is_file():
         raise UsageError(f"找不到 browse 自身的可执行文件 {SCRIPT_PATH}，没法自举 daemon")
     subprocess.Popen(
-        [sys.executable, str(SCRIPT_PATH), "daemon", "run", "--socket", str(sock)],
+        [sys.executable, str(SCRIPT_PATH), "daemon", "run", "--socket", str(sock),
+         *(["--confirm-mode", confirm_mode] if confirm_mode else [])],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
@@ -250,10 +279,10 @@ def ensure_daemon(sock: pathlib.Path, *, spawn: bool = True) -> bool:
     return False
 
 
-async def _serve(sock: pathlib.Path, idle_timeout: float) -> bool:
+async def _serve(sock: pathlib.Path, idle_timeout: float, confirm_mode: str = "") -> bool:
     """前台跑 daemon，收到 SIGTERM/SIGINT 就取消它 —— 取消点在 `wait_stopped()`，
     `browse_daemon.run` 的 finally 会把 socket 收干净，不留死文件给下次误判。"""
-    task = asyncio.ensure_future(browse_daemon.run(sock, idle_timeout))
+    task = asyncio.ensure_future(browse_daemon.run(sock, idle_timeout, confirm_mode))
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, task.cancel)
@@ -263,13 +292,22 @@ async def _serve(sock: pathlib.Path, idle_timeout: float) -> bool:
         return True
 
 
-def daemon_run(sock: pathlib.Path, idle_timeout: float) -> int:
-    """`browse daemon run`：前台守着，由 `ensure_daemon` 在后台拉起。"""
+def daemon_run(sock: pathlib.Path, idle_timeout: float, confirm_mode: str = "") -> int:
+    """`browse daemon run`：前台守着，由 `ensure_daemon` 在后台拉起。
+
+    `_serve` 返回 False 表示这个 socket 上已经有另一个 daemon 在跑，这一次没起来 ——
+    所以是失败，不是成功。
+    """
+    if probe(sock):
+        # pid 文件写在这里，先确认这一个是我们的——否则下面的 finally 会把正在跑的
+        # 那个 daemon 的 pid 文件删掉，`daemon stop` 就再也找不到它
+        reporter(stderr=True).err(f"这个 socket 上已经有 daemon 在跑：{sock}")
+        return EXIT_FAILED
     pid_file = pid_path(sock)
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
     try:
-        return EXIT_OK if asyncio.run(_serve(sock, idle_timeout)) else EXIT_OK
+        return EXIT_OK if asyncio.run(_serve(sock, idle_timeout, confirm_mode)) else EXIT_FAILED
     finally:
         pid_file.unlink(missing_ok=True)
 
@@ -304,15 +342,18 @@ def daemon_stop(sock: pathlib.Path) -> int:
 
 # ---------------------------------------------------------------- 发指令
 async def execute(method: str, params: dict, sock: pathlib.Path, *,
-                  duration: float | None = None, stream=None) -> dict:
+                  duration: float | None = None, stream=None,
+                  confirm_mode: str = "") -> dict:
     """发一条指令，等回包。返回 `{"status": "ok"|"failed", ...}`。
 
     `duration` 只对 `network.subscribe` 有意义：拿到订阅后继续读事件，一行一个 JSON
     打到 `stream`，到点再用 daemon 发的 `sub-N` 退订（那个 id 拿到什么就回什么，不能
     自己缓存或去解析扩展的内部 id）。
+
+    `confirm_mode` 随握手发给 daemon，对这一条连接生效。
     """
     try:
-        reader, writer, _ = await connect("cli", sock)
+        reader, writer, _ = await connect("cli", sock, confirm_mode=confirm_mode)
     except (OSError, ProtocolError) as exc:
         return {"status": "failed", "error": ERR_NOT_CONNECTED,
                 "message": f"连不上 daemon（{sock}）: {exc}"}
@@ -367,7 +408,7 @@ async def _stream_events(reader, writer, subscription, duration: float, stream) 
 
 # ---------------------------------------------------------------- run 批量
 async def run_batch(items: list[tuple[str, dict]], sock: pathlib.Path, *,
-                    concurrency: int, fail_fast: bool) -> list[dict]:
+                    concurrency: int, fail_fast: bool, confirm_mode: str = "") -> list[dict]:
     """并发跑一批，返回与 items 同序的结果。
 
     fail-fast 的边界在**提交**：第一条失败之后还没开跑的标 `skipped`，已经在途的尽力
@@ -383,7 +424,8 @@ async def run_batch(items: list[tuple[str, dict]], sock: pathlib.Path, *,
     async def worker() -> None:
         for index in cursor:
             try:
-                results[index] = await execute(items[index][0], items[index][1], sock)
+                results[index] = await execute(items[index][0], items[index][1], sock,
+                                               confirm_mode=confirm_mode)
             except asyncio.CancelledError:
                 results[index] = {"status": "failed", "error": "lg:cancelled",
                                   "message": "已提交给浏览器，被 fail-fast 取消，结果未知"}
@@ -463,11 +505,14 @@ HELP = """browse — 用命令行驱动浏览器扩展
   browse <module> <action> [位置参数...] [--参数 值...]
   browse run [--concurrency N] [--no-fail-fast] '<指令串>'... | browse run -
   browse daemon start | stop | status
-  browse stop
+  browse stop                                       中止在途指令，daemon 留着
+  browse install | uninstall                        把 browse 注册给浏览器
 
 先跑起来
+  browse install                                    第一次用：注册 native host
   browse browsingContext getTree --table            看浏览器连上没有、有哪些标签页
   browse browsingContext navigate https://example.com
+  browse page snapshot --table                      列出这一页能点/能填的元素
   browse input type 'css=input[name=user]' 'myname'
   browse input click 'text=登录'
   browse script evaluate 'document.title'
@@ -481,6 +526,8 @@ HELP = """browse — 用命令行驱动浏览器扩展
   --concurrency N    run 的并发上限，默认 4
   --no-fail-fast     run 的每条各自独立，不因为前面失败就停，整体退出码 0
   --duration 30s     network subscribe 听多久，事件一行一个 JSON
+  --confirm-mode M   这一条命令临时收紧确认策略：silent / per_domain / always
+                     只能比配置更严；想放松要改配置文件，命令行放松会被拒
   --debug / --no-say 仓库通用开关
 
 参数怎么写
@@ -521,11 +568,12 @@ def _cmd_daemon(tokens: list[str]) -> int:
     action = tokens[0] if tokens else "status"
     _, flags = split_tokens(tokens[1:])
     sock = _sock_of(flags)
+    mode = confirm_mode_of(flags)
     report = reporter(stderr=True)
     if action == "run":
-        return daemon_run(sock, float(flags.get("idleTimeout", IDLE_TIMEOUT)))
+        return daemon_run(sock, float(flags.get("idleTimeout", IDLE_TIMEOUT)), mode)
     if action == "start":
-        if ensure_daemon(sock):
+        if ensure_daemon(sock, confirm_mode=mode):
             report.ok(f"daemon 在跑：{sock}")
             return EXIT_OK
         report.err(f"daemon 起不来：{sock}（{SPAWN_HINT}）")
@@ -542,6 +590,7 @@ def _cmd_daemon(tokens: list[str]) -> int:
 def _cmd_run(tokens: list[str]) -> int:
     raw, flags = split_tokens(tokens)
     sock = _sock_of(flags)
+    mode = confirm_mode_of(flags)
     concurrency = int(flags.get("concurrency", DEFAULT_CONCURRENCY))
     if concurrency < 1:
         raise UsageError(f"--concurrency 至少是 1：{concurrency}")
@@ -553,11 +602,12 @@ def _cmd_run(tokens: list[str]) -> int:
 
     # 先全部解析，再决定要不要起 daemon：写错一条就一条都不发，副作用为零
     items = [parse_run_item(line) for line in raw]
-    if not ensure_daemon(sock):
+    if not ensure_daemon(sock, confirm_mode=mode):
         print_error({"error": ERR_NOT_CONNECTED, "message": f"daemon 起不来：{sock}（{SPAWN_HINT}）"})
         return EXIT_NOT_CONNECTED
 
-    outcomes = asyncio.run(run_batch(items, sock, concurrency=concurrency, fail_fast=fail_fast))
+    outcomes = asyncio.run(run_batch(items, sock, concurrency=concurrency, fail_fast=fail_fast,
+                                     confirm_mode=mode))
     report = [{"index": i, "command": line, **outcome}
               for i, (line, outcome) in enumerate(zip(raw, outcomes))]
     sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
@@ -570,19 +620,48 @@ def _cmd_run(tokens: list[str]) -> int:
 def _cmd_single(tokens: list[str]) -> int:
     method, params, opts = parse_command(tokens)
     sock = _sock_of(opts)
+    mode = confirm_mode_of(opts)
     duration = parse_duration(opts["duration"]) if "duration" in opts else None
     if duration is not None and method != "network.subscribe":
         raise UsageError("--duration 只对 `browse network subscribe` 有意义")
-    if not ensure_daemon(sock):
+    if not ensure_daemon(sock, confirm_mode=mode):
         print_error({"error": ERR_NOT_CONNECTED, "message": f"daemon 起不来：{sock}（{SPAWN_HINT}）"})
         return EXIT_NOT_CONNECTED
 
-    outcome = asyncio.run(execute(method, params, sock, duration=duration))
+    outcome = asyncio.run(execute(method, params, sock, duration=duration, confirm_mode=mode))
     if outcome["status"] != "ok":
         print_error(outcome)
         return exit_code_for(outcome)
     print_result(outcome["result"], table=opts.get("table") is True)
     return EXIT_OK
+
+
+def _cmd_stop(tokens: list[str]) -> int:
+    """`browse stop`：把在途指令全掐了，daemon 留着（spec 4.5）。
+
+    要停 daemon 本身用 `browse daemon stop`。
+    """
+    sock = _sock_of(split_tokens(tokens)[1])
+    report = reporter(stderr=True)
+    if not probe(sock):
+        report.info(f"daemon 没在跑（{sock}），没有在途指令")
+        return EXIT_OK
+    outcome = asyncio.run(execute(ABORT_METHOD, {}, sock))
+    if outcome["status"] != "ok":
+        print_error(outcome)
+        return exit_code_for(outcome)
+    report.ok(f"已中止 {outcome['result'].get('aborted', 0)} 条在途指令，daemon 还在跑：{sock}")
+    return EXIT_OK
+
+
+def _cmd_install(tokens: list[str], uninstall: bool) -> int:
+    """`browse install` / `browse uninstall`：注册/注销 native messaging host。
+
+    延迟 import：注册表那套只有装扩展的人用得上，`browse --help` 不该为它付钱。
+    """
+    from lib.browse_install import main as install_main
+
+    return install_main(["browse install", *(["--uninstall"] if uninstall else []), *tokens])
 
 
 def _main(argv: list[str]) -> int:
@@ -596,11 +675,9 @@ def _main(argv: list[str]) -> int:
         if tokens[0] == "run":
             return _cmd_run(tokens[1:])
         if tokens[0] == "stop":
-            # ponytail: 只是 `daemon stop` 的别名。spec 4.5 想要的「断开端口、在途指令
-            # 全中止、daemon 留着」需要一条 daemon 侧的控制消息，那是 daemon 的文件，
-            # 不在本票范围。现状的可观察行为一致（在途指令全部失败），区别只是 daemon
-            # 也一起退了——下一条指令会自动把它拉起来。等控制消息落地后改成发那条。
-            return daemon_stop(_sock_of(split_tokens(tokens[1:])[1]))
+            return _cmd_stop(tokens[1:])
+        if tokens[0] in ("install", "uninstall"):
+            return _cmd_install(tokens[1:], uninstall=tokens[0] == "uninstall")
         return _cmd_single(tokens)
     except UsageError as exc:
         reporter(stderr=True).err(str(exc))

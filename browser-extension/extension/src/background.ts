@@ -59,6 +59,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: answerConfirm(message.token, message.approved) });
     return false;
   }
+  // The panel's live log and its brake (spec 4.5). Both are local to the
+  // service worker — no daemon round trip, so the brake still works when the
+  // daemon is the thing that has gone wrong.
+  if (message?.type === "browse-log") {
+    sendResponse({ ok: true, entries: connection.recent(), state });
+    return false;
+  }
+  if (message?.type === "browse-disconnect") {
+    connection.disconnect();
+    sendResponse({ ok: true });
+    return false;
+  }
   if (message?.type !== "browse-approvals") {
     return false;
   }

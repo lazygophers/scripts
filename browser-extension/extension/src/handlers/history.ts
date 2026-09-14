@@ -1,4 +1,4 @@
-import { CommandError } from "../protocol.ts";
+import { CommandError, optionalString } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
 import { requireApi } from "./context.ts";
 
@@ -13,10 +13,7 @@ export async function historySearch(
   requireApi("history", "reading browsing history");
   await confirm({ action: "readHistory", method: "lg:history.search", url: null });
 
-  const text = params.text === undefined ? "" : params.text;
-  if (typeof text !== "string") {
-    throw new CommandError("invalid argument", "text must be a string");
-  }
+  const text = optionalString(params.text, "text") ?? "";
   const items = await chrome.history.search({
     text,
     ...(typeof params.startTime === "number" ? { startTime: params.startTime } : {}),
