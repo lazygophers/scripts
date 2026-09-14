@@ -3,7 +3,147 @@
 `browse` 的浏览器端。通过 Native Messaging 连本机 daemon（host 名 `com.lazygophers.browse`），
 收 WebDriver BiDi 形状的指令，执行后回结果。方案见 `.scratch/browser-control-extension/spec.md`。
 
-## 构建
+## 安装（Chrome / Edge / Brave，四步）
+
+方案第 7.1 节。**不走 Chrome Web Store，自己分发，手动更新。**
+
+### 第 1 步：构建出可加载的扩展目录
+
+```bash
+cd browser-extension/extension
+npm install
+npm run build      # 产出 dist/，这就是要加载的那个目录
+```
+
+`dist/` 的绝对路径下一步要用，先 `pwd` 记下来：`<仓库>/browser-extension/extension/dist`。
+
+### 第 2 步：打开「开发者模式」，**此后一直开着**
+
+浏览器地址栏输 `chrome://extensions`（Edge 是 `edge://extensions`，Brave 是
+`brave://extensions`），把右上角的「开发者模式」开关打开。
+
+**这个开关必须一直开着。** Chrome 134 起，关掉它会直接**禁用**所有以「已解压」方式
+加载的扩展（内部原因码 `DISABLE_UNSUPPORTED_DEVELOPER_EXTENSION`）——不是隐藏，是
+停止工作。关掉再打开需要重新启用扩展。
+
+### 第 3 步：「加载已解压的扩展程序」，选第 1 步的 `dist/`
+
+加载成功后，扩展卡片上会显示 ID。它应该恒等于：
+
+```
+podeceeeafjdcemppcgjhhokcokpcama
+```
+
+对不上就是 `manifest.json` 的 `key` 字段被改过或丢了——**ID 不对，第 4 步注册的
+manifest 就会失配，扩展永远连不上 daemon**。详见下面「扩展 ID 与签名密钥」。
+
+### 第 4 步：注册 native host manifest
+
+```bash
+python3 browser-extension/install/native_host.py          # 装
+python3 browser-extension/install/native_host.py --list   # 只看会写哪些文件，不动盘
+python3 browser-extension/install/native_host.py --uninstall  # 卸
+```
+
+**这个脚本没有登记进 `pyproject.toml` 的 `[project.scripts]`**，所以
+`uvx --from git+https://github.com/lazygophers/scripts ...` 装不到它。要注册 native
+host，只能 clone 仓库后按上面的路径跑 `python3`。（`browse` 本身有入口，`uvx` 装得到；
+装不到的只是这个安装脚本。）
+
+**装完必须重启浏览器。** 浏览器只在启动时扫一遍 native messaging 的 manifest 目录，
+不重启就永远读不到刚写进去的那份。
+
+验证：
+
+```bash
+browse browsingContext getTree --table
+```
+
+出标签页列表就是通了。退出码 3（`lg:browser not connected`）就是没通，按下面「装不上
+时」排查。
+
+### 这个脚本到底动了哪些文件
+
+装的时候写两样东西，**不止 manifest**：
+
+1. **一个 wrapper 脚本**：`~/.local/state/lazygophers/scripts/browse-native-host`
+   （Windows 是 `%LOCALAPPDATA%\lazygophers\browse\browse-native-host.cmd`），权限
+   0755。内容就一行 `exec "<browse 的绝对路径>" --native-host "$@"`。
+   为什么要它：native messaging 的 manifest **没有 `args` 字段**，而 native host
+   就是 `browse --native-host`，那个参数没地方传，只能让 manifest 的 `path` 指向一个
+   自带该参数的脚本。
+2. **每个探测到的浏览器一份 manifest**：文件名恒为 `com.lazygophers.browse.json`，
+   `path` 指向上面那个 wrapper。macOS 上的落点：
+
+   | 浏览器 | 落点 |
+   |---|---|
+   | Chrome | `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/` |
+   | Chromium | `~/Library/Application Support/Chromium/NativeMessagingHosts/` |
+   | Edge | `~/Library/Application Support/Microsoft Edge/NativeMessagingHosts/` |
+   | Brave | `~/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/` **和** Chrome 那个目录（两处来源冲突，两个都写） |
+   | Opera | Chrome 那个目录 |
+   | Vivaldi | `~/Library/Application Support/Vivaldi/NativeMessagingHosts/` |
+   | Firefox | `~/Library/Application Support/Mozilla/NativeMessagingHosts/` |
+
+   Linux 换成 `~/.config/<浏览器>/NativeMessagingHosts/`；Windows 不写目录写
+   **HKCU 注册表键**（`SOFTWARE\<厂商>\<浏览器>\NativeMessagingHosts\com.lazygophers.browse`），
+   manifest 文件统一放 `%LOCALAPPDATA%\lazygophers\browse\`。
+
+`--uninstall` 把上面**两样都删**：所有已知落点的 manifest（不管当初探测到没有）、
+Windows 注册表键、以及那个 wrapper 脚本；目录空了连目录一起删。它不碰浏览器里已加载
+的扩展——那个要自己去 `chrome://extensions` 移除。
+
+### 浏览器探测：装了但从没启动过，探测不到
+
+脚本判断「这台机器有没有这个浏览器」看的是**用户数据目录存不存在**，而那个目录是浏览器
+**第一次启动时**才创建的。所以：装了 Edge 但一次都没打开过 → 探测不到 → 不给它写
+manifest。反过来也成立：卸载后残留的数据目录仍会被当成「装了」。
+
+两种解法，先试第一种：
+
+1. 把那个浏览器打开一次再跑脚本；
+2. 跳过探测，直接点名：
+
+```bash
+python3 browser-extension/install/native_host.py --browsers chrome,brave
+# 可选值：chrome chromium edge brave opera vivaldi firefox（逗号分隔）
+```
+
+### 更新：Win / Mac 上**不能**自动更新
+
+这不是没做，是做不了。在 Windows / macOS 的官方版 Chrome 上，带自分发 `update_url`
+的 `.crx` 装完**立刻被禁用**（`InstallVerifier::MustRemainDisabled`，原因码
+`DISABLE_NOT_VERIFIED`）；而判定「是不是商店来的」看的就是 `update_url` 指不指向
+商店——**为自动更新而写的那个自分发地址，本身就是被禁用的理由**。自动更新与保持启用
+在 Win/Mac 上互斥。Linux 与 Chromium 构建不受此限。
+
+所以更新走**本地程序**：`browse` 直接改写扩展目录里的文件，再让扩展自己调
+`chrome.runtime.reload()`。对已解压加载的扩展，reload 节流很宽松（要连续 30 次间隔
+不到 1 秒才会被禁）。人工等价操作：重新 `npm run build`，然后在 `chrome://extensions`
+上点那张卡片的「重新加载」。
+
+**Firefox 是另一条路**：AMO unlisted 签名 + 自托管 XPI，`update_url` 生效，每天自动
+检查一次。Firefox 侧的扩展 ID 是：
+
+```
+browse@lazygophers.com
+```
+
+它写在两处且必须一致——扩展的 `manifest.json` 的
+`browser_specific_settings.gecko.id`，和安装脚本的 `GECKO_IDS`。有测试锁着这两处同步，
+改一处不改另一处会测试失败。
+
+### 装不上时按这个顺序查
+
+1. `browse daemon status` —— daemon 没在跑就 `browse daemon start`
+2. `chrome://extensions` 上扩展 ID 是不是 `podeceeeafjdcemppcgjhhokcokpcama`
+3. `python3 browser-extension/install/native_host.py --list` —— 你的浏览器在列表里吗
+4. manifest 的 `path` 指的那个 wrapper 还在吗、有执行位吗
+   （`ls -l ~/.local/state/lazygophers/scripts/browse-native-host`）
+5. 重启浏览器（第 4 步之后没重启是最常见的原因）
+6. 扩展的 service worker 控制台有没有 `[browse] daemon unavailable` 在刷
+
+## 构建与开发
 
 ```bash
 cd browser-extension/extension
@@ -12,9 +152,6 @@ npm run build      # 产出 dist/，这就是可加载的扩展目录
 npm run typecheck  # tsc --noEmit，严格模式
 npm test           # node --test，无第三方测试框架
 ```
-
-加载：`chrome://extensions` → 打开「开发者模式」→「加载已解压的扩展程序」→ 选
-`browser-extension/extension/dist`。
 
 daemon 没起时这是**正常现象**：service worker 控制台会持续打印
 `[browse] daemon unavailable (...); retry #N in Nms`，间隔从 500ms 逐步退避到 60s，
