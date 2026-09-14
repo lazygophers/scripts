@@ -12,13 +12,26 @@ from pathlib import Path
 
 from lib.graphwatch_config import GraphwatchError, config_home, load_config
 
-# 新鲜度比对时整目录排除：构建产物/依赖目录不是「源码改动」，不排除的话
-# IDE/构建器一碰 build/ 就永远显示过期
+# 整目录排除（watch 事件过滤 + 新鲜度比对共用）：构建产物/依赖/缓存/临时
+# 目录不是「源码改动」，不排除的话 IDE/构建器一碰 build/ 就永远显示过期
 STALE_EXCLUDED_DIRS = frozenset({
     "node_modules", "target", "build", "dist", "out", "obj",
     ".venv", "venv", "__pycache__", ".dart_tool", "Pods", "DerivedData",
     ".next", ".nuxt", ".cache", ".idea", ".gradle", ".terraform",
+    "tmp", "temp", ".tmp", ".temp", "bak", ".bak", "backup", "log", "logs",
+    "coverage", "htmlcov", ".tox", ".nox", ".pytest_cache", ".mypy_cache",
+    ".ruff_cache", ".turbo", ".parcel-cache", ".sass-cache", ".eslint",
+    ".angular", ".astro", ".svelte-kit", ".expo", "bazel-out",
 })
+
+# 监听根自身之外的固定产物目录：graphwatch 的输出和 VCS 元数据
+WATCH_EXCLUDED_DIRS = frozenset({"graphify-out", ".git"})
+
+
+def _path_ignored(path_parts: tuple[str, ...], root_parts: tuple[str, ...]) -> bool:
+    """root 之下是否有任何一段落在排除目录里。只比 root 之后的部分，
+    root 自身的祖先目录名（如 ~/build/ 下有个仓库）不算数。"""
+    return bool((STALE_EXCLUDED_DIRS | WATCH_EXCLUDED_DIRS) & set(path_parts[len(root_parts):]))
 
 
 # 图谱新鲜度状态 → (列标签, 色)；list / status 共用
@@ -209,6 +222,7 @@ def _watchdog_listener(folder: str, debounce: float, on_change) -> object:
     from watchdog.observers import Observer
 
     watched = _watched_extensions()
+    root_parts = Path(folder).parts
 
     class _Handler(FileSystemEventHandler):
         def __init__(self):
@@ -230,7 +244,7 @@ def _watchdog_listener(folder: str, debounce: float, on_change) -> object:
             if event.is_directory:
                 return
             p = _P(event.src_path)
-            if "graphify-out" in p.parts or ".git" in p.parts:
+            if _path_ignored(p.parts, root_parts):
                 return
             if p.suffix.lower() not in watched:
                 return
@@ -485,7 +499,7 @@ def stale_trigger(folder: str) -> Path | None:
     if not graph.is_file():
         return None
     gm = graph.stat().st_mtime
-    excluded = {"graphify-out", ".git"} | STALE_EXCLUDED_DIRS
+    excluded = STALE_EXCLUDED_DIRS | WATCH_EXCLUDED_DIRS
     import stat as _stat
 
     newest: tuple[float, Path] | None = None

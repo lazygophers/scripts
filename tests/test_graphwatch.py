@@ -1338,6 +1338,49 @@ class TestFreshnessEdges(GraphwatchCase):
         # 产物/依赖目录整棵剪掉：里面的新文件不算源码改动
         self.assertIsNone(graphwatch.stale_trigger(str(repo)))
 
+    def test_stale_trigger_prunes_tmp_log_bak(self):
+        import os
+
+        from lib import graphwatch_daemon
+
+        repo = self.mkdir()
+        (repo / "a.py").write_text("x\n", encoding="utf-8")
+        g = repo / "graphify-out"
+        g.mkdir()
+        (g / "graph.json").write_text("{}", encoding="utf-8")
+        future = time.time() + 100
+        for sub in ("tmp", "log", "bak", ".pytest_cache"):
+            d = repo / sub / "nested"
+            d.mkdir(parents=True)
+            (d / "gen.py").write_text("x\n", encoding="utf-8")
+            os.utime(d / "gen.py", (future, future))
+        # 临时/日志/备份/缓存目录里的文件不算源码改动
+        self.assertIsNone(graphwatch.stale_trigger(str(repo)))
+
+    def test_path_ignored(self):
+        from lib import graphwatch_daemon as gd
+
+        root = ("/Users", "x", "repo")
+        ignored = [
+            root + ("tmp", "a.py"),
+            root + ("log", "a.log"),
+            root + ("src", "node_modules", "dep.js"),
+            root + ("graphify-out", "graph.json"),
+            root + (".git", "HEAD"),
+            root + ("build", "out.py"),
+        ]
+        kept = [
+            root + ("src", "a.py"),
+            root + ("build.py",),  # 文件名恰好叫 build，不是目录
+            root + ("src", "tmp.py"),  # 文件名恰好叫 tmp
+        ]
+        for parts in ignored:
+            self.assertTrue(gd._path_ignored(parts, root), parts)
+        for parts in kept:
+            self.assertFalse(gd._path_ignored(parts, root), parts)
+        # root 自身祖先目录名不算数
+        self.assertFalse(gd._path_ignored(("/Users", "build", "repo", "a.py"), ("/Users", "build", "repo")))
+
 
 class TestWatchedExtensionsFallback(GraphwatchCase):
     def test_fallback_without_graphify(self):
