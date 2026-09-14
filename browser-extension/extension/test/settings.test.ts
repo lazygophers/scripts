@@ -140,8 +140,13 @@ test("功能目录每个功能都画出来了，方法名单也带上", async ()
   }
   assert.equal(
     document.querySelector<HTMLInputElement>('.feature[data-feature="downloads"] .feat-off')?.checked,
+    false,
+    "禁用的功能不勾（勾 = 启用）",
+  );
+  assert.equal(
+    document.querySelector<HTMLInputElement>('.feature[data-feature="tabs"] .feat-off')?.checked,
     true,
-    "全局禁用的功能要勾上",
+    "默认全部启用，勾上",
   );
   assert.equal(
     document.querySelector<HTMLInputElement>('.feature[data-feature="script"] .feat-domains')?.value,

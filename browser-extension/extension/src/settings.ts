@@ -123,7 +123,8 @@ function renderFeatures(config: BrowseConfig): void {
     const off = document.createElement("input");
     off.type = "checkbox";
     off.className = "feat-off";
-    off.checked = config.disabled_features.includes(feature.id);
+    // 勾 = 启用（默认）。存进配置的是「禁用名单」，所以这里取反
+    off.checked = !config.disabled_features.includes(feature.id);
     label.append(off);
     const name = document.createElement("span");
     name.textContent = msg(`settingsFeat${feature.id.slice(0, 1).toUpperCase()}${feature.id.slice(1)}`);
@@ -189,7 +190,7 @@ export function readForm(): Partial<BrowseConfig> {
     'input[name="confirm_mode"]:checked',
   );
   const retention = byId<HTMLInputElement>("retention");
-  // 功能开关：勾了「禁用」进全局名单；填了域名进按域名名单。目录顺序即返回顺序。
+  // 功能开关：勾 = 启用，没勾进全局禁用名单；填了域名进按域名禁用名单。目录顺序即返回顺序。
   const disabled_features: string[] = [];
   const domain_disabled_features: Record<string, string[]> = {};
   for (const feature of FEATURES) {
@@ -197,7 +198,7 @@ export function readForm(): Partial<BrowseConfig> {
     if (!row) {
       continue;
     }
-    if (row.querySelector<HTMLInputElement>(".feat-off")?.checked === true) {
+    if (row.querySelector<HTMLInputElement>(".feat-off")?.checked !== true) {
       disabled_features.push(feature.id);
     }
     const text = row.querySelector<HTMLInputElement>(".feat-domains")?.value ?? "";

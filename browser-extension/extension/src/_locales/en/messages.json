@@ -178,7 +178,7 @@
     "message": "Features"
   },
   "settingsFeaturesHint": {
-    "message": "Everything this extension can do. Tick a box to turn a feature off everywhere; type domains (space- or comma-separated) in the box to turn it off for those sites only. example.com also covers a.example.com."
+    "message": "Everything this extension can do — all on by default. Untick a box to turn a feature off everywhere; type domains (space- or comma-separated) in the box to turn it off for those sites only. example.com also covers a.example.com."
   },
   "settingsFeatDomains": {
     "message": "Off for these domains only, space-separated"
