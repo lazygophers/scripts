@@ -477,3 +477,18 @@ class TestCli(TempHome):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGeckoIdStaysInSync(unittest.TestCase):
+    """扩展 manifest 的 gecko.id 必须与安装脚本的 GECKO_IDS 一致。
+
+    两边对不上时 Firefox 会拒绝 native messaging 的授权，而且报错发生在
+    用户机器上、本地测不出来。这条测试把「两处要同步」变成机器强制。
+    """
+
+    def test_manifest_gecko_id_matches_installer(self) -> None:
+        manifest = json.loads(
+            (REPO_ROOT / "browser-extension" / "extension" / "src" / "manifest.json").read_text()
+        )
+        gecko_id = manifest["browser_specific_settings"]["gecko"]["id"]
+        self.assertIn(gecko_id, nh.GECKO_IDS)
