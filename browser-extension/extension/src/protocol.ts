@@ -51,7 +51,8 @@ export type ErrorCode =
   | "unknown error"
   | "unsupported operation"
   | "lg:browser not connected"
-  | "lg:user rejected";
+  | "lg:user rejected"
+  | "lg:feature disabled";
 
 /** Thrown by handlers to pick the error code instead of `unknown error`. */
 export class CommandError extends Error {

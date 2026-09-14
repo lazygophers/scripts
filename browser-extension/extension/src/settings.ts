@@ -13,13 +13,14 @@ import { localize, msg } from "./i18n.ts";
 import {
   CONFIG_KEY,
   CONFIRM_MODES,
+  FEATURES,
   readConfig,
   revoke as revokeDomain,
   setConfig,
   type BrowseConfig,
 } from "./policy.ts";
 
-export { CONFIRM_MODES, type BrowseConfig };
+export { CONFIRM_MODES, FEATURES, type BrowseConfig };
 
 /**
  * Check a draft before sending it. The daemon validates again — it is the
@@ -37,10 +38,10 @@ export function validate(draft: Partial<BrowseConfig>): string {
   return "";
 }
 
-/** Textarea text → domain list. Blank lines and stray whitespace drop out. */
+/** Textarea / 单行文本 → domain list. Blank entries and stray whitespace drop out. */
 export function parseDomains(text: string): string[] {
   const out: string[] = [];
-  for (const line of text.split("\n")) {
+  for (const line of text.split(/[\s,;]+/)) {
     const domain = line.trim().replace(/^\*/, "").replace(/^\./, "").toLowerCase();
     if (domain && !out.includes(domain)) {
       out.push(domain);
@@ -94,6 +95,55 @@ export function render(config: BrowseConfig, path: string): void {
     retention.value = String(config.audit_retention_days);
   }
   renderApproved(config.approved_domains);
+  renderFeatures(config);
+}
+
+/**
+ * 功能目录的展示和开关（spec 4.4 的延伸）。目录本身在 `policy.FEATURES`，这里只画：
+ * 一行一个功能，勾选框管全局禁用，旁边一格填「只对这些域名禁用」。
+ */
+function renderFeatures(config: BrowseConfig): void {
+  const box = byId("features");
+  if (!box) {
+    return;
+  }
+  const perDomain: Record<string, string[]> = {};
+  for (const [domain, ids] of Object.entries(config.domain_disabled_features)) {
+    for (const id of ids) {
+      (perDomain[id] ??= []).push(domain);
+    }
+  }
+  box.replaceChildren();
+  for (const feature of FEATURES) {
+    const row = document.createElement("div");
+    row.className = "feature";
+    row.dataset.feature = feature.id;
+
+    const label = document.createElement("label");
+    const off = document.createElement("input");
+    off.type = "checkbox";
+    off.className = "feat-off";
+    off.checked = config.disabled_features.includes(feature.id);
+    label.append(off);
+    const name = document.createElement("span");
+    name.textContent = msg(`settingsFeat${feature.id.slice(0, 1).toUpperCase()}${feature.id.slice(1)}`);
+    label.append(name);
+    row.append(label);
+
+    const methods = document.createElement("code");
+    methods.textContent = feature.methods.join(" ");
+    row.append(methods);
+
+    const domains = document.createElement("input");
+    domains.type = "text";
+    domains.className = "feat-domains";
+    domains.placeholder = msg("settingsFeatDomains");
+    domains.spellcheck = false;
+    domains.value = (perDomain[feature.id] ?? []).join(" ");
+    row.append(domains);
+
+    box.append(row);
+  }
 }
 
 function renderApproved(domains: string[]): void {
@@ -139,6 +189,22 @@ export function readForm(): Partial<BrowseConfig> {
     'input[name="confirm_mode"]:checked',
   );
   const retention = byId<HTMLInputElement>("retention");
+  // 功能开关：勾了「禁用」进全局名单；填了域名进按域名名单。目录顺序即返回顺序。
+  const disabled_features: string[] = [];
+  const domain_disabled_features: Record<string, string[]> = {};
+  for (const feature of FEATURES) {
+    const row = document.querySelector<HTMLDivElement>(`.feature[data-feature="${feature.id}"]`);
+    if (!row) {
+      continue;
+    }
+    if (row.querySelector<HTMLInputElement>(".feat-off")?.checked === true) {
+      disabled_features.push(feature.id);
+    }
+    const text = row.querySelector<HTMLInputElement>(".feat-domains")?.value ?? "";
+    for (const domain of parseDomains(text)) {
+      (domain_disabled_features[domain] ??= []).push(feature.id);
+    }
+  }
   return {
     // 一个都没选中时给空串：`validate()` 会挡下它。**不能悄悄填成 silent** ——
     // 那是最松的模式，静静地把用户设成它是这条路上最不能犯的错。
@@ -146,6 +212,8 @@ export function readForm(): Partial<BrowseConfig> {
     deny_domains: parseDomains(byId<HTMLTextAreaElement>("deny")?.value ?? ""),
     audit: byId<HTMLInputElement>("audit")?.checked === true,
     audit_retention_days: Number.parseInt(retention?.value ?? "", 10),
+    disabled_features,
+    domain_disabled_features,
   };
 }
 

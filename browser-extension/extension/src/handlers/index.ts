@@ -1,5 +1,5 @@
 import { record } from "../audit.ts";
-import { domainOf, enforceDenyList, riskyAction, targetUrl } from "../policy.ts";
+import { domainOf, enforceDenyList, enforceFeatureToggles, riskyAction, targetUrl } from "../policy.ts";
 import { CommandError } from "../protocol.ts";
 import { auditClear, auditRead } from "./audit.ts";
 import { bookmarksCreate, bookmarksRemove, bookmarksSearch } from "./bookmarks.ts";
@@ -118,6 +118,7 @@ export async function dispatch(
   const domain = domainOf(targetUrl(params));
   try {
     await enforceDenyList(method, params);
+    await enforceFeatureToggles(method, params);
   } catch (err) {
     await record({
       ts: new Date().toISOString(),

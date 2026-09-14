@@ -100,6 +100,8 @@ const CONFIG = {
   approved_domains: ["shop.test"],
   audit: true,
   audit_retention_days: 7,
+  disabled_features: ["downloads"],
+  domain_disabled_features: { "shop.test": ["script"] },
 };
 
 test("the form round-trips a config through render and readForm", async () => {
@@ -113,11 +115,50 @@ test("the form round-trips a config through render and readForm", async () => {
     deny_domains: ["bank.test"],
     audit: true,
     audit_retention_days: 7,
+    disabled_features: ["downloads"],
+    domain_disabled_features: { "shop.test": ["script"] },
   });
   // approved_domains 是只读的：设置页不把它当表单字段写回去
   const approved = document.getElementById("approved");
   assert.match(approved?.textContent ?? "", /shop\.test/);
   assert.match(approved?.textContent ?? "", /\[panelRevoke\]/);
+});
+
+test("功能目录每个功能都画出来了，方法名单也带上", async () => {
+  realm(HTML);
+  const { render, FEATURES } = await load();
+  render(CONFIG, "");
+  const rows = Array.from(document.querySelectorAll<HTMLDivElement>("#features .feature"));
+  assert.equal(rows.length, FEATURES.length);
+  for (const feature of FEATURES) {
+    const row = document.querySelector(`.feature[data-feature="${feature.id}"]`);
+    assert.ok(row, `功能 ${feature.id} 没画出来`);
+    assert.ok(
+      row?.querySelector("code")?.textContent?.includes(feature.methods[0]),
+      `方法 ${feature.methods[0]} 没展示`,
+    );
+  }
+  assert.equal(
+    document.querySelector<HTMLInputElement>('.feature[data-feature="downloads"] .feat-off')?.checked,
+    true,
+    "全局禁用的功能要勾上",
+  );
+  assert.equal(
+    document.querySelector<HTMLInputElement>('.feature[data-feature="script"] .feat-domains')?.value,
+    "shop.test",
+    "按域名禁用的域名要填回去",
+  );
+});
+
+test("空格和逗号分隔的域名也能解析，不只是换行", async () => {
+  realm("");
+  const { parseDomains } = await load();
+  assert.deepEqual(parseDomains("a.test, b.test;c.test  d.test"), [
+    "a.test",
+    "b.test",
+    "c.test",
+    "d.test",
+  ]);
 });
 
 test("the real path is always on the page, so nobody thinks this is a second config", async () => {

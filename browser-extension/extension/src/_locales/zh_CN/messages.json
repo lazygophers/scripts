@@ -173,5 +173,41 @@
   },
   "settingsBadRetention": {
     "message": "保留天数要填整数。"
+  },
+  "settingsFeatures": {
+    "message": "功能开关"
+  },
+  "settingsFeaturesHint": {
+    "message": "这个扩展支持的功能全在这里。勾上勾选框就把一个功能全局关掉；右边一栏填域名（空格或逗号分隔），只对这些网站关掉。写 example.com 会连 a.example.com 这类子域一起关掉。"
+  },
+  "settingsFeatDomains": {
+    "message": "只对这些域名禁用，空格分隔"
+  },
+  "settingsFeatTabs": {
+    "message": "标签页与导航"
+  },
+  "settingsFeatScript": {
+    "message": "在网页里跑 JS"
+  },
+  "settingsFeatInput": {
+    "message": "点击、输入、滚动"
+  },
+  "settingsFeatStorage": {
+    "message": "Cookie 与 localStorage"
+  },
+  "settingsFeatNetwork": {
+    "message": "网络事件监听"
+  },
+  "settingsFeatHistory": {
+    "message": "历史记录"
+  },
+  "settingsFeatBookmarks": {
+    "message": "书签"
+  },
+  "settingsFeatSnapshot": {
+    "message": "页面快照"
+  },
+  "settingsFeatDownloads": {
+    "message": "下载"
   }
 }

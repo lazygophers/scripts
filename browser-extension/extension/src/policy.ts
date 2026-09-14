@@ -28,6 +28,8 @@ export interface BrowseConfig {
   approved_domains: string[];
   audit: boolean;
   audit_retention_days: number;
+  disabled_features: string[];
+  domain_disabled_features: Record<string, string[]>;
 }
 
 export const DEFAULTS: BrowseConfig = {
@@ -36,6 +38,8 @@ export const DEFAULTS: BrowseConfig = {
   approved_domains: [],
   audit: true,
   audit_retention_days: 7,
+  disabled_features: [],
+  domain_disabled_features: {},
 };
 
 export const CONFIG_KEY = "browse:config";
@@ -48,6 +52,92 @@ export const CONFIG_KEY = "browse:config";
 const ON_ERROR: BrowseConfig = { ...DEFAULTS, confirm_mode: "always" };
 
 // ---------------------------------------------------------------- 读写
+
+export interface Feature {
+  /** 配置和设置页共用的 id，也是 i18n key 的后缀。 */
+  id: string;
+  /** 这个功能覆盖的 wire method，逐字对齐 `handlers/index.ts` 的 HANDLERS。 */
+  methods: string[];
+}
+
+/**
+ * 功能目录：设置页靠它「展示所有支持的功能」，开关也按它分组。`lg:audit.*` 故意不在
+ * 里面 —— 那两条是日志唯一的出口，把它们关掉等于把自己锁在自己家外面。
+ */
+export const FEATURES: Feature[] = [
+  {
+    id: "tabs",
+    methods: [
+      "browsingContext.getTree",
+      "browsingContext.create",
+      "browsingContext.close",
+      "browsingContext.activate",
+      "browsingContext.navigate",
+      "browsingContext.reload",
+      "browsingContext.captureScreenshot",
+    ],
+  },
+  { id: "script", methods: ["script.evaluate", "script.callFunction"] },
+  {
+    id: "input",
+    methods: ["input.click", "input.type", "input.scroll", "input.key"],
+  },
+  {
+    id: "storage",
+    methods: [
+      "storage.getCookies",
+      "storage.setCookie",
+      "storage.deleteCookies",
+      "storage.getLocalStorage",
+      "storage.setLocalStorage",
+    ],
+  },
+  { id: "network", methods: ["network.subscribe", "network.unsubscribe"] },
+  { id: "history", methods: ["lg:history.search", "lg:history.delete"] },
+  {
+    id: "bookmarks",
+    methods: ["lg:bookmarks.search", "lg:bookmarks.create", "lg:bookmarks.remove"],
+  },
+  { id: "snapshot", methods: ["lg:page.snapshot"] },
+  {
+    id: "downloads",
+    methods: ["lg:downloads.start", "lg:downloads.list", "lg:downloads.cancel"],
+  },
+];
+
+/** method → 所属功能。不在目录里的（`lg:audit.*`）没有开关，永远放行。 */
+export const FEATURE_OF: ReadonlyMap<string, Feature> = new Map(
+  FEATURES.flatMap((feature) => feature.methods.map((method) => [method, feature])),
+);
+
+const KNOWN_FEATURES = new Set(FEATURES.map((feature) => feature.id));
+
+/** feature id 列表 → 只留认识的，去重。存进来的垃圾在这里无声清掉。 */
+function normaliseFeatures(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string" && KNOWN_FEATURES.has(item) && !out.includes(item)) {
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+/** `{域名: [功能]}` → 域名走同一套规范化（去点去星号小写），空名单的键整个丢掉。 */
+function normaliseDomainFeatures(value: unknown): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [raw, ids] of Object.entries((value ?? {}) as Record<string, unknown>)) {
+    const features = normaliseFeatures(ids);
+    const domain = normaliseDomains([raw])[0];
+    if (domain && features.length > 0) {
+      out[domain] = features;
+    }
+  }
+  return out;
+}
 
 function normalise(raw: unknown): BrowseConfig {
   const got = (raw ?? {}) as Partial<BrowseConfig>;
@@ -63,6 +153,8 @@ function normalise(raw: unknown): BrowseConfig {
     approved_domains: normaliseDomains(got.approved_domains),
     audit: got.audit !== false,
     audit_retention_days: days,
+    disabled_features: normaliseFeatures(got.disabled_features),
+    domain_disabled_features: normaliseDomainFeatures(got.domain_disabled_features),
   };
 }
 
@@ -111,6 +203,18 @@ export async function setConfig(patch: Partial<BrowseConfig>): Promise<BrowseCon
   }
   if (patch.audit_retention_days !== undefined && !Number.isInteger(patch.audit_retention_days)) {
     throw new CommandError("invalid argument", "audit_retention_days 要是整数");
+  }
+  for (const id of patch.disabled_features ?? []) {
+    if (!KNOWN_FEATURES.has(id)) {
+      throw new CommandError("invalid argument", `不认识的功能: ${id}`);
+    }
+  }
+  for (const ids of Object.values(patch.domain_disabled_features ?? {})) {
+    for (const id of ids) {
+      if (!KNOWN_FEATURES.has(id)) {
+        throw new CommandError("invalid argument", `不认识的功能: ${id}`);
+      }
+    }
   }
   const merged = normalise({ ...(await getConfig()), ...patch });
   await chrome.storage.local.set({ [CONFIG_KEY]: merged });
@@ -205,6 +309,33 @@ export async function enforceDenyList(
         `${domain} 命中拒绝名单（deny_domains: ${pattern}），${method} 未执行`,
       );
     }
+  }
+}
+
+/**
+ * 功能开关这一关。全局禁用对一切域名生效；按域名禁用和拒绝名单用同一套取域名的规则 ——
+ * 从参数的 `url` / `domain` 里取，取不出来（比如只给了 tab context）就只有全局禁用管得
+ * 到它。这是拒绝名单已有的边界，不是新开的口子。
+ */
+export async function enforceFeatureToggles(
+  method: string,
+  params: Record<string, unknown>,
+): Promise<void> {
+  const feature = FEATURE_OF.get(method);
+  if (!feature) {
+    return;
+  }
+  const { disabled_features, domain_disabled_features } = await getConfig();
+  const domain = domainOf(targetUrl(params));
+  const off = disabled_features.includes(feature.id)
+    || (domain !== null && Object.entries(domain_disabled_features).some(
+      ([pattern, ids]) => ids.includes(feature.id) && domainMatches(domain, pattern),
+    ));
+  if (off) {
+    throw new CommandError(
+      "lg:feature disabled",
+      `功能 ${feature.id} 已被禁用，${method} 未执行`,
+    );
   }
 }
 

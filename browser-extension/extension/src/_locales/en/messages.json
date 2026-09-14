@@ -173,5 +173,41 @@
   },
   "settingsBadRetention": {
     "message": "Keep-for must be a whole number."
+  },
+  "settingsFeatures": {
+    "message": "Features"
+  },
+  "settingsFeaturesHint": {
+    "message": "Everything this extension can do. Tick a box to turn a feature off everywhere; type domains (space- or comma-separated) in the box to turn it off for those sites only. example.com also covers a.example.com."
+  },
+  "settingsFeatDomains": {
+    "message": "Off for these domains only, space-separated"
+  },
+  "settingsFeatTabs": {
+    "message": "Tabs and navigation"
+  },
+  "settingsFeatScript": {
+    "message": "Run JS in pages"
+  },
+  "settingsFeatInput": {
+    "message": "Click, type, scroll"
+  },
+  "settingsFeatStorage": {
+    "message": "Cookies and localStorage"
+  },
+  "settingsFeatNetwork": {
+    "message": "Network event listening"
+  },
+  "settingsFeatHistory": {
+    "message": "History"
+  },
+  "settingsFeatBookmarks": {
+    "message": "Bookmarks"
+  },
+  "settingsFeatSnapshot": {
+    "message": "Page snapshot"
+  },
+  "settingsFeatDownloads": {
+    "message": "Downloads"
   }
 }

@@ -3,6 +3,7 @@ import test from "node:test";
 import { read } from "../src/audit.ts";
 import { confirm, setConfirmHook } from "../src/handlers/confirm.ts";
 import { HANDLERS, dispatch } from "../src/handlers/index.ts";
+import { FEATURE_OF } from "../src/policy.ts";
 import { clearChrome, rejectsWith, storageMock } from "./mock.ts";
 
 /** Spec 5.1, verbatim. If this list and HANDLERS disagree, one of them is wrong. */
@@ -60,6 +61,18 @@ test("the daemon's old reverse-RPC methods are gone for good", () => {
   }
 });
 
+test("the feature catalogue covers every handler except the audit exits", () => {
+  for (const method of Object.keys(HANDLERS)) {
+    if (AUDIT.includes(method)) {
+      continue;
+    }
+    assert.ok(FEATURE_OF.has(method), `${method} 不在任何功能里，设置页关不掉它`);
+  }
+  for (const method of FEATURE_OF.keys()) {
+    assert.ok(method in HANDLERS, `${method} 在功能目录里但命令表没有它`);
+  }
+});
+
 test("a command outside v1 is unsupported operation, never a guess", async () => {
   // A real BiDi command this extension deliberately does not implement.
   await rejectsWith(() => dispatch("browsingContext.print", {}), "unsupported operation");
@@ -89,6 +102,20 @@ test("拒绝名单在 dispatch 上拦住，handler 一步都不走", async () =>
     () => dispatch("browsingContext.navigate", { url: "https://bank.test/x" }),
     "lg:user rejected",
   );
+  clearChrome();
+});
+
+test("被禁的功能在 dispatch 上拦住，handler 一步都不走", async () => {
+  storageMock({ "browse:config": { disabled_features: ["storage"] } });
+  // 故意不装 chrome.cookies：真走到 handler 就会是另一个错误码，那就说明没拦住
+  const err = await rejectsWith(
+    () => dispatch("storage.getCookies", { domain: "a.test" }),
+    "lg:feature disabled",
+  );
+  assert.match(err.message, /storage/);
+  const [entry] = await read();
+  assert.equal(entry?.result, "denied");
+  assert.match(entry?.error ?? "", /禁用/);
   clearChrome();
 });
 

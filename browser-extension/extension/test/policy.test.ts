@@ -8,10 +8,13 @@ import {
   CONFIG_KEY,
   CONFIRM_MODES,
   DEFAULTS,
+  FEATURES,
+  FEATURE_OF,
   decide,
   domainMatches,
   domainOf,
   enforceDenyList,
+  enforceFeatureToggles,
   getConfig,
   readConfig,
   riskyAction,
@@ -141,6 +144,82 @@ test("没命中就放行，名单空着更是直接放行", async () => {
   await enforceDenyList("browsingContext.navigate", { url: "https://ok.test/" });
   storageMock({ [CONFIG_KEY]: DEFAULTS });
   await enforceDenyList("browsingContext.navigate", { url: "https://bank.test/" });
+});
+
+// ------------------------------------------------------------------ 功能开关
+
+test("功能目录盖住每个功能的方法，一个方法只属于一个功能", () => {
+  const all = FEATURES.flatMap((feature) => feature.methods);
+  assert.equal(new Set(all).size, all.length, "方法重复出现在两个功能里");
+  assert.equal(FEATURE_OF.size, all.length);
+  assert.equal(FEATURE_OF.get("browsingContext.navigate")?.id, "tabs");
+  assert.equal(FEATURE_OF.get("lg:page.snapshot")?.id, "snapshot");
+});
+
+test("全局禁用：这个功能全拒，别的功能照放", async () => {
+  storageMock({ [CONFIG_KEY]: { ...DEFAULTS, disabled_features: ["script"] } });
+  await rejectsWith(
+    () => enforceFeatureToggles("script.evaluate", { url: "https://a.test/" }),
+    "lg:feature disabled",
+  );
+  await rejectsWith(
+    () => enforceFeatureToggles("script.callFunction", {}),
+    "lg:feature disabled",
+  );
+  await enforceFeatureToggles("browsingContext.navigate", { url: "https://a.test/" });
+});
+
+test("按域名禁用：子域一起算，别的域名照放", async () => {
+  storageMock({
+    [CONFIG_KEY]: { ...DEFAULTS, domain_disabled_features: { "a.test": ["storage"] } },
+  });
+  await rejectsWith(
+    () => enforceFeatureToggles("storage.getCookies", { domain: "a.test" }),
+    "lg:feature disabled",
+  );
+  await rejectsWith(
+    () => enforceFeatureToggles("storage.setCookie", { url: "https://sub.a.test/x" }),
+    "lg:feature disabled",
+  );
+  await enforceFeatureToggles("storage.getCookies", { domain: "b.test" });
+  // 按域名禁用管不到不知道域名的指令 —— 和拒绝名单同一条边界
+  await enforceFeatureToggles("storage.getCookies", {});
+});
+
+test("审计的出口没有开关，永远放行", async () => {
+  storageMock({
+    [CONFIG_KEY]: {
+      ...DEFAULTS,
+      disabled_features: FEATURES.map((feature) => feature.id),
+      domain_disabled_features: { a: ["tabs"], b: ["tabs"] },
+    },
+  });
+  await enforceFeatureToggles("lg:audit.read", {});
+  await enforceFeatureToggles("lg:audit.clear", {});
+});
+
+test("不认识的功能 id 写不进去，存进来的垃圾被清掉", async () => {
+  storageMock();
+  await rejectsWith(
+    () => setConfig({ disabled_features: ["tabs", "nope"] }),
+    "invalid argument",
+  );
+  await rejectsWith(
+    () => setConfig({ domain_disabled_features: { "a.test": ["nope"] } }),
+    "invalid argument",
+  );
+  assert.deepEqual(await getConfig(), DEFAULTS, "校验没过就一个字都不该落盘");
+
+  storageMock({
+    [CONFIG_KEY]: {
+      ...DEFAULTS,
+      disabled_features: [42, "tabs", "tabs"],
+      domain_disabled_features: { "*.A.test ": ["script"], "b.test": [] },
+    },
+  });
+  const got = await getConfig();
+  assert.deepEqual(got.disabled_features, ["tabs"]);
+  assert.deepEqual(got.domain_disabled_features, { "a.test": ["script"] }, "空名单的键整个丢掉");
 });
 
 // ------------------------------------------------------------------ 高危判定

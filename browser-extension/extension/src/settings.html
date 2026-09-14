@@ -42,6 +42,34 @@
         border-top: 1px solid #23262d;
       }
       .domain { font-family: ui-monospace, monospace; word-break: break-all; }
+      #features .feature {
+        display: grid;
+        grid-template-columns: minmax(140px, auto) 1fr minmax(160px, 220px);
+        gap: 12px;
+        align-items: center;
+        padding: 7px 0;
+        border-top: 1px solid #23262d;
+      }
+      #features .feature label { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+      #features .feature code {
+        display: block;
+        font-size: 11px;
+        color: #9aa1ac;
+        word-break: break-all;
+        padding: 0;
+        background: none;
+      }
+      #features .feature input[type="text"] {
+        font: inherit;
+        font-family: ui-monospace, monospace;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid #3a3f48;
+        background: #1c1f25;
+        color: inherit;
+      }
       button {
         font: inherit;
         padding: 4px 12px;
@@ -109,6 +137,13 @@
       <h2 data-i18n="settingsDeny">Always refused</h2>
       <p class="hint" data-i18n="settingsDenyHint">One domain per line.</p>
       <textarea id="deny" rows="4" spellcheck="false"></textarea>
+
+      <h2 data-i18n="settingsFeatures">Features</h2>
+      <p class="hint" data-i18n="settingsFeaturesHint">
+        Everything this extension can do. Tick the box to turn a feature off everywhere;
+        type domains in the box to turn it off for those sites only.
+      </p>
+      <div id="features"></div>
 
       <h2 data-i18n="settingsAudit">Audit log</h2>
       <label><input type="checkbox" id="audit" /> <span data-i18n="settingsAuditOn">Keep an audit log</span></label>
