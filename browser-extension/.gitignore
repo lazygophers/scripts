@@ -1,0 +1,5 @@
+extension/node_modules/
+extension/dist/
+# Signing key for the extension ID. Losing it means a new ID (see README).
+extension/keys/
+*.pem

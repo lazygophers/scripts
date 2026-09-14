@@ -17,6 +17,7 @@ dependencies = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.32"
 # 可执行文件, 所以 `scripts` 是 lazyhelp 的别名: 直接列出全部工具。
 scripts = "lib.cli.lazyhelp:main"
 archery = "lib.cli.archery:main"
+browse = "lib.cli.browse:main"
 check_ai = "lib.cli.check_ai:main"
 checkwork = "lib.cli.checkwork:main"
 cicd = "lib.cli.cicd:main"
