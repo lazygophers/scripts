@@ -160,7 +160,7 @@ class TestFrames(unittest.TestCase):
 
     def test_encode_keeps_unicode_raw(self):
         raw = encode_frame(command(1, "script.evaluate", {"t": "中文"}))
-        self.assertIn("中文".encode("utf-8"), raw)
+        self.assertIn("中文".encode(), raw)
 
     def test_decode_empty_buffer(self):
         self.assertEqual(decode_frames(b""), ([], b""))

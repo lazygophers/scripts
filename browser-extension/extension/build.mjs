@@ -8,7 +8,9 @@ await rm(outdir, { recursive: true, force: true });
 await mkdir(outdir, { recursive: true });
 
 const options = {
-  entryPoints: ["src/background.ts"],
+  // The two extension pages ship as ESM like the worker: `confirm.html` is the
+  // spec 4.4 dialog, `panel.html` the spec 4.5 toolbar panel.
+  entryPoints: ["src/background.ts", "src/confirm-page.ts", "src/panel.ts"],
   outdir,
   bundle: true,
   format: "esm",
@@ -37,5 +39,7 @@ if (watch) {
   await build(pageOptions);
 }
 
-await cp("src/manifest.json", `${outdir}/manifest.json`);
-console.log(`manifest.json -> ${outdir}/manifest.json`);
+for (const file of ["manifest.json", "confirm.html", "panel.html"]) {
+  await cp(`src/${file}`, `${outdir}/${file}`);
+  console.log(`${file} -> ${outdir}/${file}`);
+}

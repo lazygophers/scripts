@@ -11,7 +11,8 @@
     }
   },
   "action": {
-    "default_title": "browse"
+    "default_title": "browse",
+    "default_popup": "panel.html"
   },
   "background": {
     "service_worker": "background.js",

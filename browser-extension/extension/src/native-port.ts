@@ -5,7 +5,9 @@ import {
   NATIVE_HOST,
   isCommand,
   type ErrorCode,
+  type ErrorReply,
   type Outbound,
+  type Success,
 } from "./protocol.ts";
 
 /**
@@ -29,11 +31,25 @@ export class NativeConnection {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private inFlight = 0;
   private stopped = false;
+  // Our own outbound commands (`lg:approvals.*` for the panel). Ids are ours;
+  // they never collide with the daemon's because each side only ever matches
+  // replies against the ids *it* issued.
+  private outSeq = 0;
+  private outbound = new Map<number, (reply: Success | ErrorReply) => void>();
+
+  // Assigned in the body, not as constructor parameter properties: Node's
+  // type-stripping (`node --test` on .ts sources) rejects those, same as
+  // `CommandError` in protocol.ts.
+  private readonly onState: (state: ConnectionState) => void;
+  private readonly onInFlight: (count: number) => void;
 
   constructor(
-    private readonly onState: (state: ConnectionState) => void,
-    private readonly onInFlight: (count: number) => void,
-  ) {}
+    onState: (state: ConnectionState) => void,
+    onInFlight: (count: number) => void,
+  ) {
+    this.onState = onState;
+    this.onInFlight = onInFlight;
+  }
 
   connect(): void {
     this.stopped = false;
@@ -79,7 +95,37 @@ export class NativeConnection {
     this.port?.postMessage(message);
   }
 
+  /**
+   * Ask the daemon something and wait for its reply. Only `lg:approvals.*`
+   * uses this — the panel reading and editing the per-domain allow list
+   * (spec 4.5). The *policy* stays in Python; this carries the question.
+   */
+  request(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    const port = this.port;
+    if (!port) {
+      return Promise.reject(new Error("daemon not connected"));
+    }
+    this.outSeq += 1;
+    const id = this.outSeq;
+    return new Promise((resolve, reject) => {
+      this.outbound.set(id, (reply) => {
+        if (reply.type === "success") {
+          resolve(reply.result);
+        } else {
+          reject(new CommandError(reply.error, reply.message));
+        }
+      });
+      port.postMessage({ id, method, params });
+    });
+  }
+
   private async handle(msg: unknown): Promise<void> {
+    const reply = asReply(msg);
+    if (reply) {
+      this.outbound.get(reply.id)?.(reply);
+      this.outbound.delete(reply.id);
+      return;
+    }
     if (!isCommand(msg)) {
       console.warn("[browse] dropped non-command message", msg);
       return;
@@ -101,6 +147,11 @@ export class NativeConnection {
   private scheduleReconnect(reason: string): void {
     this.stopPing();
     this.onState("disconnected");
+    // Nobody is left to answer these; leaving them pending hangs the panel.
+    for (const [id, settle] of this.outbound) {
+      settle({ type: "error", id, error: "lg:browser not connected", message: reason });
+    }
+    this.outbound.clear();
     if (this.stopped || this.reconnectTimer !== null) {
       return;
     }
@@ -135,6 +186,15 @@ export class NativeConnection {
       this.pingTimer = null;
     }
   }
+}
+
+/** A reply to one of *our* commands. Daemon-issued Commands carry a `method`. */
+function asReply(msg: unknown): Success | ErrorReply | null {
+  const m = msg as { id?: unknown; type?: unknown } | null;
+  if (typeof m !== "object" || m === null || typeof m.id !== "number") {
+    return null;
+  }
+  return m.type === "success" || m.type === "error" ? (m as Success | ErrorReply) : null;
 }
 
 function classify(err: unknown): [ErrorCode, string] {
