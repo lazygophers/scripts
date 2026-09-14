@@ -35,6 +35,7 @@ export type Outbound = Success | ErrorReply | Event;
 /** BiDi standard error codes, the subset this extension can produce. */
 export type ErrorCode =
   | "invalid argument"
+  | "no such element"
   | "no such frame"
   | "no such script"
   | "unknown command"
