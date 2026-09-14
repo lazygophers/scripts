@@ -105,9 +105,7 @@ class BrowseE2E(unittest.TestCase):
         # 路径有 104 字节上限，叠上文件名就顶格了。
         self.tmp = pathlib.Path(tempfile.mkdtemp(dir="/tmp", prefix="browse-e2e-"))
         self.sock = self.tmp / "browse.sock"
-        # 语言钉死：下面断言的是中文文案，跑测试的人环境里 LANG 是什么不该影响结果。
-        self.env = {**os.environ, "HOME": str(self.tmp), "SCRIPTS_NO_SAY": "1",
-                    "LC_ALL": "zh_CN.UTF-8"}
+        self.env = {**os.environ, "HOME": str(self.tmp), "SCRIPTS_NO_SAY": "1"}
         self.env.pop("XDG_RUNTIME_DIR", None)
         self.stub: StubHost | None = None
         self.daemon = subprocess.Popen(

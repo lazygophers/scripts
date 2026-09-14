@@ -36,7 +36,6 @@ import subprocess
 import sys
 import time
 
-from lib.i18n import t
 from lib.ui import reporter
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -294,7 +293,7 @@ def resolve_browse_path(given: str | None) -> pathlib.Path:
     if given:
         path = pathlib.Path(given).expanduser().resolve()
         if not path.exists():
-            raise ValueError(t("install.err_browse_path_missing", path=path))
+            raise ValueError(f"--browse-path 指向的文件不存在：{path}")
         return path
     found = shutil.which("browse")
     if found:
@@ -302,7 +301,11 @@ def resolve_browse_path(given: str | None) -> pathlib.Path:
     local = REPO_ROOT / "bin" / "browse"
     if local.exists():
         return local.resolve()
-    raise ValueError(t("install.err_no_browse"))
+    raise ValueError(
+        "PATH 上没有 browse，仓库里也没有 bin/browse。先 `uv tool install "
+        "git+https://github.com/lazygophers/scripts` 装成常驻命令，或用 "
+        "--browse-path 指一个不会消失的绝对路径"
+    )
 
 
 EXTENSION_SRC = REPO_ROOT / "browser-extension" / "extension"
@@ -320,7 +323,7 @@ def build_extension(src: pathlib.Path = EXTENSION_SRC) -> pathlib.Path:
     if (dist / "manifest.json").exists():
         return dist
     if not (src / "package.json").exists():
-        raise FileNotFoundError(t("install.err_no_src", src=src))
+        raise FileNotFoundError(f"扩展源码不在 {src}，用 --no-build 跳过构建")
     if not (src / "node_modules").exists():
         subprocess.run(["npm", "install"], cwd=src, check=True)
     subprocess.run(["npm", "run", "build"], cwd=src, check=True)
@@ -368,21 +371,21 @@ def wait_for_extension(browse_path: pathlib.Path, timeout: float) -> bool:
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="browse install",
-        description=t("install.desc"),
+        description="把 browse 注册成浏览器的 native messaging host",
     )
-    parser.add_argument("--uninstall", action="store_true", help=t("install.opt.uninstall"))
+    parser.add_argument("--uninstall", action="store_true", help="删掉所有已知落点")
     parser.add_argument("--list", action="store_true", dest="list_only",
-                        help=t("install.opt.list"))
-    parser.add_argument("--browsers", help=t("install.opt.browsers"))
-    parser.add_argument("--browse-path", help=t("install.opt.browse_path"))
+                        help="只打印探测到的浏览器和落点，不写任何东西")
+    parser.add_argument("--browsers", help="逗号分隔，跳过探测直接指定，如 chrome,firefox")
+    parser.add_argument("--browse-path", help="manifest 里写的 browse 绝对路径")
     parser.add_argument("--extension-id", action="append", default=[],
-                        help=t("install.opt.extension_id"))
+                        help="追加一个 Chromium 扩展 ID（Edge 商店另发的 ID 用这个补）")
     parser.add_argument("--no-build", action="store_true",
-                        help=t("install.opt.no_build"))
+                        help="不自动构建扩展（默认 dist/ 缺失时自动跑 npm run build）")
     parser.add_argument("--no-wait", action="store_true",
-                        help=t("install.opt.no_wait"))
+                        help="不等扩展连上就返回（默认等 120 秒）")
     parser.add_argument("--gecko-id", action="append", default=[],
-                        help=t("install.opt.gecko_id"))
+                        help="追加一个 Firefox 扩展 ID（gecko.id）")
     return parser.parse_args(argv[1:])
 
 
@@ -402,8 +405,8 @@ def main(argv: list[str]) -> int:
         names = [n.strip() for n in args.browsers.split(",") if n.strip()]
         unknown = [n for n in names if n not in table]
         if unknown:
-            out.err(t("install.unknown_browsers", plat=plat, names=", ".join(unknown),
-                      choices=", ".join(table)))
+            out.err(f"{plat} 上不认识这些浏览器：{', '.join(unknown)}；"
+                    f"可选：{', '.join(table)}")
             return EXIT_USAGE
     else:
         names = None
@@ -411,9 +414,9 @@ def main(argv: list[str]) -> int:
     if args.uninstall:
         removed = uninstall(home, plat)
         for name, where in removed:
-            out.ok(t("install.removed", name=name, where=where))
+            out.ok(f"{name}: 已删 {where}")
         if not removed:
-            out.info(t("install.nothing_removed"))
+            out.info("没有找到任何已安装的 manifest")
         return EXIT_OK
 
     try:
@@ -424,18 +427,19 @@ def main(argv: list[str]) -> int:
 
     found = names if names is not None else detect(home, plat)
     if not found:
-        out.err(t("install.no_browser_detected", plat=plat, choices=", ".join(table)))
+        out.err(f"没探测到任何浏览器（{plat}）。浏览器装了但没启动过时用户目录还不存在，"
+                f"用 --browsers 指定，可选：{', '.join(table)}")
         return EXIT_FAILED
 
     if args.list_only:
-        out.info(t("install.list.browse", path=browse_path))
-        out.info(t("install.list.wrapper", path=wrapper_path(home, plat)))
+        out.info(f"browse：{browse_path}")
+        out.info(f"wrapper（manifest 的 path 指向它）：{wrapper_path(home, plat)}")
         for name in found:
             flavor, _, dests = table[name]
             for dest in dests:
                 where = (f"HKCU\\{dest[4:]}\\{HOST_NAME}" if dest.startswith("reg:")
                          else str(home / dest / f"{HOST_NAME}.json"))
-                out.info(t("install.list.entry", name=name, flavor=flavor, where=where))
+                out.info(f"{name} ({flavor}): {where}")
         return EXIT_OK
 
     done = install(
@@ -445,8 +449,8 @@ def main(argv: list[str]) -> int:
         gecko_ids=GECKO_IDS + tuple(args.gecko_id),
     )
     for name, where in done:
-        out.ok(t("install.done_entry", name=name, where=where))
-    out.info(t("install.wrapper_line", wrapper=wrapper_path(home, plat), browse=browse_path))
+        out.ok(f"{name}: {where}")
+    out.info(f"wrapper：{wrapper_path(home, plat)} -> {browse_path} --native-host")
 
     # 到这里为止，只完成了「浏览器怎么找到 browse」。扩展本体还没装 —— 而且
     # 装不了：Chrome 把所有程序化安装扩展的路都封了（--load-extension 于 137
@@ -456,7 +460,7 @@ def main(argv: list[str]) -> int:
     # 非交互（管道、CI、测试）时到此为止：只做注册。构建、指引、等待都是给
     # 坐在终端前的人看的，脚本里跑不该被一个 120 秒的等待卡住。
     if not sys.stderr.isatty():
-        out.info(t("install.manual_load"))
+        out.info("扩展本体要手动加载，见 browser-extension/README.md")
         return EXIT_OK
 
     if args.no_build:
@@ -465,37 +469,37 @@ def main(argv: list[str]) -> int:
         try:
             dist = build_extension()
         except (OSError, subprocess.CalledProcessError) as exc:
-            out.err(t("install.build_failed", error=exc))
-            out.info(t("install.build_manual", src=EXTENSION_SRC))
+            out.err(f"构建扩展失败：{exc}")
+            out.info(f"手动构建：cd {EXTENSION_SRC} && npm install && npm run build")
             return EXIT_FAILED
-        out.ok(t("install.built", dist=dist))
+        out.ok(f"扩展已构建：{dist}")
 
     copied = copy_to_clipboard(str(dist))
     out.info("")
-    out.info(t("install.step_intro"))
-    out.info(t("install.step1"))
-    out.info(t("install.step2"))
-    out.info(t("install.step3"))
+    out.info("还差一步，只能你自己点 —— Chrome 不允许任何程序替用户装扩展：")
+    out.info("  1. 打开 chrome://extensions")
+    out.info("  2. 右上角打开「开发者模式」（此后要一直开着）")
+    out.info("  3. 点「加载已解压的扩展程序」，选这个目录：")
     out.info(f"     {dist}")
     if copied:
-        out.info(t("install.clipboard"))
+        out.info("     （路径已复制到剪贴板，文件选择框里按 Cmd+Shift+G 粘贴即可）")
     out.info("")
 
     if args.no_wait:
-        out.info(t("install.verify_yourself", browse=browse_path))
+        out.info(f"装完自己验：{browse_path} browsingContext getTree --table")
         return EXIT_OK
 
-    out.info(t("install.waiting", seconds=int(WAIT_TIMEOUT)))
+    out.info(f"等你装上……（最多 {int(WAIT_TIMEOUT)} 秒，Ctrl-C 可中断）")
     try:
         connected = wait_for_extension(browse_path, WAIT_TIMEOUT)
     except KeyboardInterrupt:
-        out.info(t("install.interrupted", browse=browse_path))
+        out.info(f"没等到。装好后自己验：{browse_path} browsingContext getTree --table")
         return EXIT_OK
     if connected:
-        out.ok(t("install.connected"))
+        out.ok("扩展已连上，整条链路通了。试试：browse browsingContext getTree --table")
         return EXIT_OK
-    out.err(t("install.timeout"))
-    out.err(t("install.timeout1"))
-    out.err(t("install.timeout2", ext_id=EXTENSION_IDS[0]))
-    out.err(t("install.timeout3"))
+    out.err("超时：扩展还没连上。排查顺序：")
+    out.err("  1. chrome://extensions 里有没有看到这个扩展、是不是启用状态")
+    out.err("  2. 扩展 ID 是不是 podeceeeafjdcemppcgjhhokcokpcama（不是的话 manifest 的 key 被改过）")
+    out.err("  3. 点扩展卡片上的 service worker，看控制台有没有报错")
     return EXIT_FAILED

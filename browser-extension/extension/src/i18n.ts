@@ -1,11 +1,14 @@
 /**
  * Text for the two extension pages, out of `_locales/<lang>/messages.json`.
  *
- * Chrome picks the language itself (browser UI language, falling back to
- * `default_locale`), so there is no language setting here and none to keep in
- * sync with the CLI's `--lang`. What Chrome does *not* do is substitute
- * `__MSG_x__` inside HTML — that only works in `manifest.json` and CSS — so the
- * static markup carries `data-i18n="<key>"` and the page fills it on load.
+ * Chrome picks the language itself — the browser UI language, falling back to
+ * `default_locale` (`zh_CN`) when there is no `_locales` folder for it. So there
+ * is no language switch anywhere: nothing to configure, nothing to pass in. The
+ * CLI is a separate thing and keeps printing Chinese.
+ *
+ * What Chrome does *not* do is substitute `__MSG_x__` inside HTML — that only
+ * works in `manifest.json` and CSS — so the static markup carries
+ * `data-i18n="<key>"` and the page fills it on load.
  */
 
 /** Replace the text of every `[data-i18n]` node with its message. */
