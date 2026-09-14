@@ -48,8 +48,8 @@ class TempHome(unittest.TestCase):
     def read(self, rel: str) -> dict:
         return json.loads((self.home / rel / f"{nh.HOST_NAME}.json").read_text("utf-8"))
 
-    def wrapper(self, plat: str = "darwin") -> pathlib.Path:
-        return nh.wrapper_path(self.home, plat)
+    def wrapper(self, plat: str = "darwin", browser: str = "chrome") -> pathlib.Path:
+        return nh.wrapper_path(self.home, plat, browser)
 
 
 class TestWrapper(TempHome):
@@ -58,6 +58,10 @@ class TestWrapper(TempHome):
     def test_posix_content_and_exec_bit(self) -> None:
         path = nh.write_wrapper(self.home, "darwin", BROWSE)
         self.assertEqual(path, self.home / nh.WRAPPER_DIR / nh.WRAPPER_NAME)
+        # 带上浏览器名就是每个浏览器各自那一个，`--browser` 写死在里面
+        named = nh.write_wrapper(self.home, "darwin", BROWSE, "brave")
+        self.assertEqual(named.name, f"{nh.WRAPPER_NAME}-brave")
+        self.assertIn("--browser brave", named.read_text("utf-8"))
         self.assertEqual(path.read_text("utf-8"),
                          '#!/bin/sh\nexec "/opt/lazygophers/bin/browse" --native-host "$@"\n')
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755)
@@ -71,6 +75,9 @@ class TestWrapper(TempHome):
     def test_windows_is_a_cmd_with_crlf(self) -> None:
         path = nh.write_wrapper(self.home, "win32", pathlib.Path(r"C:\bin\browse.exe"))
         self.assertEqual(path.name, f"{nh.WRAPPER_NAME}.cmd")
+        named = nh.write_wrapper(self.home, "win32", pathlib.Path(r"C:\bin\browse.exe"), "edge")
+        self.assertEqual(named.name, f"{nh.WRAPPER_NAME}-edge.cmd")
+        self.assertIn("--browser edge", named.read_text("utf-8"))
         self.assertEqual(path.read_bytes(),
                          b'@echo off\r\n"C:\\bin\\browse.exe" --native-host %*\r\n')
 
@@ -316,7 +323,8 @@ class TestInstallWindows(TempHome):
         nh.install(self.home, "win32", BROWSE, browsers=["chrome", "firefox"],
                    reg_set=reg.set)
         files = sorted(p.name for p in (self.home / nh.WIN_MANIFEST_DIR).iterdir())
-        self.assertEqual(files, [f"{nh.WRAPPER_NAME}.cmd",
+        self.assertEqual(files, [f"{nh.WRAPPER_NAME}-chrome.cmd",
+                                 f"{nh.WRAPPER_NAME}-firefox.cmd",
                                  "com.lazygophers.browse.firefox.json",
                                  "com.lazygophers.browse.json"])
 

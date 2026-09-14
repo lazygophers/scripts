@@ -136,7 +136,7 @@ async def _forward(reader: asyncio.StreamReader, emit, direction: str) -> None:
 
 
 async def run(path: Path | None = None, stdin=None, stdout=None,
-              command: list[str] | None = None) -> int:
+              command: list[str] | None = None, browser: str = "") -> int:
     """接上 daemon 并双向转发，直到任意一头断开。返回进程退出码。
 
     `stdin` / `stdout` 是二进制流，缺省用真实的标准输入输出；测试拿管道注入。
@@ -148,11 +148,12 @@ async def run(path: Path | None = None, stdin=None, stdout=None,
     if not await ensure_daemon(target, command):
         return 1
     try:
-        reader, writer, conn_id = await connect(role=ROLE_NATIVE_HOST, path=target)
+        reader, writer, conn_id = await connect(role=ROLE_NATIVE_HOST, path=target,
+                                               browser=browser)
     except (OSError, ProtocolError, asyncio.IncompleteReadError) as exc:
         log(f"连不上 daemon: {exc}")
         return 1
-    log(f"已连上 daemon，connectionId={conn_id}")
+    log(f"已连上 daemon，connectionId={conn_id}，browser={browser or '(未指定)'}")
 
     def to_daemon(message: dict) -> None:
         writer.write(pack(message, MAX_INCOMING_FRAME_BYTES))
@@ -179,13 +180,31 @@ async def run(path: Path | None = None, stdin=None, stdout=None,
     return 0
 
 
+def browser_of(argv: list[str]) -> str:
+    """从 `--browser <名字>` 取出我代表哪个浏览器。
+
+    这个参数是 `browse install` 写死在**每个浏览器各自的 wrapper** 里的，不是用户敲的。
+    身份必须这么来：扩展侧猜不得 —— Brave 的 User-Agent 伪装成 Chrome，Edge 只差一个
+    `Edg/`，而 `chrome.runtime` 里根本没有「我跑在哪个浏览器上」这种字段。
+
+    升级前装的通用 wrapper 不带这个参数，取到空串 —— daemon 那边会归到 `unknown` 槽，
+    照常能用。
+    """
+    for i, token in enumerate(argv):
+        if token == "--browser" and i + 1 < len(argv):
+            return argv[i + 1].strip()
+        if token.startswith("--browser="):
+            return token[len("--browser="):].strip()
+    return ""
+
+
 def main(argv: list[str]) -> int:
     """`browse --native-host` 的入口。`lib/cli/browse.py` 认出该参数后延迟 import 调这里。
 
     `argv` 是剥掉 `--debug` / `--no-say` 之后的完整命令行，含 `argv[0]` —— 拉起
     daemon 时要重新跑的就是它。返回值直接当退出码。
     """
-    return asyncio.run(run(command=daemon_command(argv[0])))
+    return asyncio.run(run(command=daemon_command(argv[0]), browser=browser_of(argv)))
 
 
-__all__ = ["daemon_command", "ensure_daemon", "log", "main", "run"]
+__all__ = ["browser_of", "daemon_command", "ensure_daemon", "log", "main", "run"]

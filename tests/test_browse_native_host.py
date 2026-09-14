@@ -22,6 +22,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import lib.browse_native_host as m_host  # noqa: E402
 from lib.browse_daemon import MAX_HELLO_BYTES, pack, read_frame  # noqa: E402
 from lib.browse_native_host import (  # noqa: E402
+    browser_of,
     daemon_command,
     ensure_daemon,
     main,
@@ -376,8 +377,30 @@ class TestMain(unittest.TestCase):
         # patch 认出 run 是 async def，给的是 AsyncMock，所以 return_value 就是 await 的结果
         with mock.patch("lib.browse_native_host.run", return_value=3) as fn:
             self.assertEqual(main(["bin/browse", "--native-host"]), 3)
-        fn.assert_called_once_with(command=daemon_command("bin/browse"))
+        fn.assert_called_once_with(command=daemon_command("bin/browse"), browser="")
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBrowserIdentity(unittest.TestCase):
+    """native host 自己代表哪个浏览器 —— 由 wrapper 写死的 `--browser` 决定。
+
+    不能靠扩展猜：Brave 的 User-Agent 伪装成 Chrome，Edge 只差一个 `Edg/`。
+    """
+
+    def test_it_reads_the_browser_from_its_own_argv(self):
+        self.assertEqual(browser_of(["browse", "--native-host", "--browser", "brave"]), "brave")
+        self.assertEqual(browser_of(["browse", "--native-host", "--browser=edge"]), "edge")
+
+    def test_the_old_generic_wrapper_has_none_and_that_is_fine(self):
+        # 升级前装的 wrapper 不带这个参数：取到空串，daemon 那边归到 unknown 槽
+        self.assertEqual(browser_of(["browse", "--native-host"]), "")
+        self.assertEqual(browser_of(["browse", "--native-host", "--browser"]), "",
+                         "后面漏了值也不能炸")
+
+    def test_main_hands_the_name_through(self):
+        with mock.patch("lib.browse_native_host.run", return_value=0) as fn:
+            main(["bin/browse", "--native-host", "--browser", "chrome"])
+        fn.assert_called_once_with(command=daemon_command("bin/browse"), browser="chrome")

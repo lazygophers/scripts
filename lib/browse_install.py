@@ -183,25 +183,38 @@ def detect(home: pathlib.Path, plat: str) -> list[str]:
             if (home / probe).exists()]
 
 
-def wrapper_path(home: pathlib.Path, plat: str) -> pathlib.Path:
-    """manifest 的 path 指向的那个脚本。Windows 上 .sh 跑不了，用 .cmd。"""
+def wrapper_path(home: pathlib.Path, plat: str, browser: str = "") -> pathlib.Path:
+    """manifest 的 path 指向的那个脚本。Windows 上 .sh 跑不了，用 .cmd。
+
+    **每个浏览器一个**（`browse-native-host-chrome`、`-brave`…）。名字就是身份：wrapper
+    里写死 `--browser <名字>`，native host 启动时就知道自己代表谁，daemon 据此分槽。
+    不这样的话一台机器上装了多个浏览器时，后连的会把先连的顶掉，而扩展侧会退避重连 ——
+    两者相乘就是无限互踢。
+
+    `browser` 留空给的是**旧版的通用 wrapper 路径**，只在卸载/清理时用得着。
+    """
+    name = f"{WRAPPER_NAME}-{browser}" if browser else WRAPPER_NAME
     if plat == "win32":
-        return home / WIN_MANIFEST_DIR / f"{WRAPPER_NAME}.cmd"
-    return home / WRAPPER_DIR / WRAPPER_NAME
+        return home / WIN_MANIFEST_DIR / f"{name}.cmd"
+    return home / WRAPPER_DIR / name
 
 
-def write_wrapper(home: pathlib.Path, plat: str,
-                  browse_path: pathlib.Path) -> pathlib.Path:
-    """生成 wrapper 并给上执行位，返回它的绝对路径。"""
-    path = wrapper_path(home, plat)
+def write_wrapper(home: pathlib.Path, plat: str, browse_path: pathlib.Path,
+                  browser: str = "") -> pathlib.Path:
+    """生成某个浏览器的 wrapper 并给上执行位，返回它的绝对路径。
+
+    `--browser <名字>` 写死在这里面。manifest 没有 `args` 字段，所以身份只能这么传。
+    """
+    path = wrapper_path(home, plat, browser)
     path.parent.mkdir(parents=True, exist_ok=True)
+    flag = f" --browser {browser}" if browser else ""
     if plat == "win32":
         # 需要: 实机验证 .cmd 这一路。Windows 上 browse 是 uv 装出来的 browse.exe
         # 或 py 启动器认的脚本，这里只负责把参数原样透传。
-        body = f'@echo off\r\n"{browse_path}" --native-host %*\r\n'
+        body = f'@echo off\r\n"{browse_path}" --native-host{flag} %*\r\n'
         newline = ""
     else:
-        body = f'#!/bin/sh\nexec "{browse_path}" --native-host "$@"\n'
+        body = f'#!/bin/sh\nexec "{browse_path}" --native-host{flag} "$@"\n'
         newline = "\n"
     path.write_text(body, encoding="utf-8", newline=newline)
     # 浏览器直接 fork 执行这个文件，没有执行位就是启动失败。
@@ -245,10 +258,15 @@ def install(home: pathlib.Path, plat: str, browse_path: pathlib.Path, *,
             reg_set=_reg_set) -> list[tuple[str, str]]:
     """写 wrapper + 给每个选中的浏览器写 manifest，返回 [(浏览器, 落点描述)]。"""
     names = detect(home, plat) if browsers is None else browsers
-    wrapper = write_wrapper(home, plat, browse_path)
+    # 升级路径：把旧版那个不带 `--browser` 的通用 wrapper 清掉，别留残留。留着的话它
+    # 仍然会被某个 manifest 指着，连上来落到 unknown 槽，白白多一条连接。
+    legacy = wrapper_path(home, plat)
+    if legacy.exists():
+        legacy.unlink()
     done: list[tuple[str, str]] = []
     for name in names:
         flavor, _, dests = BROWSERS[plat][name]
+        wrapper = write_wrapper(home, plat, browse_path, name)
         manifest = build_manifest(flavor, wrapper, extension_ids, gecko_ids)
         for dest in dests:
             if dest.startswith("reg:"):
@@ -282,7 +300,11 @@ def uninstall(home: pathlib.Path, plat: str, *,
         if path.exists():
             path.unlink()
             removed.append(("windows", str(path)))
-    for wrapper in (wrapper_path(home, "win32"), wrapper_path(home, "linux")):
+    # 每个浏览器一个 wrapper，外加旧版那个通用的 —— 全删掉，不留残留
+    wrappers = [wrapper_path(home, plat_key, browser)
+                for plat_key in ("win32", "linux")
+                for browser in ("", *BROWSERS[plat_key])]
+    for wrapper in dict.fromkeys(wrappers):
         if wrapper.exists():
             wrapper.unlink()
             removed.append(("wrapper", str(wrapper)))
@@ -442,7 +464,8 @@ def main(argv: list[str]) -> int:
 
     if args.list_only:
         out.info(f"browse：{browse_path}")
-        out.info(f"wrapper（manifest 的 path 指向它）：{wrapper_path(home, plat)}")
+        out.info(f"wrapper（manifest 的 path 指向它，每个浏览器一个）："
+                 f"{wrapper_path(home, plat, '<浏览器>')}")
         for name in found:
             flavor, _, dests = table[name]
             for dest in dests:
@@ -459,7 +482,14 @@ def main(argv: list[str]) -> int:
     )
     for name, where in done:
         out.ok(f"{name}: {where}")
-    out.info(f"wrapper：{wrapper_path(home, plat)} -> {browse_path} --native-host")
+    for name in found:
+        out.info(f"wrapper：{wrapper_path(home, plat, name)} -> "
+                 f"{browse_path} --native-host --browser {name}")
+    if len(found) > 1:
+        out.info(f"这台机器上有 {len(found)} 个浏览器会连上来。"
+                 f"指令加 `--browser <名字>` 指定发给谁，`browse daemon status` 看谁连着")
+    # wrapper 换了位置，浏览器只在启动时读 manifest —— 不重启就还在跑旧的那个
+    out.info("装完/升级后**要重启浏览器**，它才会去读新的通信配置")
 
     # 到这里为止，只完成了「浏览器怎么找到 browse」。扩展本体还没装 —— 而且
     # 装不了：Chrome 把所有程序化安装扩展的路都封了（--load-extension 于 137
