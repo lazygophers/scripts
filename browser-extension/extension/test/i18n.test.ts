@@ -62,3 +62,17 @@ test("every key referenced by the pages exists", () => {
     assert.ok(known.has(key), `页面引用了不存在的 key: ${key}`);
   }
 });
+
+/**
+ * manifest 和 package.json 的版本号必须一致。
+ *
+ * 两处分居两地，改一个忘另一个是必然会发生的事，而且不会有任何报错 —— 打出来的包
+ * 版本号对不上，排查时先怀疑的一定是别的地方。和 gecko.id 那条同样的思路：把「两处
+ * 要同步」变成机器强制。
+ */
+test("the manifest and package.json agree on the version", () => {
+  const root = join(import.meta.dirname, "..");
+  const manifest = JSON.parse(readFileSync(join(root, "src/manifest.json"), "utf8"));
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.equal(manifest.version, pkg.version);
+});
