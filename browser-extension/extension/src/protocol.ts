@@ -32,7 +32,16 @@ export interface Event {
 
 export type Outbound = Success | ErrorReply | Event;
 
-/** BiDi standard error codes, the subset this extension can produce. */
+/**
+ * BiDi standard error codes, the subset this extension can produce, plus the
+ * two private ones. A colon-prefixed code is a BiDi extension namespace (§3.3,
+ * same rule as the `lg:` command modules), so the daemon's validator accepts
+ * the 8 standard codes plus anything containing a colon —
+ * `lib/browse_protocol.py` implements exactly that.
+ *
+ * `lg:browser not connected` is only ever produced daemon-side; it is listed
+ * here so both ends carry the same enum.
+ */
 export type ErrorCode =
   | "invalid argument"
   | "no such element"
@@ -40,16 +49,20 @@ export type ErrorCode =
   | "no such script"
   | "unknown command"
   | "unknown error"
-  | "unsupported operation";
+  | "unsupported operation"
+  | "lg:browser not connected"
+  | "lg:user rejected";
 
 /** Thrown by handlers to pick the error code instead of `unknown error`. */
 export class CommandError extends Error {
-  constructor(
-    readonly code: ErrorCode,
-    message: string,
-  ) {
+  // Assigned in the body, not as a constructor parameter property: Node's
+  // type-stripping (`node --test` on .ts sources) rejects those.
+  readonly code: ErrorCode;
+
+  constructor(code: ErrorCode, message: string) {
     super(message);
     this.name = "CommandError";
+    this.code = code;
   }
 }
 

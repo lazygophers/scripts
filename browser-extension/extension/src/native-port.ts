@@ -1,12 +1,12 @@
-import { nextDelay } from "./backoff.js";
-import { dispatch } from "./handlers/index.js";
+import { nextDelay } from "./backoff.ts";
+import { dispatch } from "./handlers/index.ts";
 import {
   CommandError,
   NATIVE_HOST,
   isCommand,
   type ErrorCode,
   type Outbound,
-} from "./protocol.js";
+} from "./protocol.ts";
 
 /**
  * Keeps one `connectNative` port to the daemon open, reconnecting with
