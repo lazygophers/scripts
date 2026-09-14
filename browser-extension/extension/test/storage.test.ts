@@ -73,7 +73,7 @@ test("a refused confirm stops the cookie read", async () => {
   setConfirmHook(async () => false);
   const err = await rejectsWith(
     () => storageGetCookies({ domain: "a.test" }),
-    "unknown error",
+    "lg:user rejected",
   );
   assert.match(err.message, /user denied readCookies/);
   teardown();

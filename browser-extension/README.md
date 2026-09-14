@@ -144,3 +144,7 @@ export function setConfirmHook(fn: ConfirmHook): void;
 T08 要做的就是在 `background.ts` 里调 `setConfirmHook`，实现里把 `ConfirmRequest`
 发给 daemon（`confirm_mode`、按域名免确认清单、审计日志都在那边），拿回 true/false。
 现在的默认钩子一律放行 —— 这正是 spec 4.4 的默认值 `confirm_mode: silent`，不是漏网。
+
+钩子返回 false 时抛的错误码是 **`lg:user rejected`**（对应 spec 6.7 的退出码 4）。
+它带冒号，属于 BiDi §3.3 的扩展命名空间，`lib/browse_protocol.py` 的校验规则
+「8 个标准码 + 任何含冒号的扩展码」已放行。

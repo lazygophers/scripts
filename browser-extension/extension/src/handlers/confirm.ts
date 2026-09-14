@@ -45,7 +45,7 @@ export async function confirm(request: ConfirmRequest): Promise<void> {
     return;
   }
   throw new CommandError(
-    "unknown error",
+    "lg:user rejected",
     `user denied ${request.action} for ${request.method} on ${request.url ?? "the browser"}`,
   );
 }

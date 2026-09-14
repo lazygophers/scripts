@@ -80,7 +80,7 @@ test("history search confirms first and passes the window through", async () => 
 test("a refused confirm blocks the history read", async () => {
   setup();
   setConfirmHook(async () => false);
-  await rejectsWith(() => historySearch({}), "unknown error");
+  await rejectsWith(() => historySearch({}), "lg:user rejected");
   teardown();
 });
 
@@ -148,7 +148,7 @@ test("download start confirms with the target url and returns the download id", 
 test("a refused confirm stops the download before it touches the disk", async () => {
   const { calls } = setup();
   setConfirmHook(async () => false);
-  await rejectsWith(() => downloadsStart({ url: "https://a.test/f.zip" }), "unknown error");
+  await rejectsWith(() => downloadsStart({ url: "https://a.test/f.zip" }), "lg:user rejected");
   assert.equal(calls.length, 0);
   teardown();
 });

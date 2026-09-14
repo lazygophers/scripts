@@ -81,7 +81,7 @@ test("MAIN world evaluation asks the confirm hook and a refusal stops it", async
   });
 
   setConfirmHook(async () => false);
-  const err = await rejectsWith(() => scriptEvaluate({ expression: "1" }), "unknown error");
+  const err = await rejectsWith(() => scriptEvaluate({ expression: "1" }), "lg:user rejected");
   assert.match(err.message, /user denied evalMainWorld/);
   teardown();
 });

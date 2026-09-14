@@ -54,7 +54,7 @@ test("a hook that says no turns into a refusal naming the action", async () => {
   setConfirmHook(async () => false);
   const err = await rejectsWith(
     () => confirm({ action: "readCookies", method: "storage.getCookies", url: "a.test" }),
-    "unknown error",
+    "lg:user rejected",
   );
   assert.match(err.message, /user denied readCookies for storage.getCookies on a.test/);
   setConfirmHook(async () => true);
