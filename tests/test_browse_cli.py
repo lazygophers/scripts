@@ -247,6 +247,27 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(handlers - control, set(browse.METHODS))
         self.assertEqual(control & set(browse.METHODS), set())
 
+    def test_panel_and_settings_methods_are_not_reachable_from_the_cli(self):
+        """面板和设置页那几条只走「扩展 → daemon」，命令行上必须敲不出来。
+
+        它们不在扩展的 HANDLERS 里，所以上一条对不齐的断言碰不到它们 —— 而能从命令行
+        发 `lg:config.set` 就等于谁都能把别人的确认策略改成 silent。
+        """
+        from lib.browse_daemon import (
+            APPROVALS_APPROVE,
+            APPROVALS_LIST,
+            APPROVALS_REVOKE,
+            CONFIG_GET,
+            CONFIG_SET,
+        )
+
+        panel = {APPROVALS_LIST, APPROVALS_APPROVE, APPROVALS_REVOKE, CONFIG_GET, CONFIG_SET}
+        self.assertEqual(panel & set(browse.METHODS), set())
+        for method in panel:
+            module, _, action = method.rpartition(".")
+            with self.assertRaises(browse.UsageError, msg=method):
+                browse.resolve_method(module, action)
+
 
 # ---------------------------------------------------------------- 输出与退出码
 class TestOutput(unittest.TestCase):

@@ -158,6 +158,97 @@ config_lock = _STORE.lock
 default_config_path = _STORE.default_path
 
 
+# 设置页能改的字段，就是上面 docstring 里那五个。不在这张表里的 key 一律忽略：
+# 扩展只是 UI，不该有能力往这份配置里塞任意东西。
+CONFIG_FIELDS = ("confirm_mode", "deny_domains", "approved_domains", "audit",
+                 "audit_retention_days")
+
+
+def config_view(cfg: dict | None = None) -> dict:
+    """把配置整理成「实际生效的值」，缺的字段填默认值。
+
+    设置页拿它来显示 —— 否则页面得自己再抄一遍默认值，抄错了用户看到的就不是真的
+    在生效的那份策略。
+    """
+    cfg = cfg or {}
+    try:
+        days = int(cfg.get("audit_retention_days", DEFAULT_RETENTION_DAYS))
+    except (TypeError, ValueError):
+        days = DEFAULT_RETENTION_DAYS
+    return {
+        "confirm_mode": str(cfg.get("confirm_mode") or DEFAULT_CONFIRM_MODE),
+        "deny_domains": [str(x) for x in cfg.get("deny_domains") or [] if str(x).strip()],
+        "approved_domains": [str(x) for x in cfg.get("approved_domains") or [] if str(x).strip()],
+        "audit": cfg.get("audit") is not False,
+        "audit_retention_days": days,
+    }
+
+
+def _domain_list(value, field: str) -> list[str]:
+    if not isinstance(value, list):
+        raise SecurityError(f"{field} 要是一个列表", code="invalid argument")
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise SecurityError(f"{field} 里只能放域名字符串：{item!r}", code="invalid argument")
+        domain = item.strip().lstrip("*").lstrip(".").lower()
+        if domain and domain not in out:
+            out.append(domain)
+    return out
+
+
+def sanitize_config(patch: dict) -> dict:
+    """设置页送来的一份配置 → 可以写盘的那几个字段。非法值当场抛，不落盘。
+
+    扩展侧也会挡一次非法的 `confirm_mode`，但那是为了早点给用户提示；这里是边界，
+    必须自己校验一遍 —— 扩展是能被改的，daemon 的 socket 也不是只有扩展能连。
+    """
+    if not isinstance(patch, dict):
+        raise SecurityError("配置要是一个对象", code="invalid argument")
+    out: dict = {}
+    for field in CONFIG_FIELDS:
+        if field not in patch:
+            continue
+        value = patch[field]
+        if field == "confirm_mode":
+            # 这里不走 resolve_confirm_mode：它会把空值当「没配置」填成默认的 silent，
+            # 而设置页送来空值意味着没选中任何一项 —— 静静地给用户设成最松的那个模式
+            # 是这条路上最不能犯的错。
+            if value not in CONFIRM_MODES:
+                raise SecurityError(
+                    f"confirm_mode 非法: {value!r}（可选 {' / '.join(CONFIRM_MODES)}）",
+                    code="invalid argument",
+                )
+            out[field] = value
+        elif field in ("deny_domains", "approved_domains"):
+            out[field] = _domain_list(value, field)
+        elif field == "audit":
+            if not isinstance(value, bool):
+                raise SecurityError("audit 要是 true / false", code="invalid argument")
+            out[field] = value
+        else:
+            # bool 在 Python 里是 int 的子类，不挡住的话 `true` 会被当成 1 天
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise SecurityError("audit_retention_days 要是整数（<=0 表示不删）",
+                                    code="invalid argument")
+            out[field] = value
+    return out
+
+
+def update_config(patch: dict, path: Path | None = None) -> dict:
+    """把设置页改的字段并进配置文件，返回并进去之后的整份配置。
+
+    读—改—写全程持锁并从盘上重读，和 `Security._update_approvals` 同一个理由：
+    另一个 browse 进程可能正在改同一份文件。没提到的字段原样留着，包括这里不认识的。
+    """
+    clean_patch = sanitize_config(patch)
+    with config_lock(path):
+        cfg = load_config(path)
+        cfg.update(clean_patch)
+        save_config(cfg, path)
+    return cfg
+
+
 def resolve_confirm_mode(configured: str | None, override: str | None = None) -> str:
     """配置里的模式 + 命令行覆盖 → 实际生效的模式。**只能收紧不能放宽。**"""
     mode = (configured or DEFAULT_CONFIRM_MODE).strip() or DEFAULT_CONFIRM_MODE

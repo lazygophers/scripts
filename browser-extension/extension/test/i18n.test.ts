@@ -39,7 +39,16 @@ test("no message is empty", () => {
 test("every key referenced by the pages exists", () => {
   const known = new Set(Object.keys(messages("zh_CN")));
   const used = new Set<string>();
-  for (const file of ["panel.html", "confirm.html", "panel.ts", "confirm-page.ts", "manifest.json"]) {
+  const files = [
+    "panel.html",
+    "confirm.html",
+    "settings.html",
+    "panel.ts",
+    "confirm-page.ts",
+    "settings.ts",
+    "manifest.json",
+  ];
+  for (const file of files) {
     const text = readFileSync(join(SRC, file), "utf8");
     for (const [, key] of text.matchAll(/data-i18n="([^"]+)"/g)) used.add(key);
     for (const [, key] of text.matchAll(/\bmsg\(\s*"([^"]+)"/g)) used.add(key);

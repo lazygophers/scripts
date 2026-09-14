@@ -1,28 +1,177 @@
 {
-  "extName": { "message": "lazygophers browse" },
-  "extDescription": { "message": "通过 native messaging 在本机控制浏览器，由 `browse` 命令行驱动。" },
-  "actionTitle": { "message": "browse" },
-
-  "panelTitle": { "message": "browse" },
-  "panelDisconnect": { "message": "立即断开" },
-  "panelDisconnected": { "message": "已断开" },
-  "panelRecent": { "message": "最近执行的指令" },
-  "panelLoading": { "message": "加载中……" },
-  "panelAllowed": { "message": "免确认的域名" },
-  "panelDomainCount": { "message": "$1 个域名", "placeholders": { "1": { "content": "$1" } } },
-  "panelNoDomains": { "message": "还没有 —— 每个高危动作都会问你。" },
-  "panelRevoke": { "message": "撤销" },
-  "panelNoAnswer": { "message": "service worker 没有回应" },
-  "panelDaemonConnected": { "message": "daemon 已连接" },
-  "panelDaemonDisconnected": { "message": "daemon 未连接" },
-  "panelNothingRun": { "message": "还没跑过任何指令。" },
-
-  "confirmTitle": { "message": "browse — 确认" },
-  "confirmHeading": { "message": "允许这次操作吗？" },
-  "confirmAction": { "message": "动作" },
-  "confirmCommand": { "message": "指令" },
-  "confirmTarget": { "message": "目标" },
-  "confirmDeny": { "message": "拒绝" },
-  "confirmAllow": { "message": "允许" },
-  "confirmWholeBrowser": { "message": "整个浏览器" }
+  "extName": {
+    "message": "lazygophers browse"
+  },
+  "extDescription": {
+    "message": "通过 native messaging 在本机控制浏览器，由 `browse` 命令行驱动。"
+  },
+  "actionTitle": {
+    "message": "browse"
+  },
+  "panelTitle": {
+    "message": "browse"
+  },
+  "panelDisconnect": {
+    "message": "立即断开"
+  },
+  "panelDisconnected": {
+    "message": "已断开"
+  },
+  "panelRecent": {
+    "message": "最近执行的指令"
+  },
+  "panelLoading": {
+    "message": "加载中……"
+  },
+  "panelAllowed": {
+    "message": "免确认的域名"
+  },
+  "panelDomainCount": {
+    "message": "$1 个域名",
+    "placeholders": {
+      "1": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelNoDomains": {
+    "message": "还没有 —— 每个高危动作都会问你。"
+  },
+  "panelRevoke": {
+    "message": "撤销"
+  },
+  "panelNoAnswer": {
+    "message": "service worker 没有回应"
+  },
+  "panelDaemonConnected": {
+    "message": "daemon 已连接"
+  },
+  "panelDaemonDisconnected": {
+    "message": "daemon 未连接"
+  },
+  "panelNothingRun": {
+    "message": "还没跑过任何指令。"
+  },
+  "confirmTitle": {
+    "message": "browse — 确认"
+  },
+  "confirmHeading": {
+    "message": "允许这次操作吗？"
+  },
+  "confirmAction": {
+    "message": "动作"
+  },
+  "confirmCommand": {
+    "message": "指令"
+  },
+  "confirmTarget": {
+    "message": "目标"
+  },
+  "confirmDeny": {
+    "message": "拒绝"
+  },
+  "confirmAllow": {
+    "message": "允许"
+  },
+  "confirmWholeBrowser": {
+    "message": "整个浏览器"
+  },
+  "panelSettings": {
+    "message": "设置"
+  },
+  "settingsTitle": {
+    "message": "browse — 设置"
+  },
+  "settingsHeading": {
+    "message": "browse 设置"
+  },
+  "settingsIntro": {
+    "message": "这里改的和命令行读的是同一份设置，它就存在这一个文件里："
+  },
+  "settingsConfirmMode": {
+    "message": "做高危动作之前要不要问你"
+  },
+  "settingsModeSilent": {
+    "message": "silent —— 不问，直接做（默认）"
+  },
+  "settingsModeSilentHint": {
+    "message": "读 cookie、跑网页里的 JS、下载文件、翻历史记录这些都会直接执行，只记进审计日志。"
+  },
+  "settingsModePerDomain": {
+    "message": "per_domain —— 每个网站问一次"
+  },
+  "settingsModePerDomainHint": {
+    "message": "对某个网站第一次做高危动作时弹窗问你，你同意之后这个网站就不再问；下面「不再询问的网站」里可以逐条撤销。"
+  },
+  "settingsModeAlways": {
+    "message": "always —— 每次都问"
+  },
+  "settingsModeAlwaysHint": {
+    "message": "每一次高危动作都弹窗。窗口 60 秒没人点就按拒绝算。"
+  },
+  "settingsDeny": {
+    "message": "一律拒绝的网站"
+  },
+  "settingsDenyHint": {
+    "message": "一行一个域名，连窗都不弹，直接拒。写 example.com 会把 a.example.com 这类子域一起拒掉。"
+  },
+  "settingsApproved": {
+    "message": "不再询问的网站"
+  },
+  "settingsApprovedHint": {
+    "message": "只有 per_domain 模式用得上这份名单。插件面板里也能撤销。"
+  },
+  "settingsApprovedEmpty": {
+    "message": "还没有 —— 每个网站都会问。"
+  },
+  "settingsAudit": {
+    "message": "审计日志"
+  },
+  "settingsAuditOn": {
+    "message": "记录审计日志"
+  },
+  "settingsAuditHint": {
+    "message": "只记「对哪个网站做了什么动作、成没成、花了多久」，不记网页正文、不记 cookie 的值、不记你填的内容。"
+  },
+  "settingsRetention": {
+    "message": "保留天数"
+  },
+  "settingsRetentionHint": {
+    "message": "超过这个天数的日志文件自动删掉。填 0 或负数表示永不删除。"
+  },
+  "settingsSave": {
+    "message": "保存"
+  },
+  "settingsSaving": {
+    "message": "保存中……"
+  },
+  "settingsSaved": {
+    "message": "已保存"
+  },
+  "settingsLoading": {
+    "message": "读取中……"
+  },
+  "settingsOffline": {
+    "message": "连不上本地程序，现在改不了设置。"
+  },
+  "settingsOffline1": {
+    "message": "在终端里跑一下 `browse daemon start`。"
+  },
+  "settingsOffline2": {
+    "message": "还是不行就重跑一次 `browse install`，它会重新注册通信配置。"
+  },
+  "settingsOffline3": {
+    "message": "然后刷新本页。下面显示的是上一次读到的内容，不是你的设置丢了。"
+  },
+  "settingsBadMode": {
+    "message": "不认识的确认模式：$1",
+    "placeholders": {
+      "1": {
+        "content": "$1"
+      }
+    }
+  },
+  "settingsBadRetention": {
+    "message": "保留天数要填整数。"
+  }
 }

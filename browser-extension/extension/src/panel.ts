@@ -18,6 +18,7 @@ const statusNode = document.getElementById("status");
 const logList = document.getElementById("log") as HTMLUListElement | null;
 const logStatus = document.getElementById("logStatus");
 const cut = document.getElementById("cut") as HTMLButtonElement | null;
+const settings = document.getElementById("settings") as HTMLButtonElement | null;
 
 async function call(op: string, domain?: string): Promise<string[]> {
   const reply = await chrome.runtime.sendMessage({ type: "browse-approvals", op, domain });
@@ -112,6 +113,9 @@ cut?.addEventListener("click", () => {
     void loadLog();
   });
 });
+
+// The options page is otherwise three clicks deep in chrome://extensions.
+settings?.addEventListener("click", () => chrome.runtime.openOptionsPage());
 
 localize();
 void run(() => call("list"));

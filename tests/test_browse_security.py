@@ -21,15 +21,18 @@ from lib.browse_security import (  # noqa: E402
     RISKY_METHODS,
     Security,
     SecurityError,
+    config_view,
     default_config_path,
     domain_matches,
     domain_of,
     load_config,
     resolve_confirm_mode,
     risky_action,
+    sanitize_config,
     save_config,
     state_dir,
     target_url,
+    update_config,
 )
 
 # 扩展侧 handlers/confirm.ts:14-24 的 RiskyAction 联合类型，逐字抄过来
@@ -404,6 +407,91 @@ class TestConfigFile(Temp):
         sec.approve("example.com")
         self.assertEqual(load_config(self.config_path)["approved_domains"],
                          ["other.com", "example.com"])
+
+
+class TestConfigView(Temp):
+    """设置页照着 `config_view` 画界面，所以缺字段时它得给出真正在生效的默认值。"""
+
+    def test_empty_config_shows_the_real_defaults(self):
+        self.assertEqual(config_view({}), {
+            "confirm_mode": "silent",
+            "deny_domains": [],
+            "approved_domains": [],
+            "audit": True,
+            "audit_retention_days": 7,
+        })
+        self.assertEqual(config_view(None), config_view({}))
+
+    def test_values_from_the_file_win(self):
+        view = config_view({"confirm_mode": "always", "audit": False,
+                            "audit_retention_days": 0, "deny_domains": ["a.test"]})
+        self.assertEqual(view["confirm_mode"], "always")
+        self.assertIs(view["audit"], False)
+        self.assertEqual(view["audit_retention_days"], 0)
+        self.assertEqual(view["deny_domains"], ["a.test"])
+
+    def test_a_garbage_retention_falls_back_instead_of_blowing_up(self):
+        self.assertEqual(config_view({"audit_retention_days": "七天"})["audit_retention_days"], 7)
+
+
+class TestSanitizeConfig(Temp):
+    """设置页送来的东西一律当不可信输入：扩展是能被改的，socket 也不是只有它能连。"""
+
+    def test_only_the_five_known_fields_survive(self):
+        got = sanitize_config({"audit": False, "token": "secret", "confirm_mode": "always"})
+        self.assertEqual(got, {"audit": False, "confirm_mode": "always"})
+
+    def test_absent_fields_are_left_alone(self):
+        self.assertEqual(sanitize_config({}), {})
+
+    def test_domains_are_normalised_and_deduped(self):
+        got = sanitize_config({"deny_domains": ["*.Bank.test", " ", ".bank.test", "shop.test"]})
+        self.assertEqual(got["deny_domains"], ["bank.test", "shop.test"])
+
+    def test_an_illegal_confirm_mode_raises(self):
+        for mode in ("loud", "", "SILENT"):
+            with self.assertRaises(SecurityError):
+                sanitize_config({"confirm_mode": mode})
+
+    def test_illegal_types_raise(self):
+        for patch in ({"deny_domains": "bank.test"}, {"deny_domains": [1]},
+                      {"approved_domains": {"a": 1}}, {"audit": "yes"}, {"audit": 1},
+                      {"audit_retention_days": "7"}, {"audit_retention_days": 1.5}):
+            with self.assertRaises(SecurityError, msg=str(patch)):
+                sanitize_config(patch)
+
+    def test_a_bool_is_not_a_retention_count(self):
+        # bool 是 int 的子类：不挡住的话 `true` 会被静静地当成「保留 1 天」
+        with self.assertRaises(SecurityError):
+            sanitize_config({"audit_retention_days": True})
+
+    def test_zero_and_negative_retention_are_legal(self):
+        self.assertEqual(sanitize_config({"audit_retention_days": 0})["audit_retention_days"], 0)
+        self.assertEqual(sanitize_config({"audit_retention_days": -1})["audit_retention_days"], -1)
+
+
+class TestUpdateConfig(Temp):
+    def test_untouched_fields_survive_including_unknown_ones(self):
+        save_config({"approved_domains": ["shop.test"], "future_field": 1}, self.config_path)
+        cfg = update_config({"confirm_mode": "always"}, self.config_path)
+        self.assertEqual(cfg["approved_domains"], ["shop.test"])
+        self.assertEqual(cfg["future_field"], 1)
+        self.assertEqual(load_config(self.config_path)["confirm_mode"], "always")
+
+    def test_an_illegal_patch_writes_nothing(self):
+        with self.assertRaises(SecurityError):
+            update_config({"confirm_mode": "loud"}, self.config_path)
+        self.assertFalse(self.config_path.exists(), "校验没过就一个字都不该落盘")
+
+    def test_the_written_file_is_still_0600(self):
+        update_config({"audit": False}, self.config_path)
+        self.assertEqual(stat.S_IMODE(os.stat(self.config_path).st_mode), 0o600)
+
+    def test_it_rereads_under_the_lock(self):
+        # 另一个进程在这中间写了一条，不能被整份覆盖掉
+        save_config({"deny_domains": ["a.test"]}, self.config_path)
+        update_config({"audit": False}, self.config_path)
+        self.assertEqual(load_config(self.config_path)["deny_domains"], ["a.test"])
 
 
 if __name__ == "__main__":

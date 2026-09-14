@@ -63,9 +63,13 @@ from lib.browse_protocol import (
 from lib.browse_security import (
     Security,
     SecurityError,
+    config_view,
+    default_config_path,
     domain_of,
+    load_config,
     resolve_confirm_mode,
     target_url,
+    update_config,
 )
 
 IDLE_TIMEOUT = 30 * 60.0
@@ -109,6 +113,12 @@ ABORT_METHOD = "lg:daemon.abort"
 APPROVALS_LIST = "lg:approvals.list"
 APPROVALS_APPROVE = "lg:approvals.approve"
 APPROVALS_REVOKE = "lg:approvals.revoke"
+
+# 同方向：扩展的设置页读写 browse.yaml（spec 4.4 / 4.6 的那几个字段）。策略的唯一
+# 权威是那个文件 —— 扩展侧不留第二份配置，两份配置一定会漂，而漂的方向是「用户以为
+# 关了其实没关」。同样在 daemon 本地执行，CLI 上也敲不出来。
+CONFIG_GET = "lg:config.get"
+CONFIG_SET = "lg:config.set"
 
 
 def socket_path() -> Path:
@@ -249,6 +259,10 @@ class Daemon:
     _last_command: float = field(default_factory=time.monotonic, init=False)
     _stopping: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     _idle_task: asyncio.Task | None = field(default=None, init=False)
+    # 安全层被丢弃重建时要记得的落点。测试把这两个指到临时目录，重建时丢了它们就会
+    # 去读写用户真实的 ~/.config 和审计目录。生产上两个都是 None = 用默认位置。
+    _config_path: Path | None = field(default=None, init=False)
+    _audit_dir: Path | None = field(default=None, init=False)
 
     # ------------------------------------------------------------ 生命周期
     async def start(self) -> bool:
@@ -425,7 +439,9 @@ class Daemon:
     def _sec(self) -> Security:
         """安全层单例。建不出来就抛 SecurityError，调用方负责变成 error 回包。"""
         if self.security is None:
-            self.security = Security(override_mode=self.override_mode)
+            self.security = Security(override_mode=self.override_mode,
+                                     config_path=self._config_path,
+                                     audit_dir=self._audit_dir)
         return self.security
 
     def _audit(self, method: str, params: dict, started: float | None, *,
@@ -528,8 +544,11 @@ class Daemon:
             await self._fanout(message)
             return
         if kind is None:
-            # 扩展面板问 daemon 要 per_domain 名单（spec 4.5）。本地执行，不转发。
-            await self._approvals(conn, message)
+            # 扩展面板 / 设置页问 daemon 要配置（spec 4.5）。本地执行，不转发。
+            if message.get("method") in (CONFIG_GET, CONFIG_SET):
+                await self._config(conn, message)
+            else:
+                await self._approvals(conn, message)
             return
         if kind not in ("success", "error"):
             return
@@ -572,6 +591,35 @@ class Daemon:
             await conn.send(error(cid, exc.code, str(exc)))
             return
         await conn.send(success(cid, {"domains": sec.approvals()}))
+
+    async def _config(self, conn: _Conn, message: dict) -> None:
+        """`lg:config.get / set`，扩展设置页读写 browse.yaml。
+
+        写完把安全层丢掉重建：不丢的话设置页改了模式，已经在跑的 daemon 还按旧策略
+        放行 —— 用户以为关了其实没关，正是这条链路最不能出的错。
+        """
+        method, cid = message["method"], message["id"]
+        if self.security is not None:
+            self._config_path = self.security.config_path
+            self._audit_dir = self.security.audit_dir
+        path = self._config_path
+        try:
+            if method == CONFIG_SET:
+                update_config(message.get("params") or {}, path)
+                # 丢掉安全层，下一条指令按新配置重建。不丢的话设置页改了模式，daemon
+                # 还按旧策略放行 ——「用户以为关了其实没关」正是这条链路最不能出的错。
+                # 只丢不立刻重建：新配置和启动时的 `--confirm-mode` 撞上时，该让那条
+                # 指令失败，而不是让这次保存报错（配置其实已经写进去了）。
+                self.security = None
+            cfg = load_config(path)
+        except SecurityError as exc:
+            await conn.send(error(cid, exc.code, str(exc)))
+            return
+        except OSError as exc:
+            await conn.send(error(cid, ERR_INVALID_ARGUMENT, f"配置文件读写失败：{exc}"))
+            return
+        await conn.send(success(cid, {"config": config_view(cfg),
+                                      "path": str(path or default_config_path())}))
 
     async def _fanout(self, message: dict) -> None:
         if message["method"] == KEEPALIVE_METHOD:
@@ -719,6 +767,8 @@ __all__ = [
     "APPROVALS_APPROVE",
     "APPROVALS_LIST",
     "APPROVALS_REVOKE",
+    "CONFIG_GET",
+    "CONFIG_SET",
     "CONFIRM_METHOD",
     "CONFIRM_TIMEOUT",
     "CONTEXT_URL_METHOD",

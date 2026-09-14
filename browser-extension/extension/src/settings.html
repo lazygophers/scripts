@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title data-i18n="settingsTitle">browse — settings</title>
+    <style>
+      :root { color-scheme: dark light; }
+      body {
+        font: 13px/1.6 system-ui, sans-serif;
+        margin: 0 auto;
+        padding: 28px 24px 48px;
+        max-width: 720px;
+        background: #16181d;
+        color: #e6e8ec;
+      }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      h2 { font-size: 13px; margin: 28px 0 6px; color: #9aa1ac; font-weight: 600; }
+      p.hint { margin: 0 0 10px; color: #9aa1ac; }
+      code { font-family: ui-monospace, monospace; background: #23262d; padding: 1px 4px; border-radius: 3px; }
+      fieldset { border: 0; margin: 0; padding: 0; }
+      label.mode { display: block; padding: 6px 0; border-top: 1px solid #23262d; }
+      label.mode span.what { display: block; margin-left: 22px; color: #9aa1ac; }
+      textarea, input[type="number"] {
+        font: inherit;
+        font-family: ui-monospace, monospace;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 8px;
+        border-radius: 6px;
+        border: 1px solid #3a3f48;
+        background: #1c1f25;
+        color: inherit;
+      }
+      input[type="number"] { width: 8em; }
+      ul { list-style: none; margin: 0; padding: 0; }
+      li {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 5px 0;
+        border-top: 1px solid #23262d;
+      }
+      .domain { font-family: ui-monospace, monospace; word-break: break-all; }
+      button {
+        font: inherit;
+        padding: 4px 12px;
+        border-radius: 6px;
+        border: 1px solid #3a3f48;
+        background: #23262d;
+        color: inherit;
+        cursor: pointer;
+      }
+      #save { padding: 7px 20px; background: #2563eb; border-color: #2563eb; color: #fff; }
+      #bar { display: flex; align-items: center; gap: 14px; margin-top: 28px; }
+      #status { color: #9aa1ac; }
+      #status.bad { color: #f87171; }
+      #status.good { color: #4ade80; }
+      #path { font-family: ui-monospace, monospace; word-break: break-all; color: #9aa1ac; }
+      #offline {
+        display: none;
+        margin: 0 0 20px;
+        padding: 12px 14px;
+        border-radius: 8px;
+        border: 1px solid #6b2b2b;
+        background: #2b1c1c;
+      }
+      #offline ol { margin: 8px 0 0; padding-left: 20px; color: #cbb; }
+      body.offline #offline { display: block; }
+      body.offline #form { opacity: 0.4; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <h1 data-i18n="settingsHeading">browse settings</h1>
+    <p class="hint" data-i18n="settingsIntro">
+      These are the same settings the command line reads. They live in one file:
+    </p>
+    <p id="path">…</p>
+
+    <div id="offline">
+      <strong data-i18n="settingsOffline">Cannot reach the local program, so nothing can be changed.</strong>
+      <ol>
+        <li data-i18n="settingsOffline1">Run `browse daemon start` in a terminal.</li>
+        <li data-i18n="settingsOffline2">If that fails, run `browse install` again.</li>
+        <li data-i18n="settingsOffline3">Then reload this page.</li>
+      </ol>
+    </div>
+
+    <form id="form">
+      <h2 data-i18n="settingsConfirmMode">When to ask before a risky action</h2>
+      <fieldset id="modes">
+        <label class="mode">
+          <input type="radio" name="confirm_mode" value="silent" />
+          <span data-i18n="settingsModeSilent">silent</span>
+          <span class="what" data-i18n="settingsModeSilentHint">Never asks.</span>
+        </label>
+        <label class="mode">
+          <input type="radio" name="confirm_mode" value="per_domain" />
+          <span data-i18n="settingsModePerDomain">per_domain</span>
+          <span class="what" data-i18n="settingsModePerDomainHint">Asks once per site.</span>
+        </label>
+        <label class="mode">
+          <input type="radio" name="confirm_mode" value="always" />
+          <span data-i18n="settingsModeAlways">always</span>
+          <span class="what" data-i18n="settingsModeAlwaysHint">Asks every time.</span>
+        </label>
+      </fieldset>
+
+      <h2 data-i18n="settingsDeny">Always refused</h2>
+      <p class="hint" data-i18n="settingsDenyHint">One domain per line.</p>
+      <textarea id="deny" rows="4" spellcheck="false"></textarea>
+
+      <h2 data-i18n="settingsAudit">Audit log</h2>
+      <label><input type="checkbox" id="audit" /> <span data-i18n="settingsAuditOn">Keep an audit log</span></label>
+      <p class="hint" data-i18n="settingsAuditHint">Records what was done, never the content.</p>
+      <label><span data-i18n="settingsRetention">Keep for (days)</span>
+        <input type="number" id="retention" step="1" />
+      </label>
+      <p class="hint" data-i18n="settingsRetentionHint">0 or less keeps them forever.</p>
+
+      <div id="bar">
+        <button type="submit" id="save" data-i18n="settingsSave">Save</button>
+        <span id="status" data-i18n="settingsLoading">loading…</span>
+      </div>
+    </form>
+
+    <h2 data-i18n="settingsApproved">Sites that no longer ask</h2>
+    <p class="hint" data-i18n="settingsApprovedHint">Only used by per_domain.</p>
+    <ul id="approved"></ul>
+
+    <script type="module" src="settings.js"></script>
+  </body>
+</html>

@@ -15,6 +15,7 @@
     "default_title": "__MSG_actionTitle__",
     "default_popup": "panel.html"
   },
+  "options_page": "settings.html",
   "background": {
     "service_worker": "background.js",
     "type": "module"

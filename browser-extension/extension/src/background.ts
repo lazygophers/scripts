@@ -10,6 +10,12 @@ const APPROVALS: Record<string, string> = {
   revoke: "lg:approvals.revoke",
 };
 
+/** Settings page op → daemon method. The config file is the daemon's; this only asks. */
+const CONFIG: Record<string, string> = {
+  get: "lg:config.get",
+  set: "lg:config.set",
+};
+
 interface Approvals {
   domains: string[];
 }
@@ -70,6 +76,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     connection.disconnect();
     sendResponse({ ok: true });
     return false;
+  }
+  // The settings page (spec 4.4 / 4.6). Nothing is cached here and nothing is
+  // mirrored into chrome.storage: `browse.yaml` is the only copy of the policy,
+  // and a second copy would drift towards "the user thinks it is off".
+  if (message?.type === "browse-config") {
+    const method = CONFIG[message.op as string];
+    if (!method) {
+      sendResponse({ ok: false, error: `unknown config op: ${message.op}`, state });
+      return false;
+    }
+    connection.request(method, (message.config ?? {}) as Record<string, unknown>).then(
+      (result) => sendResponse({ ok: true, ...(result as object), state }),
+      (err: Error) => sendResponse({ ok: false, error: err.message, state }),
+    );
+    return true;
   }
   if (message?.type !== "browse-approvals") {
     return false;

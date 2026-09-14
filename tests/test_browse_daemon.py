@@ -24,6 +24,8 @@ from lib.browse_daemon import (  # noqa: E402
     APPROVALS_APPROVE,
     APPROVALS_LIST,
     APPROVALS_REVOKE,
+    CONFIG_GET,
+    CONFIG_SET,
     CONFIRM_METHOD,
     CONTEXT_URL_METHOD,
     MAX_HELLO_BYTES,
@@ -1033,6 +1035,89 @@ class TestApprovalsPanel(WiringCase):
     async def test_an_unknown_browser_command_is_refused_not_forwarded(self):
         reply = await self.ask(1, "lg:nonsense.do")
         self.assertEqual(reply["error"], ERR_UNKNOWN_COMMAND)
+
+
+class TestConfigPanel(WiringCase):
+    """扩展设置页经 daemon 读写 browse.yaml（spec 4.4 / 4.6）。
+
+    这条链路的要害是「只有一份配置」：设置页写的必须是 CLI 读的那个文件，写完 daemon
+    必须按新配置办事。所以下面既断言回包，也断言文件内容和后续指令的行为。
+    """
+
+    security_cfg = {"confirm_mode": "silent"}
+
+    async def ask(self, cid: int, method: str, params: dict | None = None) -> dict:
+        await send(self.browser_writer, command(cid, method, params or {}))
+        return await recv(self.browser_reader)
+
+    def saved(self) -> dict:
+        import yaml
+
+        path = pathlib.Path(self.tmp) / "browse.yaml"
+        return yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+    async def test_get_returns_the_effective_config_and_the_real_file_path(self):
+        reply = await self.ask(1, CONFIG_GET)
+        self.assertEqual(reply["type"], "success")
+        # 文件还不存在时给的是默认值，不是空对象 —— 设置页照着画的就是实际在生效的策略
+        self.assertEqual(reply["result"]["config"], {
+            "confirm_mode": "silent",
+            "deny_domains": [],
+            "approved_domains": [],
+            "audit": True,
+            "audit_retention_days": 7,
+        })
+        self.assertEqual(reply["result"]["path"], str(pathlib.Path(self.tmp) / "browse.yaml"))
+
+    async def test_set_round_trips_through_the_file_the_cli_reads(self):
+        reply = await self.ask(1, CONFIG_SET, {
+            "confirm_mode": "always",
+            "deny_domains": ["*.Bank.test", " ", "bank.test"],
+            "audit": False,
+            "audit_retention_days": 0,
+        })
+        self.assertEqual(reply["type"], "success")
+        self.assertEqual(reply["result"]["config"], {
+            "confirm_mode": "always",
+            "deny_domains": ["bank.test"],
+            "approved_domains": [],
+            "audit": False,
+            "audit_retention_days": 0,
+        })
+        self.assertEqual(self.saved()["confirm_mode"], "always")
+        self.assertEqual(await self.ask(2, CONFIG_GET), reply | {"id": 2})
+
+    async def test_saving_really_changes_what_the_next_command_does(self):
+        """改完不生效是这条链路最危险的 bug：用户以为关了，其实还开着。"""
+        await self.ask(1, CONFIG_SET, {"deny_domains": ["bank.test"]})
+        await send(self.cli_writer, COOKIES)
+        reply = await recv(self.cli_reader)
+        self.assertEqual(reply["type"], "error", "刚拉黑的域名必须当场就被拒")
+        self.assertIn("bank.test", reply["message"])
+
+    async def test_unknown_fields_are_ignored_not_written(self):
+        await self.ask(1, CONFIG_SET, {"audit": False, "whatever": "x", "token": "secret"})
+        self.assertEqual(set(self.saved()), {"audit"})
+
+    async def test_an_illegal_confirm_mode_is_refused_and_nothing_is_written(self):
+        reply = await self.ask(1, CONFIG_SET, {"confirm_mode": "loud"})
+        self.assertEqual((reply["type"], reply["error"]), ("error", ERR_INVALID_ARGUMENT))
+        self.assertEqual(self.saved(), {}, "校验没过就一个字都不该落盘")
+
+    async def test_illegal_types_are_refused(self):
+        for params in ({"deny_domains": "bank.test"},        # 字符串不是列表
+                       {"deny_domains": [1]},                # 列表里不是域名
+                       {"audit": "yes"},                     # 不是布尔
+                       {"audit_retention_days": "7"},        # 不是整数
+                       {"audit_retention_days": True}):      # bool 是 int 的子类，要挡住
+            reply = await self.ask(1, CONFIG_SET, params)
+            self.assertEqual(reply["error"], ERR_INVALID_ARGUMENT, params)
+        self.assertEqual(self.saved(), {})
+
+    async def test_the_panel_and_the_settings_page_share_one_approved_list(self):
+        await self.ask(1, APPROVALS_APPROVE, {"domain": "shop.test"})
+        reply = await self.ask(2, CONFIG_GET)
+        self.assertEqual(reply["result"]["config"]["approved_domains"], ["shop.test"])
 
 
 class DeadWriter:
