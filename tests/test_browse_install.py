@@ -166,6 +166,31 @@ class TestTable(unittest.TestCase):
         self.assertEqual(len(m["allowed_origins"]), len(ids))
 
 
+class TestExtensionManifestAgreement(unittest.TestCase):
+    """安装脚本里的 ID 必须和扩展 manifest 对得上，对不上就是授权失配。"""
+
+    def setUp(self) -> None:
+        path = REPO_ROOT / "browser-extension" / "extension" / "src" / "manifest.json"
+        self.manifest = json.loads(path.read_text("utf-8"))
+
+    def test_chromium_id_matches_the_pinned_key(self) -> None:
+        """ID = 公钥 SHA-256 前 16 字节的 hex 逐位映射到 a-p。
+
+        出处：`components/crx_file/id_util.cc:44-57`。key 写死了 ID 就固定，
+        与扩展装在哪个目录无关。
+        """
+        import base64
+        import hashlib
+
+        digest = hashlib.sha256(base64.b64decode(self.manifest["key"])).digest()[:16]
+        expect = "".join(chr(ord("a") + int(c, 16)) for c in digest.hex())
+        self.assertEqual(nh.EXTENSION_IDS[0], expect)
+
+    def test_gecko_id_matches(self) -> None:
+        self.assertEqual(self.manifest["browser_specific_settings"]["gecko"]["id"],
+                         nh.GECKO_IDS[0])
+
+
 class TestDetect(TempHome):
     def test_nothing_installed(self) -> None:
         self.assertEqual(nh.detect(self.home, "darwin"), [])
