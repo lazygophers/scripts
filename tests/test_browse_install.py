@@ -1,0 +1,431 @@
+"""native host manifest 注册的测试：全程用临时 HOME，一个字节都不碰真实用户目录。"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import pathlib
+import stat
+import sys
+import tempfile
+import unittest
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+_SPEC = importlib.util.spec_from_file_location(
+    "browse_install_native_host",
+    REPO_ROOT / "browser-extension" / "install" / "native_host.py",
+)
+assert _SPEC and _SPEC.loader
+nh = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(nh)
+
+BROWSE = pathlib.Path("/opt/lazygophers/bin/browse")
+
+
+class FakeRegistry:
+    """winreg 的替身：macOS 上跑不到真注册表，只断言键名和值。"""
+
+    def __init__(self) -> None:
+        self.keys: dict[str, str] = {}
+        self.deleted: list[str] = []
+
+    def set(self, key: str, value: str) -> None:
+        self.keys[key] = value
+
+    def delete(self, key: str) -> None:
+        self.deleted.append(key)
+        self.keys.pop(key, None)
+
+
+class TempHome(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = pathlib.Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def touch_dir(self, rel: str) -> pathlib.Path:
+        path = self.home / rel
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def read(self, rel: str) -> dict:
+        return json.loads((self.home / rel / f"{nh.HOST_NAME}.json").read_text("utf-8"))
+
+
+class TestManifest(unittest.TestCase):
+    def test_chromium_shape(self) -> None:
+        m = nh.build_manifest(nh.CHROMIUM, BROWSE)
+        self.assertEqual(m["name"], "com.lazygophers.browse")
+        self.assertEqual(m["type"], "stdio")
+        self.assertEqual(m["path"], str(BROWSE))
+        self.assertEqual(m["allowed_origins"],
+                         ["chrome-extension://podeceeeafjdcemppcgjhhokcokpcama/"])
+        self.assertNotIn("allowed_extensions", m)
+
+    def test_allowed_origins_rules(self) -> None:
+        """末尾斜杠必带、不许有通配符、ID 恒为 32 位。"""
+        m = nh.build_manifest(nh.CHROMIUM, BROWSE, ("aaaabbbbccccddddeeeeffffgggghhhh",
+                                                    "iiiijjjjkkkkllllmmmmnnnnoooopppp"))
+        self.assertEqual(len(m["allowed_origins"]), 2)
+        for origin in m["allowed_origins"]:
+            self.assertTrue(origin.startswith("chrome-extension://"))
+            self.assertTrue(origin.endswith("/"))
+            self.assertNotIn("*", origin)
+            self.assertEqual(len(origin[len("chrome-extension://"):-1]), 32)
+
+    def test_chromium_ids_deduped(self) -> None:
+        m = nh.build_manifest(nh.CHROMIUM, BROWSE, ("dup", "dup", "other"))
+        self.assertEqual(m["allowed_origins"],
+                         ["chrome-extension://dup/", "chrome-extension://other/"])
+
+    def test_gecko_uses_allowed_extensions(self) -> None:
+        m = nh.build_manifest(nh.GECKO, BROWSE)
+        self.assertEqual(m["allowed_extensions"], ["browse@lazygophers.com"])
+        self.assertNotIn("allowed_origins", m)
+        # gecko.id 是裸 ID，不是 URL
+        for value in m["allowed_extensions"]:
+            self.assertNotIn("://", value)
+
+    def test_gecko_ids_deduped(self) -> None:
+        m = nh.build_manifest(nh.GECKO, BROWSE, gecko_ids=("a@b", "a@b", "c@d"))
+        self.assertEqual(m["allowed_extensions"], ["a@b", "c@d"])
+
+
+class TestPlatformKey(unittest.TestCase):
+    def test_mapping(self) -> None:
+        self.assertEqual(nh.platform_key("darwin"), "darwin")
+        self.assertEqual(nh.platform_key("win32"), "win32")
+        self.assertEqual(nh.platform_key("windows"), "win32")
+        self.assertEqual(nh.platform_key("linux"), "linux")
+        self.assertEqual(nh.platform_key("freebsd13"), "linux")
+
+    def test_default_is_current_platform(self) -> None:
+        self.assertIn(nh.platform_key(), nh.BROWSERS)
+
+
+class TestTable(unittest.TestCase):
+    def test_every_platform_has_the_same_browsers(self) -> None:
+        names = {plat: set(table) for plat, table in nh.BROWSERS.items()}
+        self.assertEqual(len(set(map(frozenset, names.values()))), 1, names)
+
+    def test_only_firefox_is_gecko(self) -> None:
+        for plat, table in nh.BROWSERS.items():
+            for name, (flavor, _, _) in table.items():
+                expect = nh.GECKO if name == "firefox" else nh.CHROMIUM
+                self.assertEqual(flavor, expect, f"{plat}/{name}")
+
+    def test_windows_dests_are_all_registry(self) -> None:
+        for name, (_, _, dests) in nh.BROWSERS["win32"].items():
+            for dest in dests:
+                self.assertTrue(dest.startswith("reg:"), f"{name}: {dest}")
+
+    def test_posix_dests_are_all_dirs(self) -> None:
+        for plat in ("darwin", "linux"):
+            for name, (_, _, dests) in nh.BROWSERS[plat].items():
+                for dest in dests:
+                    self.assertFalse(dest.startswith("reg:"), f"{plat}/{name}: {dest}")
+
+    def test_edge_manifest_carries_every_id(self) -> None:
+        """Edge on Windows 只读第一个命中的 manifest，所以那一份必须授权所有 ID。"""
+        ids = nh.EXTENSION_IDS + ("edgestoreidedgestoreidedgestorei",)
+        m = nh.build_manifest(nh.CHROMIUM, BROWSE, ids)
+        self.assertEqual(len(m["allowed_origins"]), len(ids))
+
+
+class TestDetect(TempHome):
+    def test_nothing_installed(self) -> None:
+        self.assertEqual(nh.detect(self.home, "darwin"), [])
+
+    def test_detects_only_present(self) -> None:
+        self.touch_dir("Library/Application Support/Google/Chrome")
+        self.touch_dir("Library/Application Support/Firefox")
+        self.assertEqual(sorted(nh.detect(self.home, "darwin")), ["chrome", "firefox"])
+
+    def test_linux(self) -> None:
+        self.touch_dir(".config/BraveSoftware/Brave-Browser")
+        self.assertEqual(nh.detect(self.home, "linux"), ["brave"])
+
+    def test_windows(self) -> None:
+        self.touch_dir("AppData/Local/Microsoft/Edge/User Data")
+        self.assertEqual(nh.detect(self.home, "win32"), ["edge"])
+
+
+class TestInstallMac(TempHome):
+    def test_chrome_path_and_permissions(self) -> None:
+        self.touch_dir("Library/Application Support/Google/Chrome")
+        done = nh.install(self.home, "darwin", BROWSE)
+        self.assertEqual([n for n, _ in done], ["chrome"])
+        path = self.home / nh._MAC_CHROME / f"{nh.HOST_NAME}.json"
+        self.assertTrue(path.is_file())
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
+        self.assertEqual(json.loads(path.read_text("utf-8"))["path"], str(BROWSE))
+
+    def test_brave_writes_both_dirs(self) -> None:
+        """brave-core 指 Chrome 目录、KeePassXC 指 BraveSoftware 目录，两个都写。"""
+        self.touch_dir("Library/Application Support/BraveSoftware/Brave-Browser")
+        nh.install(self.home, "darwin", BROWSE)
+        brave = self.read("Library/Application Support/BraveSoftware/"
+                          "Brave-Browser/NativeMessagingHosts")
+        chrome = self.read(nh._MAC_CHROME)
+        self.assertEqual(brave, chrome)
+        self.assertIn("allowed_origins", brave)
+
+    def test_opera_lands_in_chrome_dir(self) -> None:
+        self.touch_dir("Library/Application Support/com.operasoftware.Opera")
+        done = nh.install(self.home, "darwin", BROWSE)
+        self.assertEqual(done, [("opera", str(self.home / nh._MAC_CHROME /
+                                              f"{nh.HOST_NAME}.json"))])
+
+    def test_firefox_dir_and_field(self) -> None:
+        self.touch_dir("Library/Application Support/Firefox")
+        nh.install(self.home, "darwin", BROWSE)
+        m = self.read("Library/Application Support/Mozilla/NativeMessagingHosts")
+        self.assertEqual(m["allowed_extensions"], list(nh.GECKO_IDS))
+
+    def test_undetected_browser_gets_nothing(self) -> None:
+        self.touch_dir("Library/Application Support/Google/Chrome")
+        nh.install(self.home, "darwin", BROWSE)
+        self.assertFalse((self.home / "Library/Application Support/Vivaldi").exists())
+        self.assertFalse((self.home / "Library/Application Support/Mozilla").exists())
+
+    def test_explicit_browsers_skip_detection(self) -> None:
+        done = nh.install(self.home, "darwin", BROWSE, browsers=["vivaldi"])
+        self.assertEqual([n for n, _ in done], ["vivaldi"])
+        self.assertTrue(self.read("Library/Application Support/Vivaldi/"
+                                  "NativeMessagingHosts"))
+
+    def test_extra_ids_reach_the_file(self) -> None:
+        done = nh.install(self.home, "darwin", BROWSE, browsers=["chrome"],
+                          extension_ids=nh.EXTENSION_IDS + ("zzz",))
+        self.assertEqual(len(done), 1)
+        self.assertIn("chrome-extension://zzz/", self.read(nh._MAC_CHROME)["allowed_origins"])
+
+    def test_rerun_is_idempotent(self) -> None:
+        self.touch_dir("Library/Application Support/Google/Chrome")
+        first = nh.install(self.home, "darwin", BROWSE)
+        second = nh.install(self.home, "darwin", BROWSE)
+        self.assertEqual(first, second)
+        path = self.home / nh._MAC_CHROME / f"{nh.HOST_NAME}.json"
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
+
+
+class TestInstallLinux(TempHome):
+    def test_every_browser_lands_where_spec_says(self) -> None:
+        expect = {
+            "chrome": ".config/google-chrome/NativeMessagingHosts",
+            "chromium": ".config/chromium/NativeMessagingHosts",
+            "edge": ".config/microsoft-edge/NativeMessagingHosts",
+            "brave": ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts",
+            "opera": ".config/google-chrome/NativeMessagingHosts",
+            "vivaldi": ".config/vivaldi/NativeMessagingHosts",
+            "firefox": ".mozilla/native-messaging-hosts",
+        }
+        for name, rel in expect.items():
+            with self.subTest(name):
+                nh.install(self.home, "linux", BROWSE, browsers=[name])
+                self.assertTrue((self.home / rel / f"{nh.HOST_NAME}.json").is_file())
+
+
+class TestInstallWindows(TempHome):
+    def test_registry_value_points_at_the_file(self) -> None:
+        reg = FakeRegistry()
+        self.touch_dir("AppData/Local/Google/Chrome/User Data")
+        nh.install(self.home, "win32", BROWSE, reg_set=reg.set)
+        key = r"SOFTWARE\Google\Chrome\NativeMessagingHosts\com.lazygophers.browse"
+        self.assertIn(key, reg.keys)
+        path = pathlib.Path(reg.keys[key])
+        self.assertEqual(path, self.home / nh.WIN_MANIFEST_DIR / f"{nh.HOST_NAME}.json")
+        self.assertEqual(json.loads(path.read_text("utf-8"))["type"], "stdio")
+
+    def test_chromium_falls_back_to_chrome_key(self) -> None:
+        reg = FakeRegistry()
+        nh.install(self.home, "win32", BROWSE, browsers=["chromium"], reg_set=reg.set)
+        self.assertEqual(sorted(reg.keys), [
+            r"SOFTWARE\Chromium\NativeMessagingHosts\com.lazygophers.browse",
+            r"SOFTWARE\Google\Chrome\NativeMessagingHosts\com.lazygophers.browse",
+        ])
+
+    def test_firefox_uses_its_own_key_and_file(self) -> None:
+        reg = FakeRegistry()
+        nh.install(self.home, "win32", BROWSE, browsers=["firefox"], reg_set=reg.set)
+        key = r"SOFTWARE\Mozilla\NativeMessagingHosts\com.lazygophers.browse"
+        path = pathlib.Path(reg.keys[key])
+        self.assertTrue(path.name.endswith(".firefox.json"))
+        self.assertIn("allowed_extensions", json.loads(path.read_text("utf-8")))
+
+    def test_chromium_and_gecko_files_do_not_collide(self) -> None:
+        reg = FakeRegistry()
+        nh.install(self.home, "win32", BROWSE, browsers=["chrome", "firefox"],
+                   reg_set=reg.set)
+        files = sorted(p.name for p in (self.home / nh.WIN_MANIFEST_DIR).iterdir())
+        self.assertEqual(files, ["com.lazygophers.browse.firefox.json",
+                                 "com.lazygophers.browse.json"])
+
+
+class TestUninstall(TempHome):
+    def test_removes_every_file(self) -> None:
+        names = list(nh.BROWSERS["darwin"])
+        nh.install(self.home, "darwin", BROWSE, browsers=names)
+        left_before = list(self.home.rglob(f"{nh.HOST_NAME}*.json"))
+        self.assertTrue(left_before)
+        nh.uninstall(self.home, "darwin")
+        self.assertEqual(list(self.home.rglob(f"{nh.HOST_NAME}*.json")), [])
+
+    def test_reports_what_it_removed(self) -> None:
+        nh.install(self.home, "darwin", BROWSE, browsers=["vivaldi"])
+        removed = nh.uninstall(self.home, "darwin")
+        self.assertEqual([n for n, _ in removed], ["vivaldi"])
+
+    def test_is_safe_when_nothing_installed(self) -> None:
+        self.assertEqual(nh.uninstall(self.home, "darwin"), [])
+
+    def test_windows_deletes_keys_and_files(self) -> None:
+        reg = FakeRegistry()
+        names = list(nh.BROWSERS["win32"])
+        nh.install(self.home, "win32", BROWSE, browsers=names, reg_set=reg.set)
+        nh.uninstall(self.home, "win32", reg_delete=reg.delete)
+        self.assertEqual(reg.keys, {})
+        self.assertIn(r"SOFTWARE\Mozilla\NativeMessagingHosts\com.lazygophers.browse",
+                      reg.deleted)
+        self.assertFalse((self.home / nh.WIN_MANIFEST_DIR).exists())
+
+    def test_leaves_other_hosts_alone(self) -> None:
+        nh.install(self.home, "darwin", BROWSE, browsers=["chrome"])
+        other = self.home / nh._MAC_CHROME / "com.someone.else.json"
+        other.write_text("{}", encoding="utf-8")
+        nh.uninstall(self.home, "darwin")
+        self.assertTrue(other.is_file())
+
+
+class TestResolveBrowsePath(TempHome):
+    def test_explicit_path(self) -> None:
+        target = self.home / "browse"
+        target.write_text("#!/bin/sh\n", encoding="utf-8")
+        self.assertEqual(nh.resolve_browse_path(str(target)), target.resolve())
+
+    def test_explicit_missing_path_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            nh.resolve_browse_path(str(self.home / "nope"))
+
+    def test_default_is_the_repo_bin(self) -> None:
+        self.assertEqual(nh.resolve_browse_path(None), (REPO_ROOT / "bin" / "browse").resolve())
+
+    def test_falls_back_to_path_lookup(self) -> None:
+        import unittest.mock as mock
+
+        found = self.home / "browse"
+        found.write_text("#!/bin/sh\n", encoding="utf-8")
+        with mock.patch.object(nh, "REPO_ROOT", self.home / "nowhere"), \
+                mock.patch.object(nh.shutil, "which", lambda _: str(found)):
+            self.assertEqual(nh.resolve_browse_path(None), found.resolve())
+
+    def test_raises_when_browse_is_nowhere(self) -> None:
+        import unittest.mock as mock
+
+        with mock.patch.object(nh, "REPO_ROOT", self.home / "nowhere"), \
+                mock.patch.object(nh.shutil, "which", lambda _: None), \
+                self.assertRaises(ValueError):
+            nh.resolve_browse_path(None)
+
+
+class FakeWinreg:
+    """够 _reg_set / _reg_delete 用的最小 winreg：真机上跑不到，形状必须对。"""
+
+    HKEY_CURRENT_USER = "HKCU"
+    REG_SZ = 1
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    def CreateKey(self, root, key):  # noqa: N802 — 照抄 winreg 的名字
+        import contextlib
+
+        assert root == self.HKEY_CURRENT_USER
+        self.values.setdefault(key, "")
+        return contextlib.nullcontext(key)
+
+    def SetValueEx(self, handle, name, reserved, typ, value):  # noqa: N802
+        assert name == "" and typ == self.REG_SZ
+        self.values[handle] = value
+
+    def DeleteKey(self, root, key):  # noqa: N802
+        assert root == self.HKEY_CURRENT_USER
+        if key not in self.values:
+            raise FileNotFoundError(key)
+        del self.values[key]
+
+
+class TestRegistryBackend(unittest.TestCase):
+    """需要: 实机验证。这里只证明键名/值/删除语义，真 winreg 在 macOS 上不存在。"""
+
+    def setUp(self) -> None:
+        import unittest.mock as mock
+
+        self.winreg = FakeWinreg()
+        patcher = mock.patch.dict(sys.modules, {"winreg": self.winreg})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_set_then_delete(self) -> None:
+        key = r"SOFTWARE\Google\Chrome\NativeMessagingHosts\com.lazygophers.browse"
+        nh._reg_set(key, r"C:\manifest.json")
+        self.assertEqual(self.winreg.values[key], r"C:\manifest.json")
+        nh._reg_delete(key)
+        self.assertNotIn(key, self.winreg.values)
+
+    def test_delete_missing_key_is_quiet(self) -> None:
+        nh._reg_delete(r"SOFTWARE\Nope\com.lazygophers.browse")
+
+
+class TestCli(TempHome):
+    def run_cli(self, *args: str) -> int:
+        import unittest.mock as mock
+
+        # 固定成 darwin：CLI 的行为与跑测试的机器是什么系统无关。
+        with mock.patch.object(nh.pathlib.Path, "home", staticmethod(lambda: self.home)), \
+                mock.patch.object(nh, "platform_key", lambda *a: "darwin"):
+            return nh.main(["native_host.py", *args])
+
+    def test_install_and_uninstall_round_trip(self) -> None:
+        self.touch_dir("Library/Application Support/Google/Chrome")
+        self.assertEqual(self.run_cli("--browsers", "chrome"), nh.EXIT_OK)
+        path = self.home / nh._MAC_CHROME / f"{nh.HOST_NAME}.json"
+        self.assertTrue(path.is_file())
+        self.assertEqual(self.run_cli("--uninstall"), nh.EXIT_OK)
+        self.assertFalse(path.exists())
+
+    def test_list_writes_nothing(self) -> None:
+        self.touch_dir("Library/Application Support/Google/Chrome")
+        self.assertEqual(self.run_cli("--list"), nh.EXIT_OK)
+        self.assertEqual(list(self.home.rglob(f"{nh.HOST_NAME}*.json")), [])
+
+    def test_unknown_browser_is_usage_error(self) -> None:
+        self.assertEqual(self.run_cli("--browsers", "netscape"), nh.EXIT_USAGE)
+
+    def test_nothing_detected_fails(self) -> None:
+        self.assertEqual(self.run_cli(), nh.EXIT_FAILED)
+
+    def test_bad_browse_path_is_usage_error(self) -> None:
+        self.assertEqual(self.run_cli("--browse-path", str(self.home / "nope")),
+                         nh.EXIT_USAGE)
+
+    def test_uninstall_on_clean_home(self) -> None:
+        self.assertEqual(self.run_cli("--uninstall"), nh.EXIT_OK)
+
+    def test_extension_id_flag_reaches_the_manifest(self) -> None:
+        self.assertEqual(self.run_cli("--browsers", "chrome", "--extension-id", "zzz"),
+                         nh.EXIT_OK)
+        self.assertIn("chrome-extension://zzz/",
+                      self.read(nh._MAC_CHROME)["allowed_origins"])
+
+    def test_gecko_id_flag_reaches_the_manifest(self) -> None:
+        self.assertEqual(self.run_cli("--browsers", "firefox", "--gecko-id", "x@y"),
+                         nh.EXIT_OK)
+        m = self.read("Library/Application Support/Mozilla/NativeMessagingHosts")
+        self.assertIn("x@y", m["allowed_extensions"])
+
+
+if __name__ == "__main__":
+    unittest.main()
