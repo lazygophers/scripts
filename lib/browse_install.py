@@ -1,12 +1,11 @@
-#!/usr/bin/env python3
 """把 browse 注册成浏览器的 native messaging host（三平台，用户级）
 
 常用：
-  python3 browser-extension/install/native_host.py              # 装到探测到的浏览器
-  python3 browser-extension/install/native_host.py --list       # 只看探测到了谁
-  python3 browser-extension/install/native_host.py --uninstall  # 全部卸干净
-  python3 browser-extension/install/native_host.py --browsers chrome,firefox
-  python3 browser-extension/install/native_host.py --extension-id <Edge 商店 ID>
+  browse install                      # 装到探测到的浏览器
+  browse install --list               # 只看探测到了谁，不写盘
+  browse uninstall                    # 全部卸干净
+  browse install --browsers chrome,firefox
+  browse install --extension-id <Edge 商店 ID>
 
 写两样东西：一份 JSON（manifest）和一个 wrapper 脚本。**native messaging 的 manifest
 没有 `args` 字段**（Chrome / Edge / Firefox 都没有），字段只有 name / description /
@@ -21,6 +20,10 @@ path / type / allowed_origins（Firefox 是 allowed_extensions），所以 `--na
 
 路径表出处：`.scratch/browser-control-extension/spec.md` 7.3，Firefox 一行出自
 <https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Native_manifests>。
+
+**住在 `lib/` 而不是 `browser-extension/install/`**：manifest 里写的是浏览器要 fork
+的绝对路径，所以装扩展这件事必须跟着 browse 一起发布。放在仓库的 extension 目录下
+时，`uvx` 装的人手上根本没有那个文件。
 """
 
 from __future__ import annotations
@@ -31,11 +34,9 @@ import pathlib
 import shutil
 import sys
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT))
+from lib.ui import reporter
 
-from lib.notify import consume_debug, consume_no_say  # noqa: E402
-from lib.ui import reporter, timed  # noqa: E402
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 HOST_NAME = "com.lazygophers.browse"
 DESCRIPTION = "lazygophers browse — 用命令行驱动浏览器"
@@ -281,24 +282,33 @@ def uninstall(home: pathlib.Path, plat: str, *,
 
 
 def resolve_browse_path(given: str | None) -> pathlib.Path:
-    """manifest 里要写的 browse 绝对路径。"""
+    """manifest 里要写的 browse 绝对路径。
+
+    这个路径要长期有效：浏览器每次启动 native host 都按它去 fork。`uvx` 那种一次性
+    环境里的路径随时会消失，所以先找 PATH 上装好的那个（`uv tool install` /
+    `pipx install` 的落点），再退回仓库里的 `bin/browse`。
+    """
     if given:
         path = pathlib.Path(given).expanduser().resolve()
         if not path.exists():
             raise ValueError(f"--browse-path 指向的文件不存在：{path}")
         return path
-    local = REPO_ROOT / "bin" / "browse"
-    if local.exists():
-        return local.resolve()
     found = shutil.which("browse")
     if found:
         return pathlib.Path(found).resolve()
-    raise ValueError("找不到 browse 可执行文件，用 --browse-path 指一个绝对路径")
+    local = REPO_ROOT / "bin" / "browse"
+    if local.exists():
+        return local.resolve()
+    raise ValueError(
+        "PATH 上没有 browse，仓库里也没有 bin/browse。先 `uv tool install "
+        "git+https://github.com/lazygophers/scripts` 装成常驻命令，或用 "
+        "--browse-path 指一个不会消失的绝对路径"
+    )
 
 
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="install/native_host.py",
+        prog="browse install",
         description="把 browse 注册成浏览器的 native messaging host",
     )
     parser.add_argument("--uninstall", action="store_true", help="删掉所有已知落点")
@@ -313,7 +323,12 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv[1:])
 
 
-def _main(argv: list[str]) -> int:
+def main(argv: list[str]) -> int:
+    """`browse install` / `browse uninstall` 的实现。
+
+    `--no-say` / `--debug` / 计时都由 `lib/cli/browse.py` 的入口统一处理过了，这里
+    不再包一层。
+    """
     args = _parse(argv)
     out = reporter(stderr=True)
     home = pathlib.Path.home()
@@ -371,14 +386,3 @@ def _main(argv: list[str]) -> int:
         out.ok(f"{name}: {where}")
     out.info(f"wrapper：{wrapper_path(home, plat)} -> {browse_path} --native-host")
     return EXIT_OK
-
-
-def main(argv: list[str] | None = None) -> int:
-    argv = list(sys.argv if argv is None else argv)
-    argv = consume_debug(consume_no_say(argv))
-    sys.argv = argv
-    return timed(_main, label="browse-install")(argv)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

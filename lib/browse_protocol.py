@@ -46,6 +46,8 @@ ERR_TIMEOUT = "timeout"
 # 本项目私有，按 BiDi §3.3 带冒号前缀
 ERR_NOT_CONNECTED = "lg:browser not connected"
 ERR_USER_REJECTED = "lg:user rejected"
+# `browse stop` 把在途指令掐了（spec 4.5）。副作用可能已经发生，所以是失败不是跳过。
+ERR_ABORTED = "lg:aborted"
 
 ERROR_CODES = frozenset({
     ERR_NO_SUCH_ELEMENT,
@@ -56,6 +58,7 @@ ERROR_CODES = frozenset({
     ERR_TIMEOUT,
     ERR_NOT_CONNECTED,
     ERR_USER_REJECTED,
+    ERR_ABORTED,
 })
 
 # `<module>.<action>`，module 可带一段 `<prefix>:` 私有命名空间。

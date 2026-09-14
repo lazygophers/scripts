@@ -66,6 +66,33 @@ export class CommandError extends Error {
   }
 }
 
+/**
+ * Argument checks. Every handler needs the same three shapes, so they live here
+ * next to `CommandError` instead of being retyped at each call site.
+ *
+ * `hint` is appended to the message when the plain name is not enough to act on
+ * (`key must be a non-empty string, e.g. "Enter"`).
+ */
+export function asString(value: unknown, name: string, hint = ""): string {
+  if (typeof value !== "string") {
+    throw new CommandError("invalid argument", `${name} must be a string${hint}`);
+  }
+  return value;
+}
+
+/** Same, but empty is not a usable id, url or key either. */
+export function requireString(value: unknown, name: string, hint = ""): string {
+  if (typeof value !== "string" || value === "") {
+    throw new CommandError("invalid argument", `${name} must be a non-empty string${hint}`);
+  }
+  return value;
+}
+
+/** `undefined` passes through untouched; anything else must be a string. */
+export function optionalString(value: unknown, name: string, hint = ""): string | undefined {
+  return value === undefined ? undefined : asString(value, name, hint);
+}
+
 export function isCommand(value: unknown): value is Command {
   const c = value as Command | null;
   return (

@@ -14,12 +14,20 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from lib.browse_daemon import CONFIRM_METHOD, Daemon, connect, pack, read_frame  # noqa: E402
+from lib.browse_daemon import (  # noqa: E402
+    CONFIRM_METHOD,
+    CONTEXT_URL_METHOD,
+    Daemon,
+    connect,
+    pack,
+    read_frame,
+)
 from lib.browse_protocol import (  # noqa: E402
     ERR_INVALID_ARGUMENT,
     ERR_NOT_CONNECTED,
@@ -208,18 +216,36 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(browse.read_stdin_items(text),
                          ["input.click css=a", "script.evaluate 1+1"])
 
+    def test_confirm_mode_is_a_cli_flag_not_a_wire_param(self):
+        """`--confirm-mode` 以前会被当成指令参数发给浏览器然后被静默丢掉。"""
+        method, params, opts = browse.parse_command(
+            ["storage", "getCookies", "--domain", "a.test", "--confirm-mode", "always"])
+        self.assertEqual(params, {"domain": "a.test"})
+        self.assertEqual(opts, {"confirmMode": "always"})
+        self.assertEqual(browse.confirm_mode_of(opts), "always")
+
+    def test_a_misspelled_confirm_mode_never_leaves_the_machine(self):
+        with self.assertRaises(browse.UsageError):
+            browse.confirm_mode_of({"confirmMode": "loud"})
+        with self.assertRaises(browse.UsageError):
+            browse.confirm_mode_of({"confirmMode": True})  # `--confirm-mode` 后面漏了值
+        self.assertEqual(browse.confirm_mode_of({}), "")
+
     def test_methods_table_matches_extension_handlers(self):
         """CLI 的指令表必须和扩展侧 HANDLERS 逐条对齐，少一条就是 CLI 发不出去。
 
-        `lg:confirm.request` 例外：那是 daemon 主动问扩展的控制消息，不是能力。
-        CLI 能发它就等于「谁都能弹一个假确认框」，所以它**必须**不在 METHODS 里。
+        两条控制消息例外：`lg:confirm.request`（daemon 让扩展弹确认）和
+        `lg:context.url`（daemon 问扩展这条指令落在哪一页，deny_domains 要用）。
+        CLI 能发它们就等于「谁都能弹一个假确认框 / 探别人的标签页」，所以它们**必须**
+        不在 METHODS 里。
         """
         source = (pathlib.Path(__file__).resolve().parent.parent
                   / "browser-extension/extension/src/handlers/index.ts").read_text(encoding="utf-8")
         import re
         handlers = set(re.findall(r'^\s+"([\w:]+\.\w+)":', source, re.M))
-        self.assertEqual(handlers - {CONFIRM_METHOD}, set(browse.METHODS))
-        self.assertNotIn(CONFIRM_METHOD, browse.METHODS)
+        control = {CONFIRM_METHOD, CONTEXT_URL_METHOD}
+        self.assertEqual(handlers - control, set(browse.METHODS))
+        self.assertEqual(control & set(browse.METHODS), set())
 
 
 # ---------------------------------------------------------------- 输出与退出码
@@ -299,6 +325,43 @@ class TestSingleCommand(unittest.TestCase):
             with mock.patch("sys.stderr", io.StringIO()):
                 code = h.cli("storage", "getCookies", "--domain", "example.com")
         self.assertEqual(code, 4)
+
+    def test_tightening_confirm_mode_from_the_command_line_reaches_the_daemon(self):
+        """配置是 silent，命令行 `--confirm-mode always` —— 扩展必须真的收到确认请求。"""
+        asked: list[str] = []
+
+        def handler(method, params):
+            asked.append(method)
+            return {"approved": True} if method == CONFIRM_METHOD else {"cookies": []}
+
+        with Harness(handler) as h:
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("storage", "getCookies", "--domain", "a.test",
+                             "--confirm-mode", "always")
+        self.assertEqual(code, 0)
+        self.assertEqual(asked, [CONFIRM_METHOD, "storage.getCookies"])
+
+    def test_loosening_confirm_mode_from_the_command_line_is_refused(self):
+        """配置是 always，命令行想换 silent —— 指令直接失败，一个字节都不发给浏览器。"""
+        with Harness(lambda m, p: {"cookies": []}) as h:
+            h.daemon.security.cfg["confirm_mode"] = "always"
+            h.daemon.security.confirm_mode = "always"
+            err = io.StringIO()
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", err):
+                code = h.cli("storage", "getCookies", "--domain", "a.test",
+                             "--confirm-mode", "silent")
+            self.assertEqual(h.browser.seen, [], "拒绝之后不该有任何指令到达浏览器")
+        self.assertEqual(code, 1)
+        payload = json.loads(err.getvalue())
+        self.assertEqual(payload["error"], ERR_INVALID_ARGUMENT)
+        self.assertIn("只能收紧不能放宽", payload["message"])
+
+    def test_a_misspelled_confirm_mode_exits_2_without_sending(self):
+        with Harness(lambda m, p: {}) as h:
+            with mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("storage", "getCookies", "--confirm-mode", "loud")
+            self.assertEqual(h.browser.seen, [])
+        self.assertEqual(code, 2)
 
     def test_unknown_command_exits_2_without_sending(self):
         with Harness(lambda m, p: {}) as h:
@@ -518,7 +581,7 @@ class TestRunBatchUnit(unittest.TestCase):
         async def scenario():
             calls = []
 
-            async def fake_execute(method, params, sock):
+            async def fake_execute(method, params, sock, **_):
                 calls.append(method)
                 if params["n"] == 0:
                     await asyncio.sleep(0.05)  # 让第 1 条先进入在途
@@ -589,10 +652,50 @@ class TestDaemonCommands(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("没退", err.getvalue())
 
-    def test_browse_stop_is_daemon_stop(self):
-        with mock.patch.object(browse, "daemon_stop", return_value=0) as stop:
-            self.assertEqual(browse._main(["browse", "stop", "--socket", "/tmp/x.sock"]), 0)
-        stop.assert_called_once_with(pathlib.Path("/tmp/x.sock"))
+    def test_browse_stop_aborts_inflight_and_leaves_the_daemon_running(self):
+        """spec 4.5：`browse stop` 掐在途指令，daemon 留着 —— 不是 `daemon stop` 的别名。"""
+        held = asyncio.Event()
+
+        async def handler(method, params):
+            await held.wait()  # 一直不回，让这条指令留在途中
+            return {}
+
+        with Harness(handler) as h:
+            done: list[int] = []
+            thread = threading.Thread(
+                target=lambda: done.append(h.cli("storage", "getCookies",
+                                                 "--domain", "bank.test")),
+                daemon=True)
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                thread.start()
+                for _ in range(100):
+                    if h.browser and h.browser.inflight:
+                        break
+                    time.sleep(0.02)
+                err = io.StringIO()
+                with mock.patch("sys.stderr", err):
+                    self.assertEqual(h.cli("stop"), 0)
+                thread.join(TIMEOUT)
+            self.assertIn("已中止 1 条在途指令", err.getvalue())
+            self.assertEqual(done, [browse.EXIT_FAILED])
+            self.assertTrue(browse.probe(h.sock), "daemon 必须还活着")
+            h.loop.call_soon_threadsafe(held.set)
+
+    def test_browse_stop_without_a_daemon_is_quiet(self):
+        missing = pathlib.Path(tempfile.mkdtemp()) / "nope.sock"
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            self.assertEqual(browse._main(["browse", "stop", "--socket", str(missing)]), 0)
+        self.assertIn("没在跑", err.getvalue())
+
+    def test_daemon_run_refuses_when_one_is_already_up(self):
+        """返回值不能吞：已经有一个在跑时这次没起来，就是失败。"""
+        with Harness() as h:
+            browse.pid_path(h.sock).write_text("2147483646", encoding="utf-8")
+            with mock.patch("sys.stderr", io.StringIO()):
+                self.assertEqual(browse.daemon_run(h.sock, 1.0), browse.EXIT_FAILED)
+            # 而且没把别人的 pid 文件删掉
+            self.assertTrue(browse.pid_path(h.sock).exists())
 
     def test_daemon_run_then_daemon_stop_end_to_end(self):
         """`browse daemon run` 前台跑起来，另一头 `browse daemon stop` 把它收干净。

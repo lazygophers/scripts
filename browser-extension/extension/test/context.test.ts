@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  contextUrl,
+  formatContext,
   globToRegExp,
   parseContext,
   requireApi,
@@ -68,6 +70,28 @@ test("frame context ids keep the frame id", () => {
   assert.deepEqual(parseContext("12.3"), { tabId: 12, frameId: 3 });
   assert.deepEqual(parseContext("12"), { tabId: 12, frameId: undefined });
   assert.throws(() => parseContext("nope"), /bad context id/);
+});
+
+test("formatContext is the inverse of parseContext, and frame 0 is the tab", () => {
+  assert.equal(formatContext(12), "12");
+  assert.equal(formatContext(12, 3), "12.3");
+  assert.equal(formatContext(12, 0), "12");
+  assert.deepEqual(parseContext(formatContext(12, 3)), { tabId: 12, frameId: 3 });
+});
+
+test("lg:context.url answers with the page the command would land on", async () => {
+  installChrome({
+    tabs: {
+      query: async (q: { active?: boolean }) =>
+        q.active === true ? TABS.filter((t) => t.active) : TABS,
+      get: async (id: number) => TABS.find((t) => t.id === id),
+    },
+  });
+  // This is what the daemon asks before applying deny_domains to input.* /
+  // script.*, whose params carry no url at all.
+  assert.deepEqual(await contextUrl({}), { url: "https://b.test/orders/7" });
+  assert.deepEqual(await contextUrl({ context: "1" }), { url: "https://a.test/login" });
+  clearChrome();
 });
 
 test("glob is anchored and only * and ? are special", () => {

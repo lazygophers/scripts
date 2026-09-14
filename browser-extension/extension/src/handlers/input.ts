@@ -1,5 +1,5 @@
 import { parseLocator, type LocateOptions, type Scheme } from "../locator.ts";
-import { CommandError } from "../protocol.ts";
+import { CommandError, asString, optionalString, requireString } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
 import { resolveContext, targetUrl } from "./context.ts";
 import { runInPage, type PageLocate, type PageResult } from "./inject.ts";
@@ -18,23 +18,17 @@ import { runInPage, type PageLocate, type PageResult } from "./inject.ts";
  * `readonly` is re-read here, right before the event goes out.
  */
 export async function inputClick(params: Record<string, unknown>): Promise<unknown> {
-  return run("click", params, {});
+  return performInput("click", params, {});
 }
 
 export async function inputType(params: Record<string, unknown>): Promise<unknown> {
-  const text = params.text;
-  if (typeof text !== "string") {
-    throw new CommandError("invalid argument", "text must be a string");
-  }
-  return run("type", params, { text, clear: params.clear !== false });
+  const text = asString(params.text, "text");
+  return performInput("type", params, { text, clear: params.clear !== false });
 }
 
 export async function inputKey(params: Record<string, unknown>): Promise<unknown> {
-  const key = params.key;
-  if (typeof key !== "string" || key === "") {
-    throw new CommandError("invalid argument", `key must be a non-empty string, e.g. "Enter"`);
-  }
-  return run("key", params, {
+  const key = requireString(params.key, "key", `, e.g. "Enter"`);
+  return performInput("key", params, {
     key,
     code: typeof params.code === "string" ? params.code : key,
     ctrlKey: params.ctrl === true,
@@ -52,20 +46,17 @@ export async function inputScroll(params: Record<string, unknown>): Promise<unkn
   if (dy !== undefined && typeof dy !== "number") {
     throw new CommandError("invalid argument", "dy must be a number");
   }
-  return run("scroll", params, { dx: dx ?? 0, dy: dy ?? 0 });
+  return performInput("scroll", params, { dx: dx ?? 0, dy: dy ?? 0 });
 }
 
 type InputAction = "click" | "type" | "key" | "scroll";
 
-async function run(
+async function performInput(
   action: InputAction,
   params: Record<string, unknown>,
   payload: Record<string, unknown>,
 ): Promise<unknown> {
-  const selector = params.selector;
-  if (selector !== undefined && typeof selector !== "string") {
-    throw new CommandError("invalid argument", "selector must be a string");
-  }
+  const selector = optionalString(params.selector, "selector");
   // `input.scroll` and `input.key` are the only ones that work without one:
   // they fall back to the window and the focused element.
   if (selector === undefined && (action === "click" || action === "type")) {

@@ -1,4 +1,4 @@
-import { CommandError } from "../protocol.ts";
+import { CommandError, optionalString, requireString } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
 import { requireApi } from "./context.ts";
 
@@ -11,14 +11,8 @@ export async function downloadsStart(
   params: Record<string, unknown>,
 ): Promise<{ download: number }> {
   requireApi("downloads", "downloading files");
-  const url = params.url;
-  if (typeof url !== "string" || url === "") {
-    throw new CommandError("invalid argument", "url must be a non-empty string");
-  }
-  const filename = params.filename;
-  if (filename !== undefined && typeof filename !== "string") {
-    throw new CommandError("invalid argument", "filename must be a string");
-  }
+  const url = requireString(params.url, "url");
+  const filename = optionalString(params.filename, "filename");
   await confirm({ action: "download", method: "lg:downloads.start", url });
 
   const id = await chrome.downloads.download({

@@ -1,5 +1,5 @@
-import { CommandError } from "../protocol.ts";
-import { requireApi, resolveContext, type Target } from "./context.ts";
+import { CommandError, optionalString, requireString } from "../protocol.ts";
+import { formatContext, requireApi, resolveContext, type Target } from "./context.ts";
 
 interface ContextInfo {
   context: string;
@@ -20,10 +20,7 @@ interface ContextInfo {
 export async function browsingContextGetTree(
   params: Record<string, unknown>,
 ): Promise<{ contexts: ContextInfo[] }> {
-  const root = params.root;
-  if (root !== undefined && typeof root !== "string") {
-    throw new CommandError("invalid argument", "root must be a context id string");
-  }
+  const root = optionalString(params.root, "root", ", a context id");
 
   const tabs = await chrome.tabs.query({});
   const wanted = root === undefined ? tabs : tabs.filter((t) => String(t.id) === root);
@@ -99,10 +96,7 @@ export async function browsingContextActivate(
 export async function browsingContextNavigate(
   params: Record<string, unknown>,
 ): Promise<{ navigation: null; url: string }> {
-  const url = params.url;
-  if (typeof url !== "string" || url === "") {
-    throw new CommandError("invalid argument", "url must be a non-empty string");
-  }
+  const url = requireString(params.url, "url");
   const target = await requireTabOnly(params, "navigate");
   await chrome.tabs.update(target.tabId, { url });
   if (params.wait !== "none") {
@@ -188,16 +182,6 @@ function timeoutOf(params: Record<string, unknown>): number {
   return typeof timeout === "number" && timeout > 0 ? timeout : 30_000;
 }
 
-function optionalString(value: unknown, name: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    throw new CommandError("invalid argument", `${name} must be a string`);
-  }
-  return value;
-}
-
 async function activate(tabId: number): Promise<void> {
   const tab = await chrome.tabs.update(tabId, { active: true });
   if (tab?.windowId !== undefined) {
@@ -231,7 +215,7 @@ function waitForLoad(tabId: number, timeout: number): Promise<void> {
 async function tabToContext(tab: chrome.tabs.Tab): Promise<ContextInfo> {
   const tabId = tab.id ?? -1;
   return {
-    context: String(tabId),
+    context: formatContext(tabId),
     parent: null,
     url: tab.url ?? "",
     "lg:title": tab.title ?? "",
@@ -253,8 +237,8 @@ async function frameChildren(tabId: number): Promise<ContextInfo[]> {
   return frames
     .filter((f) => f.frameId !== 0)
     .map((f) => ({
-      context: `${tabId}.${f.frameId}`,
-      parent: f.parentFrameId === 0 ? String(tabId) : `${tabId}.${f.parentFrameId}`,
+      context: formatContext(tabId, f.frameId),
+      parent: formatContext(tabId, f.parentFrameId),
       url: f.url,
       children: [],
     }));

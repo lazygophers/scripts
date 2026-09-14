@@ -40,15 +40,18 @@ manifest 就会失配，扩展永远连不上 daemon**。详见下面「扩展 I
 ### 第 4 步：注册 native host manifest
 
 ```bash
-python3 browser-extension/install/native_host.py          # 装
-python3 browser-extension/install/native_host.py --list   # 只看会写哪些文件，不动盘
-python3 browser-extension/install/native_host.py --uninstall  # 卸
+browse install            # 装
+browse install --list     # 只看会写哪些文件，不动盘
+browse uninstall          # 卸
 ```
 
-**这个脚本没有登记进 `pyproject.toml` 的 `[project.scripts]`**，所以
-`uvx --from git+https://github.com/lazygophers/scripts ...` 装不到它。要注册 native
-host，只能 clone 仓库后按上面的路径跑 `python3`。（`browse` 本身有入口，`uvx` 装得到；
-装不到的只是这个安装脚本。）
+它是 `browse` 的子命令（实现在 `lib/browse_install.py`），跟着 `browse` 一起发布，
+所以 `uvx` / `uv tool install` 装来的那份也有。
+
+**先把 `browse` 装成常驻命令再跑 `install`。** manifest 里写死的是浏览器每次启动都要
+去 fork 的绝对路径，而 `uvx` 那种一次性环境的路径随时会消失。`browse install` 找路径
+的顺序是：`--browse-path` > PATH 上的 `browse`（`uv tool install` / `pipx` 的落点）>
+仓库里的 `bin/browse`。
 
 **装完必须重启浏览器。** 浏览器只在启动时扫一遍 native messaging 的 manifest 目录，
 不重启就永远读不到刚写进去的那份。
@@ -105,7 +108,7 @@ manifest。反过来也成立：卸载后残留的数据目录仍会被当成「
 2. 跳过探测，直接点名：
 
 ```bash
-python3 browser-extension/install/native_host.py --browsers chrome,brave
+browse install --browsers chrome,brave
 # 可选值：chrome chromium edge brave opera vivaldi firefox（逗号分隔）
 ```
 
@@ -137,7 +140,7 @@ browse@lazygophers.com
 
 1. `browse daemon status` —— daemon 没在跑就 `browse daemon start`
 2. `chrome://extensions` 上扩展 ID 是不是 `podeceeeafjdcemppcgjhhokcokpcama`
-3. `python3 browser-extension/install/native_host.py --list` —— 你的浏览器在列表里吗
+3. `browse install --list` —— 你的浏览器在列表里吗
 4. manifest 的 `path` 指的那个 wrapper 还在吗、有执行位吗
    （`ls -l ~/.local/state/lazygophers/scripts/browse-native-host`）
 5. 重启浏览器（第 4 步之后没重启是最常见的原因）
@@ -209,6 +212,8 @@ extension/
   src/page-locate.ts   locator 的注入入口，单独打成 iife 供 executeScript files 用
   src/events.ts        handler → daemon 的事件出口（network.* 用）
   src/handlers/        指令表，一个模块一个文件
+  src/panel.{html,ts}  工具栏面板：实时日志、一键断开、免确认域名清单
+  src/confirm-ui.ts    高危动作的确认弹窗（策略在 Python 侧，这里只负责问）
   test/                node --test
 ```
 
@@ -223,7 +228,12 @@ network.{ subscribe, unsubscribe }
 lg:history.{ search, delete }
 lg:bookmarks.{ search, create, remove }
 lg:downloads.{ start, list, cancel }
+lg:page.snapshot                    # spec 6.4 的配套发现命令
 ```
+
+`lg:page.snapshot` 列出这一页所有能点、能填的元素，每条附 `css` 与 `xpath` 两种可用
+locator（`browse page snapshot --table`）。它直接读 DOM，不走 locator，所以没有自动
+等待可关 —— 拿到的就是此刻的页面。`--limit` 默认 200，截断时返回值里 `truncated: true`。
 
 目标 context 选择（spec 6.5）对所有指令统一：`context` > `matchUrl` glob（匹配到
 多个直接报错并列出候选）> 当前活动标签页。实现在 `handlers/context.ts`。
@@ -245,6 +255,16 @@ lg:downloads.{ start, list, cancel }
 统一接口 + 显式能力协商，不做隐式降级（spec 5.5）。`chrome.*` 命名空间缺失时，
 `handlers/context.ts` 的 `requireApi()` 回 `unsupported operation` 并写明缺的是哪个
 API，**不会换一套实现凑合**。
+
+### 能力协商：实现成运行时报错，不是握手时协商（有意偏离 spec 5.5）
+
+spec 5.5 原文说的是**握手时**协商能力清单。实现改成了**运行时**拒绝：
+`requireApi()` 在真要用某个 `chrome.*` 命名空间时才检查，缺了就回 `unsupported
+operation` 并写明缺的是哪个 API。
+
+结果等价 —— 两种做法都不会发生隐式降级，调用方拿到的都是显式拒绝 —— 而运行时这条不
+需要在两端维护一份能力清单并保持同步。差别只在报错的时机：握手时协商能提前一步告诉你
+「这个浏览器没有 downloads」，运行时这条要等你真去下载才说。
 
 ## 加一条指令
 
@@ -290,3 +310,15 @@ T08 要做的就是在 `background.ts` 里调 `setConfirmHook`，实现里把 `C
 钩子返回 false 时抛的错误码是 **`lg:user rejected`**（对应 spec 6.7 的退出码 4）。
 它带冒号，属于 BiDi §3.3 的扩展命名空间，`lib/browse_protocol.py` 的校验规则
 「8 个标准码 + 任何含冒号的扩展码」已放行。
+
+反方向（daemon → 扩展）一共两条控制消息，都不是能力，CLI 上敲不出来：
+
+| method | 干什么 |
+|---|---|
+| `lg:confirm.request` | 把确认问题摆到用户面前，回 `{approved}`（spec 4.4） |
+| `lg:context.url` | 回答「这条指令会落在哪个页面上」（spec 4.3 的 `deny_domains` 要用） |
+
+`lg:context.url` 存在的原因：`input.*` / `script.*` 的 params 里根本没有 url，目标页是
+扩展按 `context` > `matchUrl` > 活动标签页算出来的。daemon 想用拒绝名单拦住它们，就得
+先问一句。问不到（没连浏览器、超时、答 null）时**按拒绝处理**——不知道打在谁身上就
+不能打。名单是空的时候不问，省掉这个往返。

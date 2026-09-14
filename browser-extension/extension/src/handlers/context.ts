@@ -1,9 +1,18 @@
-import { CommandError } from "../protocol.ts";
+import { CommandError, asString } from "../protocol.ts";
 
 /** A resolved target: a tab, optionally narrowed to one of its frames. */
 export interface Target {
   tabId: number;
   frameId: number | undefined;
+}
+
+/**
+ * Context ids are `<tabId>` for a tab and `<tabId>.<frameId>` for a frame.
+ * Frame 0 *is* the tab, so it formats as the bare tab id — the inverse of
+ * `parseContext`.
+ */
+export function formatContext(tabId: number, frameId?: number): string {
+  return frameId === undefined || frameId === 0 ? String(tabId) : `${tabId}.${frameId}`;
 }
 
 /** Context ids are `<tabId>` for a tab and `<tabId>.<frameId>` for a frame. */
@@ -42,31 +51,26 @@ export async function resolveContext(params: Record<string, unknown>): Promise<T
   const { context, matchUrl } = params as { context?: unknown; matchUrl?: unknown };
 
   if (context !== undefined) {
-    if (typeof context !== "string") {
-      throw new CommandError("invalid argument", "context must be a context id string");
-    }
-    return parseContext(context);
+    return parseContext(asString(context, "context", ", a context id"));
   }
 
   if (matchUrl !== undefined) {
-    if (typeof matchUrl !== "string") {
-      throw new CommandError("invalid argument", "matchUrl must be a glob string");
-    }
-    const pattern = globToRegExp(matchUrl);
+    const glob = asString(matchUrl, "matchUrl", ", a shell-style glob");
+    const pattern = globToRegExp(glob);
     const hits = (await chrome.tabs.query({})).filter((tab) => pattern.test(tab.url ?? ""));
     if (hits.length === 0) {
-      throw new CommandError("no such frame", `no browsing context matches ${matchUrl}`);
+      throw new CommandError("no such frame", `no browsing context matches ${glob}`);
     }
     if (hits.length > 1) {
       const urls = hits.map((tab) => `${tab.id}=${tab.url ?? ""}`).join(", ");
       throw new CommandError(
         "invalid argument",
-        `matchUrl ${matchUrl} matches ${hits.length} contexts (${urls}); narrow it or pass context`,
+        `matchUrl ${glob} matches ${hits.length} contexts (${urls}); narrow it or pass context`,
       );
     }
     const only = hits[0];
     if (only?.id === undefined) {
-      throw new CommandError("no such frame", `context matching ${matchUrl} has no id`);
+      throw new CommandError("no such frame", `context matching ${glob} has no id`);
     }
     return { tabId: only.id, frameId: undefined };
   }
@@ -76,6 +80,21 @@ export async function resolveContext(params: Record<string, unknown>): Promise<T
     throw new CommandError("no such frame", "no active tab");
   }
   return { tabId: active.id, frameId: undefined };
+}
+
+/**
+ * `lg:context.url` — the daemon asking which page a command would land on.
+ *
+ * Not a capability: the CLI cannot spell it. `input.*` and `script.*` carry no
+ * url in their params, so the daemon has no way to apply `deny_domains`
+ * (spec 4.3) to them without asking. The rule for *which* page is right here in
+ * `resolveContext`; copying it into Python would drift the first time it
+ * changes.
+ */
+export async function contextUrl(
+  params: Record<string, unknown>,
+): Promise<{ url: string | null }> {
+  return { url: await targetUrl(await resolveContext(params)) };
 }
 
 /** The page URL of a target, for the audit/confirm record. Never throws. */

@@ -70,10 +70,22 @@ class TestRiskyActions(Temp):
                 self.assertIsNone(risky_action(method))
 
     def test_js_locator_is_main_world(self):
-        # spec 4.4：`js=` 定位在 MAIN world 求值，也算高危 —— 只看方法名会漏
-        self.assertEqual(risky_action("input.click", {"locator": "js=document.body"}),
+        # spec 4.4：`js=` 定位在 MAIN world 求值，也算高危 —— 只看方法名会漏。
+        # 字段名必须是 `selector`：CLI 的位置参数名（lib/cli/browse.py:82）和扩展侧读
+        # 的键（handlers/input.ts:65）都叫这个，读别的名字等于这条判定永远不触发。
+        self.assertEqual(risky_action("input.click", {"selector": "js=document.body"}),
                          "evalMainWorld")
-        self.assertIsNone(risky_action("input.click", {"locator": "css=button"}))
+        self.assertEqual(risky_action("input.type", {"selector": "js=x", "text": "y"}),
+                         "evalMainWorld")
+        self.assertIsNone(risky_action("input.click", {"selector": "css=button"}))
+
+    def test_js_selector_reaches_the_confirm_flow(self):
+        """`js=` 不只是被标成高危，还真的会走到确认（而不是被静默放行）。"""
+        sec = self.make(confirm_mode="always")
+        self.assertEqual(
+            sec.check("input.click", {"selector": "js=document.body"}),
+            {"action": "evalMainWorld", "method": "input.click", "url": None},
+        )
 
 
 class TestUrlAndDomain(Temp):
@@ -217,6 +229,27 @@ class TestDenyDomains(Temp):
     def test_other_domains_pass(self):
         sec = self.make(deny_domains=["bank.com"])
         self.assertIsNone(sec.check("browsingContext.navigate", {"url": "https://example.com/"}))
+
+    def test_page_methods_need_a_lookup_only_when_the_list_is_not_empty(self):
+        """`input.*` / `script.*` 的 params 里没有 url —— 目标页得先问扩展。"""
+        self.assertTrue(self.make(deny_domains=["bank.com"])
+                        .needs_target_lookup("input.click", {"selector": "text=转账"}))
+        self.assertTrue(self.make(deny_domains=["bank.com"])
+                        .needs_target_lookup("script.evaluate", {"expression": "1"}))
+        # 名单空着就不问：一条没得拦，多一个往返纯属白花
+        self.assertFalse(self.make().needs_target_lookup("input.click", {}))
+        # 自带 url 的不用问
+        self.assertFalse(self.make(deny_domains=["bank.com"])
+                         .needs_target_lookup("browsingContext.navigate",
+                                              {"url": "https://a.com/"}))
+        # 浏览器全局的（列书签、搜历史）根本不落在某一页上
+        self.assertFalse(self.make(deny_domains=["bank.com"])
+                         .needs_target_lookup("lg:bookmarks.search", {"query": "x"}))
+
+    def test_deny_applies_to_the_url_the_caller_resolved(self):
+        sec = self.make(deny_domains=["bank.com"])
+        with self.assertRaises(SecurityError):
+            sec.check("input.click", {"selector": "text=转账"}, url="https://bank.com/x")
 
 
 class TestAudit(Temp):

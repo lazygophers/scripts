@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lib.browse_protocol import (
+    ERR_ABORTED,
     ERR_INVALID_ARGUMENT,
     ERR_NOT_CONNECTED,
     ERR_UNKNOWN_COMMAND,
@@ -59,7 +60,13 @@ from lib.browse_protocol import (
     error,
     success,
 )
-from lib.browse_security import Security, SecurityError, domain_of
+from lib.browse_security import (
+    Security,
+    SecurityError,
+    domain_of,
+    resolve_confirm_mode,
+    target_url,
+)
 
 IDLE_TIMEOUT = 30 * 60.0
 # 累积缓冲上限。协议层的 64 MB 是**单帧**上限，拦不住「一直发不完整的帧」——那样
@@ -88,6 +95,14 @@ UNSUBSCRIBE_METHOD = "network.unsubscribe"
 CONFIRM_METHOD = "lg:confirm.request"
 # 用户不点就永远不回，所以必须有上限。到点按**拒绝**处理 —— 确认这件事只能 fail closed。
 CONFIRM_TIMEOUT = 60.0
+
+# 第二条 daemon 主动问扩展的路径（spec 4.3）：`input.*` / `script.*` 的 params 里没有
+# url，目标页是扩展按 context / matchUrl / 活动标签页算的，daemon 想拿 deny_domains
+# 拦它们就只能问一句。同样不是能力，CLI 上敲不出来。
+CONTEXT_URL_METHOD = "lg:context.url"
+
+# `browse stop`（spec 4.5）：中止全部在途指令，daemon 自己留着。daemon 本地执行。
+ABORT_METHOD = "lg:daemon.abort"
 
 # 反方向：扩展面板要能列出/增删 per_domain 免确认名单（spec 4.5）。这几条在 daemon
 # 本地执行，不转发给任何人。
@@ -172,6 +187,8 @@ class _Conn:
     id: int
     role: str
     writer: asyncio.StreamWriter
+    # CLI 握手时带的 `--confirm-mode`。只能收紧不能放宽，判定在 `_gate` 里做。
+    confirm_mode: str = ""
 
     async def send(self, message: dict, limit: int = MAX_INCOMING_FRAME_BYTES) -> bool:
         """写一帧。对端已经走了就返回 False，不抛——路由不该被一个死客户端带停。"""
@@ -294,7 +311,9 @@ class Daemon:
             return
 
         self._conn_seq += 1
-        conn = _Conn(id=self._conn_seq, role=role, writer=writer)
+        mode = hello.get("confirmMode")
+        conn = _Conn(id=self._conn_seq, role=role, writer=writer,
+                     confirm_mode=mode if isinstance(mode, str) else "")
         if not await conn.send({"type": "hello-ack", "connectionId": conn.id}, MAX_HELLO_BYTES):
             await _close(writer)
             return
@@ -357,6 +376,9 @@ class Daemon:
         if "type" in message:
             return  # CLI 只发 Command；没有 type 字段的才是 Command
         self._last_command = time.monotonic()
+        if message["method"] == ABORT_METHOD:
+            await self._abort(cli, message["id"])
+            return
         if self._browser is None:
             # 不排队不等待：浏览器没开就是没开，等下去只会变成一个无人回收的挂起
             await cli.send(error(message["id"], ERR_NOT_CONNECTED,
@@ -378,6 +400,26 @@ class Daemon:
             del self._pending[gid]
             self._audit(method, params, started, result="error", err="指令发不到浏览器")
             await cli.send(error(cli_id, ERR_NOT_CONNECTED, "指令发不到浏览器：连接已断开"))
+
+    async def _abort(self, cli: _Conn, cli_id: int) -> None:
+        """`browse stop`：在途指令全部当场失败，daemon 自己留着（spec 4.5）。
+
+        已经发给浏览器的那些副作用可能已经发生了，所以回的是 `failed` 而不是假装
+        没做过 —— 和 `run` 的 fail-fast 取消同一个口径。
+        """
+        why = "已被 `browse stop` 中止，结果未知"
+        count = 0
+        for gid in list(self._pending):
+            entry = self._pending.pop(gid)
+            count += 1
+            if entry.confirm is not None:
+                if not entry.confirm.done():
+                    entry.confirm.set_result(None)  # 问到一半被中止，按拒绝算
+                continue
+            if entry.cli is not None:
+                self._audit(entry.method, entry.params, entry.started, result="error", err=why)
+                await entry.cli.send(error(entry.cli_id, ERR_ABORTED, why))
+        await cli.send(success(cli_id, {"aborted": count}))
 
     # ------------------------------------------------------------ 安全（spec 4.4）
     def _sec(self) -> Security:
@@ -405,11 +447,26 @@ class Daemon:
         """转发前的安全检查。放行返回 True；拒绝时已经把 error 回给 CLI 了。"""
         try:
             sec = self._sec()
+            # 这条连接自己的 `--confirm-mode`：比配置松就在这里被拒（spec 4.4）
+            mode = resolve_confirm_mode(sec.confirm_mode, cli.confirm_mode)
         except SecurityError as exc:
             await cli.send(error(cli_id, exc.code, str(exc)))
             return False
+
+        url = target_url(params)
+        if sec.needs_target_lookup(method, params, mode):
+            url = await self._ask_target_url(params)
+            if url is None and sec.deny_domains:
+                # 拒绝名单非空却问不出目标页 —— 不知道就不放行（fail closed）。
+                # 名单空着时问不到不算错，照旧带着 url=None 往下走。
+                why = (f"配了 deny_domains，但问不到 {method} 的目标页面 URL"
+                       f"（浏览器没答上来），按拒绝处理")
+                self._audit(method, params, started, result="denied", err=why)
+                await cli.send(error(cli_id, ERR_USER_REJECTED, why))
+                return False
+
         try:
-            req = sec.check(method, params)
+            req = sec.check(method, params, url=url, mode=mode)
         except SecurityError as exc:
             # 拒绝名单优先级高于确认：命中就直接拒，一个确认框都不弹
             self._audit(method, params, started, result="denied", err=str(exc))
@@ -418,34 +475,50 @@ class Daemon:
         if req is None:
             return True
 
-        if not await self._ask_confirm(req):
+        reply = await self._ask(CONFIRM_METHOD, req)
+        if not (reply is not None and reply.get("approved") is True):
             why = f"用户拒绝了 {req['action']}（{method}）"
             self._audit(method, params, started, result="denied", err=why)
             await cli.send(error(cli_id, ERR_USER_REJECTED, why))
             return False
-        if sec.confirm_mode == "per_domain":
+        if mode == "per_domain":
             domain = domain_of(req["url"])
             if domain:
                 sec.approve(domain)  # 同意即落盘，同域名下次不再问
         return True
 
-    async def _ask_confirm(self, req: dict) -> bool:
-        """问扩展一次。超时、送不出去、连接中途断掉，一律算拒绝（fail closed）。"""
+    async def _ask_target_url(self, params: dict) -> str | None:
+        """问扩展：这条指令会落在哪个页面上（`context` > `matchUrl` > 活动标签页）。
+
+        目标选择规则只有扩展知道（`handlers/context.ts:41`），在 daemon 里照抄一遍
+        必然漂移，所以直接问它。问不到返回 None，调用方 fail closed。
+        """
+        ask = {key: params[key] for key in ("context", "matchUrl") if key in params}
+        reply = await self._ask(CONTEXT_URL_METHOD, ask)
+        url = None if reply is None else reply.get("url")
+        return url if isinstance(url, str) and url else None
+
+    async def _ask(self, method: str, params: dict) -> dict | None:
+        """daemon 主动问扩展一句，等它的 result。
+
+        超时、送不出去、连接中途断掉一律返回 None —— 这两条路径（确认、目标页 URL）
+        的调用方都把 None 当拒绝，所以问不到就是 fail closed。
+        """
         browser = self._browser
         if browser is None:
-            return False
+            return None
         self._seq += 1
         gid = self._seq
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[gid] = _Pending(cli=None, cli_id=0, conn_id=browser.id,
-                                      method=CONFIRM_METHOD, confirm=fut)
+                                      method=method, confirm=fut)
         try:
-            if not await browser.send(command(gid, CONFIRM_METHOD, req),
+            if not await browser.send(command(gid, method, params),
                                       limit=MAX_OUTGOING_FRAME_BYTES):
-                return False
+                return None
             return await asyncio.wait_for(asyncio.shield(fut), self.confirm_timeout)
         except (asyncio.TimeoutError, asyncio.CancelledError):
-            return False
+            return None
         finally:
             self._pending.pop(gid, None)
 
@@ -467,8 +540,8 @@ class Daemon:
 
         if entry.confirm is not None:
             if not entry.confirm.done():
-                approved = kind == "success" and message.get("result", {}).get("approved") is True
-                entry.confirm.set_result(approved)
+                result = message.get("result") if kind == "success" else None
+                entry.confirm.set_result(result if isinstance(result, dict) else None)
             return
         if entry.cli is None:
             self._finish_rebuild(entry, message)
@@ -588,7 +661,7 @@ class Daemon:
             entry = self._pending.pop(gid)
             if entry.confirm is not None:
                 if not entry.confirm.done():
-                    entry.confirm.set_result(False)  # 没人能回答了，按拒绝算
+                    entry.confirm.set_result(None)  # 没人能回答了，按拒绝算
                 continue
             if entry.cli is not None:
                 self._audit(entry.method, entry.params, entry.started, result="error", err=why)
@@ -602,16 +675,23 @@ async def _close(writer: asyncio.StreamWriter) -> None:
 
 
 # ---------------------------------------------------------------- 客户端
-async def connect(role: str, path: Path | None = None) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, int]:
+async def connect(role: str, path: Path | None = None, *,
+                  confirm_mode: str = "") -> tuple[asyncio.StreamReader, asyncio.StreamWriter, int]:
     """连上 daemon 并握手，返回 (reader, writer, connectionId)。
 
     T03 的 native host 用 `role="native-host"`，T04 的 CLI 用 `role="cli"`。
+
+    `confirm_mode` 是这次调用的 `--confirm-mode`：随握手带过去，对这条连接上的每条
+    指令生效。daemon 只接受收紧，放宽会被它拒掉（spec 4.4）。
     """
     if role not in ROLES:
         raise ProtocolError(f"role 只能是 {sorted(ROLES)}: {role!r}")
     target = socket_path() if path is None else path
     reader, writer = await asyncio.open_unix_connection(str(target))
-    writer.write(pack({"type": "hello", "role": role}, MAX_HELLO_BYTES))
+    hello = {"type": "hello", "role": role}
+    if confirm_mode:
+        hello["confirmMode"] = confirm_mode
+    writer.write(pack(hello, MAX_HELLO_BYTES))
     await writer.drain()
     ack = await read_frame(reader, MAX_HELLO_BYTES)
     if ack.get("type") != "hello-ack":
@@ -635,11 +715,13 @@ async def run(path: Path | None = None, idle_timeout: float = IDLE_TIMEOUT,
 
 
 __all__ = [
+    "ABORT_METHOD",
     "APPROVALS_APPROVE",
     "APPROVALS_LIST",
     "APPROVALS_REVOKE",
     "CONFIRM_METHOD",
     "CONFIRM_TIMEOUT",
+    "CONTEXT_URL_METHOD",
     "Daemon",
     "IDLE_TIMEOUT",
     "MAX_BUFFER_BYTES",

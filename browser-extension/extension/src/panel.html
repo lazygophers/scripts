@@ -34,9 +34,20 @@
         color: inherit;
         cursor: pointer;
       }
+      #cut { width: 100%; margin-bottom: 12px; border-color: #6b2b2b; background: #2b1c1c; }
+      .log li { font-family: ui-monospace, monospace; justify-content: flex-start; }
+      .ok { color: #4ade80; }
+      .bad { color: #f87171; }
+      .ms { color: #6b7280; margin-left: auto; }
     </style>
   </head>
   <body>
+    <button id="cut">Disconnect now</button>
+
+    <h1>Recent commands</h1>
+    <p id="logStatus">loading…</p>
+    <ul id="log" class="log"></ul>
+
     <h1>Domains that skip confirmation</h1>
     <p id="status">loading…</p>
     <ul id="list"></ul>

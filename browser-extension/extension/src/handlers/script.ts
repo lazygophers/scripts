@@ -1,10 +1,11 @@
-import { CommandError } from "../protocol.ts";
+import { CommandError, asString } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
-import { parseContext, resolveContext, targetUrl, type Target } from "./context.ts";
+import { formatContext, parseContext, resolveContext, targetUrl, type Target } from "./context.ts";
+import { execInPage, type PageResult } from "./inject.ts";
 
 export { parseContext };
 
-type Injected = { ok: true; value: unknown } | { ok: false; message: string };
+type Injected = PageResult<unknown>;
 
 interface ScriptResult {
   type: "success";
@@ -28,17 +29,13 @@ interface ScriptResult {
  * a DOM node comes back as an empty object. Return primitives or JSON.
  */
 export async function scriptEvaluate(params: Record<string, unknown>): Promise<ScriptResult> {
-  const expression = params.expression;
-  if (typeof expression !== "string") {
-    throw new CommandError("invalid argument", "expression must be a string");
-  }
+  const expression = asString(params.expression, "expression");
   const awaitPromise = params.awaitPromise !== false;
   const target = await resolveTarget(params);
   await confirmEval(target, "script.evaluate");
 
-  const outcome = await inject(target, {
-    args: [expression, awaitPromise],
-    func: async (code: string, doAwait: boolean): Promise<Injected> => {
+  const outcome = await execInPage(target, "MAIN",
+    async (code: string, doAwait: boolean): Promise<Injected> => {
       try {
         const value: unknown = new Function(`return (${code})`)();
         return { ok: true, value: doAwait ? await value : value };
@@ -46,8 +43,8 @@ export async function scriptEvaluate(params: Record<string, unknown>): Promise<S
         return { ok: false, message: err instanceof Error ? err.message : String(err) };
       }
     },
-  });
-  return shape(target, outcome);
+    [expression, awaitPromise]);
+  return toScriptResult(target, outcome);
 }
 
 /**
@@ -59,10 +56,7 @@ export async function scriptEvaluate(params: Record<string, unknown>): Promise<S
 export async function scriptCallFunction(
   params: Record<string, unknown>,
 ): Promise<ScriptResult> {
-  const declaration = params.functionDeclaration;
-  if (typeof declaration !== "string") {
-    throw new CommandError("invalid argument", "functionDeclaration must be a string");
-  }
+  const declaration = asString(params.functionDeclaration, "functionDeclaration");
   const argv = params.arguments ?? [];
   if (!Array.isArray(argv)) {
     throw new CommandError("invalid argument", "arguments must be an array of JSON values");
@@ -71,9 +65,8 @@ export async function scriptCallFunction(
   const target = await resolveTarget(params);
   await confirmEval(target, "script.callFunction");
 
-  const outcome = await inject(target, {
-    args: [declaration, argv as unknown[], params.this ?? null, awaitPromise],
-    func: async (
+  const outcome = await execInPage(target, "MAIN",
+    async (
       code: string,
       callArgs: unknown[],
       thisArg: unknown,
@@ -90,42 +83,23 @@ export async function scriptCallFunction(
         return { ok: false, message: err instanceof Error ? err.message : String(err) };
       }
     },
-  });
-  return shape(target, outcome);
+    [declaration, argv as unknown[], params.this ?? null, awaitPromise]);
+  return toScriptResult(target, outcome);
 }
 
 async function confirmEval(target: Target, method: string): Promise<void> {
   await confirm({ action: "evalMainWorld", method, url: await targetUrl(target) });
 }
 
-async function inject(
-  target: Target,
-  injection: { args: unknown[]; func: (...args: never[]) => Promise<Injected> },
-): Promise<Injected> {
-  const [result] = await chrome.scripting.executeScript({
-    target:
-      target.frameId === undefined
-        ? { tabId: target.tabId }
-        : { tabId: target.tabId, frameIds: [target.frameId] },
-    world: "MAIN",
-    args: injection.args as never[],
-    func: injection.func,
-  });
-  const outcome = result?.result as Injected | undefined;
-  if (outcome === undefined) {
-    throw new CommandError("unknown error", "script produced no result");
-  }
-  return outcome;
-}
-
-function shape(target: Target, outcome: Injected): ScriptResult {
+function toScriptResult(target: Target, outcome: Injected): ScriptResult {
   if (!outcome.ok) {
+    // The page threw. That is not a locator outcome, so it keeps the generic
+    // code rather than going through `pageErrorCode`.
     throw new CommandError("unknown error", outcome.message);
   }
   return {
     type: "success",
-    realm:
-      target.frameId === undefined ? String(target.tabId) : `${target.tabId}.${target.frameId}`,
+    realm: formatContext(target.tabId, target.frameId),
     result: { value: outcome.value },
   };
 }
