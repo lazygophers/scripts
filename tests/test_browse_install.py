@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import pathlib
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -514,3 +516,46 @@ class TestGeckoIdStaysInSync(unittest.TestCase):
         )
         gecko_id = manifest["browser_specific_settings"]["gecko"]["id"]
         self.assertIn(gecko_id, nh.GECKO_IDS)
+
+
+class TestInteractiveFlow(unittest.TestCase):
+    """`browse install` 的交互流程：构建、指引、等待验证。
+
+    这些只在终端里跑（`sys.stderr.isatty()`），脚本和 CI 里 `install` 只做注册 ——
+    否则管道里跑会被一个 120 秒的等待卡死。
+    """
+
+    def test_build_is_skipped_when_dist_already_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = pathlib.Path(tmp)
+            (src / "dist").mkdir()
+            (src / "dist" / "manifest.json").write_text("{}")
+            # package.json 不存在：真跑构建会抛 FileNotFoundError，没抛就证明它早退了
+            self.assertEqual(nh.build_extension(src), src / "dist")
+
+    def test_build_refuses_when_there_is_no_extension_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(FileNotFoundError):
+                nh.build_extension(pathlib.Path(tmp))
+
+    def test_waiting_stops_early_when_the_error_is_not_about_the_browser(self) -> None:
+        """退出码 3 才是「还没连上」，其余退出码说明是别的毛病，不该干等满 120 秒。"""
+        calls: list[int] = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(1)
+            return subprocess.CompletedProcess(cmd, returncode=2)
+
+        with unittest.mock.patch.object(nh.subprocess, "run", fake_run):
+            self.assertFalse(nh.wait_for_extension(pathlib.Path("/x/browse"), timeout=99))
+        self.assertEqual(len(calls), 1, "退出码 2 应当立刻返回，不重试")
+
+    def test_waiting_succeeds_as_soon_as_a_command_goes_through(self) -> None:
+        results = iter([3, 3, 0])
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, returncode=next(results))
+
+        with unittest.mock.patch.object(nh.subprocess, "run", fake_run), \
+                unittest.mock.patch.object(nh.time, "sleep", lambda _: None):
+            self.assertTrue(nh.wait_for_extension(pathlib.Path("/x/browse"), timeout=99))

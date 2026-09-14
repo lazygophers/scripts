@@ -1,7 +1,7 @@
 """browse — 用命令行驱动浏览器扩展
 
 常用：
-  browse install                            # 第一次用：把 browse 注册给浏览器
+  browse install                            # 第一次用：构建扩展 + 注册通信配置 + 指引你加载扩展
   browse daemon start                       # 起中转服务（幂等；平时不用手动跑）
   browse browsingContext getTree --table    # 看浏览器连上没有、有哪些标签页
   browse browsingContext navigate https://example.com
@@ -506,10 +506,10 @@ HELP = """browse — 用命令行驱动浏览器扩展
   browse run [--concurrency N] [--no-fail-fast] '<指令串>'... | browse run -
   browse daemon start | stop | status
   browse stop                                       中止在途指令，daemon 留着
-  browse install | uninstall                        把 browse 注册给浏览器
+  browse install | uninstall                        装 / 卸（扩展本体仍需你手动加载一次）
 
 先跑起来
-  browse install                                    第一次用：注册 native host
+  browse install                                    第一次用：构建 + 注册 + 指引加载扩展
   browse browsingContext getTree --table            看浏览器连上没有、有哪些标签页
   browse browsingContext navigate https://example.com
   browse page snapshot --table                      列出这一页能点/能填的元素

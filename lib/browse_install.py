@@ -32,7 +32,9 @@ import argparse
 import json
 import pathlib
 import shutil
+import subprocess
 import sys
+import time
 
 from lib.ui import reporter
 
@@ -306,6 +308,66 @@ def resolve_browse_path(given: str | None) -> pathlib.Path:
     )
 
 
+EXTENSION_SRC = REPO_ROOT / "browser-extension" / "extension"
+CONNECT_POLL_SECONDS = 2.0
+WAIT_TIMEOUT = 120.0
+
+
+def build_extension(src: pathlib.Path = EXTENSION_SRC) -> pathlib.Path:
+    """构建扩展，返回 dist 目录。已经构建过就直接返回，不重复跑。
+
+    浏览器加载的是 dist/ 而不是 src/，忘了构建的话扩展装上去也是坏的
+    （`page-locate.js` 不在，所有 input.* 都会失败）。
+    """
+    dist = src / "dist"
+    if (dist / "manifest.json").exists():
+        return dist
+    if not (src / "package.json").exists():
+        raise FileNotFoundError(f"扩展源码不在 {src}，用 --no-build 跳过构建")
+    if not (src / "node_modules").exists():
+        subprocess.run(["npm", "install"], cwd=src, check=True)
+    subprocess.run(["npm", "run", "build"], cwd=src, check=True)
+    return dist
+
+
+def copy_to_clipboard(text: str) -> bool:
+    """把路径塞进剪贴板，好让用户在文件选择框里直接粘贴。失败不算错。"""
+    tool = {"darwin": ["pbcopy"], "linux": ["xclip", "-selection", "clipboard"],
+            "windows": ["clip"]}.get(platform_key())
+    if tool is None:
+        return False
+    try:
+        subprocess.run(tool, input=text.encode(), check=True)
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        return False
+
+
+def wait_for_extension(browse_path: pathlib.Path, timeout: float) -> bool:
+    """真跑一条指令，等它成功。成功返回 True，超时返回 False。
+
+    故意走用户自己会走的那条路（`browse browsingContext getTree`）而不是探测
+    daemon 的内部状态：manifest 写对了不代表扩展真的加载了，扩展加载了也不代表
+    它连得上。只有一条指令真的跑通，才说明整条链路是好的。
+
+    退出码 3 = 浏览器没连上（`lib/cli/browse.py` 的 EXIT_NO_BROWSER），是等待中的
+    正常状态；0 = 通了；其余退出码说明是别的毛病，不再干等。
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        done = subprocess.run(
+            [sys.executable, str(browse_path), "browsingContext", "getTree", "--no-say"],
+            capture_output=True,
+        )
+        if done.returncode == 0:
+            return True
+        if done.returncode != 3:
+            return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(CONNECT_POLL_SECONDS)
+
+
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="browse install",
@@ -318,6 +380,10 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--browse-path", help="manifest 里写的 browse 绝对路径")
     parser.add_argument("--extension-id", action="append", default=[],
                         help="追加一个 Chromium 扩展 ID（Edge 商店另发的 ID 用这个补）")
+    parser.add_argument("--no-build", action="store_true",
+                        help="不自动构建扩展（默认 dist/ 缺失时自动跑 npm run build）")
+    parser.add_argument("--no-wait", action="store_true",
+                        help="不等扩展连上就返回（默认等 120 秒）")
     parser.add_argument("--gecko-id", action="append", default=[],
                         help="追加一个 Firefox 扩展 ID（gecko.id）")
     return parser.parse_args(argv[1:])
@@ -385,4 +451,55 @@ def main(argv: list[str]) -> int:
     for name, where in done:
         out.ok(f"{name}: {where}")
     out.info(f"wrapper：{wrapper_path(home, plat)} -> {browse_path} --native-host")
-    return EXIT_OK
+
+    # 到这里为止，只完成了「浏览器怎么找到 browse」。扩展本体还没装 —— 而且
+    # 装不了：Chrome 把所有程序化安装扩展的路都封了（--load-extension 于 137
+    # 移除、--disable-extensions-except 于 139 移除、开发者模式 pref 属受保护
+    # 配置会被重置、CDP Extensions.loadUnpacked 要 browser-level target 而
+    # 136+ 拒绝对默认 profile 开调试端口）。剩下的只能是人点一次。
+    # 非交互（管道、CI、测试）时到此为止：只做注册。构建、指引、等待都是给
+    # 坐在终端前的人看的，脚本里跑不该被一个 120 秒的等待卡住。
+    if not sys.stderr.isatty():
+        out.info("扩展本体要手动加载，见 browser-extension/README.md")
+        return EXIT_OK
+
+    if args.no_build:
+        dist = EXTENSION_SRC / "dist"
+    else:
+        try:
+            dist = build_extension()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            out.err(f"构建扩展失败：{exc}")
+            out.info(f"手动构建：cd {EXTENSION_SRC} && npm install && npm run build")
+            return EXIT_FAILED
+        out.ok(f"扩展已构建：{dist}")
+
+    copied = copy_to_clipboard(str(dist))
+    out.info("")
+    out.info("还差一步，只能你自己点 —— Chrome 不允许任何程序替用户装扩展：")
+    out.info("  1. 打开 chrome://extensions")
+    out.info("  2. 右上角打开「开发者模式」（此后要一直开着）")
+    out.info("  3. 点「加载已解压的扩展程序」，选这个目录：")
+    out.info(f"     {dist}")
+    if copied:
+        out.info("     （路径已复制到剪贴板，文件选择框里按 Cmd+Shift+G 粘贴即可）")
+    out.info("")
+
+    if args.no_wait:
+        out.info(f"装完自己验：{browse_path} browsingContext getTree --table")
+        return EXIT_OK
+
+    out.info(f"等你装上……（最多 {int(WAIT_TIMEOUT)} 秒，Ctrl-C 可中断）")
+    try:
+        connected = wait_for_extension(browse_path, WAIT_TIMEOUT)
+    except KeyboardInterrupt:
+        out.info(f"没等到。装好后自己验：{browse_path} browsingContext getTree --table")
+        return EXIT_OK
+    if connected:
+        out.ok("扩展已连上，整条链路通了。试试：browse browsingContext getTree --table")
+        return EXIT_OK
+    out.err("超时：扩展还没连上。排查顺序：")
+    out.err("  1. chrome://extensions 里有没有看到这个扩展、是不是启用状态")
+    out.err("  2. 扩展 ID 是不是 podeceeeafjdcemppcgjhhokcokpcama（不是的话 manifest 的 key 被改过）")
+    out.err("  3. 点扩展卡片上的 service worker，看控制台有没有报错")
+    return EXIT_FAILED
