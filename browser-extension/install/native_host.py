@@ -139,14 +139,18 @@ def platform_key(platform: str | None = None) -> str:
     return "linux"
 
 
-def build_manifest(flavor: str, browse_path: pathlib.Path,
+def build_manifest(flavor: str, host_path: pathlib.Path,
                    extension_ids: tuple[str, ...] = EXTENSION_IDS,
                    gecko_ids: tuple[str, ...] = GECKO_IDS) -> dict:
-    """一份 native host manifest。Chromium 系和 Firefox 的授权字段名不同。"""
+    """一份 native host manifest。Chromium 系和 Firefox 的授权字段名不同。
+
+    host_path 是浏览器要 fork 的那个文件——**wrapper，不是 browse 本身**。
+    manifest 没有 args 字段，`--native-host` 只能由 wrapper 自己带上。
+    """
     manifest = {
         "name": HOST_NAME,
         "description": DESCRIPTION,
-        "path": str(browse_path),
+        "path": str(host_path),
         "type": "stdio",
     }
     if flavor == GECKO:
