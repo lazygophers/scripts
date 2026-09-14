@@ -12,6 +12,7 @@
  */
 import { localize, msg } from "./i18n.ts";
 import type { LogEntry } from "./native-port.ts";
+import { getConfig, revoke } from "./policy.ts";
 
 const list = document.getElementById("list") as HTMLUListElement | null;
 const statusNode = document.getElementById("status");
@@ -20,12 +21,16 @@ const logStatus = document.getElementById("logStatus");
 const cut = document.getElementById("cut") as HTMLButtonElement | null;
 const settings = document.getElementById("settings") as HTMLButtonElement | null;
 
+/**
+ * 免确认名单直接读写 `chrome.storage.local`。以前这里要经 service worker 转给 daemon，
+ * 因为名单存在 `browse.yaml` 里；现在它就在插件自己的存储里，中间那两跳全没了 ——
+ * daemon 没起来也能撤销。
+ */
 async function call(op: string, domain?: string): Promise<string[]> {
-  const reply = await chrome.runtime.sendMessage({ type: "browse-approvals", op, domain });
-  if (!reply?.ok) {
-    throw new Error(reply?.error ?? msg("panelNoAnswer"));
+  if (op === "revoke" && domain) {
+    return (await revoke(domain)).approved_domains;
   }
-  return reply.domains as string[];
+  return (await getConfig()).approved_domains;
 }
 
 function render(domains: string[]): void {

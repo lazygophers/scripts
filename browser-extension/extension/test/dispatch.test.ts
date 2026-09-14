@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { read } from "../src/audit.ts";
 import { confirm, setConfirmHook } from "../src/handlers/confirm.ts";
 import { HANDLERS, dispatch } from "../src/handlers/index.ts";
-import { rejectsWith } from "./mock.ts";
+import { clearChrome, rejectsWith, storageMock } from "./mock.ts";
 
 /** Spec 5.1, verbatim. If this list and HANDLERS disagree, one of them is wrong. */
 const V1 = [
@@ -40,15 +41,23 @@ const V1 = [
 ];
 
 /**
- * Not capabilities — the daemon asking the extension something. Every entry
- * here is a reverse RPC and needs its own review: 4.4's confirmation, and 4.3's
- * "which page would this land on", without which `deny_domains` cannot see
- * `input.*` / `script.*` at all.
+ * 不是能力，是审计的出口（spec 4.6）。日志存在 chrome.storage.local 里，命令行读不到
+ * 那个存储，这两条就是 `browse audit` 唯一的取数路径。
+ *
+ * 2026-09-14 之前这里是 `lg:confirm.request` 和 `lg:context.url` —— daemon 反过来问
+ * 插件的两条。裁决搬进插件之后 daemon 不再问任何问题，两条都删了。
  */
-const CONTROL = ["lg:confirm.request", "lg:context.url"];
+const AUDIT = ["lg:audit.read", "lg:audit.clear"];
 
-test("the command table is exactly the v1 capability list plus the control methods", () => {
-  assert.deepEqual(Object.keys(HANDLERS).sort(), [...V1, ...CONTROL].sort());
+test("the command table is exactly the v1 capability list plus the audit exits", () => {
+  assert.deepEqual(Object.keys(HANDLERS).sort(), [...V1, ...AUDIT].sort());
+});
+
+test("the daemon's old reverse-RPC methods are gone for good", () => {
+  // 留着的话就等于 daemon 还能问插件问题，而策略已经不在它那儿了
+  for (const method of ["lg:confirm.request", "lg:context.url"]) {
+    assert.equal(method in HANDLERS, false, `${method} 不该还在命令表里`);
+  }
 });
 
 test("a command outside v1 is unsupported operation, never a guess", async () => {
@@ -69,4 +78,59 @@ test("a hook that says no turns into a refusal naming the action", async () => {
   );
   assert.match(err.message, /user denied readCookies for storage.getCookies on a.test/);
   setConfirmHook(async () => true);
+});
+
+// ------------------------------------------------- 闸门和记账都在 dispatch 上
+
+test("拒绝名单在 dispatch 上拦住，handler 一步都不走", async () => {
+  storageMock({ "browse:config": { deny_domains: ["bank.test"] } });
+  // 故意不装 chrome.tabs：真走到 handler 就会是另一个错误码，那就说明没拦住
+  await rejectsWith(
+    () => dispatch("browsingContext.navigate", { url: "https://bank.test/x" }),
+    "lg:user rejected",
+  );
+  clearChrome();
+});
+
+test("被拒的指令记成 denied，带上域名和原因", async () => {
+  storageMock({ "browse:config": { deny_domains: ["bank.test"] } });
+  await rejectsWith(
+    () => dispatch("storage.getCookies", { domain: "bank.test" }),
+    "lg:user rejected",
+  );
+  const [entry] = await read();
+  assert.equal(entry?.result, "denied");
+  assert.equal(entry?.domain, "bank.test");
+  assert.equal(entry?.action, "readCookies");
+  assert.match(entry?.error ?? "", /拒绝名单/);
+  clearChrome();
+});
+
+test("失败的指令记成 error，成功的记成 success", async () => {
+  storageMock();
+  // 没装 chrome.tabs，handler 会炸；炸出来的东西必须被记成一条 error
+  await assert.rejects(() => dispatch("browsingContext.navigate", { url: "https://a.test/" }));
+  const entries = await read();
+  assert.equal(entries.at(-1)?.result, "error");
+  assert.equal(entries.at(-1)?.domain, "a.test");
+  clearChrome();
+});
+
+test("读审计这件事本身不记审计 —— 否则越读越长", async () => {
+  storageMock();
+  await dispatch("lg:audit.read", {});
+  await dispatch("lg:audit.read", {});
+  assert.deepEqual(await read(), []);
+  clearChrome();
+});
+
+test("审计写不进去也不能把指令搞挂", async () => {
+  const store = storageMock();
+  store.failNext = 999;
+  // 这条指令该失败的原因是「没有 chrome.tabs」，不该变成「审计写不进去」
+  const err = await dispatch("browsingContext.navigate", { url: "https://a.test/" })
+    .then(() => null, (e: Error) => e);
+  assert.ok(err instanceof Error);
+  assert.doesNotMatch(err.message, /QUOTA/, "失败原因不该是审计");
+  clearChrome();
 });

@@ -1,4 +1,7 @@
+import { record } from "../audit.ts";
+import { domainOf, enforceDenyList, riskyAction, targetUrl } from "../policy.ts";
 import { CommandError } from "../protocol.ts";
+import { auditClear, auditRead } from "./audit.ts";
 import { bookmarksCreate, bookmarksRemove, bookmarksSearch } from "./bookmarks.ts";
 import {
   browsingContextActivate,
@@ -9,8 +12,6 @@ import {
   browsingContextNavigate,
   browsingContextReload,
 } from "./browsingContext.ts";
-import { confirmRequest } from "./confirm.ts";
-import { contextUrl } from "./context.ts";
 import { downloadsCancel, downloadsList, downloadsStart } from "./downloads.ts";
 import { historyDelete, historySearch } from "./history.ts";
 import { inputClick, inputKey, inputScroll, inputType } from "./input.ts";
@@ -73,17 +74,31 @@ export const HANDLERS: Record<string, Handler> = {
 
   "lg:page.snapshot": pageSnapshot,
 
-  // Not capabilities — the daemon asking a question. `lg:confirm.request` puts
-  // it to the user (spec 4.4); `lg:context.url` asks which page a command would
-  // land on, which is what `deny_domains` needs (spec 4.3).
-  "lg:confirm.request": confirmRequest,
-  "lg:context.url": contextUrl,
+  // 审计的出口（spec 4.6）。日志存在 chrome.storage.local 里，命令行读不到那个存储，
+  // 这两条就是 `browse audit` 唯一的取数路径。
+  "lg:audit.read": auditRead,
+  "lg:audit.clear": auditClear,
 
   "lg:downloads.start": downloadsStart,
   "lg:downloads.list": downloadsList,
   "lg:downloads.cancel": downloadsCancel,
 };
 
+/**
+ * 读审计本身不记审计。不排除的话 `browse audit` 每跑一次都会给日志添一条「我读了
+ * 日志」，越读越长。
+ */
+const NOT_AUDITED = new Set(["lg:audit.read", "lg:audit.clear"]);
+
+/**
+ * 一条指令的完整一生：拒绝名单 → 执行 → 记账。
+ *
+ * 2026-09-14 之前这三件事在 daemon 里（`_gate` + `_audit`）。搬过来之后这里是唯一的
+ * 收口 —— 每条指令都从这儿过，漏不掉。
+ *
+ * 拒绝名单管**全部**方法，不只高危的那些：拉黑一个域名之后连导航过去都不该允许，所以
+ * 它在 handler 之前、`confirm()` 之外单独走一道。
+ */
 export async function dispatch(
   method: string,
   params: Record<string, unknown>,
@@ -95,5 +110,49 @@ export async function dispatch(
       `no handler for ${method}`,
     );
   }
-  return handler(params);
+  if (NOT_AUDITED.has(method)) {
+    return handler(params);
+  }
+
+  const started = Date.now();
+  const domain = domainOf(targetUrl(params));
+  try {
+    await enforceDenyList(method, params);
+  } catch (err) {
+    await record({
+      ts: new Date().toISOString(),
+      method,
+      domain,
+      action: riskyAction(method, params),
+      result: "denied",
+      ms: Date.now() - started,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+
+  try {
+    const result = await handler(params);
+    await record({
+      ts: new Date().toISOString(),
+      method,
+      domain,
+      action: riskyAction(method, params),
+      result: "success",
+      ms: Date.now() - started,
+    });
+    return result;
+  } catch (err) {
+    const rejected = err instanceof CommandError && err.code === "lg:user rejected";
+    await record({
+      ts: new Date().toISOString(),
+      method,
+      domain,
+      action: riskyAction(method, params),
+      result: rejected ? "denied" : "error",
+      ms: Date.now() - started,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }

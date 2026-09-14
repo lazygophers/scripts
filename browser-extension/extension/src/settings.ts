@@ -1,40 +1,25 @@
 /**
- * The settings page, spec 4.4 / 4.6.
+ * 设置页（spec 4.4 / 4.6）。
  *
- * **The policy lives in `browse.yaml`, not here.** This page reads and writes
- * that file through the daemon (`lg:config.get` / `lg:config.set`), the same
- * way the panel edits the per-domain allow list. Nothing is kept in
- * `chrome.storage`: a second copy of the policy would drift, and it would drift
- * towards "the user thinks it is off". That is also why the file's real path is
- * printed on the page — so it is obvious that this and the command line are
- * editing one thing.
+ * **配置就存在这里 —— `chrome.storage.local`，插件自己的存储。** 2026-09-14 之前它经
+ * daemon 读写 `browse.yaml`，于是本地程序没起来就什么都改不了；用户要的正是这个：
+ * 「这些都应该是浏览器自己做的」。现在这个页面不和 daemon 说一句话，**daemon 开没开
+ * 都能读能改能存**。
  *
- * When the daemon is not reachable the page says so and disables the form. It
- * must never fall back to showing an empty config, which reads as "your
- * settings are gone".
+ * 裁决的人也是插件自己（`src/policy.ts`），所以这里存下去的东西下一条指令立刻生效，
+ * 不存在「改了但那边还没重新加载」的窗口。
  */
 import { localize, msg } from "./i18n.ts";
+import {
+  CONFIG_KEY,
+  CONFIRM_MODES,
+  readConfig,
+  revoke as revokeDomain,
+  setConfig,
+  type BrowseConfig,
+} from "./policy.ts";
 
-/** The five fields of spec 4.4 / 4.6, as the daemon returns them. */
-export interface BrowseConfig {
-  confirm_mode: string;
-  deny_domains: string[];
-  approved_domains: string[];
-  audit: boolean;
-  audit_retention_days: number;
-}
-
-/** Mirrors `CONFIRM_MODES` in `lib/browse_security.py`, loosest first. */
-export const CONFIRM_MODES = ["silent", "per_domain", "always"];
-
-interface Reply {
-  ok: boolean;
-  config?: BrowseConfig;
-  path?: string;
-  domains?: string[];
-  error?: string;
-  state?: string;
-}
+export { CONFIRM_MODES, type BrowseConfig };
 
 /**
  * Check a draft before sending it. The daemon validates again — it is the
@@ -42,7 +27,8 @@ interface Reply {
  * round trip into an instant message next to the field.
  */
 export function validate(draft: Partial<BrowseConfig>): string {
-  if (draft.confirm_mode !== undefined && !CONFIRM_MODES.includes(draft.confirm_mode)) {
+  if (draft.confirm_mode !== undefined
+      && !CONFIRM_MODES.includes(draft.confirm_mode as (typeof CONFIRM_MODES)[number])) {
     return msg("settingsBadMode", draft.confirm_mode);
   }
   if (draft.audit_retention_days !== undefined && !Number.isInteger(draft.audit_retention_days)) {
@@ -80,8 +66,9 @@ function setOffline(offline: boolean): void {
   document.body.classList.toggle("offline", offline);
 }
 
-async function ask(op: "get" | "set", config?: Partial<BrowseConfig>): Promise<Reply> {
-  return (await chrome.runtime.sendMessage({ type: "browse-config", op, config })) as Reply;
+/** 配置在哪：给用户看的那一行。不是文件路径了，是插件自己的存储。 */
+function whereItLives(): string {
+  return `chrome.storage.local · ${CONFIG_KEY}`;
 }
 
 export function render(config: BrowseConfig, path: string): void {
@@ -139,16 +126,10 @@ function renderApproved(domains: string[]): void {
 }
 
 async function revoke(domain: string): Promise<void> {
-  // The panel's existing path, writing the same file — no second implementation.
-  const reply = (await chrome.runtime.sendMessage({
-    type: "browse-approvals",
-    op: "revoke",
-    domain,
-  })) as Reply;
-  if (reply?.ok) {
-    renderApproved(reply.domains ?? []);
-  } else {
-    say(reply?.error ?? msg("panelNoAnswer"), "bad");
+  try {
+    renderApproved((await revokeDomain(domain)).approved_domains);
+  } catch (err) {
+    say(err instanceof Error ? err.message : String(err), "bad");
   }
 }
 
@@ -159,7 +140,9 @@ export function readForm(): Partial<BrowseConfig> {
   );
   const retention = byId<HTMLInputElement>("retention");
   return {
-    confirm_mode: checked?.value ?? "",
+    // 一个都没选中时给空串：`validate()` 会挡下它。**不能悄悄填成 silent** ——
+    // 那是最松的模式，静静地把用户设成它是这条路上最不能犯的错。
+    confirm_mode: (checked?.value ?? "") as BrowseConfig["confirm_mode"],
     deny_domains: parseDomains(byId<HTMLTextAreaElement>("deny")?.value ?? ""),
     audit: byId<HTMLInputElement>("audit")?.checked === true,
     audit_retention_days: Number.parseInt(retention?.value ?? "", 10),
@@ -167,15 +150,15 @@ export function readForm(): Partial<BrowseConfig> {
 }
 
 async function load(): Promise<void> {
-  const reply = await ask("get");
-  if (!reply?.ok || !reply.config) {
+  try {
+    render(await readConfig(), whereItLives());
+    setOffline(false);
+    say("");
+  } catch (err) {
+    // 走到这里说明插件自己的存储坏了，不是 daemon 的事 —— daemon 这个页面根本不碰
     setOffline(true);
-    say(reply?.error ?? msg("panelNoAnswer"), "bad");
-    return;
+    say(err instanceof Error ? err.message : String(err), "bad");
   }
-  setOffline(false);
-  render(reply.config, reply.path ?? "");
-  say("");
 }
 
 async function save(): Promise<void> {
@@ -186,14 +169,13 @@ async function save(): Promise<void> {
     return;
   }
   say(msg("settingsSaving"));
-  const reply = await ask("set", draft);
-  if (!reply?.ok || !reply.config) {
-    setOffline(reply?.state !== "connected");
-    say(reply?.error ?? msg("panelNoAnswer"), "bad");
-    return;
+  try {
+    render(await setConfig(draft), whereItLives());
+    setOffline(false);
+    say(msg("settingsSaved"), "good");
+  } catch (err) {
+    say(err instanceof Error ? err.message : String(err), "bad");
   }
-  render(reply.config, reply.path ?? "");
-  say(msg("settingsSaved"), "good");
 }
 
 const form = byId<HTMLFormElement>("form");

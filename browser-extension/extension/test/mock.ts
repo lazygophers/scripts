@@ -81,3 +81,36 @@ export async function rejectsWith(
   }
   throw new Error(`expected a rejection with code ${code}`);
 }
+
+/**
+ * 一个内存版 `chrome.storage.local`。策略和审计都存在那里，所以几乎每个用例都要它。
+ *
+ * `failNext` 让 `set` 抛一次配额错——这是撞 10 MB 上限时 `chrome.storage` 的真实行为，
+ * 也是环形淘汰唯一的触发条件。真造 10 MB 数据太慢，用它更快也更准。
+ */
+export function storageMock(initial: Any = {}): {
+  data: Any;
+  /** 还剩几次 set 会抛配额错。 */
+  failNext: number;
+  sets: number;
+} {
+  const store: Any = { ...initial };
+  const state = { data: store, failNext: 0, sets: 0 };
+  const local = {
+    get: async (key: string) => (key in store ? { [key]: store[key] } : {}),
+    set: async (items: Any) => {
+      state.sets += 1;
+      if (state.failNext > 0) {
+        state.failNext -= 1;
+        throw new Error("QUOTA_BYTES quota exceeded");
+      }
+      Object.assign(store, items);
+    },
+    remove: async (key: string) => {
+      delete store[key];
+    },
+  };
+  const existing = ((globalThis as Any).chrome as Any) ?? {};
+  installChrome({ ...existing, storage: { local } });
+  return state;
+}

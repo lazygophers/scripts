@@ -1,13 +1,8 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 import { answerConfirm, askUser, windowClosed } from "../src/confirm-ui.ts";
-import {
-  confirmRequest,
-  setConfirmHook,
-  type ConfirmRequest,
-} from "../src/handlers/confirm.ts";
-import { dispatch } from "../src/handlers/index.ts";
-import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
+import { confirm, setConfirmHook, type ConfirmRequest } from "../src/handlers/confirm.ts";
+import { clearChrome, installChrome, rejectsWith, storageMock } from "./mock.ts";
 
 const COOKIES = {
   action: "readCookies",
@@ -20,50 +15,74 @@ afterEach(() => {
   clearChrome();
 });
 
-// ------------------------------------------------------- lg:confirm.request
+// ------------------------------------------------------- 裁决就在插件里
 
-test("lg:confirm.request answers with the hook's decision, it never throws", async () => {
-  const seen: ConfirmRequest[] = [];
-  setConfirmHook(async (request) => {
-    seen.push(request);
-    return false;
+test("silent 模式下高危动作直接放行，一个框都不弹", async () => {
+  storageMock({ "browse:config": { confirm_mode: "silent" } });
+  setConfirmHook(async () => {
+    throw new Error("silent 模式不该问用户");
   });
-  assert.deepEqual(await dispatch("lg:confirm.request", { ...COOKIES }), {
-    approved: false,
-  });
-  assert.deepEqual(seen, [COOKIES]);
-
-  setConfirmHook(async () => true);
-  assert.deepEqual(await dispatch("lg:confirm.request", { ...COOKIES }), {
-    approved: true,
-  });
+  await confirm({ ...COOKIES } as ConfirmRequest);
 });
 
-test("a browser-wide action arrives with a null url", async () => {
-  let got: ConfirmRequest | null = null;
-  setConfirmHook(async (request) => {
-    got = request;
+test("always 模式每次都问，同意过也照问", async () => {
+  storageMock({ "browse:config": { confirm_mode: "always" } });
+  let asked = 0;
+  setConfirmHook(async () => {
+    asked += 1;
     return true;
   });
-  await confirmRequest({ action: "readBookmarks", method: "lg:bookmarks.search", url: null });
-  assert.deepEqual(got, {
-    action: "readBookmarks",
-    method: "lg:bookmarks.search",
-    url: null,
-  });
+  await confirm({ ...COOKIES } as ConfirmRequest);
+  await confirm({ ...COOKIES } as ConfirmRequest);
+  assert.equal(asked, 2);
 });
 
-test("an unknown action is an argument error, not a silent approval", async () => {
+test("per_domain 模式问一次，同意之后这个域名就不再问", async () => {
+  const store = storageMock({ "browse:config": { confirm_mode: "per_domain" } });
+  let asked = 0;
   setConfirmHook(async () => {
-    throw new Error("the hook must not be reached");
+    asked += 1;
+    return true;
   });
-  for (const params of [
-    { action: "takeOverTheWorld", method: "storage.getCookies", url: null },
-    { action: "readCookies", url: null },
-    {},
-  ]) {
-    await rejectsWith(() => confirmRequest(params), "invalid argument");
-  }
+  await confirm({ ...COOKIES, url: "https://bank.test/x" } as ConfirmRequest);
+  await confirm({ ...COOKIES, url: "https://bank.test/y" } as ConfirmRequest);
+  assert.equal(asked, 1, "同一个域名只该问一次");
+  assert.deepEqual((store.data["browse:config"] as { approved_domains: string[] }).approved_domains,
+                   ["bank.test"], "同意必须落盘，不能只活在内存里");
+
+  await confirm({ ...COOKIES, url: "https://other.test/" } as ConfirmRequest);
+  assert.equal(asked, 2, "换个域名要重新问");
+});
+
+test("per_domain 下点了拒绝，不记进免确认名单", async () => {
+  const store = storageMock({ "browse:config": { confirm_mode: "per_domain" } });
+  setConfirmHook(async () => false);
+  await rejectsWith(
+    () => confirm({ ...COOKIES, url: "https://bank.test/" } as ConfirmRequest),
+    "lg:user rejected",
+  );
+  const saved = store.data["browse:config"] as { approved_domains?: string[] } | undefined;
+  assert.deepEqual(saved?.approved_domains ?? [], []);
+});
+
+test("配置读不出来时按最严的模式办，不是按最松的", async () => {
+  // 存储坏了 / 权限没了：这时静默放行所有高危动作是最糟的失败方式
+  clearChrome();
+  let asked = 0;
+  setConfirmHook(async () => {
+    asked += 1;
+    return true;
+  });
+  await confirm({ ...COOKIES } as ConfirmRequest);
+  assert.equal(asked, 1, "读不到配置必须退到 always，而不是 silent");
+});
+
+test("hook 自己抛了异常，当拒绝处理", async () => {
+  storageMock({ "browse:config": { confirm_mode: "always" } });
+  setConfirmHook(async () => {
+    throw new Error("service worker 被回收了");
+  });
+  await rejectsWith(() => confirm({ ...COOKIES } as ConfirmRequest), "lg:user rejected");
 });
 
 // ------------------------------------------------------- the dialog window
