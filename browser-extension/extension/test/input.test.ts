@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { inputClick, inputKey, inputScroll, inputType } from "../src/handlers/input.ts";
+import { setConfirmHook, type ConfirmRequest } from "../src/handlers/confirm.ts";
 import { clearChrome, installChrome, page, rejectsWith, scriptingMock } from "./mock.ts";
 import type { JSDOM } from "jsdom";
 
@@ -216,5 +217,43 @@ test("typing into something that is not a text field fails loudly", async () => 
     "invalid argument",
   );
   assert.match(err.message, /cannot type into <div#d>/);
+  clearChrome();
+});
+
+test("a js= locator takes the same confirm as script.evaluate, css= takes none", async () => {
+  setup(`<button id="go">Go</button>`);
+  const asked: ConfirmRequest[] = [];
+  setConfirmHook(async (request) => {
+    asked.push(request);
+    return true;
+  });
+
+  await inputClick({ selector: "#go" });
+  assert.deepEqual(asked, [], "css= runs in ISOLATED, so it is not a high-risk action");
+
+  await inputClick({ selector: "js=document.querySelector('#go')" });
+  assert.deepEqual(asked, [
+    { action: "evalMainWorld", method: "input.click", url: "https://a.test/" },
+  ]);
+
+  setConfirmHook(async () => true);
+  clearChrome();
+});
+
+test("a refused confirm stops a js= locator on every input command", async () => {
+  setup(`<input id="u">`);
+  setConfirmHook(async () => false);
+
+  for (const call of [
+    () => inputClick({ selector: "js=document.querySelector('#u')" }),
+    () => inputType({ selector: "js=document.querySelector('#u')", text: "x" }),
+    () => inputKey({ selector: "js=document.querySelector('#u')", key: "Enter" }),
+    () => inputScroll({ selector: "js=document.querySelector('#u')", dy: 10 }),
+  ]) {
+    const err = await rejectsWith(call, "lg:user rejected");
+    assert.match(err.message, /user denied evalMainWorld for input\./);
+  }
+
+  setConfirmHook(async () => true);
   clearChrome();
 });

@@ -125,7 +125,12 @@ API，**不会换一套实现凑合**。
 ## 给 T08（安全层）的对接点
 
 高危动作（读写 cookie、读写 localStorage、MAIN world 执行 JS、下载、读写历史书签）
-统一走 `src/handlers/confirm.ts` 的钩子，扩展侧只有调用点，**策略全在 Python 侧**：
+统一走 `src/handlers/confirm.ts` 的钩子，扩展侧只有调用点，**策略全在 Python 侧**。
+
+「MAIN world 执行 JS」包括 `input.*` 用 `js=` 前缀定位的情况：它和 `script.evaluate`
+一样在页面上下文跑任意 JS，只是包了一层 locator 的外衣，所以用同一个
+`action: "evalMainWorld"`。另外三种前缀（`css=` / `text=` / `xpath=`）跑在 ISOLATED
+world，不是高危，不走确认。
 
 ```ts
 type RiskyAction =
