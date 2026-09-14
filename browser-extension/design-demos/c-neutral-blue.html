@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN" class="dark">
+<head>
+<meta charset="utf-8" />
+<title>方向 C · Neutral + 蓝 primary · 双栏工具台</title>
+<style>
+/* shadcn token 体系，基色 neutral，dark，primary 换成 Tailwind blue-600（推测:blue oklch 按 Tailwind v4 换算） */
+:root {
+  --radius: 0.5rem;
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.546 0.245 262.881);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: var(--primary);
+}
+* { border-color: var(--border); }
+body {
+  font: 13.5px/1.55 -apple-system, "SF Pro Text", system-ui, sans-serif;
+  margin: 0; background: var(--background); color: var(--foreground);
+}
+/* 骨架：双栏工具台（与 A/B 的单栏结构区分） */
+.layout { display: grid; grid-template-columns: 200px 1fr; min-height: 100vh; max-width: 980px; margin: 0 auto; }
+aside { border-right: 1px solid var(--border); padding: 28px 14px 28px 24px; position: sticky; top: 0; height: 100vh; box-sizing: border-box; }
+aside h1 { font-size: 14px; font-weight: 650; margin: 0 0 2px; letter-spacing: -0.01em; }
+aside .loc { font-family: ui-monospace, monospace; font-size: 10.5px; color: var(--muted-foreground); margin: 0 0 20px; word-break: break-all; }
+nav { display: flex; flex-direction: column; gap: 1px; }
+nav a {
+  color: var(--muted-foreground); text-decoration: none; font-size: 13px;
+  padding: 6px 10px; border-radius: calc(var(--radius)*0.8); display: flex; justify-content: space-between; align-items: center;
+}
+nav a.on { color: var(--foreground); background: var(--accent); }
+nav a .n { font-family: ui-monospace, monospace; font-size: 10.5px; color: var(--muted-foreground); }
+nav a.on .n { color: var(--primary); }
+main { padding: 28px 28px 90px; min-width: 0; }
+section { margin-bottom: 28px; scroll-margin-top: 20px; }
+section > h2 { font-size: 13px; font-weight: 600; margin: 0 0 3px; }
+section > .hint { color: var(--muted-foreground); font-size: 12px; margin: 0 0 10px; }
+
+/* Radio：紧凑行 */
+.radio-row { display: flex; gap: 9px; align-items: baseline; padding: 7px 0; }
+.radio-row + .radio-row { border-top: 1px solid var(--border); }
+.dot { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--input); flex: none; transform: translateY(2px); display: grid; place-items: center; }
+.radio-row.on .dot { border-color: var(--primary); }
+.radio-row.on .dot::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--primary); }
+.radio-row b { font-weight: 500; font-size: 13px; }
+.radio-row .what { color: var(--muted-foreground); font-size: 12px; margin-left: 8px; }
+
+textarea, input[type="text"], input[type="number"] {
+  font: inherit; font-family: ui-monospace, monospace; font-size: 12.5px;
+  width: 100%; box-sizing: border-box; padding: 6px 9px;
+  border-radius: calc(var(--radius)*0.8); border: 1px solid var(--input);
+  background: transparent; color: inherit;
+}
+textarea:focus, input:focus { outline: 2px solid var(--ring); outline-offset: 1px; border-color: transparent; }
+textarea { resize: vertical; }
+
+/* 功能开关：密排表 + badge 方法名 */
+table.feats { width: 100%; border-collapse: collapse; }
+table.feats th { text-align: left; font-weight: 500; color: var(--muted-foreground); font-size: 11.5px; padding: 0 8px 6px 0; }
+table.feats td { padding: 7px 8px 7px 0; border-top: 1px solid var(--border); vertical-align: middle; }
+table.feats tr:first-child td { border-top: 0; }
+table.feats td.domains { width: 170px; }
+table.feats td.sw { width: 44px; }
+.feat b { font-weight: 500; font-size: 13px; display: block; }
+.badge {
+  display: inline-block; margin: 2px 3px 0 0; padding: 0 6px;
+  font-family: ui-monospace, monospace; font-size: 10.5px; line-height: 1.7;
+  background: var(--secondary); color: var(--muted-foreground);
+  border-radius: 999px; border: 1px solid var(--border);
+}
+.switch { position: relative; width: 34px; height: 19px; border-radius: 10px; background: var(--input); transition: background .15s; display: inline-block; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: var(--muted-foreground); transition: left .15s; }
+.switch.on { background: var(--primary); }
+.switch.on::after { left: 17px; background: oklch(0.985 0 0); }
+
+.btn {
+  font: inherit; font-size: 13px; font-weight: 500;
+  padding: 5px 14px; border-radius: calc(var(--radius)*0.8);
+  border: 1px solid var(--border); background: var(--secondary); color: var(--secondary-foreground);
+  cursor: pointer;
+}
+.btn.primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+.btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+
+.checkline { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+.checkbox { width: 15px; height: 15px; border-radius: 4px; border: 1px solid var(--input); display: grid; place-items: center; font-size: 10px; color: oklch(0.985 0 0); }
+.checkbox.on { background: var(--primary); border-color: var(--primary); }
+.retain { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12.5px; }
+.retain input { width: 5em; }
+
+/* 粘底保存条 */
+.savebar {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  background: oklch(0.205 0 0 / 92%); backdrop-filter: blur(8px);
+  border-top: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px; padding: 10px 28px;
+}
+.savebar .status { color: var(--muted-foreground); font-size: 12.5px; margin-right: auto; }
+.savebar kbd {
+  font-family: ui-monospace, monospace; font-size: 10.5px;
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; color: var(--muted-foreground);
+}
+ul.domains { list-style: none; margin: 4px 0 0; padding: 0; }
+ul.domains li { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-top: 1px solid var(--border); font-family: ui-monospace, monospace; font-size: 12px; }
+ul.domains li:first-child { border-top: 0; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside>
+    <h1>browse 设置</h1>
+    <p class="loc">chrome.storage.local<br/>browse:config</p>
+    <nav>
+      <a class="on" href="#">确认模式<span class="n">01</span></a>
+      <a href="#">功能开关<span class="n">02</span></a>
+      <a href="#">拒绝名单<span class="n">03</span></a>
+      <a href="#">审计日志<span class="n">04</span></a>
+      <a href="#">免确认名单<span class="n">05</span></a>
+    </nav>
+  </aside>
+  <main>
+    <section id="mode">
+      <h2>做高危动作之前要不要问你</h2>
+      <p class="hint">读 cookie、跑网页里的 JS、下载文件、翻历史记录这些动作的确认策略。</p>
+      <div class="radio-row">
+        <span class="dot"></span>
+        <b>silent —— 不问，直接做（默认）</b><span class="what">直接执行，只记进审计日志。</span>
+      </div>
+      <div class="radio-row on">
+        <span class="dot"></span>
+        <b>per_domain —— 每个网站问一次</b><span class="what">同意之后这个网站就不再问。</span>
+      </div>
+      <div class="radio-row">
+        <span class="dot"></span>
+        <b>always —— 每次都问</b><span class="what">60 秒没人点按拒绝算。</span>
+      </div>
+    </section>
+
+    <section id="feats">
+      <h2>功能开关</h2>
+      <p class="hint">默认全部启用。关掉开关就全局禁用；「按域名」一栏填域名，只对这些网站禁用。</p>
+      <table class="feats">
+        <thead><tr><th>功能 / 方法</th><th>按域名禁用</th><th>启用</th></tr></thead>
+        <tbody>
+          <tr><td><b>标签页与导航</b><br/><span class="badge">getTree</span><span class="badge">create</span><span class="badge">close</span><span class="badge">activate</span><span class="badge">navigate</span><span class="badge">reload</span><span class="badge">captureScreenshot</span></td><td class="domains"><input type="text" placeholder="example.com a.test" /></td><td class="sw"><span class="switch on" role="switch" aria-checked="true"></span></td></tr>
+          <tr><td><b>在网页里跑 JS</b><br/><span class="badge">script.evaluate</span><span class="badge">script.callFunction</span></td><td class="domains"><input type="text" value="bank.test" /></td><td class="sw"><span class="switch on" role="switch" aria-checked="true"></span></td></tr>
+          <tr><td><b>点击、输入、滚动</b><br/><span class="badge">input.click</span><span class="badge">input.type</span><span class="badge">input.scroll</span><span class="badge">input.key</span></td><td class="domains"><input type="text" placeholder="example.com a.test" /></td><td class="sw"><span class="switch on" role="switch" aria-checked="true"></span></td></tr>
+          <tr><td><b>Cookie 与 localStorage</b><br/><span class="badge">getCookies</span><span class="badge">setCookie</span><span class="badge">deleteCookies</span><span class="badge">getLocalStorage</span><span class="badge">setLocalStorage</span></td><td class="domains"><input type="text" placeholder="example.com a.test" /></td><td class="sw"><span class="switch" role="switch" aria-checked="false"></span></td></tr>
+          <tr><td><b>网络事件监听</b><br/><span class="badge">network.subscribe</span><span class="badge">network.unsubscribe</span></td><td class="domains"><input type="text" placeholder="example.com a.test" /></td><td class="sw"><span class="switch on" role="switch" aria-checked="true"></span></td></tr>
+          <tr><td><b>历史记录</b><br/><span class="badge">lg:history.search</span><span class="badge">lg:history.delete</span></td><td class="domains"><input type="text" placeholder="example.com a.test" /></td><td class="sw"><span class="switch on" role="switch" aria-checked="true"></span></td></tr>
+          <tr><td><b>书签</b><br/><span class="badge">lg:bookmarks.search</span><span class="badge">lg:bookmarks.create</span><span class="badge">lg:bookmarks.remove</span></td><td class="domains"><input type="text" placeholder="example.com a.test" /></td><td class="sw"><span class="switch on" role="switch" aria-checked="true"></span></td></tr>
+          <tr><td><b>页面快照</b><br/><span class="badge">lg:page.snapshot</span></td><td class="domains"><input type="text" placeholder="example.com a.test" /></td><td class="sw"><span class="switch on" role="switch" aria-checked="true"></span></td></tr>
+          <tr><td><b>下载</b><br/><span class="badge">lg:downloads.start</span><span class="badge">lg:downloads.list</span><span class="badge">lg:downloads.cancel</span></td><td class="domains"><input type="text" placeholder="example.com a.test" /></td><td class="sw"><span class="switch on" role="switch" aria-checked="true"></span></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="deny">
+      <h2>一律拒绝的网站</h2>
+      <p class="hint">一行一个域名，连窗都不弹，直接拒。example.com 会把子域一起拒掉。</p>
+      <textarea rows="3">bank.test
+mail.test</textarea>
+    </section>
+
+    <section id="audit">
+      <h2>审计日志</h2>
+      <label class="checkline"><span class="checkbox on">✓</span> 记录审计日志</label>
+      <p class="hint" style="margin-top:6px">只记「对哪个网站做了什么动作、成没成」，不记正文、不记 cookie 的值。</p>
+      <div class="retain"><span>保留天数</span><input type="number" value="7" /><span style="color:var(--muted-foreground)">0 或负数 = 永不删除</span></div>
+    </section>
+
+    <section id="approved">
+      <h2>不再询问的网站</h2>
+      <p class="hint">只有 per_domain 模式用得上这份名单。</p>
+      <ul class="domains">
+        <li><span>shop.test</span><button class="btn" style="padding:3px 10px;font-size:12px">撤销</button></li>
+        <li><span>docs.example.com</span><button class="btn" style="padding:3px 10px;font-size:12px">撤销</button></li>
+      </ul>
+    </section>
+  </main>
+</div>
+<div class="savebar">
+  <span class="status">已保存</span>
+  <kbd>⌘S</kbd>
+  <button class="btn primary">保存</button>
+</div>
+</body>
+</html>

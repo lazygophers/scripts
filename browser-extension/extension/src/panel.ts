@@ -48,6 +48,7 @@ function render(domains: string[]): void {
     name.className = "domain";
     name.textContent = domain;
     const button = document.createElement("button");
+    button.className = "btn";
     button.textContent = msg("panelRevoke");
     button.addEventListener("click", () => {
       button.disabled = true;
@@ -86,8 +87,9 @@ function renderLog(entries: LogEntry[], state: string): void {
   }
   for (const entry of entries) {
     const row = document.createElement("li");
+    row.className = "logline";
     const mark = document.createElement("span");
-    mark.className = entry.ok ? "ok" : "bad";
+    mark.className = entry.ok ? "mark ok" : "mark bad";
     mark.textContent = entry.ok ? "✓" : "✗";
     const name = document.createElement("span");
     name.textContent = entry.ok ? entry.method : `${entry.method} — ${entry.error}`;

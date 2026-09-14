@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN" class="dark">
+<head>
+<meta charset="utf-8" />
+<title>方向 A · Zinc Dark · shadcn 经典暗色</title>
+<style>
+/* shadcn token 体系（ui.shadcn.com/docs/theming），基色 zinc（推测:色值按 Tailwind zinc 阶梯换算） */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(0.141 0.005 285.823);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.21 0.006 285.885);
+  --card-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.141 0.005 285.823);
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.552 0.016 285.938);
+}
+* { border-color: var(--border); }
+body {
+  font: 14px/1.6 -apple-system, "SF Pro Text", system-ui, sans-serif;
+  margin: 0; padding: 40px 24px 80px;
+  background: var(--background); color: var(--foreground);
+  display: flex; justify-content: center;
+}
+main { width: 100%; max-width: 640px; }
+h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; }
+.sub { color: var(--muted-foreground); font-size: 13px; margin: 0 0 8px; }
+.sub code { font-family: ui-monospace, monospace; font-size: 12px; }
+code { background: var(--muted); padding: 1px 5px; border-radius: calc(var(--radius)*0.6); font-size: 12px; }
+
+.card {
+  background: var(--card); color: var(--card-foreground);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 20px; margin-top: 16px;
+}
+.card > h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+.card > .hint { color: var(--muted-foreground); font-size: 12.5px; margin: 0 0 14px; }
+
+/* Radio：shadcn RadioGroup 风格 */
+.radio-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border-radius: calc(var(--radius)*0.8); cursor: pointer; }
+.radio-row:hover { background: var(--accent); }
+.radio-row + .radio-row { border-top: 1px solid var(--border); }
+.radio-row:first-of-type { border-top: 0; }
+.dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--input); margin-top: 2px; flex: none; display: grid; place-items: center; }
+.radio-row.on .dot { border-color: var(--primary); }
+.radio-row.on .dot::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--primary); }
+.radio-row .what { display: block; color: var(--muted-foreground); font-size: 12.5px; margin-top: 1px; }
+.radio-row b { font-weight: 500; font-size: 13.5px; }
+
+/* 输入 */
+textarea, input[type="text"], input[type="number"] {
+  font: inherit; font-family: ui-monospace, monospace; font-size: 13px;
+  width: 100%; box-sizing: border-box; padding: 8px 10px;
+  border-radius: calc(var(--radius)*0.8); border: 1px solid var(--input);
+  background: transparent; color: inherit;
+}
+textarea:focus, input:focus { outline: 2px solid var(--ring); outline-offset: 1px; }
+textarea { resize: vertical; }
+
+/* 功能开关：shadcn Switch */
+.feat { display: flex; align-items: center; gap: 12px; padding: 11px 0; }
+.feat + .feat { border-top: 1px solid var(--border); }
+.feat .meta { flex: 1; min-width: 0; }
+.feat .meta b { font-weight: 500; font-size: 13.5px; display: block; }
+.feat .meta code { display: block; background: none; padding: 0; color: var(--muted-foreground); font-size: 11px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feat input[type="text"] { width: 200px; flex: none; font-size: 12px; }
+.switch { position: relative; width: 38px; height: 22px; flex: none; border-radius: 11px; background: var(--input); transition: background .15s; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--foreground); transition: left .15s; }
+.switch.on { background: var(--primary); }
+.switch.on::after { left: 18px; background: var(--primary-foreground); }
+.switch.off::after { background: var(--muted-foreground); }
+
+/* 按钮 */
+.btn {
+  font: inherit; font-size: 13.5px; font-weight: 500;
+  padding: 7px 16px; border-radius: calc(var(--radius)*0.8);
+  border: 1px solid var(--border); background: var(--secondary); color: var(--secondary-foreground);
+  cursor: pointer;
+}
+.btn.primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+.btn.destructive { background: transparent; color: var(--destructive); border-color: oklch(0.704 0.191 22.216 / 40%); }
+.btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+
+.checkline { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+.checkbox { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--input); display: grid; place-items: center; font-size: 11px; color: var(--primary-foreground); }
+.checkbox.on { background: var(--primary); border-color: var(--primary); }
+.retain { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; }
+.retain input { width: 5.5em; font-size: 13px; }
+
+.bar { display: flex; gap: 10px; align-items: center; justify-content: flex-end; margin-top: 20px; }
+.bar .status { color: var(--muted-foreground); font-size: 13px; margin-right: auto; }
+ul.domains { list-style: none; margin: 8px 0 0; padding: 0; }
+ul.domains li { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); font-family: ui-monospace, monospace; font-size: 12.5px; }
+ul.domains li:first-child { border-top: 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>browse 设置</h1>
+  <p class="sub">这里改的和命令行读的是同一份设置，它就存在这一个地方：<code>chrome.storage.local · browse:config</code></p>
+
+  <section class="card">
+    <h2>做高危动作之前要不要问你</h2>
+    <p class="hint">读 cookie、跑网页里的 JS、下载文件、翻历史记录这些动作的确认策略。</p>
+    <div class="radio-row">
+      <span class="dot"></span>
+      <span><b>silent —— 不问，直接做（默认）</b>
+      <span class="what">这些都会直接执行，只记进审计日志。</span></span>
+    </div>
+    <div class="radio-row on">
+      <span class="dot"></span>
+      <span><b>per_domain —— 每个网站问一次</b>
+      <span class="what">对某个网站第一次做高危动作时弹窗问你，你同意之后这个网站就不再问。</span></span>
+    </div>
+    <div class="radio-row">
+      <span class="dot"></span>
+      <span><b>always —— 每次都问</b>
+      <span class="what">每一次高危动作都弹窗。窗口 60 秒没人点就按拒绝算。</span></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>功能开关</h2>
+    <p class="hint">这个扩展支持的功能全在这里，默认全部启用。关掉开关就全局禁用；右边填域名，只对这些网站禁用。</p>
+    <div class="feat">
+      <span class="meta"><b>标签页与导航</b><code>browsingContext.getTree create close activate navigate reload captureScreenshot</code></span>
+      <input type="text" placeholder="只对这些域名禁用" />
+      <span class="switch on" role="switch" aria-checked="true"></span>
+    </div>
+    <div class="feat">
+      <span class="meta"><b>在网页里跑 JS</b><code>script.evaluate · script.callFunction</code></span>
+      <input type="text" value="bank.test" />
+      <span class="switch on" role="switch" aria-checked="true"></span>
+    </div>
+    <div class="feat">
+      <span class="meta"><b>点击、输入、滚动</b><code>input.click type scroll key</code></span>
+      <input type="text" placeholder="只对这些域名禁用" />
+      <span class="switch on" role="switch" aria-checked="true"></span>
+    </div>
+    <div class="feat">
+      <span class="meta"><b>Cookie 与 localStorage</b><code>storage.getCookies setCookie deleteCookies getLocalStorage setLocalStorage</code></span>
+      <input type="text" placeholder="只对这些域名禁用" />
+      <span class="switch off" role="switch" aria-checked="false"></span>
+    </div>
+    <div class="feat">
+      <span class="meta"><b>网络事件监听</b><code>network.subscribe · network.unsubscribe</code></span>
+      <input type="text" placeholder="只对这些域名禁用" />
+      <span class="switch on" role="switch" aria-checked="true"></span>
+    </div>
+    <div class="feat">
+      <span class="meta"><b>历史记录</b><code>lg:history.search · lg:history.delete</code></span>
+      <input type="text" placeholder="只对这些域名禁用" />
+      <span class="switch on" role="switch" aria-checked="true"></span>
+    </div>
+    <div class="feat">
+      <span class="meta"><b>书签</b><code>lg:bookmarks.search create remove</code></span>
+      <input type="text" placeholder="只对这些域名禁用" />
+      <span class="switch on" role="switch" aria-checked="true"></span>
+    </div>
+    <div class="feat">
+      <span class="meta"><b>页面快照</b><code>lg:page.snapshot</code></span>
+      <input type="text" placeholder="只对这些域名禁用" />
+      <span class="switch on" role="switch" aria-checked="true"></span>
+    </div>
+    <div class="feat">
+      <span class="meta"><b>下载</b><code>lg:downloads.start list cancel</code></span>
+      <input type="text" placeholder="只对这些域名禁用" />
+      <span class="switch on" role="switch" aria-checked="true"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>一律拒绝的网站</h2>
+    <p class="hint">一行一个域名，连窗都不弹，直接拒。写 example.com 会把子域一起拒掉。</p>
+    <textarea rows="3">bank.test
+mail.test</textarea>
+  </section>
+
+  <section class="card">
+    <h2>审计日志</h2>
+    <label class="checkline"><span class="checkbox on">✓</span> 记录审计日志</label>
+    <p class="hint" style="margin-top:6px">只记「对哪个网站做了什么动作、成没成」，不记正文、不记 cookie 的值。</p>
+    <div class="retain"><span>保留天数</span><input type="number" value="7" /><span style="color:var(--muted-foreground);font-size:12.5px">0 或负数表示永不删除</span></div>
+  </section>
+
+  <div class="bar">
+    <span class="status">已保存</span>
+    <button class="btn destructive">清空审计日志</button>
+    <button class="btn primary">保存</button>
+  </div>
+
+  <section class="card">
+    <h2>不再询问的网站</h2>
+    <p class="hint">只有 per_domain 模式用得上这份名单。</p>
+    <ul class="domains">
+      <li><span>shop.test</span><button class="btn" style="padding:3px 12px;font-size:12.5px">撤销</button></li>
+      <li><span>docs.example.com</span><button class="btn" style="padding:3px 12px;font-size:12.5px">撤销</button></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

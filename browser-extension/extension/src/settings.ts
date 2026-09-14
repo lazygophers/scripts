@@ -103,7 +103,7 @@ export function render(config: BrowseConfig, path: string): void {
  * 一行一个功能，勾选框管全局禁用，旁边一格填「只对这些域名禁用」。
  */
 function renderFeatures(config: BrowseConfig): void {
-  const box = byId("features");
+  const box = byId("features-list");
   if (!box) {
     return;
   }
@@ -119,25 +119,33 @@ function renderFeatures(config: BrowseConfig): void {
     row.className = "feature";
     row.dataset.feature = feature.id;
 
+    const meta = document.createElement("div");
     const label = document.createElement("label");
     const off = document.createElement("input");
     off.type = "checkbox";
-    off.className = "feat-off";
+    off.className = "switch feat-off";
     // 勾 = 启用（默认）。存进配置的是「禁用名单」，所以这里取反
     off.checked = !config.disabled_features.includes(feature.id);
     label.append(off);
-    const name = document.createElement("span");
+    const name = document.createElement("b");
     name.textContent = msg(`settingsFeat${feature.id.slice(0, 1).toUpperCase()}${feature.id.slice(1)}`);
     label.append(name);
-    row.append(label);
+    meta.append(label);
 
-    const methods = document.createElement("code");
-    methods.textContent = feature.methods.join(" ");
-    row.append(methods);
+    const badges = document.createElement("span");
+    badges.className = "badges";
+    for (const method of feature.methods) {
+      const badge = document.createElement("code");
+      badge.className = "badge";
+      badge.textContent = method;
+      badges.append(badge);
+    }
+    meta.append(badges);
+    row.append(meta);
 
     const domains = document.createElement("input");
     domains.type = "text";
-    domains.className = "feat-domains";
+    domains.className = "txt feat-domains";
     domains.placeholder = msg("settingsFeatDomains");
     domains.spellcheck = false;
     domains.value = (perDomain[feature.id] ?? []).join(" ");
@@ -166,6 +174,7 @@ function renderApproved(domains: string[]): void {
     name.textContent = domain;
     const button = document.createElement("button");
     button.type = "button";
+    button.className = "btn";
     button.textContent = msg("panelRevoke");
     button.addEventListener("click", () => {
       button.disabled = true;

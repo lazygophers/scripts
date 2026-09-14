@@ -86,7 +86,7 @@
     "message": "browse settings"
   },
   "settingsIntro": {
-    "message": "These are the same settings the command line reads. They live in one file:"
+    "message": "These are the same settings the command line reads. They live in one place:"
   },
   "settingsConfirmMode": {
     "message": "When to ask before a risky action"
@@ -152,16 +152,16 @@
     "message": "loading…"
   },
   "settingsOffline": {
-    "message": "Cannot reach the local program, so nothing can be changed."
+    "message": "Cannot read the extension's own storage, so nothing can be changed."
   },
   "settingsOffline1": {
-    "message": "Run `browse daemon start` in a terminal."
+    "message": "Reload this page — the storage may have come back."
   },
   "settingsOffline2": {
-    "message": "If that still fails, run `browse install` again — it re-registers the messaging config."
+    "message": "If it stays broken, reload the extension in chrome://extensions."
   },
   "settingsOffline3": {
-    "message": "Then reload this page. What you see below is the last thing read, not lost settings."
+    "message": "What you see below is the last thing read, not lost settings."
   },
   "settingsBadMode": {
     "message": "Unknown confirmation mode: $1",
@@ -209,5 +209,20 @@
   },
   "settingsFeatDownloads": {
     "message": "Downloads"
+  },
+  "settingsNavMode": {
+    "message": "Mode"
+  },
+  "settingsNavFeatures": {
+    "message": "Features"
+  },
+  "settingsNavDeny": {
+    "message": "Deny list"
+  },
+  "settingsNavAudit": {
+    "message": "Audit log"
+  },
+  "settingsNavApproved": {
+    "message": "No-confirm sites"
   }
 }

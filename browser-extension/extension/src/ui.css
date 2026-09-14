@@ -1,0 +1,334 @@
+/**
+ * browse 扩展的公共 UI 层 —— shadcn 的 token 体系和组件范式，原生 CSS 落地。
+ *
+ * 2026-09-15 重设计（direction-approved.md：A 配色 + C 布局）。token 语义照搬
+ * ui.shadcn.com/docs/theming（类1）：background/foreground 成对，组件只认语义名。
+ * zinc 色值按 Tailwind 阶梯换算（推测:）；亮色由系统偏好自动切换，页面无需改动。
+ *
+ * 三个页面（settings / panel / confirm）共用这一份。新增组件先进这里，再在页面用 ——
+ * 禁止往单页 <style> 里再复制一份按钮或输入框样式。
+ */
+
+:root {
+  color-scheme: dark;
+  --radius: 0.5rem;
+  /* zinc · dark（选定方向 A）。要支持亮色时在这里加 prefers-color-scheme 覆盖即可 */
+  --background: oklch(0.141 0.005 285.823);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.21 0.006 285.885);
+  --card-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.141 0.005 285.823);
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.552 0.016 285.938);
+}
+
+/* ------------------------------------------------------------------ 基础 */
+
+* { border-color: var(--border); }
+
+body {
+  font: 13.5px/1.6 -apple-system, "SF Pro Text", system-ui, sans-serif;
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 4px; }
+h2 { font-size: 13px; font-weight: 600; margin: 0 0 3px; }
+.hint { color: var(--muted-foreground); font-size: 12.5px; margin: 0 0 10px; }
+
+code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.92em;
+  background: var(--muted);
+  padding: 1px 5px;
+  border-radius: calc(var(--radius) * 0.6);
+}
+
+kbd {
+  font-family: ui-monospace, monospace;
+  font-size: 10.5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--muted-foreground);
+}
+
+/* ------------------------------------------------------------------ 卡片 */
+
+.card {
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+
+/* ------------------------------------------------------------------ 按钮 */
+
+.btn {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: calc(var(--radius) * 0.8);
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--accent); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+.btn.primary:hover { opacity: 0.9; background: var(--primary); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--muted-foreground); }
+.btn.ghost:hover { background: var(--accent); color: var(--accent-foreground); }
+.btn.destructive { background: transparent; color: var(--destructive); border-color: color-mix(in oklch, var(--destructive) 40%, transparent); }
+.btn.destructive:hover { background: color-mix(in oklch, var(--destructive) 12%, transparent); }
+.btn:focus-visible, .switch:focus-visible, .dot:focus-visible, .tick:focus-visible,
+textarea:focus-visible, .txt:focus-visible, .num:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------- 表单控件 */
+
+textarea, .txt, .num {
+  font: inherit;
+  font-family: ui-monospace, monospace;
+  font-size: 12.5px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border-radius: calc(var(--radius) * 0.8);
+  border: 1px solid var(--input);
+  background: transparent;
+  color: inherit;
+}
+textarea { resize: vertical; line-height: 1.5; }
+.num { width: 5.5em; }
+
+/* Switch：勾选框换皮，表单语义不变 */
+input.switch {
+  appearance: none;
+  width: 34px;
+  height: 19px;
+  border-radius: 10px;
+  background: var(--input);
+  position: relative;
+  cursor: pointer;
+  margin: 0;
+  flex: none;
+  transition: background 0.15s;
+}
+input.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--muted-foreground);
+  transition: left 0.15s, background 0.15s;
+}
+input.switch:checked { background: var(--primary); }
+input.switch:checked::after { left: 17px; background: var(--primary-foreground); }
+
+/* Radio：圆点 */
+input.dot {
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid var(--input);
+  margin: 0;
+  flex: none;
+  position: relative;
+  cursor: pointer;
+}
+input.dot:checked { border-color: var(--primary); }
+input.dot:checked::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+
+/* Checkbox：方块勾 */
+input.tick {
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1px solid var(--input);
+  margin: 0;
+  flex: none;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--primary-foreground);
+}
+input.tick:checked { background: var(--primary); border-color: var(--primary); }
+input.tick:checked::after { content: "✓"; }
+
+/* 单选/多选行 */
+.pick {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 9px 10px;
+  border-radius: calc(var(--radius) * 0.8);
+  cursor: pointer;
+}
+.pick:hover { background: var(--accent); }
+.pick + .pick { border-top: 1px solid var(--border); }
+.pick .what { display: block; color: var(--muted-foreground); font-size: 12px; margin-top: 1px; }
+.pick b { font-weight: 500; font-size: 13px; }
+
+/* ------------------------------------------------------------------ 徽章 */
+
+code.badge {
+  display: inline-block;
+  margin: 2px 3px 0 0;
+  padding: 0 6px;
+  font-size: 10.5px;
+  line-height: 1.7;
+  background: var(--secondary);
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ 列表行 */
+
+ul.rows { list-style: none; margin: 6px 0 0; padding: 0; }
+ul.rows li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  font-family: ui-monospace, monospace;
+  font-size: 12.5px;
+}
+ul.rows li:first-child { border-top: 0; }
+ul.rows .btn { padding: 3px 11px; font-size: 12px; }
+
+/* ------------------------------------------------------------ 设置页骨架 */
+
+/* C 方向的双栏：左侧锚点导航，右侧内容。窄窗口（含截图）退化为单栏 */
+.layout {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 0 36px;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+  box-sizing: border-box;
+}
+@media (max-width: 720px) {
+  .layout { grid-template-columns: 1fr; }
+  .layout aside { display: none; }
+}
+.layout aside { position: sticky; top: 32px; align-self: start; }
+.layout aside h1 { font-size: 15px; }
+.layout aside .loc {
+  font-family: ui-monospace, monospace;
+  font-size: 10.5px;
+  color: var(--muted-foreground);
+  margin: 2px 0 18px;
+  word-break: break-all;
+}
+nav.toc { display: flex; flex-direction: column; gap: 1px; }
+nav.toc a {
+  color: var(--muted-foreground);
+  text-decoration: none;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: calc(var(--radius) * 0.8);
+}
+nav.toc a:hover { color: var(--foreground); background: var(--accent); }
+.layout section { margin-bottom: 30px; scroll-margin-top: 16px; }
+
+/* 粘底保存条 */
+.savebar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0 14px;
+  margin-top: 4px;
+  background: linear-gradient(to top, var(--background) 60%, transparent);
+}
+.savebar .status { color: var(--muted-foreground); font-size: 12.5px; margin-right: auto; }
+.savebar .status.bad { color: var(--destructive); }
+.savebar .status.good { color: var(--foreground); }
+
+/* 功能开关行（settings）：名称+开关 一栏，按域名 一栏 */
+.feature {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 170px;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 0;
+}
+.feature + .feature { border-top: 1px solid var(--border); }
+.feature label { display: inline-flex; align-items: center; gap: 9px; font-weight: 500; font-size: 13px; cursor: pointer; }
+.feature .badges { display: block; margin-top: 3px; min-width: 0; overflow: hidden; }
+@media (max-width: 720px) {
+  .feature { grid-template-columns: minmax(0, 1fr) 34px; }
+  .feature .txt { grid-column: 1 / -1; order: 3; }
+}
+
+/* ---------------------------------------------------------------- 面板/弹窗 */
+
+.panel { width: 320px; padding: 14px 16px 18px; box-sizing: border-box; }
+.panel .stack { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+
+.dialog { width: 420px; padding: 20px 22px 18px; box-sizing: border-box; }
+.dialog dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 5px 14px;
+  margin: 0 0 16px;
+}
+.dialog dt { color: var(--muted-foreground); }
+.dialog dd { margin: 0; word-break: break-all; font-family: ui-monospace, monospace; font-size: 12.5px; }
+.dialog .row { display: flex; gap: 10px; justify-content: flex-end; }
+
+/* 日志行（panel） */
+ul.rows li.logline { font-size: 12px; justify-content: flex-start; }
+ul.rows li.logline .mark { width: 1.2em; flex: none; }
+ul.rows li.logline .mark.ok { color: var(--foreground); }
+ul.rows li.logline .mark.bad { color: var(--destructive); }
+ul.rows li.logline .ms { color: var(--muted-foreground); margin-left: auto; font-size: 11px; }
+
+/* 离线提示（settings） */
+#offline {
+  display: none;
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in oklch, var(--destructive) 40%, transparent);
+  background: color-mix(in oklch, var(--destructive) 10%, var(--card));
+}
+#offline ol { margin: 8px 0 0; padding-left: 20px; color: var(--muted-foreground); }
+body.offline #offline { display: block; }
+body.offline #form { opacity: 0.4; pointer-events: none; }

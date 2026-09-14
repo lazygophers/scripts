@@ -86,7 +86,7 @@
     "message": "browse 设置"
   },
   "settingsIntro": {
-    "message": "这里改的和命令行读的是同一份设置，它就存在这一个文件里："
+    "message": "这里改的和命令行读的是同一份设置，它就存在这一个地方："
   },
   "settingsConfirmMode": {
     "message": "做高危动作之前要不要问你"
@@ -152,16 +152,16 @@
     "message": "读取中……"
   },
   "settingsOffline": {
-    "message": "连不上本地程序，现在改不了设置。"
+    "message": "插件自己的存储读不出来，现在改不了设置。"
   },
   "settingsOffline1": {
-    "message": "在终端里跑一下 `browse daemon start`。"
+    "message": "先刷新本页 —— 存储可能自己恢复了。"
   },
   "settingsOffline2": {
-    "message": "还是不行就重跑一次 `browse install`，它会重新注册通信配置。"
+    "message": "还不行就去 chrome://extensions 里重新加载这个扩展。"
   },
   "settingsOffline3": {
-    "message": "然后刷新本页。下面显示的是上一次读到的内容，不是你的设置丢了。"
+    "message": "下面显示的是上一次读到的内容，不是你的设置丢了。"
   },
   "settingsBadMode": {
     "message": "不认识的确认模式：$1",
@@ -209,5 +209,20 @@
   },
   "settingsFeatDownloads": {
     "message": "下载"
+  },
+  "settingsNavMode": {
+    "message": "确认模式"
+  },
+  "settingsNavFeatures": {
+    "message": "功能开关"
+  },
+  "settingsNavDeny": {
+    "message": "拒绝名单"
+  },
+  "settingsNavAudit": {
+    "message": "审计日志"
+  },
+  "settingsNavApproved": {
+    "message": "免确认名单"
   }
 }

@@ -3,33 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <title data-i18n="confirmTitle">browse — confirm</title>
-    <style>
-      :root { color-scheme: dark light; }
-      body {
-        font: 13px/1.5 system-ui, sans-serif;
-        margin: 0;
-        padding: 18px 20px;
-        background: #16181d;
-        color: #e6e8ec;
-      }
-      h1 { font-size: 15px; margin: 0 0 12px; }
-      dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0 0 18px; }
-      dt { color: #9aa1ac; }
-      dd { margin: 0; word-break: break-all; font-family: ui-monospace, monospace; }
-      .row { display: flex; gap: 10px; justify-content: flex-end; }
-      button {
-        font: inherit;
-        padding: 6px 16px;
-        border-radius: 6px;
-        border: 1px solid #3a3f48;
-        background: #23262d;
-        color: inherit;
-        cursor: pointer;
-      }
-      button.yes { background: #2563eb; border-color: #2563eb; color: #fff; }
-    </style>
+    <link rel="stylesheet" href="ui.css" />
   </head>
-  <body>
+  <body class="dialog">
     <h1 data-i18n="confirmHeading">Allow this?</h1>
     <dl>
       <dt data-i18n="confirmAction">action</dt><dd id="action"></dd>
@@ -37,8 +13,8 @@
       <dt data-i18n="confirmTarget">target</dt><dd id="url"></dd>
     </dl>
     <div class="row">
-      <button id="no" data-i18n="confirmDeny">Deny</button>
-      <button id="yes" class="yes" data-i18n="confirmAllow">Allow</button>
+      <button id="no" class="btn destructive" data-i18n="confirmDeny">Deny</button>
+      <button id="yes" class="btn primary" data-i18n="confirmAllow">Allow</button>
     </div>
     <script type="module" src="confirm-page.js"></script>
   </body>

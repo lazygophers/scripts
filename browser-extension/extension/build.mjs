@@ -39,7 +39,7 @@ if (watch) {
   await build(pageOptions);
 }
 
-for (const file of ["manifest.json", "confirm.html", "panel.html", "settings.html"]) {
+for (const file of ["manifest.json", "confirm.html", "panel.html", "settings.html", "ui.css"]) {
   await cp(`src/${file}`, `${outdir}/${file}`);
   console.log(`${file} -> ${outdir}/${file}`);
 }
