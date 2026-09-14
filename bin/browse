@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""browse — 用命令行驱动浏览器扩展（标签页、点击、填表、截图、网络事件）"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.browse import main
+
+raise SystemExit(main())
