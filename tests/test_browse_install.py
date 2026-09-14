@@ -453,11 +453,16 @@ class TestRegistryBackend(unittest.TestCase):
 
 class TestCli(TempHome):
     def run_cli(self, *args: str) -> int:
+        import io
         import unittest.mock as mock
 
         # 固定成 darwin：CLI 的行为与跑测试的机器是什么系统无关。
+        # stderr 换成 StringIO 有两个作用：`isatty()` 恒为 False，交互那半边
+        # （构建扩展、等 120 秒、**写系统策略要管理员密码**）在测试里一步都不会跑；
+        # 顺带把 reporter 的输出收走，不再喷到跑测试的人的终端上。
         with mock.patch.object(nh.pathlib.Path, "home", staticmethod(lambda: self.home)), \
-                mock.patch.object(nh, "platform_key", lambda *a: "darwin"):
+                mock.patch.object(nh, "platform_key", lambda *a: "darwin"), \
+                mock.patch("sys.stderr", new=io.StringIO()):
             return nh.main(["browse install", *args])
 
     def test_install_and_uninstall_round_trip(self) -> None:
