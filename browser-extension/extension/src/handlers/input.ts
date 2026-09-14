@@ -1,6 +1,7 @@
 import { parseLocator, type LocateOptions, type Scheme } from "../locator.ts";
 import { CommandError } from "../protocol.ts";
-import { resolveContext } from "./context.ts";
+import { confirm } from "./confirm.ts";
+import { resolveContext, targetUrl } from "./context.ts";
 import { runInPage, type PageLocate, type PageResult } from "./inject.ts";
 
 /**
@@ -79,8 +80,19 @@ async function run(
     ...(params.wait === false ? { wait: false } : {}),
   };
   const target = await resolveContext(params);
-  // `js=` evaluates page expressions, so it needs the page realm (spec 6.4).
+  // `js=` evaluates page expressions, so it needs the page realm (spec 6.4) —
+  // which makes it arbitrary JS in the page, exactly what `script.evaluate`
+  // does, just wearing a locator's clothes. Spec 4.4 lists it as high-risk for
+  // that reason, so it takes the same confirm as `script.evaluate`. The other
+  // three schemes stay in ISOLATED and are not high-risk.
   const world = locator?.scheme === "js" ? "MAIN" : "ISOLATED";
+  if (world === "MAIN") {
+    await confirm({
+      action: "evalMainWorld",
+      method: `input.${action}`,
+      url: await targetUrl(target),
+    });
+  }
 
   const value = await runInPage(target, world, pageInput, [action, locator, options, payload]);
   return { ...(value as Record<string, unknown>), "lg:isTrusted": false };
