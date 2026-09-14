@@ -1,0 +1,28 @@
+{
+  "extName": { "message": "lazygophers browse" },
+  "extDescription": { "message": "Local browser control over native messaging. Driven by the `browse` CLI." },
+  "actionTitle": { "message": "browse" },
+
+  "panelTitle": { "message": "browse" },
+  "panelDisconnect": { "message": "Disconnect now" },
+  "panelDisconnected": { "message": "Disconnected" },
+  "panelRecent": { "message": "Recent commands" },
+  "panelLoading": { "message": "loading…" },
+  "panelAllowed": { "message": "Domains that skip confirmation" },
+  "panelDomainCount": { "message": "$1 domains", "placeholders": { "1": { "content": "$1" } } },
+  "panelNoDomains": { "message": "None yet — every risky action still asks." },
+  "panelRevoke": { "message": "Revoke" },
+  "panelNoAnswer": { "message": "no answer from the service worker" },
+  "panelDaemonConnected": { "message": "daemon connected" },
+  "panelDaemonDisconnected": { "message": "daemon not connected" },
+  "panelNothingRun": { "message": "Nothing run yet." },
+
+  "confirmTitle": { "message": "browse — confirm" },
+  "confirmHeading": { "message": "Allow this?" },
+  "confirmAction": { "message": "action" },
+  "confirmCommand": { "message": "command" },
+  "confirmTarget": { "message": "target" },
+  "confirmDeny": { "message": "Deny" },
+  "confirmAllow": { "message": "Allow" },
+  "confirmWholeBrowser": { "message": "the whole browser" }
+}

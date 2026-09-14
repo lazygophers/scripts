@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>browse</title>
+    <title data-i18n="panelTitle">browse</title>
     <style>
       :root { color-scheme: dark light; }
       body {
@@ -42,14 +42,14 @@
     </style>
   </head>
   <body>
-    <button id="cut">Disconnect now</button>
+    <button id="cut" data-i18n="panelDisconnect">Disconnect now</button>
 
-    <h1>Recent commands</h1>
-    <p id="logStatus">loading…</p>
+    <h1 data-i18n="panelRecent">Recent commands</h1>
+    <p id="logStatus" data-i18n="panelLoading">loading…</p>
     <ul id="log" class="log"></ul>
 
-    <h1>Domains that skip confirmation</h1>
-    <p id="status">loading…</p>
+    <h1 data-i18n="panelAllowed">Domains that skip confirmation</h1>
+    <p id="status" data-i18n="panelLoading">loading…</p>
     <ul id="list"></ul>
     <script type="module" src="panel.js"></script>
   </body>

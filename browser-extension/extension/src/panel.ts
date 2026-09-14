@@ -10,6 +10,7 @@
  * through the service worker to the daemon. The log and the brake are the
  * service worker's own — they keep working when the daemon does not.
  */
+import { localize, msg } from "./i18n.ts";
 import type { LogEntry } from "./native-port.ts";
 
 const list = document.getElementById("list") as HTMLUListElement | null;
@@ -21,7 +22,7 @@ const cut = document.getElementById("cut") as HTMLButtonElement | null;
 async function call(op: string, domain?: string): Promise<string[]> {
   const reply = await chrome.runtime.sendMessage({ type: "browse-approvals", op, domain });
   if (!reply?.ok) {
-    throw new Error(reply?.error ?? "no answer from the service worker");
+    throw new Error(reply?.error ?? msg("panelNoAnswer"));
   }
   return reply.domains as string[];
 }
@@ -33,8 +34,8 @@ function render(domains: string[]): void {
   list.replaceChildren();
   if (statusNode) {
     statusNode.textContent = domains.length
-      ? `${domains.length} domain${domains.length > 1 ? "s" : ""}`
-      : "None yet — every risky action still asks.";
+      ? msg("panelDomainCount", String(domains.length))
+      : msg("panelNoDomains");
   }
   for (const domain of domains) {
     const row = document.createElement("li");
@@ -42,7 +43,7 @@ function render(domains: string[]): void {
     name.className = "domain";
     name.textContent = domain;
     const button = document.createElement("button");
-    button.textContent = "Revoke";
+    button.textContent = msg("panelRevoke");
     button.addEventListener("click", () => {
       button.disabled = true;
       void run(() => call("revoke", domain));
@@ -64,8 +65,9 @@ async function run(body: () => Promise<string[]>): Promise<void> {
 
 function renderLog(entries: LogEntry[], state: string): void {
   if (logStatus) {
-    logStatus.textContent =
-      state === "connected" ? "daemon connected" : "daemon not connected";
+    logStatus.textContent = msg(
+      state === "connected" ? "panelDaemonConnected" : "panelDaemonDisconnected",
+    );
   }
   if (!logList) {
     return;
@@ -73,7 +75,7 @@ function renderLog(entries: LogEntry[], state: string): void {
   logList.replaceChildren();
   if (entries.length === 0) {
     const row = document.createElement("li");
-    row.textContent = "Nothing run yet.";
+    row.textContent = msg("panelNothingRun");
     logList.append(row);
     return;
   }
@@ -106,10 +108,11 @@ async function loadLog(): Promise<void> {
 cut?.addEventListener("click", () => {
   cut.disabled = true;
   void chrome.runtime.sendMessage({ type: "browse-disconnect" }).then(() => {
-    cut.textContent = "Disconnected";
+    cut.textContent = msg("panelDisconnected");
     void loadLog();
   });
 });
 
+localize();
 void run(() => call("list"));
 void loadLog();

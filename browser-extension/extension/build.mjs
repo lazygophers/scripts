@@ -43,3 +43,8 @@ for (const file of ["manifest.json", "confirm.html", "panel.html"]) {
   await cp(`src/${file}`, `${outdir}/${file}`);
   console.log(`${file} -> ${outdir}/${file}`);
 }
+
+// `_locales` must sit at the extension root or `__MSG_*__` in the manifest
+// resolves to nothing and Chrome refuses to load the extension.
+await cp("src/_locales", `${outdir}/_locales`, { recursive: true });
+console.log(`_locales -> ${outdir}/_locales`);

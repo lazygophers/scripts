@@ -1,0 +1,28 @@
+{
+  "extName": { "message": "lazygophers browse" },
+  "extDescription": { "message": "通过 native messaging 在本机控制浏览器，由 `browse` 命令行驱动。" },
+  "actionTitle": { "message": "browse" },
+
+  "panelTitle": { "message": "browse" },
+  "panelDisconnect": { "message": "立即断开" },
+  "panelDisconnected": { "message": "已断开" },
+  "panelRecent": { "message": "最近执行的指令" },
+  "panelLoading": { "message": "加载中……" },
+  "panelAllowed": { "message": "免确认的域名" },
+  "panelDomainCount": { "message": "$1 个域名", "placeholders": { "1": { "content": "$1" } } },
+  "panelNoDomains": { "message": "还没有 —— 每个高危动作都会问你。" },
+  "panelRevoke": { "message": "撤销" },
+  "panelNoAnswer": { "message": "service worker 没有回应" },
+  "panelDaemonConnected": { "message": "daemon 已连接" },
+  "panelDaemonDisconnected": { "message": "daemon 未连接" },
+  "panelNothingRun": { "message": "还没跑过任何指令。" },
+
+  "confirmTitle": { "message": "browse — 确认" },
+  "confirmHeading": { "message": "允许这次操作吗？" },
+  "confirmAction": { "message": "动作" },
+  "confirmCommand": { "message": "指令" },
+  "confirmTarget": { "message": "目标" },
+  "confirmDeny": { "message": "拒绝" },
+  "confirmAllow": { "message": "允许" },
+  "confirmWholeBrowser": { "message": "整个浏览器" }
+}

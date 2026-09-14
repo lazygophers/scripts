@@ -56,6 +56,7 @@ from lib.browse_protocol import (
     command,
 )
 from lib.browse_security import CONFIRM_MODES
+from lib.i18n import consume_lang, resolve_lang, set_lang, t
 from lib.notify import consume_debug, consume_dry_run, consume_no_say
 from lib.skills_help import consume_skills
 from lib.ui import reporter, timed
@@ -116,7 +117,8 @@ DEFAULT_CONCURRENCY = 4
 # 的就绪等待。
 SPAWN_TIMEOUT = 5.0
 # 自举是后台起进程、日志丢弃的，起不来时看不到原因；把手动前台跑的命令写进报错里。
-SPAWN_HINT = "看具体原因：把 `browse daemon run --socket <path>` 放前台跑一遍"
+def spawn_hint() -> str:
+    return t("daemon.spawn_hint")
 _DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)(ms|s|m|h)?$")
 
 
@@ -164,7 +166,7 @@ def split_tokens(tokens: list[str]) -> tuple[list[str], dict]:
             continue
         name, eq, raw = token[2:].partition("=")
         if not name:
-            raise UsageError(f"空的选项名: {token!r}")
+            raise UsageError(t("usage.empty_option", token=repr(token)))
         if eq:
             flags[_camel(name)] = _coerce(raw)
         elif i + 1 < len(tokens) and not tokens[i + 1].startswith("--"):
@@ -183,19 +185,19 @@ def resolve_method(module: str, action: str) -> str:
     for candidate in (f"{module}.{action}", f"lg:{module}.{action}"):
         if candidate in METHODS:
             return candidate
-    raise UsageError(f"没有这条指令: {module} {action}（`browse --help` 看全部）")
+    raise UsageError(t("usage.no_such_command", module=module, action=action))
 
 
 def parse_command(tokens: list[str]) -> tuple[str, dict, dict]:
     """`['input','click','text=登录','--index','1']` → (method, params, CLI 选项)。"""
     if len(tokens) < 2:
-        raise UsageError("要写成 `browse <module> <action> [参数...]`")
+        raise UsageError(t("usage.command_shape"))
     method = resolve_method(tokens[0], tokens[1])
     positional, flags = split_tokens(tokens[2:])
     names = METHODS[method]
     if len(positional) > len(names):
         extra = " ".join(positional[len(names):])
-        raise UsageError(f"{method} 最多吃 {len(names)} 个位置参数，多出来的: {extra}")
+        raise UsageError(t("usage.too_many_positional", method=method, count=len(names), extra=extra))
     params = {name: _coerce(value) for name, value in zip(names, positional)}
     opts = {key: flags.pop(key) for key in list(flags) if key in CLI_FLAGS}
     params.update(flags)
@@ -212,13 +214,13 @@ def parse_run_item(line: str) -> tuple[str, dict]:
     """
     tokens = shlex.split(line)
     if not tokens:
-        raise UsageError(f"空指令: {line!r}")
+        raise UsageError(t("usage.empty_item", line=repr(line)))
     head, dot, action = tokens[0].rpartition(".")
     if not dot:
-        raise UsageError(f"指令要写成 `<module>.<action> [参数...]`: {line!r}")
+        raise UsageError(t("usage.item_shape", line=repr(line)))
     method, params, opts = parse_command([head, action, *tokens[1:]])
     if opts:
-        raise UsageError(f"`run` 的指令串里不能带 CLI 选项 {sorted(opts)}: {line!r}")
+        raise UsageError(t("usage.item_has_cli_flags", opts=sorted(opts), line=repr(line)))
     return method, params
 
 
@@ -231,11 +233,11 @@ def confirm_mode_of(opts: dict) -> str:
     raw = opts.get("confirmMode")
     if raw in (None, True):
         if raw is True:
-            raise UsageError(f"--confirm-mode 要带值：{' / '.join(CONFIRM_MODES)}")
+            raise UsageError(t("usage.confirm_mode_needs_value", modes=" / ".join(CONFIRM_MODES)))
         return ""
     mode = str(raw).strip()
     if mode not in CONFIRM_MODES:
-        raise UsageError(f"--confirm-mode 只能是 {' / '.join(CONFIRM_MODES)}：{mode!r}")
+        raise UsageError(t("usage.confirm_mode_invalid", modes=" / ".join(CONFIRM_MODES), mode=repr(mode)))
     return mode
 
 
@@ -244,7 +246,7 @@ def parse_duration(raw) -> float:
     text = str(raw).strip()
     match = _DURATION_RE.match(text)
     if not match:
-        raise UsageError(f"时长写不对: {text!r}（例：30s、2m、500ms）")
+        raise UsageError(t("usage.duration_invalid", text=repr(text)))
     return float(match.group(1)) * {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}[match.group(2) or "s"]
 
 
@@ -264,7 +266,7 @@ def ensure_daemon(sock: pathlib.Path, *, spawn: bool = True, confirm_mode: str =
     if not spawn:
         return False
     if not SCRIPT_PATH.is_file():
-        raise UsageError(f"找不到 browse 自身的可执行文件 {SCRIPT_PATH}，没法自举 daemon")
+        raise UsageError(t("usage.no_self_path", path=SCRIPT_PATH))
     subprocess.Popen(
         [sys.executable, str(SCRIPT_PATH), "daemon", "run", "--socket", str(sock),
          *(["--confirm-mode", confirm_mode] if confirm_mode else [])],
@@ -301,7 +303,7 @@ def daemon_run(sock: pathlib.Path, idle_timeout: float, confirm_mode: str = "") 
     if probe(sock):
         # pid 文件写在这里，先确认这一个是我们的——否则下面的 finally 会把正在跑的
         # 那个 daemon 的 pid 文件删掉，`daemon stop` 就再也找不到它
-        reporter(stderr=True).err(f"这个 socket 上已经有 daemon 在跑：{sock}")
+        reporter(stderr=True).err(t("daemon.already_running", sock=sock))
         return EXIT_FAILED
     pid_file = pid_path(sock)
     pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -316,27 +318,27 @@ def daemon_stop(sock: pathlib.Path) -> int:
     """SIGTERM 掉 daemon 并等 socket 消失。没在跑也算成功（幂等）。"""
     report = reporter(stderr=True)
     if not probe(sock) and not pid_path(sock).exists():
-        report.info("daemon 本来就没在跑")
+        report.info(t("daemon.not_running"))
         return EXIT_OK
     try:
         pid = int(pid_path(sock).read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
-        report.err(f"daemon 在跑（{sock}）但读不到 pid 文件 {pid_path(sock)}，请手动结束进程")
+        report.err(t("daemon.pid_unreadable", sock=sock, pid_file=pid_path(sock)))
         return EXIT_FAILED
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         pid_path(sock).unlink(missing_ok=True)
         sock.unlink(missing_ok=True)
-        report.info(f"daemon 进程 {pid} 已经不在了，清掉残留文件")
+        report.info(t("daemon.gone", pid=pid))
         return EXIT_OK
     deadline = time.monotonic() + SPAWN_TIMEOUT
     while time.monotonic() < deadline:
         if not probe(sock):
-            report.ok(f"daemon 已停（pid {pid}）")
+            report.ok(t("daemon.stopped", pid=pid))
             return EXIT_OK
         time.sleep(0.05)
-    report.err(f"发了 SIGTERM 但 daemon（pid {pid}）{SPAWN_TIMEOUT:.0f} 秒内没退")
+    report.err(t("daemon.stop_timeout", pid=pid, seconds=f"{SPAWN_TIMEOUT:.0f}"))
     return EXIT_FAILED
 
 
@@ -356,7 +358,7 @@ async def execute(method: str, params: dict, sock: pathlib.Path, *,
         reader, writer, _ = await connect("cli", sock, confirm_mode=confirm_mode)
     except (OSError, ProtocolError) as exc:
         return {"status": "failed", "error": ERR_NOT_CONNECTED,
-                "message": f"连不上 daemon（{sock}）: {exc}"}
+                "message": t("conn.connect_failed", sock=sock, error=exc)}
     try:
         writer.write(pack(command(1, method, params), MAX_INCOMING_FRAME_BYTES))
         await writer.drain()
@@ -371,7 +373,7 @@ async def execute(method: str, params: dict, sock: pathlib.Path, *,
         return {"status": "ok", "result": result}
     except (OSError, ProtocolError, asyncio.IncompleteReadError) as exc:
         return {"status": "failed", "error": ERR_NOT_CONNECTED,
-                "message": f"和 daemon 的连接断了: {exc}"}
+                "message": t("conn.lost", error=exc)}
     finally:
         writer.close()
 
@@ -428,7 +430,7 @@ async def run_batch(items: list[tuple[str, dict]], sock: pathlib.Path, *,
                                                confirm_mode=confirm_mode)
             except asyncio.CancelledError:
                 results[index] = {"status": "failed", "error": "lg:cancelled",
-                                  "message": "已提交给浏览器，被 fail-fast 取消，结果未知"}
+                                  "message": t("run.cancelled")}
                 raise
             if fail_fast and results[index]["status"] != "ok":
                 me = asyncio.current_task()
@@ -439,7 +441,7 @@ async def run_batch(items: list[tuple[str, dict]], sock: pathlib.Path, *,
 
     workers = [asyncio.ensure_future(worker()) for _ in range(max(1, min(concurrency, len(items) or 1)))]
     await asyncio.gather(*workers, return_exceptions=True)
-    return [r or {"status": "skipped", "message": "前面有指令失败，这条没有提交"} for r in results]
+    return [r or {"status": "skipped", "message": t("run.skipped")} for r in results]
 
 
 def read_stdin_items(text: str) -> list[str]:
@@ -499,58 +501,8 @@ def exit_code_for(outcome: dict) -> int:
             ERR_USER_REJECTED: EXIT_REJECTED}.get(outcome.get("error", ""), EXIT_FAILED)
 
 
-HELP = """browse — 用命令行驱动浏览器扩展
-
-用法
-  browse <module> <action> [位置参数...] [--参数 值...]
-  browse run [--concurrency N] [--no-fail-fast] '<指令串>'... | browse run -
-  browse daemon start | stop | status
-  browse stop                                       中止在途指令，daemon 留着
-  browse install | uninstall                        装 / 卸（扩展本体仍需你手动加载一次）
-
-先跑起来
-  browse install                                    第一次用：构建 + 注册 + 指引加载扩展
-  browse browsingContext getTree --table            看浏览器连上没有、有哪些标签页
-  browse browsingContext navigate https://example.com
-  browse page snapshot --table                      列出这一页能点/能填的元素
-  browse input type 'css=input[name=user]' 'myname'
-  browse input click 'text=登录'
-  browse script evaluate 'document.title'
-  browse storage getCookies --domain example.com
-  browse network subscribe --match-url '*/api/*' --duration 30s > api.jsonl
-  browse run 'browsingContext.navigate https://a.com' 'browsingContext.navigate https://b.com'
-
-选项（CLI 自己的，其余 --xxx 一律当指令参数发给浏览器）
-  --table            结果用表格给人看（默认 stdout 出纯 JSON，可 | jq）
-  --socket PATH      指定 daemon 的 socket 文件
-  --concurrency N    run 的并发上限，默认 4
-  --no-fail-fast     run 的每条各自独立，不因为前面失败就停，整体退出码 0
-  --duration 30s     network subscribe 听多久，事件一行一个 JSON
-  --confirm-mode M   这一条命令临时收紧确认策略：silent / per_domain / always
-                     只能比配置更严；想放松要改配置文件，命令行放松会被拒
-  --debug / --no-say 仓库通用开关
-
-参数怎么写
-  --参数名按 kebab → camel 转成线上 key：--match-url 就是 matchUrl
-  值先按 JSON 解、解不动当字符串：--index 3 是数字，--domain a.com 是字符串
-  要强行传字符串形态的数字，把 JSON 引号带上：--text '"123"'
-  定位器四种前缀：css= / text= / xpath= / js=，不写前缀默认 css=
-  选哪个标签页：--context <id> > --match-url '<glob>' > 当前活动标签页
-
-确认（读 cookie、跑 JS 这类高危动作）
-  策略写在 ~/.config/lazygophers/scripts/browse.yaml 的 confirm_mode：
-  silent 直接执行（默认） / per_domain 每个域名问一次 / always 每次都问
-  要问的时候浏览器会弹一个小窗，最多等 60 秒，不点就按拒绝算（退出码 4）
-  deny_domains 里的域名一律拒绝，连窗都不弹
-
-退出码
-  0 成功   1 指令失败   2 参数写错   3 浏览器未连接   4 用户拒绝确认
-
-指令全集"""
-
-
 def help_text() -> str:
-    lines = [HELP]
+    lines = [t("help")]
     for method, names in METHODS.items():
         module, _, action = method.rpartition(".")
         args = "".join(f" <{name}>" for name in names)
@@ -574,17 +526,17 @@ def _cmd_daemon(tokens: list[str]) -> int:
         return daemon_run(sock, float(flags.get("idleTimeout", IDLE_TIMEOUT)), mode)
     if action == "start":
         if ensure_daemon(sock, confirm_mode=mode):
-            report.ok(f"daemon 在跑：{sock}")
+            report.ok(t("daemon.running", sock=sock))
             return EXIT_OK
-        report.err(f"daemon 起不来：{sock}（{SPAWN_HINT}）")
+        report.err(t("daemon.spawn_failed", sock=sock, hint=spawn_hint()))
         return EXIT_FAILED
     if action == "stop":
         return daemon_stop(sock)
     if action == "status":
         alive = probe(sock)
-        report.info(f"daemon {'在跑' if alive else '没在跑'}：{sock}")
+        report.info(t("daemon.running" if alive else "daemon.not_running_at", sock=sock))
         return EXIT_OK if alive else EXIT_FAILED
-    raise UsageError(f"daemon 只有 start / stop / status：{action!r}")
+    raise UsageError(t("usage.daemon_action", action=repr(action)))
 
 
 def _cmd_run(tokens: list[str]) -> int:
@@ -593,17 +545,18 @@ def _cmd_run(tokens: list[str]) -> int:
     mode = confirm_mode_of(flags)
     concurrency = int(flags.get("concurrency", DEFAULT_CONCURRENCY))
     if concurrency < 1:
-        raise UsageError(f"--concurrency 至少是 1：{concurrency}")
+        raise UsageError(t("usage.concurrency_min", value=concurrency))
     fail_fast = flags.get("failFast", True) is not False
     if raw == ["-"]:
         raw = read_stdin_items(sys.stdin.read())
     if not raw:
-        raise UsageError("`run` 至少要给一条指令串，或者用 `browse run -` 从 stdin 读")
+        raise UsageError(t("usage.run_needs_item"))
 
     # 先全部解析，再决定要不要起 daemon：写错一条就一条都不发，副作用为零
     items = [parse_run_item(line) for line in raw]
     if not ensure_daemon(sock, confirm_mode=mode):
-        print_error({"error": ERR_NOT_CONNECTED, "message": f"daemon 起不来：{sock}（{SPAWN_HINT}）"})
+        print_error({"error": ERR_NOT_CONNECTED,
+                     "message": t("daemon.spawn_failed", sock=sock, hint=spawn_hint())})
         return EXIT_NOT_CONNECTED
 
     outcomes = asyncio.run(run_batch(items, sock, concurrency=concurrency, fail_fast=fail_fast,
@@ -623,9 +576,10 @@ def _cmd_single(tokens: list[str]) -> int:
     mode = confirm_mode_of(opts)
     duration = parse_duration(opts["duration"]) if "duration" in opts else None
     if duration is not None and method != "network.subscribe":
-        raise UsageError("--duration 只对 `browse network subscribe` 有意义")
+        raise UsageError(t("usage.duration_only_subscribe"))
     if not ensure_daemon(sock, confirm_mode=mode):
-        print_error({"error": ERR_NOT_CONNECTED, "message": f"daemon 起不来：{sock}（{SPAWN_HINT}）"})
+        print_error({"error": ERR_NOT_CONNECTED,
+                     "message": t("daemon.spawn_failed", sock=sock, hint=spawn_hint())})
         return EXIT_NOT_CONNECTED
 
     outcome = asyncio.run(execute(method, params, sock, duration=duration, confirm_mode=mode))
@@ -644,13 +598,13 @@ def _cmd_stop(tokens: list[str]) -> int:
     sock = _sock_of(split_tokens(tokens)[1])
     report = reporter(stderr=True)
     if not probe(sock):
-        report.info(f"daemon 没在跑（{sock}），没有在途指令")
+        report.info(t("stop.no_daemon", sock=sock))
         return EXIT_OK
     outcome = asyncio.run(execute(ABORT_METHOD, {}, sock))
     if outcome["status"] != "ok":
         print_error(outcome)
         return exit_code_for(outcome)
-    report.ok(f"已中止 {outcome['result'].get('aborted', 0)} 条在途指令，daemon 还在跑：{sock}")
+    report.ok(t("stop.done", count=outcome["result"].get("aborted", 0), sock=sock))
     return EXIT_OK
 
 
@@ -684,11 +638,27 @@ def _main(argv: list[str]) -> int:
         return EXIT_USAGE
 
 
+def configured_lang() -> str:
+    """`browse.yaml` 里的 `lang`。配置读不出来（文件不在、坏了、没装 pyyaml）就当没写 ——
+    选语言这件事不该让命令起不来。"""
+    from lib.browse_security import default_config_path, load_config
+
+    try:
+        # 先看文件在不在：没写过配置的人占多数，这一步省掉 `import yaml`。
+        if not default_config_path().exists():
+            return ""
+        return str(load_config().get("lang", "") or "")
+    except Exception:
+        return ""
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
     doc = __doc__ or ""
+    argv, lang_flag = consume_lang(argv)
     argv = consume_skills(consume_dry_run(consume_debug(consume_no_say(argv)), doc), description=doc)
     sys.argv = argv
+    set_lang(resolve_lang(lang_flag, configured_lang()))
     if "--native-host" in argv[1:]:
         # 浏览器 fork 我们时带这个参数。T03 的实现，延迟 import：没装扩展的人不该
         # 因为这个模块不在就连 `browse --help` 都跑不了。不包 timed —— 这是个长命的

@@ -4,6 +4,10 @@
  * waiting on. Closing the window without clicking is handled service-worker
  * side (`windowClosed`) and counts as a refusal.
  */
+import { localize, msg } from "./i18n.ts";
+
+localize();
+
 const query = new URLSearchParams(location.search);
 
 function fill(id: string, value: string): void {
@@ -15,7 +19,7 @@ function fill(id: string, value: string): void {
 
 fill("action", query.get("action") ?? "?");
 fill("method", query.get("method") ?? "?");
-fill("url", query.get("url") || "the whole browser");
+fill("url", query.get("url") || msg("confirmWholeBrowser"));
 
 function answer(approved: boolean): void {
   void chrome.runtime.sendMessage({

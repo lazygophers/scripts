@@ -84,6 +84,10 @@ packages = ["lib", "lib.cli"]
 [tool.setuptools.package-dir]
 lib = "lib"
 
+# 语言文件是数据不是模块，不列进来的话 wheel 里就没有它，uvx 装的人全部回落成 key。
+[tool.setuptools.package-data]
+lib = ["locales/*.json"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py39"

@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>browse — confirm</title>
+    <title data-i18n="confirmTitle">browse — confirm</title>
     <style>
       :root { color-scheme: dark light; }
       body {
@@ -30,15 +30,15 @@
     </style>
   </head>
   <body>
-    <h1>Allow this?</h1>
+    <h1 data-i18n="confirmHeading">Allow this?</h1>
     <dl>
-      <dt>action</dt><dd id="action"></dd>
-      <dt>command</dt><dd id="method"></dd>
-      <dt>target</dt><dd id="url"></dd>
+      <dt data-i18n="confirmAction">action</dt><dd id="action"></dd>
+      <dt data-i18n="confirmCommand">command</dt><dd id="method"></dd>
+      <dt data-i18n="confirmTarget">target</dt><dd id="url"></dd>
     </dl>
     <div class="row">
-      <button id="no">Deny</button>
-      <button id="yes" class="yes">Allow</button>
+      <button id="no" data-i18n="confirmDeny">Deny</button>
+      <button id="yes" class="yes" data-i18n="confirmAllow">Allow</button>
     </div>
     <script type="module" src="confirm-page.js"></script>
   </body>
