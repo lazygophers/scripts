@@ -42,6 +42,7 @@ import time
 from lib import browse_daemon
 from lib.browse_daemon import (
     ABORT_METHOD,
+    BROWSERS_METHOD,
     IDLE_TIMEOUT,
     connect,
     pack,
@@ -113,7 +114,7 @@ METHODS: dict[str, tuple[str, ...]] = {
 # 这些 --flag 是 CLI 自己的，不进 params。都与线上参数名不冲突（对着 METHODS 的
 # handlers 逐个核过），所以不需要再加前缀去区分。
 CLI_FLAGS = frozenset({"table", "socket", "concurrency", "failFast", "duration",
-                       "idleTimeout", "limit"})
+                       "idleTimeout", "limit", "browser"})
 
 DEFAULT_CONCURRENCY = 4
 # 自举起 daemon 后等它把 socket 建起来的上限。这不是轮询别人的异步结果，是本地进程
@@ -226,6 +227,20 @@ def parse_run_item(line: str) -> tuple[str, dict]:
     return method, params
 
 
+def browser_of(opts: dict) -> str:
+    """`--browser` 的值，没给就是空串（= 让 daemon 替我挑）。
+
+    一台机器上可以同时连着好几个浏览器（`browse install` 默认给每个都注册）。只有一个
+    连着时不用写这个参数；多个连着又不写，daemon 会报错并把都有谁列出来。
+    """
+    raw = opts.get("browser")
+    if raw in (None, True):
+        if raw is True:
+            raise UsageError("--browser 要带值，比如 `--browser chrome`")
+        return ""
+    return str(raw).strip()
+
+
 def parse_duration(raw) -> float:
     """`30s` / `2m` / `500ms` / `1.5`（裸数字当秒）→ 秒。"""
     text = str(raw).strip()
@@ -326,7 +341,7 @@ def daemon_stop(sock: pathlib.Path) -> int:
 
 # ---------------------------------------------------------------- 发指令
 async def execute(method: str, params: dict, sock: pathlib.Path, *,
-                  duration: float | None = None, stream=None) -> dict:
+                  duration: float | None = None, stream=None, browser: str = "") -> dict:
     """发一条指令，等回包。返回 `{"status": "ok"|"failed", ...}`。
 
     `duration` 只对 `network.subscribe` 有意义：拿到订阅后继续读事件，一行一个 JSON
@@ -334,7 +349,7 @@ async def execute(method: str, params: dict, sock: pathlib.Path, *,
     自己缓存或去解析扩展的内部 id）。
     """
     try:
-        reader, writer, _ = await connect("cli", sock)
+        reader, writer, _ = await connect("cli", sock, browser=browser)
     except (OSError, ProtocolError) as exc:
         return {"status": "failed", "error": ERR_NOT_CONNECTED,
                 "message": f"连不上 daemon（{sock}）: {exc}"}
@@ -389,7 +404,7 @@ async def _stream_events(reader, writer, subscription, duration: float, stream) 
 
 # ---------------------------------------------------------------- run 批量
 async def run_batch(items: list[tuple[str, dict]], sock: pathlib.Path, *,
-                    concurrency: int, fail_fast: bool) -> list[dict]:
+                    concurrency: int, fail_fast: bool, browser: str = "") -> list[dict]:
     """并发跑一批，返回与 items 同序的结果。
 
     fail-fast 的边界在**提交**：第一条失败之后还没开跑的标 `skipped`，已经在途的尽力
@@ -405,7 +420,8 @@ async def run_batch(items: list[tuple[str, dict]], sock: pathlib.Path, *,
     async def worker() -> None:
         for index in cursor:
             try:
-                results[index] = await execute(items[index][0], items[index][1], sock)
+                results[index] = await execute(items[index][0], items[index][1], sock,
+                                               browser=browser)
             except asyncio.CancelledError:
                 results[index] = {"status": "failed", "error": "lg:cancelled",
                                   "message": "已提交给浏览器，被 fail-fast 取消，结果未知"}
@@ -484,7 +500,7 @@ HELP = """browse — 用命令行驱动浏览器扩展
 用法
   browse <module> <action> [位置参数...] [--参数 值...]
   browse run [--concurrency N] [--no-fail-fast] '<指令串>'... | browse run -
-  browse daemon start | stop | status
+  browse daemon start | stop | status               status 会列出连着哪些浏览器
   browse stop                                       中止在途指令，daemon 留着
   browse audit [--limit N] [--table]                看审计日志（存在插件里）
   browse install | uninstall                        装 / 卸（扩展本体仍需你手动加载一次）
@@ -508,6 +524,8 @@ HELP = """browse — 用命令行驱动浏览器扩展
   --no-fail-fast     run 的每条各自独立，不因为前面失败就停，整体退出码 0
   --duration 30s     network subscribe 听多久，事件一行一个 JSON
   --limit N          audit 只取最近 N 条
+  --browser NAME     发给哪个浏览器：chrome / brave / edge / ...
+                     只有一个连着时不用写；多个连着又不写会报错并列出都有谁
   --debug / --no-say 仓库通用开关
 
 参数怎么写
@@ -516,6 +534,13 @@ HELP = """browse — 用命令行驱动浏览器扩展
   要强行传字符串形态的数字，把 JSON 引号带上：--text '"123"'
   定位器四种前缀：css= / text= / xpath= / js=，不写前缀默认 css=
   选哪个标签页：--context <id> > --match-url '<glob>' > 当前活动标签页
+  选哪个浏览器：--browser <名字>（跟在 action 后面）；只有一个连着时可以不写
+
+同时开着好几个浏览器
+  `browse install` 默认给探测到的每个浏览器都注册，所以 Chrome 和 Brave 可以同时连着
+  `browse daemon status` 看现在连着谁
+  `browse browsingContext getTree --browser brave` 指定发给谁
+  装完或升级后**要重启浏览器**，它才会去读新的通信配置
 
 确认与审计（都在插件里，不在这边）
   设置页：浏览器的扩展详情 →「扩展程序选项」，或点插件面板上的「设置」
@@ -561,9 +586,23 @@ def _cmd_daemon(tokens: list[str]) -> int:
     if action == "stop":
         return daemon_stop(sock)
     if action == "status":
-        alive = probe(sock)
-        report.info(f"daemon {'在跑' if alive else '没在跑'}：{sock}")
-        return EXIT_OK if alive else EXIT_FAILED
+        if not probe(sock):
+            report.info(f"daemon 没在跑：{sock}")
+            return EXIT_FAILED
+        report.info(f"daemon 在跑：{sock}")
+        # 连着哪些浏览器：多浏览器同时用的时候，这是唯一看得出「--browser 该写什么」的地方
+        outcome = asyncio.run(execute(BROWSERS_METHOD, {}, sock))
+        if outcome["status"] != "ok":
+            print_error(outcome)
+            return exit_code_for(outcome)
+        names = outcome["result"].get("browsers", [])
+        if names:
+            report.info(f"连着的浏览器（{len(names)}）：{', '.join(names)}")
+            if len(names) > 1:
+                report.info("有多个连着，指令要加 --browser <名字> 指定发给谁")
+        else:
+            report.info("没有浏览器连着：确认浏览器开着且扩展已启用")
+        return EXIT_OK
     raise UsageError(f"daemon 只有 start / stop / status：{action!r}")
 
 
@@ -585,7 +624,8 @@ def _cmd_run(tokens: list[str]) -> int:
         print_error({"error": ERR_NOT_CONNECTED, "message": f"daemon 起不来：{sock}（{SPAWN_HINT}）"})
         return EXIT_NOT_CONNECTED
 
-    outcomes = asyncio.run(run_batch(items, sock, concurrency=concurrency, fail_fast=fail_fast))
+    outcomes = asyncio.run(run_batch(items, sock, concurrency=concurrency, fail_fast=fail_fast,
+                                     browser=browser_of(flags)))
     report = [{"index": i, "command": line, **outcome}
               for i, (line, outcome) in enumerate(zip(raw, outcomes))]
     sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
@@ -605,7 +645,8 @@ def _cmd_single(tokens: list[str]) -> int:
         print_error({"error": ERR_NOT_CONNECTED, "message": f"daemon 起不来：{sock}（{SPAWN_HINT}）"})
         return EXIT_NOT_CONNECTED
 
-    outcome = asyncio.run(execute(method, params, sock, duration=duration))
+    outcome = asyncio.run(execute(method, params, sock, duration=duration,
+                                  browser=browser_of(opts)))
     if outcome["status"] != "ok":
         print_error(outcome)
         return exit_code_for(outcome)
@@ -659,7 +700,7 @@ def _audit_call(method: str, params: dict, flags: dict) -> dict:
     if not ensure_daemon(sock):
         return {"status": "failed", "error": ERR_NOT_CONNECTED,
                 "message": f"daemon 起不来：{sock}（{SPAWN_HINT}）"}
-    return asyncio.run(execute(method, params, sock))
+    return asyncio.run(execute(method, params, sock, browser=browser_of(flags)))
 
 
 def _cmd_stop(tokens: list[str]) -> int:

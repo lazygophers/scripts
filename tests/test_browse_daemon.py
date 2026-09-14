@@ -20,9 +20,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from lib.browse_daemon import (  # noqa: E402
     ABORT_METHOD,
+    BROWSERS_METHOD,
     MAX_HELLO_BYTES,
     ROLE_CLI,
     ROLE_NATIVE_HOST,
+    UNKNOWN_BROWSER,
     Daemon,
     _Conn,
     bind,
@@ -159,8 +161,8 @@ class DaemonCase(unittest.IsolatedAsyncioTestCase):
         await self.daemon.stop()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    async def client(self, role: str):
-        reader, writer, conn_id = await connect(role, self.path)
+    async def client(self, role: str, browser: str = ""):
+        reader, writer, conn_id = await connect(role, self.path, browser=browser)
         self._writers.append(writer)
         return reader, writer, conn_id
 
@@ -626,7 +628,6 @@ class WiringCase(DaemonCase):
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        self.daemon.confirm_timeout = 1.0
         self.browser_reader, self.browser_writer, _ = await self.client(ROLE_NATIVE_HOST)
         self.cli_reader, self.cli_writer, _ = await self.client(ROLE_CLI)
         await self.settle()
@@ -702,6 +703,174 @@ class TestFailClosed(DaemonCase):
     async def test_an_envelope_the_browser_should_never_send_is_dropped(self):
         conn = _Conn(id=1, role=ROLE_NATIVE_HOST, writer=DeadWriter())
         await self.daemon._from_browser(conn, {"type": "hello", "id": 1})
+
+
+class TestManyBrowsers(DaemonCase):
+    """一台机器上同时连着好几个浏览器。
+
+    这是个真缺陷的回归测试：以前 daemon 只有一个浏览器插槽，后连的顶掉先连的，而扩展侧
+    `native-port.ts` 的 onDisconnect 会退避重连 —— 两者相乘就是 Chrome 和 Brave 无限
+    互踢。而 `browse install` 默认给探测到的每个浏览器都注册，等于主动把现场布好了。
+    """
+
+    async def two_browsers(self):
+        chrome = await self.client(ROLE_NATIVE_HOST, browser="chrome")
+        brave = await self.client(ROLE_NATIVE_HOST, browser="brave")
+        await self.settle()
+        return chrome, brave
+
+    async def test_two_browsers_stay_connected_neither_is_kicked(self):
+        """缺陷本身：两个同时连着，谁都不该被踢掉。"""
+        (chrome_r, chrome_w, _), (brave_r, brave_w, _) = await self.two_browsers()
+        self.assertEqual(sorted(self.daemon._browsers), ["brave", "chrome"])
+
+        # 两条连接都还活着：各自收得到发给自己的指令
+        cli_r, cli_w, _ = await self.client(ROLE_CLI, browser="chrome")
+        await send(cli_w, command(1, "browsingContext.getTree"))
+        self.assertEqual((await recv(chrome_r))["method"], "browsingContext.getTree")
+
+        cli2_r, cli2_w, _ = await self.client(ROLE_CLI, browser="brave")
+        await send(cli2_w, command(1, "browsingContext.getTree"))
+        self.assertEqual((await recv(brave_r))["method"], "browsingContext.getTree")
+
+    async def test_the_same_browser_reconnecting_does_replace_its_own_slot(self):
+        """同名的新连接顶掉旧的 —— 那是同一个浏览器重连，本来就该换。"""
+        first_r, first_w, first_id = await self.client(ROLE_NATIVE_HOST, browser="chrome")
+        await self.settle()
+        second_r, second_w, second_id = await self.client(ROLE_NATIVE_HOST, browser="chrome")
+        await self.settle()
+        self.assertEqual(list(self.daemon._browsers), ["chrome"])
+        self.assertEqual(self.daemon._browsers["chrome"].id, second_id)
+
+    async def test_ambiguity_is_an_error_that_names_every_browser(self):
+        """多个连着又没指定：报错必须把都有谁列出来，并写明怎么指定。"""
+        await self.two_browsers()
+        cli_r, cli_w, _ = await self.client(ROLE_CLI)  # 没指定 --browser
+        await send(cli_w, command(1, "browsingContext.getTree"))
+        reply = await recv(cli_r)
+
+        self.assertEqual((reply["type"], reply["error"]), ("error", ERR_INVALID_ARGUMENT))
+        self.assertIn("chrome", reply["message"], "错误里要说得出都有谁")
+        self.assertIn("brave", reply["message"])
+        self.assertIn("--browser", reply["message"], "要写明怎么指定")
+
+    async def test_one_browser_needs_no_flag(self):
+        """只有一个连着时不用指定 —— 单浏览器的人不该为这个功能付钱。"""
+        browser_r, browser_w, _ = await self.client(ROLE_NATIVE_HOST, browser="chrome")
+        cli_r, cli_w, _ = await self.client(ROLE_CLI)
+        await self.settle()
+        await send(cli_w, command(1, "browsingContext.getTree"))
+        self.assertEqual((await recv(browser_r))["method"], "browsingContext.getTree")
+
+    async def test_naming_a_browser_that_is_not_connected_says_who_is(self):
+        await self.two_browsers()
+        cli_r, cli_w, _ = await self.client(ROLE_CLI, browser="firefox")
+        await send(cli_w, command(1, "browsingContext.getTree"))
+        reply = await recv(cli_r)
+        self.assertEqual(reply["error"], ERR_NOT_CONNECTED)
+        self.assertIn("firefox", reply["message"])
+        self.assertIn("chrome", reply["message"], "要告诉他连着的是谁")
+
+    async def test_the_old_generic_wrapper_still_works(self):
+        """升级前装的 wrapper 不带 --browser，握手里就没有这个字段 —— 不能让 daemon 崩。"""
+        browser_r, browser_w, _ = await self.client(ROLE_NATIVE_HOST)  # 无 browser
+        cli_r, cli_w, _ = await self.client(ROLE_CLI)
+        await self.settle()
+        self.assertEqual(list(self.daemon._browsers), [UNKNOWN_BROWSER])
+        await send(cli_w, command(1, "browsingContext.getTree"))
+        self.assertEqual((await recv(browser_r))["method"], "browsingContext.getTree")
+
+    async def test_daemon_status_lists_who_is_connected(self):
+        await self.two_browsers()
+        cli_r, cli_w, _ = await self.client(ROLE_CLI)
+        await send(cli_w, command(9, BROWSERS_METHOD))
+        self.assertEqual(await recv(cli_r), success(9, {"browsers": ["brave", "chrome"]}))
+
+
+class TestBrowsersDoNotInterfere(DaemonCase):
+    """A 断开时 B 的在途指令和订阅都不受影响。这条最容易写错。"""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.chrome_r, self.chrome_w, self.chrome_id = await self.client(
+            ROLE_NATIVE_HOST, browser="chrome")
+        self.brave_r, self.brave_w, self.brave_id = await self.client(
+            ROLE_NATIVE_HOST, browser="brave")
+        self.cli_r, self.cli_w, _ = await self.client(ROLE_CLI, browser="chrome")
+        self.cli2_r, self.cli2_w, _ = await self.client(ROLE_CLI, browser="brave")
+        await self.settle()
+
+    async def test_a_dropped_browser_only_fails_its_own_inflight_commands(self):
+        # 两边各发一条，都不回，让它们挂在途中
+        await send(self.cli_w, command(1, "browsingContext.getTree"))
+        await send(self.cli2_w, command(1, "browsingContext.getTree"))
+        await recv(self.chrome_r)
+        await recv(self.brave_r)
+        self.assertEqual(len(self.daemon._pending), 2)
+
+        # chrome 掉线
+        self.chrome_w.close()
+        await self.settle()
+
+        # chrome 那条当场失败
+        reply = await recv(self.cli_r)
+        self.assertEqual(reply["error"], ERR_NOT_CONNECTED)
+        self.assertIn("chrome", reply["message"])
+
+        # brave 那条**还在途中**，没被牵连；brave 回了之后照常送达
+        self.assertEqual([p.browser for p in self.daemon._pending.values()], ["brave"])
+        await send(self.brave_w, success(list(self.daemon._pending)[0], {"contexts": []}))
+        self.assertEqual(await recv(self.cli2_r), success(1, {"contexts": []}))
+
+    async def test_a_dropped_browser_leaves_the_other_ones_subscriptions_alone(self):
+        # 两个浏览器各订一个
+        await send(self.cli_w, command(1, "network.subscribe", {"matchUrl": "*"}))
+        gid = (await recv(self.chrome_r))["id"]
+        await send(self.chrome_w, success(gid, {"subscription": "ext-chrome-1"}))
+        await recv(self.cli_r)
+
+        await send(self.cli2_w, command(1, "network.subscribe", {"matchUrl": "*"}))
+        gid2 = (await recv(self.brave_r))["id"]
+        await send(self.brave_w, success(gid2, {"subscription": "ext-brave-1"}))
+        await recv(self.cli2_r)
+
+        self.assertEqual(sorted(s.browser for s in self.daemon._subs.values()),
+                         ["brave", "chrome"])
+
+        # chrome 重连：只该重建 chrome 自己那一条
+        self.chrome_w.close()
+        await self.settle()
+        new_r, new_w, _ = await self.client(ROLE_NATIVE_HOST, browser="chrome")
+        await self.settle()
+
+        rebuilt = await recv(new_r)
+        self.assertEqual(rebuilt["method"], "network.subscribe")
+        # brave 那边一个包都不该收到
+        with self.assertRaises(asyncio.TimeoutError):
+            await recv(self.brave_r, timeout=0.3)
+        # 两条订阅都还在，各归各的浏览器
+        self.assertEqual(sorted(s.browser for s in self.daemon._subs.values()),
+                         ["brave", "chrome"])
+
+    async def test_events_from_one_browser_do_not_borrow_the_others_subscription(self):
+        """两个浏览器给出同一个 ext_id 时不能串台。"""
+        await send(self.cli_w, command(1, "network.subscribe", {"matchUrl": "*"}))
+        gid = (await recv(self.chrome_r))["id"]
+        await send(self.chrome_w, success(gid, {"subscription": "sub-collision"}))
+        chrome_sub = (await recv(self.cli_r))["result"]["subscription"]
+
+        await send(self.cli2_w, command(1, "network.subscribe", {"matchUrl": "*"}))
+        gid2 = (await recv(self.brave_r))["id"]
+        # 故意给一模一样的内部 id
+        await send(self.brave_w, success(gid2, {"subscription": "sub-collision"}))
+        brave_sub = (await recv(self.cli2_r))["result"]["subscription"]
+        self.assertNotEqual(chrome_sub, brave_sub)
+
+        # brave 推一个事件：必须带 brave 那条订阅的对外 id，不是 chrome 的
+        await send(self.brave_w, {"type": "event", "method": "network.responseCompleted",
+                                  "params": {"subscriptions": ["sub-collision"], "url": "x"}})
+        event = await recv(self.cli2_r)
+        self.assertEqual(event["params"]["subscriptions"], [brave_sub])
 
 
 if __name__ == "__main__":

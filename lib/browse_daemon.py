@@ -7,6 +7,14 @@
     CLI ──Command──▶ daemon ──Command(新 id)──▶ native host ──▶ 扩展
     CLI ◀──Success/Error── daemon ◀──Success/Error──┘
 
+**一台机器上可以同时连着好几个浏览器。** `browse install` 默认给探测到的每个浏览器都
+注册通信配置，所以 Chrome 和 Brave 同时开着是常态。它们各自一条 native host 连接，按
+**浏览器名**分槽（`_browsers`）—— 名字是安装时写死在各自 wrapper 里的 `--browser`
+参数，不靠扩展去猜（Brave 的 UA 伪装成 Chrome，Edge 只差一个 `Edg/`，猜不得）。
+
+挑哪个浏览器的规则照搬 `lib/profile_store.ProfileStore.resolve()`：显式指定优先，只有
+一个连着时不用指定，多个连着又没指定就报错并把都有谁列出来。
+
 传输与路由而已，指令语义全在扩展侧。daemon 只认识 `network.subscribe` /
 `network.unsubscribe` 两个方法名，原因见 SUBSCRIBE_METHOD 处的注释。
 
@@ -82,6 +90,17 @@ UNSUBSCRIBE_METHOD = "network.unsubscribe"
 # `browse stop`（spec 4.5）：中止全部在途指令，daemon 自己留着。daemon 本地执行。
 ABORT_METHOD = "lg:daemon.abort"
 
+# `browse daemon status`：现在连着哪些浏览器。也是 daemon 本地执行，不转发。
+BROWSERS_METHOD = "lg:daemon.browsers"
+
+
+class _NoBrowser(Exception):
+    """挑不出浏览器。`code` 直接就是回给 CLI 的错误码。"""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
 
 def socket_path() -> Path:
     """socket 落点：优先 `$XDG_RUNTIME_DIR`，没有就回落用户状态目录。"""
@@ -152,6 +171,11 @@ def bind(path: Path) -> socket.socket:
     return sock
 
 
+# 握手里没带浏览器名时用的槽位名。旧版的通用 wrapper（升级前装的那个）不带
+# `--browser`，落到这里 —— 仍然能用，只是多个旧 wrapper 之间还是会互相顶掉。
+UNKNOWN_BROWSER = "unknown"
+
+
 @dataclass
 class _Conn:
     """一条已握手的连接。`id` 就是握手时发回去的 connectionId。"""
@@ -159,6 +183,9 @@ class _Conn:
     id: int
     role: str
     writer: asyncio.StreamWriter
+    # native-host：自己代表哪个浏览器（安装时写死在 wrapper 里）。
+    # cli：这一次要发给哪个浏览器，空串表示「没指定，你替我挑」。
+    browser: str = ""
 
     async def send(self, message: dict, limit: int = MAX_INCOMING_FRAME_BYTES) -> bool:
         """写一帧。对端已经走了就返回 False，不抛——路由不该被一个死客户端带停。"""
@@ -180,15 +207,22 @@ class _Pending:
     method: str
     params: dict = field(default_factory=dict)
     sub_id: str | None = None
+    # 这条指令发给了哪个浏览器。回包时用它把订阅归到对的那个浏览器名下。
+    browser: str = ""
 
 
 @dataclass
 class _Sub:
-    """一个对外稳定的订阅。`ext_id` 是扩展当前这一世给的地址，重建后会变。"""
+    """一个对外稳定的订阅。`ext_id` 是扩展当前这一世给的地址，重建后会变。
+
+    `browser` 是它订在哪个浏览器上。**必须记着**：不同浏览器给出的 `ext_id` 可能撞车，
+    而且一个浏览器重连时只该重建它自己的订阅，不能把别人的也重下一遍。
+    """
 
     id: str
     cli: _Conn
     params: dict
+    browser: str = ""
     ext_id: str = ""
 
 
@@ -200,7 +234,9 @@ class Daemon:
     idle_timeout: float = IDLE_TIMEOUT
 
     _server: asyncio.AbstractServer | None = field(default=None, init=False)
-    _browser: _Conn | None = field(default=None, init=False)
+    # 浏览器名 → 它那条 native host 连接。同名的新连接顶掉旧的（同一个浏览器重连），
+    # 不同名的互不相干 —— 这正是「Chrome 和 Brave 互踢」那个缺陷的修法。
+    _browsers: dict[str, _Conn] = field(default_factory=dict, init=False)
     _clis: dict[int, _Conn] = field(default_factory=dict, init=False)
     _pending: dict[int, _Pending] = field(default_factory=dict, init=False)
     _subs: dict[str, _Sub] = field(default_factory=dict, init=False)
@@ -246,7 +282,7 @@ class Daemon:
         tick = min(30.0, max(0.05, self.idle_timeout / 4))
         while True:
             await asyncio.sleep(tick)
-            if self._clis or self._browser is not None:
+            if self._clis or self._browsers:
                 continue
             if time.monotonic() - self._last_command >= self.idle_timeout:
                 self._stopping.set()
@@ -272,7 +308,13 @@ class Daemon:
             return
 
         self._conn_seq += 1
-        conn = _Conn(id=self._conn_seq, role=role, writer=writer)
+        want = hello.get("browser")
+        conn = _Conn(id=self._conn_seq, role=role, writer=writer,
+                     browser=want if isinstance(want, str) else "")
+        if role == ROLE_NATIVE_HOST and not conn.browser:
+            # 升级前装的通用 wrapper 不带 `--browser`。不认识就归到 unknown 槽，
+            # 照常能用（单浏览器场景和以前一模一样），不让它把 daemon 带倒。
+            conn.browser = UNKNOWN_BROWSER
         if not await conn.send({"type": "hello-ack", "connectionId": conn.id}, MAX_HELLO_BYTES):
             await _close(writer)
             return
@@ -288,10 +330,14 @@ class Daemon:
         if conn.role == ROLE_CLI:
             self._clis[conn.id] = conn
             return
-        old, self._browser = self._browser, conn
+        old = self._browsers.get(conn.browser)
+        self._browsers[conn.browser] = conn
         if old is not None:
-            await _close(old.writer)  # 一个浏览器就够了，新的顶掉旧的
-            await self._fail_pending(old.id, "native host 被新连接顶替")
+            # 只顶掉**同一个浏览器**的旧连接（它重连了）。别的浏览器一概不动 ——
+            # 以前这里是一个全局插槽，Chrome 连上会踢掉 Brave，而扩展侧会退避重连，
+            # 两者相乘就是无限互踢。
+            await _close(old.writer)
+            await self._fail_pending(old.id, f"{conn.browser} 的 native host 被新连接顶替")
         await self._rebuild_subscriptions(conn)
 
     async def _detach(self, conn: _Conn) -> None:
@@ -301,9 +347,11 @@ class Daemon:
             for gid in [g for g, p in self._pending.items() if p.cli is conn]:
                 del self._pending[gid]
             return
-        if self._browser is conn:
-            self._browser = None
-        await self._fail_pending(conn.id, "浏览器连接已断开")
+        if self._browsers.get(conn.browser) is conn:
+            del self._browsers[conn.browser]
+        # 只失败**这一条连接**的在途指令（`_Pending.conn_id` 就是为这个存的），
+        # 别的浏览器上跑着的指令不受影响
+        await self._fail_pending(conn.id, f"{conn.browser} 的浏览器连接已断开")
 
     async def _pump(self, conn: _Conn, reader: asyncio.StreamReader) -> None:
         buf = b""
@@ -331,6 +379,28 @@ class Daemon:
         else:
             await self._from_browser(conn, message)
 
+    def pick_browser(self, want: str = "") -> _Conn:
+        """挑出这条指令发给哪个浏览器。挑不出来抛 `_NoBrowser`。
+
+        语义照搬 `lib/profile_store.ProfileStore.resolve()`（archery 用它选站点）：
+        显式指定优先 → 只有一个就用那个 → 多个又没指定就报错并列出都有谁。
+        """
+        if not self._browsers:
+            raise _NoBrowser(ERR_NOT_CONNECTED, "浏览器未连接：确认浏览器开着且扩展已启用")
+        if want:
+            conn = self._browsers.get(want)
+            if conn is None:
+                known = ", ".join(sorted(self._browsers))
+                raise _NoBrowser(ERR_NOT_CONNECTED,
+                                 f"没有 {want} 的连接（连着的: {known}）。"
+                                 f"确认那个浏览器开着且扩展已启用，或换一个 --browser")
+            return conn
+        if len(self._browsers) == 1:
+            return next(iter(self._browsers.values()))
+        known = ", ".join(sorted(self._browsers))
+        raise _NoBrowser(ERR_INVALID_ARGUMENT,
+                         f"有多个浏览器连着但没指定用哪个（{known}）。加 --browser <名字>")
+
     async def _from_cli(self, cli: _Conn, message: dict) -> None:
         if "type" in message:
             return  # CLI 只发 Command；没有 type 字段的才是 Command
@@ -338,20 +408,24 @@ class Daemon:
         if message["method"] == ABORT_METHOD:
             await self._abort(cli, message["id"])
             return
-        if self._browser is None:
+        if message["method"] == BROWSERS_METHOD:
+            await cli.send(success(message["id"], {"browsers": sorted(self._browsers)}))
+            return
+        try:
             # 不排队不等待：浏览器没开就是没开，等下去只会变成一个无人回收的挂起
-            await cli.send(error(message["id"], ERR_NOT_CONNECTED,
-                                 "浏览器未连接：确认浏览器开着且扩展已启用"))
+            browser = self.pick_browser(cli.browser)
+        except _NoBrowser as exc:
+            await cli.send(error(message["id"], exc.code, str(exc)))
             return
 
         method, params, cli_id = message["method"], message["params"], message["id"]
         forward = self._to_ext_subscription(params) if method == UNSUBSCRIBE_METHOD else params
         self._seq += 1
         gid = self._seq
-        self._pending[gid] = _Pending(cli=cli, cli_id=cli_id, conn_id=self._browser.id,
-                                      method=method, params=params)
-        if not await self._browser.send(command(gid, method, forward),
-                                        limit=MAX_OUTGOING_FRAME_BYTES):
+        self._pending[gid] = _Pending(cli=cli, cli_id=cli_id, conn_id=browser.id,
+                                      method=method, params=params, browser=browser.browser)
+        if not await browser.send(command(gid, method, forward),
+                                  limit=MAX_OUTGOING_FRAME_BYTES):
             del self._pending[gid]
             await cli.send(error(cli_id, ERR_NOT_CONNECTED, "指令发不到浏览器：连接已断开"))
 
@@ -373,7 +447,7 @@ class Daemon:
     async def _from_browser(self, conn: _Conn, message: dict) -> None:
         kind = message.get("type")
         if kind == "event":
-            await self._fanout(message)
+            await self._fanout(conn, message)
             return
         if kind is None:
             # 扩展不再反过来问 daemon 任何事（策略和审计都在它自己那儿），所以这种帧
@@ -397,7 +471,7 @@ class Daemon:
             out = self._track_subscription(entry, out)
         await entry.cli.send(out)
 
-    async def _fanout(self, message: dict) -> None:
+    async def _fanout(self, conn: _Conn, message: dict) -> None:
         if message["method"] == KEEPALIVE_METHOD:
             return
         subs = message["params"].get("subscriptions")
@@ -405,10 +479,11 @@ class Daemon:
             for cli in list(self._clis.values()):
                 await cli.send(message)
             return
-        # 带订阅标记的事件只送给订阅它的那个 CLI，并把扩展的内部 id 换回对外的
+        # 带订阅标记的事件只送给订阅它的那个 CLI，并把扩展的内部 id 换回对外的。
+        # 按发来的那个浏览器查，不然两个浏览器给出同一个 ext_id 时会串台。
         targets: dict[int, tuple[_Conn, list[str]]] = {}
         for ext_id in subs:
-            sub = self._sub_by_ext(ext_id)
+            sub = self._sub_by_ext(ext_id, conn.browser)
             if sub is None:
                 continue
             targets.setdefault(sub.cli.id, (sub.cli, []))[1].append(sub.id)
@@ -416,8 +491,9 @@ class Daemon:
             await cli.send({**message, "params": {**message["params"], "subscriptions": ids}})
 
     # ------------------------------------------------------------ 订阅
-    def _sub_by_ext(self, ext_id) -> _Sub | None:
-        return next((s for s in self._subs.values() if s.ext_id == ext_id), None)
+    def _sub_by_ext(self, ext_id, browser: str) -> _Sub | None:
+        return next((s for s in self._subs.values()
+                     if s.ext_id == ext_id and s.browser == browser), None)
 
     def _to_ext_subscription(self, params: dict) -> dict:
         """把对外的 `sub-N` 换成扩展当前认的 id。不认识就原样透传，让扩展去报错。"""
@@ -429,13 +505,13 @@ class Daemon:
         if entry.method == SUBSCRIBE_METHOD and isinstance(result.get("subscription"), str):
             self._sub_seq += 1
             sub = _Sub(id=f"sub-{self._sub_seq}", cli=entry.cli, params=dict(entry.params),
-                       ext_id=result["subscription"])
+                       browser=entry.browser, ext_id=result["subscription"])
             self._subs[sub.id] = sub
             return {**out, "result": {**result, "subscription": sub.id}}
         if entry.method == UNSUBSCRIBE_METHOD and isinstance(result.get("removed"), list):
             removed = []
             for ext_id in result["removed"]:
-                sub = self._sub_by_ext(ext_id)
+                sub = self._sub_by_ext(ext_id, entry.browser)
                 removed.append(ext_id if sub is None else self._subs.pop(sub.id).id)
             return {**out, "result": {**result, "removed": removed}}
         return out
@@ -445,12 +521,16 @@ class Daemon:
 
         订阅活在 service worker 内存里，浏览器重启或扩展重载后必然没了；CLI 那边还
         举着 `sub-N` 在等事件，所以补齐这件事只能由 daemon 做。
+
+        **只重建这个浏览器自己的订阅。** Chrome 重连时把 Brave 的订阅也重下一遍，
+        等于悄悄把订阅搬了家。
         """
-        for sub in list(self._subs.values()):
+        for sub in [s for s in self._subs.values() if s.browser == conn.browser]:
             self._seq += 1
             gid = self._seq
             self._pending[gid] = _Pending(cli=None, cli_id=0, conn_id=conn.id,
-                                          method=SUBSCRIBE_METHOD, params=sub.params, sub_id=sub.id)
+                                          method=SUBSCRIBE_METHOD, params=sub.params,
+                                          sub_id=sub.id, browser=conn.browser)
             if not await conn.send(command(gid, SUBSCRIBE_METHOD, sub.params), limit=MAX_OUTGOING_FRAME_BYTES):
                 del self._pending[gid]
                 return
@@ -469,13 +549,17 @@ class Daemon:
         gone = [s for s in self._subs.values() if s.cli is cli]
         for sub in gone:
             del self._subs[sub.id]
-        if not gone or self._browser is None:
-            return
-        for sub in gone:  # 尽力回收，扩展那边不然会一直挂着 webRequest 监听
+        # 尽力回收，扩展那边不然会一直挂着 webRequest 监听。每条订阅回收到**它自己那个
+        # 浏览器**上 —— 发错地方轻则报错，重则退掉别人一条同名的订阅。
+        for sub in gone:
+            browser = self._browsers.get(sub.browser)
+            if browser is None:
+                continue
             self._seq += 1
-            self._pending[self._seq] = _Pending(cli=None, cli_id=0, conn_id=self._browser.id,
-                                                method=UNSUBSCRIBE_METHOD, sub_id=None)
-            await self._browser.send(
+            self._pending[self._seq] = _Pending(cli=None, cli_id=0, conn_id=browser.id,
+                                                method=UNSUBSCRIBE_METHOD, sub_id=None,
+                                                browser=browser.browser)
+            await browser.send(
                 command(self._seq, UNSUBSCRIBE_METHOD, {"subscription": sub.ext_id}),
                 limit=MAX_OUTGOING_FRAME_BYTES)
 
@@ -494,8 +578,8 @@ async def _close(writer: asyncio.StreamWriter) -> None:
 
 
 # ---------------------------------------------------------------- 客户端
-async def connect(role: str,
-                  path: Path | None = None) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, int]:
+async def connect(role: str, path: Path | None = None, *,
+                  browser: str = "") -> tuple[asyncio.StreamReader, asyncio.StreamWriter, int]:
     """连上 daemon 并握手，返回 (reader, writer, connectionId)。
 
     T03 的 native host 用 `role="native-host"`，T04 的 CLI 用 `role="cli"`。
@@ -504,7 +588,11 @@ async def connect(role: str,
         raise ProtocolError(f"role 只能是 {sorted(ROLES)}: {role!r}")
     target = socket_path() if path is None else path
     reader, writer = await asyncio.open_unix_connection(str(target))
+    # native-host：我代表哪个浏览器（安装时写死在 wrapper 里）。
+    # cli：这一次发给哪个浏览器，空串 = 让 daemon 替我挑。
     hello = {"type": "hello", "role": role}
+    if browser:
+        hello["browser"] = browser
     writer.write(pack(hello, MAX_HELLO_BYTES))
     await writer.drain()
     ack = await read_frame(reader, MAX_HELLO_BYTES)
@@ -528,6 +616,8 @@ async def run(path: Path | None = None, idle_timeout: float = IDLE_TIMEOUT) -> b
 
 __all__ = [
     "ABORT_METHOD",
+    "BROWSERS_METHOD",
+    "UNKNOWN_BROWSER",
     "Daemon",
     "IDLE_TIMEOUT",
     "MAX_BUFFER_BYTES",

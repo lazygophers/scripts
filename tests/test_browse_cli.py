@@ -45,14 +45,15 @@ class FakeBrowser:
     handler(method, params) 返回 dict 当 result（成功），返回 (code, message) 当错误。
     """
 
-    def __init__(self, handler):
+    def __init__(self, handler, browser: str = ""):
         self.handler = handler
+        self.browser = browser
         self.inflight = 0
         self.peak = 0
         self.seen: list[str] = []
 
     async def pump(self, sock: pathlib.Path) -> None:
-        reader, writer, _ = await connect("native-host", sock)
+        reader, writer, _ = await connect("native-host", sock, browser=self.browser)
         self.writer = writer
         while True:
             try:
@@ -830,6 +831,85 @@ class TestAudit(unittest.TestCase):
                 code = h.cli("audit")
         self.assertEqual(code, 3)
         self.assertEqual(json.loads(err.getvalue())["error"], ERR_NOT_CONNECTED)
+
+
+class TestMultipleBrowsers(unittest.TestCase):
+    """一台机器上同时连着好几个浏览器时，命令行这一侧的表现。"""
+
+    class TwoBrowsers(Harness):
+        """两个假浏览器，各自报自己的名字。"""
+
+        async def _start(self) -> None:
+            self.daemon = Daemon(path=self.sock, idle_timeout=600.0)
+            await self.daemon.start()
+            self.browsers = {}
+            self._pumps = []
+            for name in ("chrome", "brave"):
+                fake = FakeBrowser(lambda m, p, n=name: {"who": n}, browser=name)
+                self.browsers[name] = fake
+                self._pumps.append(asyncio.ensure_future(fake.pump(self.sock)))
+            self.browser = self.browsers["chrome"]
+            await asyncio.sleep(0.1)
+
+        async def _shutdown(self) -> None:
+            for pump in self._pumps:
+                pump.cancel()
+            for fake in self.browsers.values():
+                fake.writer.close()
+            await self.daemon.stop()
+
+    def test_browser_flag_picks_the_target(self):
+        # `--browser` 和 `--socket` / `--table` 一样，跟在 `<module> <action>` 后面
+        with self.TwoBrowsers() as h:
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("browsingContext", "getTree", "--browser", "brave")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue())["who"], "brave")
+
+    def test_without_the_flag_it_refuses_and_names_them(self):
+        with self.TwoBrowsers() as h:
+            err = io.StringIO()
+            with mock.patch("sys.stderr", err):
+                code = h.cli("browsingContext", "getTree")
+        self.assertEqual(code, 1)
+        message = json.loads(err.getvalue().splitlines()[0])["message"]
+        self.assertIn("chrome", message)
+        self.assertIn("brave", message)
+        self.assertIn("--browser", message)
+
+    def test_browser_is_a_cli_flag_not_a_wire_param(self):
+        """`--browser` 不能被当成指令参数发给浏览器。"""
+        method, params, opts = browse.parse_command(
+            ["browsingContext", "navigate", "https://a.test", "--browser", "brave"])
+        self.assertEqual(params, {"url": "https://a.test"})
+        self.assertEqual(opts, {"browser": "brave"})
+        self.assertEqual(browse.browser_of(opts), "brave")
+
+    def test_browser_without_a_value_is_a_usage_error(self):
+        with self.assertRaises(browse.UsageError):
+            browse.browser_of({"browser": True})
+        self.assertEqual(browse.browser_of({}), "")
+
+    def test_daemon_status_lists_the_connected_browsers(self):
+        with self.TwoBrowsers() as h:
+            err = io.StringIO()
+            with mock.patch("sys.stderr", err):
+                code = h.cli("daemon", "status")
+        self.assertEqual(code, 0)
+        said = err.getvalue()
+        self.assertIn("brave, chrome", said)
+        self.assertIn("--browser", said, "多个连着时要提示怎么指定")
+
+    def test_run_sends_every_item_to_the_named_browser(self):
+        with self.TwoBrowsers() as h:
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("run", "--browser", "brave",
+                             "browsingContext.getTree", "browsingContext.getTree")
+        self.assertEqual(code, 0)
+        report = json.loads(out.getvalue())
+        self.assertEqual([item["result"]["who"] for item in report], ["brave", "brave"])
 
 
 if __name__ == "__main__":
