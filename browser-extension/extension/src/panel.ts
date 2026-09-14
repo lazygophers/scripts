@@ -6,9 +6,8 @@
  * - the domains that `confirm_mode: per_domain` has stopped asking about,
  *   each revocable.
  *
- * The allow list lives in `browse.yaml` on the Python side, so that part goes
- * through the service worker to the daemon. The log and the brake are the
- * service worker's own — they keep working when the daemon does not.
+ * 三样东西现在都不经 daemon：免确认名单在 `chrome.storage.local` 里（面板直接读写），
+ * 日志和刹车本来就是 service worker 自己的。所以本地程序没起来，这个面板照样能用。
  */
 import { localize, msg } from "./i18n.ts";
 import type { LogEntry } from "./native-port.ts";

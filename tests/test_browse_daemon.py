@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import pathlib
 import shutil
@@ -21,13 +20,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from lib.browse_daemon import (  # noqa: E402
     ABORT_METHOD,
-    APPROVALS_APPROVE,
-    APPROVALS_LIST,
-    APPROVALS_REVOKE,
-    CONFIG_GET,
-    CONFIG_SET,
-    CONFIRM_METHOD,
-    CONTEXT_URL_METHOD,
     MAX_HELLO_BYTES,
     ROLE_CLI,
     ROLE_NATIVE_HOST,
@@ -46,7 +38,6 @@ from lib.browse_protocol import (  # noqa: E402
     ERR_INVALID_ARGUMENT,
     ERR_NOT_CONNECTED,
     ERR_UNKNOWN_COMMAND,
-    ERR_USER_REJECTED,
     MAX_INCOMING_FRAME_BYTES,
     ProtocolError,
     command,
@@ -54,8 +45,6 @@ from lib.browse_protocol import (  # noqa: E402
     event,
     success,
 )
-from lib.browse_security import Security  # noqa: E402
-from lib.cli import browse as browse_cli  # noqa: E402
 
 TIMEOUT = 2.0
 
@@ -156,29 +145,13 @@ class TestProbe(unittest.TestCase):
 class DaemonCase(unittest.IsolatedAsyncioTestCase):
     idle_timeout = 300.0
 
-    #: 子类改这个就换掉整份安全配置（confirm_mode / deny_domains / ...）
-    security_cfg: dict = {}
-
     async def asyncSetUp(self):
         self.tmp = tempfile.mkdtemp()
         self.path = pathlib.Path(self.tmp) / "lazygophers" / "browse.sock"
-        # 安全层一律指向临时目录：不许任何一条测试读到、写到用户真实的
-        # ~/.config/lazygophers/scripts/browse.yaml 或审计目录
-        self.audit_dir = pathlib.Path(self.tmp) / "audit"
-        self.security = Security(cfg=dict(self.security_cfg),
-                                 config_path=pathlib.Path(self.tmp) / "browse.yaml",
-                                 audit_dir=self.audit_dir)
-        self.daemon = Daemon(path=self.path, idle_timeout=self.idle_timeout,
-                             security=self.security)
+        # daemon 现在是纯管道：没有配置要读，也没有审计要写
+        self.daemon = Daemon(path=self.path, idle_timeout=self.idle_timeout)
         self.assertTrue(await self.daemon.start())
         self._writers = []
-
-    def audit_lines(self) -> list[dict]:
-        """按写入顺序读回审计记录。没写过就是空表。"""
-        path = self.security.audit_path()
-        if not path.exists():
-            return []
-        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
     async def asyncTearDown(self):
         for writer in self._writers:
@@ -186,8 +159,8 @@ class DaemonCase(unittest.IsolatedAsyncioTestCase):
         await self.daemon.stop()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    async def client(self, role: str, confirm_mode: str = ""):
-        reader, writer, conn_id = await connect(role, self.path, confirm_mode=confirm_mode)
+    async def client(self, role: str):
+        reader, writer, conn_id = await connect(role, self.path)
         self._writers.append(writer)
         return reader, writer, conn_id
 
@@ -645,9 +618,10 @@ NAV = command(1, "browsingContext.navigate", {"url": "https://bank.test/x"})
 
 
 class WiringCase(DaemonCase):
-    """CLI ──▶ daemon ──(确认往返)──▶ 扩展 的端到端脚手架。
+    """CLI ──▶ daemon ──▶ 扩展 的端到端脚手架。
 
-    `self.browser_*` 就是 stub 扩展：手工替它回 `{approved: ...}`。
+    `self.browser_*` 就是 stub 扩展。确认那一段没有了 —— daemon 不再问任何问题，
+    弹不弹框是插件自己的事（`browser-extension/extension/src/policy.ts`）。
     """
 
     async def asyncSetUp(self):
@@ -657,306 +631,6 @@ class WiringCase(DaemonCase):
         self.cli_reader, self.cli_writer, _ = await self.client(ROLE_CLI)
         await self.settle()
 
-    async def answer_confirm(self, approved: bool) -> dict:
-        """收下 daemon 主动发来的 `lg:confirm.request` 并替用户回一个布尔。"""
-        ask = await recv(self.browser_reader)
-        self.assertEqual(ask["method"], CONFIRM_METHOD)
-        await send(self.browser_writer, success(ask["id"], {"approved": approved}))
-        return ask
-
-    async def expect_no_confirm(self) -> dict:
-        """下一条到达扩展的必须是指令本身，不是确认请求。"""
-        forwarded = await recv(self.browser_reader)
-        self.assertNotEqual(forwarded["method"], CONFIRM_METHOD, "这个模式下不该弹确认")
-        return forwarded
-
-
-class TestSilentMode(WiringCase):
-    """默认模式：高危动作直接执行，不打扰用户，但审计照记。"""
-
-    security_cfg = {"confirm_mode": "silent"}
-
-    async def test_a_risky_command_runs_without_any_confirmation(self):
-        await send(self.cli_writer, COOKIES)
-        forwarded = await self.expect_no_confirm()
-        self.assertEqual(forwarded["method"], "storage.getCookies")
-        await send(self.browser_writer, success(forwarded["id"], {"cookies": []}))
-        self.assertEqual(await recv(self.cli_reader), success(1, {"cookies": []}))
-
-    async def test_the_audit_records_the_domain_and_never_the_params(self):
-        await send(self.cli_writer, command(1, "storage.setCookie", {
-            "url": "https://bank.test/", "name": "session", "value": "s3cr3t-token"}))
-        forwarded = await self.expect_no_confirm()
-        await send(self.browser_writer, success(forwarded["id"], {}))
-        await recv(self.cli_reader)
-
-        (line,) = self.audit_lines()
-        self.assertEqual(line["method"], "storage.setCookie")
-        self.assertEqual(line["domain"], "bank.test")
-        self.assertEqual(line["action"], "writeCookies")
-        self.assertEqual(line["result"], "success")
-        self.assertIsInstance(line["ms"], float)
-        # params 一个字都不许进审计文件
-        blob = json.dumps(line, ensure_ascii=False)
-        for leaked in ("s3cr3t-token", "session", "value"):
-            self.assertNotIn(leaked, blob)
-
-    async def test_a_failed_command_is_audited_as_an_error(self):
-        await send(self.cli_writer, COOKIES)
-        forwarded = await self.expect_no_confirm()
-        await send(self.browser_writer, error(forwarded["id"], ERR_INVALID_ARGUMENT, "no scope"))
-        self.assertEqual((await recv(self.cli_reader))["error"], ERR_INVALID_ARGUMENT)
-        (line,) = self.audit_lines()
-        self.assertEqual((line["result"], line["error"]), ("error", "no scope"))
-
-
-class TestAlwaysMode(WiringCase):
-    """每一次高危动作都要问，同意过也不记账。"""
-
-    security_cfg = {"confirm_mode": "always"}
-
-    async def test_every_risky_command_asks_again(self):
-        for _ in range(2):
-            await send(self.cli_writer, COOKIES)
-            ask = await self.answer_confirm(True)
-            self.assertEqual(ask["params"],
-                             {"action": "readCookies", "method": "storage.getCookies",
-                              "url": "bank.test"})
-            forwarded = await recv(self.browser_reader)
-            await send(self.browser_writer, success(forwarded["id"], {"cookies": []}))
-            await recv(self.cli_reader)
-        self.assertEqual(self.security.approvals(), [], "always 模式不该把域名记成免确认")
-
-    async def test_a_refusal_comes_back_as_user_rejected_and_never_reaches_the_browser(self):
-        await send(self.cli_writer, COOKIES)
-        await self.answer_confirm(False)
-        reply = await recv(self.cli_reader)
-        self.assertEqual((reply["type"], reply["id"], reply["error"]),
-                         ("error", 1, ERR_USER_REJECTED))
-        # CLI 侧把这个码映射成退出码 4
-        self.assertEqual(browse_cli.exit_code_for({"status": "failed", "error": reply["error"]}),
-                         browse_cli.EXIT_REJECTED)
-        with self.assertRaises(asyncio.TimeoutError):
-            await recv(self.browser_reader, timeout=0.3)
-        (line,) = self.audit_lines()
-        self.assertEqual(line["result"], "denied")
-        self.assertIn("readCookies", line["error"])
-
-    async def test_a_harmless_command_is_not_confirmed(self):
-        await send(self.cli_writer, NAV)
-        forwarded = await self.expect_no_confirm()
-        self.assertEqual(forwarded["method"], "browsingContext.navigate")
-
-    async def test_no_answer_before_the_timeout_counts_as_a_refusal(self):
-        self.daemon.confirm_timeout = 0.2
-        await send(self.cli_writer, COOKIES)
-        ask = await recv(self.browser_reader)
-        self.assertEqual(ask["method"], CONFIRM_METHOD)  # 收到了，但故意不回
-        reply = await recv(self.cli_reader, timeout=2.0)
-        self.assertEqual(reply["error"], ERR_USER_REJECTED)
-        self.assertEqual(self.audit_lines()[0]["result"], "denied")
-
-    async def test_a_browser_that_drops_mid_dialog_counts_as_a_refusal(self):
-        """扩展的 service worker 在弹窗期间被回收：端口断 → 确认拿不回来 → 拒绝。"""
-        await send(self.cli_writer, COOKIES)
-        await recv(self.browser_reader)
-        self.browser_writer.close()
-        reply = await recv(self.cli_reader, timeout=2.0)
-        self.assertEqual(reply["error"], ERR_USER_REJECTED)
-
-
-class TestPerDomainMode(WiringCase):
-    """问一次就记住，撤销后重新问。"""
-
-    security_cfg = {"confirm_mode": "per_domain"}
-
-    async def run_cookies(self) -> dict:
-        """跑一条高危指令，返回扩展实际收到的第一条消息。"""
-        await send(self.cli_writer, COOKIES)
-        return await recv(self.browser_reader)
-
-    async def test_first_time_asks_second_time_does_not_and_revoke_restores_it(self):
-        first = await self.run_cookies()
-        self.assertEqual(first["method"], CONFIRM_METHOD)
-        await send(self.browser_writer, success(first["id"], {"approved": True}))
-        forwarded = await recv(self.browser_reader)
-        await send(self.browser_writer, success(forwarded["id"], {"cookies": []}))
-        await recv(self.cli_reader)
-        self.assertEqual(self.security.approvals(), ["bank.test"], "同意后必须落盘")
-
-        second = await self.run_cookies()
-        self.assertEqual(second["method"], "storage.getCookies", "同域名第二次不该再问")
-        await send(self.browser_writer, success(second["id"], {"cookies": []}))
-        await recv(self.cli_reader)
-
-        self.security.revoke("bank.test")
-        third = await self.run_cookies()
-        self.assertEqual(third["method"], CONFIRM_METHOD, "撤销后必须恢复问")
-
-    async def test_approval_is_per_domain_not_global(self):
-        self.security.approve("bank.test")
-        await send(self.cli_writer, command(1, "storage.getCookies", {"domain": "other.test"}))
-        ask = await recv(self.browser_reader)
-        self.assertEqual(ask["params"]["url"], "other.test")
-
-    async def test_a_refusal_is_not_written_down(self):
-        first = await self.run_cookies()
-        await send(self.browser_writer, success(first["id"], {"approved": False}))
-        self.assertEqual((await recv(self.cli_reader))["error"], ERR_USER_REJECTED)
-        self.assertEqual(self.security.approvals(), [])
-
-
-class TestDenyList(WiringCase):
-    """拒绝名单优先级最高：命中就直接拒，一个确认框都不弹。"""
-
-    security_cfg = {"confirm_mode": "always", "deny_domains": ["bank.test"]}
-
-    async def test_a_denied_domain_is_refused_without_asking(self):
-        await send(self.cli_writer, COOKIES)
-        reply = await recv(self.cli_reader)
-        self.assertEqual(reply["error"], ERR_USER_REJECTED)
-        self.assertIn("拒绝名单", reply["message"])
-        with self.assertRaises(asyncio.TimeoutError):
-            await recv(self.browser_reader, timeout=0.3)
-        self.assertEqual(self.audit_lines()[0]["result"], "denied")
-
-    async def test_it_also_covers_harmless_commands_and_subdomains(self):
-        await send(self.cli_writer, command(1, "browsingContext.navigate",
-                                            {"url": "https://login.bank.test/"}))
-        self.assertEqual((await recv(self.cli_reader))["error"], ERR_USER_REJECTED)
-
-    async def test_another_domain_still_goes_through_the_normal_flow(self):
-        await send(self.cli_writer, command(1, "storage.getCookies", {"domain": "shop.test"}))
-        await self.answer_confirm(True)
-        self.assertEqual((await recv(self.browser_reader))["method"], "storage.getCookies")
-
-
-class TestDenyListOnPageCommands(WiringCase):
-    """`input.*` / `script.*` 的 params 里没有 url —— 拒绝名单得先问扩展目标页是谁。"""
-
-    security_cfg = {"confirm_mode": "silent", "deny_domains": ["bank.test"]}
-
-    CLICK = command(1, "input.click", {"selector": "text=转账"})
-
-    async def answer_context_url(self, url) -> dict:
-        ask = await recv(self.browser_reader)
-        self.assertEqual(ask["method"], CONTEXT_URL_METHOD)
-        await send(self.browser_writer, success(ask["id"], {"url": url}))
-        return ask
-
-    async def test_a_click_on_a_denied_page_is_refused(self):
-        await send(self.cli_writer, self.CLICK)
-        await self.answer_context_url("https://bank.test/transfer")
-        reply = await recv(self.cli_reader)
-        self.assertEqual(reply["error"], ERR_USER_REJECTED)
-        self.assertIn("拒绝名单", reply["message"])
-        # 指令本身一个字节都没发给浏览器
-        with self.assertRaises(asyncio.TimeoutError):
-            await recv(self.browser_reader, timeout=0.3)
-        self.assertEqual(self.audit_lines()[0]["result"], "denied")
-
-    async def test_a_click_on_any_other_page_goes_through(self):
-        await send(self.cli_writer, self.CLICK)
-        await self.answer_context_url("https://shop.test/cart")
-        forwarded = await recv(self.browser_reader)
-        self.assertEqual(forwarded["method"], "input.click")
-
-    async def test_an_unanswerable_target_fails_closed(self):
-        """问不到目标页就不放行 —— 不知道打在谁身上，就不能打。"""
-        await send(self.cli_writer, self.CLICK)
-        await self.answer_context_url(None)
-        reply = await recv(self.cli_reader)
-        self.assertEqual(reply["error"], ERR_USER_REJECTED)
-        self.assertIn("deny_domains", reply["message"])
-        with self.assertRaises(asyncio.TimeoutError):
-            await recv(self.browser_reader, timeout=0.3)
-
-    async def test_the_context_lookup_carries_the_caller_s_target_selection(self):
-        await send(self.cli_writer, command(1, "script.evaluate",
-                                            {"expression": "1", "context": "7"}))
-        ask = await self.answer_context_url("https://shop.test/")
-        self.assertEqual(ask["params"], {"context": "7"})
-
-
-class TestConfirmAsksAboutTheRightPage(WiringCase):
-    """要弹确认的页面类指令，先问清楚是哪一页 —— 否则确认框没有主语，而且扩展侧的
-    去抖缓存会把 daemon 的 `url=None` 和扩展的真实 URL 当成两个问题，弹两次框。"""
-
-    security_cfg = {"confirm_mode": "always"}
-
-    async def test_the_confirm_request_carries_the_resolved_url(self):
-        await send(self.cli_writer, command(1, "input.click", {"selector": "js=x"}))
-        ask = await recv(self.browser_reader)
-        self.assertEqual(ask["method"], CONTEXT_URL_METHOD)
-        await send(self.browser_writer, success(ask["id"], {"url": "https://shop.test/cart"}))
-        confirm = await recv(self.browser_reader)
-        self.assertEqual(confirm["method"], CONFIRM_METHOD)
-        self.assertEqual(confirm["params"], {"action": "evalMainWorld",
-                                             "method": "input.click",
-                                             "url": "https://shop.test/cart"})
-
-    async def test_a_css_locator_is_not_risky_so_nothing_is_asked(self):
-        await send(self.cli_writer, command(1, "input.click", {"selector": "css=button"}))
-        forwarded = await recv(self.browser_reader)
-        self.assertEqual(forwarded["method"], "input.click")
-
-    async def test_an_unanswerable_url_still_asks_when_nothing_is_denied(self):
-        """名单空着时问不到 URL 不算错：照旧弹确认，只是框上写不出站名。"""
-        await send(self.cli_writer, command(1, "input.click", {"selector": "js=x"}))
-        ask = await recv(self.browser_reader)
-        await send(self.browser_writer, success(ask["id"], {"url": None}))
-        confirm = await recv(self.browser_reader)
-        self.assertEqual(confirm["method"], CONFIRM_METHOD)
-        self.assertIsNone(confirm["params"]["url"])
-
-
-class TestDenyListOff(WiringCase):
-    """名单空着时不许多花一个往返。"""
-
-    security_cfg = {"confirm_mode": "silent"}
-
-    async def test_no_context_lookup_when_nothing_is_denied(self):
-        await send(self.cli_writer, command(1, "input.click", {"selector": "text=x"}))
-        forwarded = await recv(self.browser_reader)
-        self.assertEqual(forwarded["method"], "input.click")
-
-
-class TestConfirmModeOverride(WiringCase):
-    """`--confirm-mode` 随握手带过来，只能收紧（spec 4.4）。"""
-
-    security_cfg = {"confirm_mode": "silent"}
-
-    async def test_tightening_from_the_command_line_really_asks(self):
-        reader, writer, _ = await self.client(ROLE_CLI, confirm_mode="always")
-        await self.settle()
-        await send(writer, COOKIES)
-        ask = await recv(self.browser_reader)
-        self.assertEqual(ask["method"], CONFIRM_METHOD)
-        await send(self.browser_writer, success(ask["id"], {"approved": True}))
-        self.assertEqual((await recv(self.browser_reader))["method"], "storage.getCookies")
-
-    async def test_another_connection_without_the_flag_is_unaffected(self):
-        await self.client(ROLE_CLI, confirm_mode="always")
-        await self.settle()
-        await send(self.cli_writer, COOKIES)  # 这条连接没带 flag，仍是配置里的 silent
-        self.assertEqual((await recv(self.browser_reader))["method"], "storage.getCookies")
-
-
-class TestConfirmModeCannotLoosen(WiringCase):
-    """配置写死 always，命令行想换 silent —— 拒绝，且 daemon 不倒。"""
-
-    security_cfg = {"confirm_mode": "always"}
-
-    async def test_a_loosening_flag_fails_the_command(self):
-        reader, writer, _ = await self.client(ROLE_CLI, confirm_mode="silent")
-        await self.settle()
-        await send(writer, COOKIES)
-        reply = await recv(reader)
-        self.assertEqual((reply["type"], reply["error"]), ("error", ERR_INVALID_ARGUMENT))
-        self.assertIn("只能收紧不能放宽", reply["message"])
-        with self.assertRaises(asyncio.TimeoutError):
-            await recv(self.browser_reader, timeout=0.3)
-        self.assertTrue(probe(self.path), "daemon 必须还活着")
 
 
 class TestAbort(WiringCase):
@@ -988,138 +662,6 @@ class TestAbort(WiringCase):
         self.assertEqual((await recv(self.cli_reader))["type"], "success")
 
 
-class TestBadConfig(WiringCase):
-    """配置写错只让指令失败，不能把 daemon 带倒。"""
-
-    async def asyncSetUp(self):
-        await super().asyncSetUp()
-        self.daemon.security = None
-        self.daemon.override_mode = "silent"
-        (pathlib.Path(self.tmp) / "browse.yaml").write_text("confirm_mode: always\n")
-
-    async def test_a_loosening_override_fails_the_command_not_the_daemon(self):
-        with mock.patch("lib.browse_security._STORE.default_path",
-                        return_value=pathlib.Path(self.tmp) / "browse.yaml"):
-            await send(self.cli_writer, COOKIES)
-            reply = await recv(self.cli_reader)
-        self.assertEqual((reply["type"], reply["error"]), ("error", ERR_INVALID_ARGUMENT))
-        self.assertIn("只能收紧不能放宽", reply["message"])
-        self.assertTrue(probe(self.path), "daemon 必须还活着")
-
-
-class TestApprovalsPanel(WiringCase):
-    """插件面板经 daemon 读写 per_domain 免确认名单（spec 4.5）。"""
-
-    security_cfg = {"confirm_mode": "per_domain"}
-
-    async def ask(self, cid: int, method: str, params: dict | None = None) -> dict:
-        await send(self.browser_writer, command(cid, method, params or {}))
-        return await recv(self.browser_reader)
-
-    async def test_list_approve_and_revoke_round_trip(self):
-        self.assertEqual(await self.ask(1, APPROVALS_LIST), success(1, {"domains": []}))
-        self.assertEqual(await self.ask(2, APPROVALS_APPROVE, {"domain": "shop.test"}),
-                         success(2, {"domains": ["shop.test"]}))
-        self.assertEqual(await self.ask(3, APPROVALS_REVOKE, {"domain": "shop.test"}),
-                         success(3, {"domains": []}))
-
-    async def test_approving_from_the_panel_really_silences_the_confirmation(self):
-        await self.ask(1, APPROVALS_APPROVE, {"domain": "bank.test"})
-        await send(self.cli_writer, COOKIES)
-        self.assertEqual((await recv(self.browser_reader))["method"], "storage.getCookies")
-
-    async def test_a_missing_domain_is_an_argument_error(self):
-        reply = await self.ask(1, APPROVALS_APPROVE, {})
-        self.assertEqual((reply["type"], reply["error"]), ("error", ERR_INVALID_ARGUMENT))
-
-    async def test_an_unknown_browser_command_is_refused_not_forwarded(self):
-        reply = await self.ask(1, "lg:nonsense.do")
-        self.assertEqual(reply["error"], ERR_UNKNOWN_COMMAND)
-
-
-class TestConfigPanel(WiringCase):
-    """扩展设置页经 daemon 读写 browse.yaml（spec 4.4 / 4.6）。
-
-    这条链路的要害是「只有一份配置」：设置页写的必须是 CLI 读的那个文件，写完 daemon
-    必须按新配置办事。所以下面既断言回包，也断言文件内容和后续指令的行为。
-    """
-
-    security_cfg = {"confirm_mode": "silent"}
-
-    async def ask(self, cid: int, method: str, params: dict | None = None) -> dict:
-        await send(self.browser_writer, command(cid, method, params or {}))
-        return await recv(self.browser_reader)
-
-    def saved(self) -> dict:
-        import yaml
-
-        path = pathlib.Path(self.tmp) / "browse.yaml"
-        return yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
-
-    async def test_get_returns_the_effective_config_and_the_real_file_path(self):
-        reply = await self.ask(1, CONFIG_GET)
-        self.assertEqual(reply["type"], "success")
-        # 文件还不存在时给的是默认值，不是空对象 —— 设置页照着画的就是实际在生效的策略
-        self.assertEqual(reply["result"]["config"], {
-            "confirm_mode": "silent",
-            "deny_domains": [],
-            "approved_domains": [],
-            "audit": True,
-            "audit_retention_days": 7,
-        })
-        self.assertEqual(reply["result"]["path"], str(pathlib.Path(self.tmp) / "browse.yaml"))
-
-    async def test_set_round_trips_through_the_file_the_cli_reads(self):
-        reply = await self.ask(1, CONFIG_SET, {
-            "confirm_mode": "always",
-            "deny_domains": ["*.Bank.test", " ", "bank.test"],
-            "audit": False,
-            "audit_retention_days": 0,
-        })
-        self.assertEqual(reply["type"], "success")
-        self.assertEqual(reply["result"]["config"], {
-            "confirm_mode": "always",
-            "deny_domains": ["bank.test"],
-            "approved_domains": [],
-            "audit": False,
-            "audit_retention_days": 0,
-        })
-        self.assertEqual(self.saved()["confirm_mode"], "always")
-        self.assertEqual(await self.ask(2, CONFIG_GET), reply | {"id": 2})
-
-    async def test_saving_really_changes_what_the_next_command_does(self):
-        """改完不生效是这条链路最危险的 bug：用户以为关了，其实还开着。"""
-        await self.ask(1, CONFIG_SET, {"deny_domains": ["bank.test"]})
-        await send(self.cli_writer, COOKIES)
-        reply = await recv(self.cli_reader)
-        self.assertEqual(reply["type"], "error", "刚拉黑的域名必须当场就被拒")
-        self.assertIn("bank.test", reply["message"])
-
-    async def test_unknown_fields_are_ignored_not_written(self):
-        await self.ask(1, CONFIG_SET, {"audit": False, "whatever": "x", "token": "secret"})
-        self.assertEqual(set(self.saved()), {"audit"})
-
-    async def test_an_illegal_confirm_mode_is_refused_and_nothing_is_written(self):
-        reply = await self.ask(1, CONFIG_SET, {"confirm_mode": "loud"})
-        self.assertEqual((reply["type"], reply["error"]), ("error", ERR_INVALID_ARGUMENT))
-        self.assertEqual(self.saved(), {}, "校验没过就一个字都不该落盘")
-
-    async def test_illegal_types_are_refused(self):
-        for params in ({"deny_domains": "bank.test"},        # 字符串不是列表
-                       {"deny_domains": [1]},                # 列表里不是域名
-                       {"audit": "yes"},                     # 不是布尔
-                       {"audit_retention_days": "7"},        # 不是整数
-                       {"audit_retention_days": True}):      # bool 是 int 的子类，要挡住
-            reply = await self.ask(1, CONFIG_SET, params)
-            self.assertEqual(reply["error"], ERR_INVALID_ARGUMENT, params)
-        self.assertEqual(self.saved(), {})
-
-    async def test_the_panel_and_the_settings_page_share_one_approved_list(self):
-        await self.ask(1, APPROVALS_APPROVE, {"domain": "shop.test"})
-        reply = await self.ask(2, CONFIG_GET)
-        self.assertEqual(reply["result"]["config"]["approved_domains"], ["shop.test"])
-
-
 class DeadWriter:
     """一个写就炸的 writer：模拟「刚决定要发，连接就没了」那一瞬间。"""
 
@@ -1131,36 +673,31 @@ class DeadWriter:
 
 
 class TestFailClosed(DaemonCase):
-    """连接在最不巧的那一刻断掉时，每条路都必须倒向拒绝，不能倒向放行。"""
+    """连接在最不巧的那一刻断掉时，每条路都必须倒向失败，不能倒向静默成功。
 
-    security_cfg = {"confirm_mode": "always"}
+    2026-09-14 之前这里还测「确认往返发不出去算拒绝」；确认搬进插件之后 daemon 不再
+    发起任何问答，剩下的就是转发这一条路。
+    """
 
-    async def test_asking_with_no_browser_at_all_is_a_refusal(self):
-        self.assertIsNone(self.daemon._browser)
-        self.assertIsNone(await self.daemon._ask(
-            CONFIRM_METHOD,
-            {"action": "readCookies", "method": "storage.getCookies", "url": "a.test"}))
-
-    async def test_a_confirmation_that_cannot_be_sent_is_a_refusal(self):
-        self.daemon._browser = _Conn(id=99, role=ROLE_NATIVE_HOST, writer=DeadWriter())
-        self.assertIsNone(await self.daemon._ask(
-            CONFIRM_METHOD,
-            {"action": "readCookies", "method": "storage.getCookies", "url": "a.test"}))
-        self.assertEqual(self.daemon._pending, {}, "发不出去就不能留下一条永远不回的 pending")
-
-    async def test_a_command_that_cannot_be_forwarded_fails_and_is_audited(self):
+    async def test_a_command_that_cannot_be_forwarded_fails(self):
         cli_reader, cli_writer, _ = await self.client(ROLE_CLI)
         await self.settle()
         self.daemon._browser = _Conn(id=99, role=ROLE_NATIVE_HOST, writer=DeadWriter())
-        # 不走高危方法，免得先卡在确认上
         await send(cli_writer, command(1, "browsingContext.getTree"))
         self.assertEqual((await recv(cli_reader))["error"], ERR_NOT_CONNECTED)
-        self.assertEqual(self.audit_lines()[0]["result"], "error")
+        self.assertEqual(self.daemon._pending, {}, "发不出去就不能留下一条永远不回的 pending")
 
-    async def test_auditing_before_the_security_layer_exists_is_a_no_op(self):
-        self.daemon.security = None
-        self.daemon._audit("storage.getCookies", {}, None, result="success")
-        self.assertEqual(self.audit_lines(), [])
+    async def test_the_browser_cannot_ask_the_daemon_anything_any_more(self):
+        """插件反过来问 daemon 的那三类消息（免确认名单、配置）已经不存在了。
+
+        真收到一条的话必须当场回 unknown command —— 静默吞掉会让插件那边挂着等。
+        """
+        browser_reader, browser_writer, _ = await self.client(ROLE_NATIVE_HOST)
+        await self.settle()
+        await send(browser_writer, command(7, "lg:config.get"))
+        reply = await recv(browser_reader)
+        self.assertEqual(reply["error"], ERR_UNKNOWN_COMMAND)
+        self.assertIn("插件", reply["message"])
 
     async def test_an_envelope_the_browser_should_never_send_is_dropped(self):
         conn = _Conn(id=1, role=ROLE_NATIVE_HOST, writer=DeadWriter())

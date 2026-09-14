@@ -21,8 +21,6 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from lib.browse_daemon import (  # noqa: E402
-    CONFIRM_METHOD,
-    CONTEXT_URL_METHOD,
     Daemon,
     connect,
     pack,
@@ -36,7 +34,6 @@ from lib.browse_protocol import (  # noqa: E402
     error,
     success,
 )
-from lib.browse_security import Security  # noqa: E402
 from lib.cli import browse  # noqa: E402
 
 TIMEOUT = 5.0
@@ -107,10 +104,8 @@ class Harness:
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(TIMEOUT)
 
     async def _start(self) -> None:
-        # 安全层指向临时目录：CLI 测试不许读写用户真实的 browse.yaml / 审计目录
-        self.daemon = Daemon(path=self.sock, idle_timeout=600.0,
-                             security=Security(cfg={}, config_path=self.dir / "browse.yaml",
-                                               audit_dir=self.dir / "audit"))
+        # daemon 现在是纯管道：策略和审计都在插件里，这边没有配置也没有落盘
+        self.daemon = Daemon(path=self.sock, idle_timeout=600.0)
         await self.daemon.start()
         if self.handler is None:
             return
@@ -216,54 +211,28 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(browse.read_stdin_items(text),
                          ["input.click css=a", "script.evaluate 1+1"])
 
-    def test_confirm_mode_is_a_cli_flag_not_a_wire_param(self):
-        """`--confirm-mode` 以前会被当成指令参数发给浏览器然后被静默丢掉。"""
-        method, params, opts = browse.parse_command(
-            ["storage", "getCookies", "--domain", "a.test", "--confirm-mode", "always"])
-        self.assertEqual(params, {"domain": "a.test"})
-        self.assertEqual(opts, {"confirmMode": "always"})
-        self.assertEqual(browse.confirm_mode_of(opts), "always")
-
-    def test_a_misspelled_confirm_mode_never_leaves_the_machine(self):
-        with self.assertRaises(browse.UsageError):
-            browse.confirm_mode_of({"confirmMode": "loud"})
-        with self.assertRaises(browse.UsageError):
-            browse.confirm_mode_of({"confirmMode": True})  # `--confirm-mode` 后面漏了值
-        self.assertEqual(browse.confirm_mode_of({}), "")
-
     def test_methods_table_matches_extension_handlers(self):
         """CLI 的指令表必须和扩展侧 HANDLERS 逐条对齐，少一条就是 CLI 发不出去。
 
-        两条控制消息例外：`lg:confirm.request`（daemon 让扩展弹确认）和
-        `lg:context.url`（daemon 问扩展这条指令落在哪一页，deny_domains 要用）。
-        CLI 能发它们就等于「谁都能弹一个假确认框 / 探别人的标签页」，所以它们**必须**
-        不在 METHODS 里。
+        2026-09-14 之前这里要排除两条 daemon 反过来问插件的控制消息
+        （`lg:confirm.request` / `lg:context.url`）。裁决搬进插件之后 daemon 不再问
+        任何问题，两条都没了，所以现在是**严格相等**，一个例外都不留。
         """
         source = (pathlib.Path(__file__).resolve().parent.parent
                   / "browser-extension/extension/src/handlers/index.ts").read_text(encoding="utf-8")
         import re
         handlers = set(re.findall(r'^\s+"([\w:]+\.\w+)":', source, re.M))
-        control = {CONFIRM_METHOD, CONTEXT_URL_METHOD}
-        self.assertEqual(handlers - control, set(browse.METHODS))
-        self.assertEqual(control & set(browse.METHODS), set())
+        self.assertEqual(handlers, set(browse.METHODS))
 
-    def test_panel_and_settings_methods_are_not_reachable_from_the_cli(self):
-        """面板和设置页那几条只走「扩展 → daemon」，命令行上必须敲不出来。
+    def test_the_daemons_old_reverse_rpc_methods_are_gone(self):
+        """daemon 不再问插件任何事，所以这几条方法名一个都不该还能发出去。
 
-        它们不在扩展的 HANDLERS 里，所以上一条对不齐的断言碰不到它们 —— 而能从命令行
-        发 `lg:config.set` 就等于谁都能把别人的确认策略改成 silent。
+        留着的话就等于「谁都能弹一个假确认框 / 改别人的确认策略」。
         """
-        from lib.browse_daemon import (
-            APPROVALS_APPROVE,
-            APPROVALS_LIST,
-            APPROVALS_REVOKE,
-            CONFIG_GET,
-            CONFIG_SET,
-        )
-
-        panel = {APPROVALS_LIST, APPROVALS_APPROVE, APPROVALS_REVOKE, CONFIG_GET, CONFIG_SET}
-        self.assertEqual(panel & set(browse.METHODS), set())
-        for method in panel:
+        for method in ("lg:confirm.request", "lg:context.url", "lg:approvals.list",
+                       "lg:approvals.approve", "lg:approvals.revoke",
+                       "lg:config.get", "lg:config.set"):
+            self.assertNotIn(method, browse.METHODS)
             module, _, action = method.rpartition(".")
             with self.assertRaises(browse.UsageError, msg=method):
                 browse.resolve_method(module, action)
@@ -346,43 +315,6 @@ class TestSingleCommand(unittest.TestCase):
             with mock.patch("sys.stderr", io.StringIO()):
                 code = h.cli("storage", "getCookies", "--domain", "example.com")
         self.assertEqual(code, 4)
-
-    def test_tightening_confirm_mode_from_the_command_line_reaches_the_daemon(self):
-        """配置是 silent，命令行 `--confirm-mode always` —— 扩展必须真的收到确认请求。"""
-        asked: list[str] = []
-
-        def handler(method, params):
-            asked.append(method)
-            return {"approved": True} if method == CONFIRM_METHOD else {"cookies": []}
-
-        with Harness(handler) as h:
-            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
-                code = h.cli("storage", "getCookies", "--domain", "a.test",
-                             "--confirm-mode", "always")
-        self.assertEqual(code, 0)
-        self.assertEqual(asked, [CONFIRM_METHOD, "storage.getCookies"])
-
-    def test_loosening_confirm_mode_from_the_command_line_is_refused(self):
-        """配置是 always，命令行想换 silent —— 指令直接失败，一个字节都不发给浏览器。"""
-        with Harness(lambda m, p: {"cookies": []}) as h:
-            h.daemon.security.cfg["confirm_mode"] = "always"
-            h.daemon.security.confirm_mode = "always"
-            err = io.StringIO()
-            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", err):
-                code = h.cli("storage", "getCookies", "--domain", "a.test",
-                             "--confirm-mode", "silent")
-            self.assertEqual(h.browser.seen, [], "拒绝之后不该有任何指令到达浏览器")
-        self.assertEqual(code, 1)
-        payload = json.loads(err.getvalue())
-        self.assertEqual(payload["error"], ERR_INVALID_ARGUMENT)
-        self.assertIn("只能收紧不能放宽", payload["message"])
-
-    def test_a_misspelled_confirm_mode_exits_2_without_sending(self):
-        with Harness(lambda m, p: {}) as h:
-            with mock.patch("sys.stderr", io.StringIO()):
-                code = h.cli("storage", "getCookies", "--confirm-mode", "loud")
-            self.assertEqual(h.browser.seen, [])
-        self.assertEqual(code, 2)
 
     def test_unknown_command_exits_2_without_sending(self):
         with Harness(lambda m, p: {}) as h:
@@ -834,6 +766,70 @@ class TestEnsureDaemon(unittest.TestCase):
         with mock.patch.object(browse.SCRIPT_PATH.__class__, "is_file", return_value=False):
             with self.assertRaises(browse.UsageError):
                 browse.ensure_daemon(missing)
+
+
+class TestAudit(unittest.TestCase):
+    """`browse audit`：审计存在插件里，这是唯一能把它捞出来的路。"""
+
+    def test_audit_prints_jsonl_one_entry_per_line(self):
+        entries = [
+            {"ts": "2026-09-14T20:00:00+08:00", "method": "storage.getCookies",
+             "domain": "a.test", "action": "readCookies", "result": "success", "ms": 3},
+            {"ts": "2026-09-14T20:00:01+08:00", "method": "browsingContext.navigate",
+             "domain": "b.test", "action": None, "result": "denied", "ms": 1},
+        ]
+        with Harness(lambda m, p: {"entries": entries}) as h:
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("audit")
+        self.assertEqual(code, 0)
+        lines = [line for line in out.getvalue().splitlines() if line]
+        self.assertEqual(len(lines), 2, "一行一条，可以直接 | jq")
+        self.assertEqual(json.loads(lines[0])["domain"], "a.test")
+        self.assertEqual(json.loads(lines[1])["result"], "denied")
+
+    def test_limit_is_passed_through_as_a_number(self):
+        seen: list[dict] = []
+
+        def handler(method, params):
+            seen.append({"method": method, "params": params})
+            return {"entries": []}
+
+        with Harness(handler) as h:
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                self.assertEqual(h.cli("audit", "--limit", "5"), 0)
+        self.assertEqual(seen[0]["method"], "lg:audit.read")
+        self.assertEqual(seen[0]["params"], {"limit": 5})
+
+    def test_a_bad_limit_exits_2_without_sending(self):
+        with Harness(lambda m, p: {"entries": []}) as h:
+            with mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("audit", "--limit", "many")
+            self.assertEqual(h.browser.seen, [])
+        self.assertEqual(code, 2)
+
+    def test_clear_reports_how_many_went(self):
+        with Harness(lambda m, p: {"cleared": 7}) as h:
+            err = io.StringIO()
+            with mock.patch("sys.stderr", err):
+                code = h.cli("audit", "clear")
+        self.assertEqual(code, 0)
+        self.assertIn("7", err.getvalue())
+
+    def test_an_unknown_subcommand_exits_2(self):
+        with Harness(lambda m, p: {"entries": []}) as h:
+            with mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("audit", "nonsense")
+        self.assertEqual(code, 2)
+
+    def test_without_a_browser_it_is_exit_3_like_every_other_command(self):
+        """审计在插件里，插件不在就真的读不到 —— 不能假装给一个空列表。"""
+        with Harness(None) as h:
+            err = io.StringIO()
+            with mock.patch("sys.stderr", err):
+                code = h.cli("audit")
+        self.assertEqual(code, 3)
+        self.assertEqual(json.loads(err.getvalue())["error"], ERR_NOT_CONNECTED)
 
 
 if __name__ == "__main__":
