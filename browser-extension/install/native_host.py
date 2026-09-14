@@ -1,0 +1,380 @@
+#!/usr/bin/env python3
+"""把 browse 注册成浏览器的 native messaging host（三平台，用户级）
+
+常用：
+  python3 browser-extension/install/native_host.py              # 装到探测到的浏览器
+  python3 browser-extension/install/native_host.py --list       # 只看探测到了谁
+  python3 browser-extension/install/native_host.py --uninstall  # 全部卸干净
+  python3 browser-extension/install/native_host.py --browsers chrome,firefox
+  python3 browser-extension/install/native_host.py --extension-id <Edge 商店 ID>
+
+写两样东西：一份 JSON（manifest）和一个 wrapper 脚本。**native messaging 的 manifest
+没有 `args` 字段**（Chrome / Edge / Firefox 都没有），字段只有 name / description /
+path / type / allowed_origins（Firefox 是 allowed_extensions），所以 `--native-host`
+这个参数没地方传——manifest 的 `path` 只能指向一个自带该参数的 wrapper：
+
+    #!/bin/sh
+    exec /abs/path/to/browse --native-host "$@"
+
+浏览器是直接 fork 执行 `path` 的，所以 wrapper 必须有执行位；被它指向的 browse 不
+需要，native host 内部用 sys.executable 显式起（T03 `lib/browse_native_host.py`）。
+
+路径表出处：`.scratch/browser-control-extension/spec.md` 7.3，Firefox 一行出自
+<https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Native_manifests>。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import shutil
+import sys
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+
+from lib.notify import consume_debug, consume_no_say  # noqa: E402
+from lib.ui import reporter, timed  # noqa: E402
+
+HOST_NAME = "com.lazygophers.browse"
+DESCRIPTION = "lazygophers browse — 用命令行驱动浏览器"
+
+# 扩展 ID 由 manifest 的 `key` 字段算出（`components/crx_file/id_util.cc:44-57`），
+# 与安装目录无关。Chromium 系（Chrome / Edge / Brave / Opera / Vivaldi）用同一套算
+# 法，所以自分发的 unpacked 扩展在 Edge 上拿到的是同一个 ID。
+# **Edge on Windows 只读第一个命中的 manifest**（9 级回落到 Chromium 键、Chrome
+# 键），所以只能有一份 manifest 同时授权两边——ID 写成列表就是为这个：真去 Edge
+# Add-ons 商店上架后商店会另发一个 ID，用 `--extension-id` 追加进来即可。
+# 需要: 上架 Edge Add-ons 后把商店分配的 ID 补进 EXTENSION_IDS。
+EXTENSION_IDS: tuple[str, ...] = ("podeceeeafjdcemppcgjhhokcokpcama",)
+
+# Firefox 侧字段名是 allowed_extensions，值是 gecko.id 字符串（不是 URL）。扩展侧
+# 的 browser_specific_settings.gecko.id 必须与此一致。
+GECKO_IDS: tuple[str, ...] = ("browse@lazygophers.com",)
+
+CHROMIUM = "chromium"
+GECKO = "gecko"
+
+_MAC_CHROME = "Library/Application Support/Google/Chrome/NativeMessagingHosts"
+_LINUX_CHROME = ".config/google-chrome/NativeMessagingHosts"
+
+# 浏览器 -> (manifest 风味, 探测目录, 落点...)。路径一律相对 home。
+# 落点以 "reg:" 开头的是 Windows 注册表键（HKCU），其余是要写 <HOST_NAME>.json 的目录。
+BROWSERS: dict[str, dict[str, tuple[str, str, tuple[str, ...]]]] = {
+    "darwin": {
+        "chrome": (CHROMIUM, "Library/Application Support/Google/Chrome", (_MAC_CHROME,)),
+        "chromium": (CHROMIUM, "Library/Application Support/Chromium",
+                     ("Library/Application Support/Chromium/NativeMessagingHosts",)),
+        "edge": (CHROMIUM, "Library/Application Support/Microsoft Edge",
+                 ("Library/Application Support/Microsoft Edge/NativeMessagingHosts",)),
+        # brave-core 源码（app/brave_main_delegate.cc:141-164）显式 override 到
+        # Chrome 目录，KeePassXC 与社区指 BraveSoftware 目录，两个来源冲突且实测机
+        # 上两个目录都存在——成本只是多拷一个文件，两个都写。
+        "brave": (CHROMIUM, "Library/Application Support/BraveSoftware/Brave-Browser",
+                  ("Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",
+                   _MAC_CHROME)),
+        "opera": (CHROMIUM, "Library/Application Support/com.operasoftware.Opera", (_MAC_CHROME,)),
+        "vivaldi": (CHROMIUM, "Library/Application Support/Vivaldi",
+                    ("Library/Application Support/Vivaldi/NativeMessagingHosts",)),
+        "firefox": (GECKO, "Library/Application Support/Firefox",
+                    ("Library/Application Support/Mozilla/NativeMessagingHosts",)),
+    },
+    "linux": {
+        "chrome": (CHROMIUM, ".config/google-chrome", (_LINUX_CHROME,)),
+        "chromium": (CHROMIUM, ".config/chromium", (".config/chromium/NativeMessagingHosts",)),
+        "edge": (CHROMIUM, ".config/microsoft-edge", (".config/microsoft-edge/NativeMessagingHosts",)),
+        "brave": (CHROMIUM, ".config/BraveSoftware/Brave-Browser",
+                  (".config/BraveSoftware/Brave-Browser/NativeMessagingHosts",)),
+        # spec 7.3 给 Opera 的 Linux 落点是系统级 /etc/opt/chrome/native-messaging-hosts，
+        # 要 root。这里走等价的用户级 Chrome 目录，不提权。
+        # 需要: 在装了 Opera 的 Linux 上确认用户级 Chrome 目录确实被读到。
+        "opera": (CHROMIUM, ".config/opera", (_LINUX_CHROME,)),
+        "vivaldi": (CHROMIUM, ".config/vivaldi", (".config/vivaldi/NativeMessagingHosts",)),
+        "firefox": (GECKO, ".mozilla/firefox", (".mozilla/native-messaging-hosts",)),
+    },
+    # Windows 不按目录读，按注册表键读：键的默认值是 manifest 文件的绝对路径，
+    # 文件本身统一放 %LOCALAPPDATA%\lazygophers\browse\。
+    # 需要: 实机验证——macOS 上跑不到真注册表，这里的写/删走 reg_set / reg_delete
+    # 两个可注入的函数，单元测试用假的。
+    "win32": {
+        "chrome": (CHROMIUM, "AppData/Local/Google/Chrome/User Data",
+                   (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",)),
+        "chromium": (CHROMIUM, "AppData/Local/Chromium/User Data",
+                     (r"reg:SOFTWARE\Chromium\NativeMessagingHosts",
+                      r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts")),
+        "edge": (CHROMIUM, "AppData/Local/Microsoft/Edge/User Data",
+                 (r"reg:SOFTWARE\Microsoft\Edge\NativeMessagingHosts",)),
+        # Brave / Opera / Vivaldi 最终都落 Chrome 键（Opera 官方文档给的是 HKLM，
+        # 需要管理员；HKCU 同键对当前用户等效，这里只写 HKCU）。
+        "brave": (CHROMIUM, "AppData/Local/BraveSoftware/Brave-Browser/User Data",
+                  (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",)),
+        "opera": (CHROMIUM, "AppData/Roaming/Opera Software/Opera Stable",
+                  (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",)),
+        "vivaldi": (CHROMIUM, "AppData/Local/Vivaldi/User Data",
+                    (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",)),
+        "firefox": (GECKO, "AppData/Roaming/Mozilla/Firefox",
+                    (r"reg:SOFTWARE\Mozilla\NativeMessagingHosts",)),
+    },
+}
+
+WIN_MANIFEST_DIR = "AppData/Local/lazygophers/browse"
+# wrapper 的落点。位置必须稳定且是绝对路径——manifest 里写死的就是它，manifest 不
+# 接受相对路径，也不会去查 PATH。
+WRAPPER_DIR = ".local/state/lazygophers/scripts"
+WRAPPER_NAME = "browse-native-host"
+
+EXIT_OK = 0
+EXIT_FAILED = 1
+EXIT_USAGE = 2
+
+
+def platform_key(platform: str | None = None) -> str:
+    """把 sys.platform 归到 BROWSERS 的三个键之一。"""
+    plat = sys.platform if platform is None else platform
+    if plat.startswith("win"):
+        return "win32"
+    if plat == "darwin":
+        return "darwin"
+    return "linux"
+
+
+def build_manifest(flavor: str, browse_path: pathlib.Path,
+                   extension_ids: tuple[str, ...] = EXTENSION_IDS,
+                   gecko_ids: tuple[str, ...] = GECKO_IDS) -> dict:
+    """一份 native host manifest。Chromium 系和 Firefox 的授权字段名不同。"""
+    manifest = {
+        "name": HOST_NAME,
+        "description": DESCRIPTION,
+        "path": str(browse_path),
+        "type": "stdio",
+    }
+    if flavor == GECKO:
+        manifest["allowed_extensions"] = list(dict.fromkeys(gecko_ids))
+    else:
+        # 末尾斜杠必带，且不支持通配符。
+        manifest["allowed_origins"] = [f"chrome-extension://{i}/"
+                                       for i in dict.fromkeys(extension_ids)]
+    return manifest
+
+
+def detect(home: pathlib.Path, plat: str) -> list[str]:
+    """探测装了哪些浏览器：看它的用户数据目录在不在。
+
+    浏览器装了但一次都没启动过时目录还不存在，这时用 --browsers 指定。
+    """
+    return [name for name, (_, probe, _) in BROWSERS[plat].items()
+            if (home / probe).exists()]
+
+
+def wrapper_path(home: pathlib.Path, plat: str) -> pathlib.Path:
+    """manifest 的 path 指向的那个脚本。Windows 上 .sh 跑不了，用 .cmd。"""
+    if plat == "win32":
+        return home / WIN_MANIFEST_DIR / f"{WRAPPER_NAME}.cmd"
+    return home / WRAPPER_DIR / WRAPPER_NAME
+
+
+def write_wrapper(home: pathlib.Path, plat: str,
+                  browse_path: pathlib.Path) -> pathlib.Path:
+    """生成 wrapper 并给上执行位，返回它的绝对路径。"""
+    path = wrapper_path(home, plat)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if plat == "win32":
+        # 需要: 实机验证 .cmd 这一路。Windows 上 browse 是 uv 装出来的 browse.exe
+        # 或 py 启动器认的脚本，这里只负责把参数原样透传。
+        body = f'@echo off\r\n"{browse_path}" --native-host %*\r\n'
+        newline = ""
+    else:
+        body = f'#!/bin/sh\nexec "{browse_path}" --native-host "$@"\n'
+        newline = "\n"
+    path.write_text(body, encoding="utf-8", newline=newline)
+    # 浏览器直接 fork 执行这个文件，没有执行位就是启动失败。
+    path.chmod(0o755)
+    return path
+
+
+def win_manifest_path(home: pathlib.Path, flavor: str) -> pathlib.Path:
+    suffix = ".firefox.json" if flavor == GECKO else ".json"
+    return home / WIN_MANIFEST_DIR / f"{HOST_NAME}{suffix}"
+
+
+def _reg_set(key: str, value: str) -> None:
+    import winreg
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key) as handle:
+        winreg.SetValueEx(handle, "", 0, winreg.REG_SZ, value)
+
+
+def _reg_delete(key: str) -> None:
+    import winreg
+
+    try:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
+    except FileNotFoundError:
+        pass
+
+
+def _write_manifest(path: pathlib.Path, manifest: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8")
+    # 浏览器以当前用户身份读它，内容不含密钥，0644 即可。
+    path.chmod(0o644)
+
+
+def install(home: pathlib.Path, plat: str, browse_path: pathlib.Path, *,
+            browsers: list[str] | None = None,
+            extension_ids: tuple[str, ...] = EXTENSION_IDS,
+            gecko_ids: tuple[str, ...] = GECKO_IDS,
+            reg_set=_reg_set) -> list[tuple[str, str]]:
+    """写 wrapper + 给每个选中的浏览器写 manifest，返回 [(浏览器, 落点描述)]。"""
+    names = detect(home, plat) if browsers is None else browsers
+    wrapper = write_wrapper(home, plat, browse_path)
+    done: list[tuple[str, str]] = []
+    for name in names:
+        flavor, _, dests = BROWSERS[plat][name]
+        manifest = build_manifest(flavor, wrapper, extension_ids, gecko_ids)
+        for dest in dests:
+            if dest.startswith("reg:"):
+                path = win_manifest_path(home, flavor)
+                _write_manifest(path, manifest)
+                reg_set(f"{dest[4:]}\\{HOST_NAME}", str(path))
+                done.append((name, f"HKCU\\{dest[4:]}\\{HOST_NAME} -> {path}"))
+            else:
+                path = home / dest / f"{HOST_NAME}.json"
+                _write_manifest(path, manifest)
+                done.append((name, str(path)))
+    return done
+
+
+def uninstall(home: pathlib.Path, plat: str, *,
+              reg_delete=_reg_delete) -> list[tuple[str, str]]:
+    """删掉所有已知落点（不管当初探测到没有），不留残留。"""
+    removed: list[tuple[str, str]] = []
+    for name, (_, _, dests) in BROWSERS[plat].items():
+        for dest in dests:
+            if dest.startswith("reg:"):
+                reg_delete(f"{dest[4:]}\\{HOST_NAME}")
+                removed.append((name, f"HKCU\\{dest[4:]}\\{HOST_NAME}"))
+                continue
+            path = home / dest / f"{HOST_NAME}.json"
+            if path.exists():
+                path.unlink()
+                removed.append((name, str(path)))
+    for flavor in (CHROMIUM, GECKO):
+        path = win_manifest_path(home, flavor)
+        if path.exists():
+            path.unlink()
+            removed.append(("windows", str(path)))
+    for wrapper in (wrapper_path(home, "win32"), wrapper_path(home, "linux")):
+        if wrapper.exists():
+            wrapper.unlink()
+            removed.append(("wrapper", str(wrapper)))
+    for stale in (home / WIN_MANIFEST_DIR, home / WRAPPER_DIR):
+        if stale.is_dir() and not any(stale.iterdir()):
+            stale.rmdir()
+    return removed
+
+
+def resolve_browse_path(given: str | None) -> pathlib.Path:
+    """manifest 里要写的 browse 绝对路径。"""
+    if given:
+        path = pathlib.Path(given).expanduser().resolve()
+        if not path.exists():
+            raise ValueError(f"--browse-path 指向的文件不存在：{path}")
+        return path
+    local = REPO_ROOT / "bin" / "browse"
+    if local.exists():
+        return local.resolve()
+    found = shutil.which("browse")
+    if found:
+        return pathlib.Path(found).resolve()
+    raise ValueError("找不到 browse 可执行文件，用 --browse-path 指一个绝对路径")
+
+
+def _parse(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="install/native_host.py",
+        description="把 browse 注册成浏览器的 native messaging host",
+    )
+    parser.add_argument("--uninstall", action="store_true", help="删掉所有已知落点")
+    parser.add_argument("--list", action="store_true", dest="list_only",
+                        help="只打印探测到的浏览器和落点，不写任何东西")
+    parser.add_argument("--browsers", help="逗号分隔，跳过探测直接指定，如 chrome,firefox")
+    parser.add_argument("--browse-path", help="manifest 里写的 browse 绝对路径")
+    parser.add_argument("--extension-id", action="append", default=[],
+                        help="追加一个 Chromium 扩展 ID（Edge 商店另发的 ID 用这个补）")
+    parser.add_argument("--gecko-id", action="append", default=[],
+                        help="追加一个 Firefox 扩展 ID（gecko.id）")
+    return parser.parse_args(argv[1:])
+
+
+def _main(argv: list[str]) -> int:
+    args = _parse(argv)
+    out = reporter(stderr=True)
+    home = pathlib.Path.home()
+    plat = platform_key()
+    table = BROWSERS[plat]
+
+    if args.browsers:
+        names = [n.strip() for n in args.browsers.split(",") if n.strip()]
+        unknown = [n for n in names if n not in table]
+        if unknown:
+            out.err(f"{plat} 上不认识这些浏览器：{', '.join(unknown)}；"
+                    f"可选：{', '.join(table)}")
+            return EXIT_USAGE
+    else:
+        names = None
+
+    if args.uninstall:
+        removed = uninstall(home, plat)
+        for name, where in removed:
+            out.ok(f"{name}: 已删 {where}")
+        if not removed:
+            out.info("没有找到任何已安装的 manifest")
+        return EXIT_OK
+
+    try:
+        browse_path = resolve_browse_path(args.browse_path)
+    except ValueError as exc:
+        out.err(str(exc))
+        return EXIT_USAGE
+
+    found = names if names is not None else detect(home, plat)
+    if not found:
+        out.err(f"没探测到任何浏览器（{plat}）。浏览器装了但没启动过时用户目录还不存在，"
+                f"用 --browsers 指定，可选：{', '.join(table)}")
+        return EXIT_FAILED
+
+    if args.list_only:
+        out.info(f"browse：{browse_path}")
+        out.info(f"wrapper（manifest 的 path 指向它）：{wrapper_path(home, plat)}")
+        for name in found:
+            flavor, _, dests = table[name]
+            for dest in dests:
+                where = (f"HKCU\\{dest[4:]}\\{HOST_NAME}" if dest.startswith("reg:")
+                         else str(home / dest / f"{HOST_NAME}.json"))
+                out.info(f"{name} ({flavor}): {where}")
+        return EXIT_OK
+
+    done = install(
+        home, plat, browse_path,
+        browsers=found,
+        extension_ids=EXTENSION_IDS + tuple(args.extension_id),
+        gecko_ids=GECKO_IDS + tuple(args.gecko_id),
+    )
+    for name, where in done:
+        out.ok(f"{name}: {where}")
+    out.info(f"wrapper：{wrapper_path(home, plat)} -> {browse_path} --native-host")
+    return EXIT_OK
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv if argv is None else argv)
+    argv = consume_debug(consume_no_say(argv))
+    sys.argv = argv
+    return timed(_main, label="browse-install")(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
