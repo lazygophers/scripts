@@ -3,7 +3,7 @@
 `browse` 的浏览器端。通过 Native Messaging 连本机 daemon（host 名 `com.lazygophers.browse`），
 收 WebDriver BiDi 形状的指令，执行后回结果。方案见 `.scratch/browser-control-extension/spec.md`。
 
-## 安装（Chrome / Edge / Brave，四步）
+## 安装（Chrome / Edge / Brave，四步 + 三个可选开关）
 
 方案第 7.1 节。**不走 Chrome Web Store，自己分发，手动更新。**
 
@@ -36,6 +36,33 @@ podeceeeafjdcemppcgjhhokcokpcama
 
 对不上就是 `manifest.json` 的 `key` 字段被改过或丢了——**ID 不对，第 4 步注册的
 manifest 就会失配，扩展永远连不上 daemon**。详见下面「扩展 ID 与签名密钥」。
+
+### 第 3 步之后：那三个开关，按需自己点（可选）
+
+加载完之后，扩展的「详情」页里有三个开关。**一个都不是必做**，按需要点，各点一次就长期
+有效：
+
+| 开关 | 什么情况下才需要开 |
+|---|---|
+| 固定到工具栏 | 想让图标一直露在地址栏右边，不用每次去「扩展」菜单里翻 |
+| 允许访问文件网址 | 只有要操作 `file://` 开头的本地文件时才需要 |
+| 在无痕模式下启用 | 只有要在无痕（隐身）窗口里干活时才需要 |
+
+**这三个只能你自己点，`browse install` 不会替你点，也不应该替你点。** 前两个要写浏览器的
+企业策略才能程序化设置，而那等于改浏览器自身的配置；第三个连策略字段都不存在。
+
+「无痕那条没有策略字段」不是推断，是正面证据：`ExtensionSettings` 策略按扩展 ID 配置时，
+schema 允许的字段**全集**只有这 11 个 ——
+
+```
+allowed_permissions, blocked_install_message, blocked_permissions,
+file_url_navigation_allowed, installation_mode, minimum_version_required,
+override_update_url, runtime_allowed_hosts, runtime_blocked_hosts,
+toolbar_pin, update_url
+```
+
+里面没有 `incognito`。出处是 Chromium 的策略定义本身（比文档页更硬）：
+<https://chromium.googlesource.com/chromium/src/+/main/components/policy/resources/templates/policy_definitions/Extensions/ExtensionSettings.yaml>
 
 ### 第 4 步：注册 native host manifest
 

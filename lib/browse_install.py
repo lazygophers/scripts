@@ -36,7 +36,6 @@ import subprocess
 import sys
 import time
 
-from lib import browse_policy
 from lib.ui import reporter
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -131,6 +130,15 @@ WRAPPER_NAME = "browse-native-host"
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
+
+# 装完之后那几个只能人点的开关。都是「按需」，不是必做 —— 写成必做会让人以为不点就用不了。
+MANUAL_TOGGLES = (
+    "装好后这几个开关按需自己点，都在扩展的「详情」页里，各点一次就行：",
+    "  · 固定到工具栏      —— 想让图标一直露在地址栏右边，不用每次去菜单里翻",
+    "  · 允许访问文件网址  —— 只有要操作 file:// 开头的本地文件时才需要",
+    "  · 在无痕模式下启用  —— 只有要在无痕（隐身）窗口里干活时才需要",
+    "  这三个只能你自己点：改它们等于改浏览器自己的配置，我们不动那里",
+)
 
 
 def platform_key(platform: str | None = None) -> str:
@@ -369,61 +377,6 @@ def wait_for_extension(browse_path: pathlib.Path, timeout: float) -> bool:
         time.sleep(CONNECT_POLL_SECONDS)
 
 
-# 策略换来的三件事。写之前原样打印给用户看 —— 要管理员密码之前得先说清楚要干嘛。
-POLICY_WANTS = (
-    "扩展不会被浏览器自动停用（自分发的扩展默认会被停）",
-    "扩展图标固定在工具栏上，不用每次去菜单里翻",
-    "扩展能访问 file:// 开头的本地文件",
-)
-
-
-def write_policy(out, plat: str, browsers: list[str], extension_ids: tuple[str, ...], *,
-                 remove: bool = False) -> bool:
-    """写 / 删浏览器企业策略。成功或本来就没事可做返回 True，没写成返回 False。
-
-    没写成**不是致命错误**：手动加载那条路依然通，只是上面 POLICY_WANTS 那三条拿不到。
-    所以这里只报告，由调用方决定怎么往下走 —— 绝不静默吞掉。
-    """
-    try:
-        steps = browse_policy.plan(plat, browsers, extension_ids, remove=remove)
-    except OSError as exc:
-        out.warn(f"读不了现有策略，跳过这一步：{exc}")
-        return False
-    if not steps:
-        out.info("浏览器策略：没有要清理的" if remove else "浏览器策略：已经是想要的样子，不用改")
-        return True
-
-    out.info("")
-    out.info("下面要改这几个系统文件，所以需要你的管理员密码：")
-    for line in browse_policy.describe(steps):
-        out.info(f"  {line}")
-    if not remove:
-        out.info("写它是为了三件事：")
-        for want in POLICY_WANTS:
-            out.info(f"  · {want}")
-        out.info("要撤销：`browse uninstall` 会把这几条原样删掉，别人的策略一个字不动")
-    out.info("")
-
-    if not browse_policy.sudo_available():
-        out.err("这台机器上没有 sudo，策略改不了")
-        return False
-    try:
-        browse_policy.apply(steps)
-    except browse_policy.PolicyError as exc:
-        out.err(f"策略没{'清理' if remove else '写'}成：{exc}")
-        return False
-    out.ok(f"浏览器策略已{'清理' if remove else '写入'}（{len(steps)} 个文件）")
-    return True
-
-
-def policy_fallback_notice(out) -> None:
-    """策略没写成时，明说因此少了什么。不许假装无事发生。"""
-    out.warn("策略没写成，下面三件事就没有了，扩展本身还是能用：")
-    for want in POLICY_WANTS:
-        out.warn(f"  · {want}")
-    out.warn("想再试一次：`browse install`；不想要就 `browse install --no-policy`")
-
-
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="browse install",
@@ -440,8 +393,6 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                         help="不自动构建扩展（默认 dist/ 缺失时自动跑 npm run build）")
     parser.add_argument("--no-wait", action="store_true",
                         help="不等扩展连上就返回（默认等 120 秒）")
-    parser.add_argument("--no-policy", action="store_true",
-                        help="不写浏览器企业策略（默认会写，需要管理员密码）")
     parser.add_argument("--gecko-id", action="append", default=[],
                         help="追加一个 Firefox 扩展 ID（gecko.id）")
     return parser.parse_args(argv[1:])
@@ -475,11 +426,6 @@ def main(argv: list[str]) -> int:
             out.ok(f"{name}: 已删 {where}")
         if not removed:
             out.info("没有找到任何已安装的 manifest")
-        # 策略是装的时候写进去的，卸载必须原样清掉，不留残留。按「所有已知浏览器」清，
-        # 和上面删 manifest 同一个口径：当初探测到谁，现在不一定还探测得到。
-        if not args.no_policy and sys.stderr.isatty():
-            write_policy(out, plat, list(table), EXTENSION_IDS + tuple(args.extension_id),
-                         remove=True)
         return EXIT_OK
 
     try:
@@ -524,15 +470,7 @@ def main(argv: list[str]) -> int:
     # 坐在终端前的人看的，脚本里跑不该被一个 120 秒的等待卡住。
     if not sys.stderr.isatty():
         out.info("扩展本体要手动加载，见 browser-extension/README.md")
-        # 非交互下不碰策略：那一步要管理员密码，没有终端就没人能输
-        out.info("浏览器策略这一步跳过了（要管理员密码）。要写就在终端里跑 `browse install`")
         return EXIT_OK
-
-    # 到这里 manifest 写完了。策略是**加载之后**的待遇（别被停用 / 固定工具栏 /
-    # 能读本地文件），和「浏览器怎么找到 browse」无关，所以放在这一步。
-    policy_ok = True
-    if not args.no_policy:
-        policy_ok = write_policy(out, plat, found, EXTENSION_IDS + tuple(args.extension_id))
 
     if args.no_build:
         dist = EXTENSION_SRC / "dist"
@@ -554,14 +492,14 @@ def main(argv: list[str]) -> int:
     out.info(f"     {dist}")
     if copied:
         out.info("     （路径已复制到剪贴板，文件选择框里按 Cmd+Shift+G 粘贴即可）")
-    # 无痕模式这条只能人点：`ExtensionSettings` 策略里根本没有 incognito 字段，
-    # 程序侧没有入口。与其让用户以为装完就万事大吉，不如在这里说清楚。
-    out.info("  4. 想让它在无痕窗口里也能用的话，点这个扩展的「详情」，")
-    out.info("     打开「在无痕模式下启用」—— 这一条只能你自己点，没有任何程序能代劳")
     out.info("")
-    if not policy_ok:
-        policy_fallback_notice(out)
-        out.info("")
+    # 这三个开关**没有任何程序侧的入口**：`toolbar_pin` / `file_url_navigation_allowed`
+    # 要写浏览器的企业策略，而无痕那条连策略字段都不存在（`ExtensionSettings` 按扩展 ID
+    # 的 schema 里没有 incognito，见 README）。不写策略是明确要求：不动浏览器自己的配置。
+    # 所以这里如实列出来，并写清楚各自什么情况下才需要开，别让人以为是必做步骤。
+    for line in MANUAL_TOGGLES:
+        out.info(line)
+    out.info("")
 
     if args.no_wait:
         out.info(f"装完自己验：{browse_path} browsingContext getTree --table")

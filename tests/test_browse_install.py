@@ -504,6 +504,44 @@ class TestCli(TempHome):
         self.assertIn("x@y", m["allowed_extensions"])
 
 
+class TestManualToggles(TempHome):
+    """装完之后那三个只能人点的开关，必须出现在输出里。
+
+    程序侧没有任何入口（要写浏览器企业策略，而那等于改浏览器自己的配置；无痕那条连策略
+    字段都没有）。不说的话用户只会以为「装完就该全都能用」，然后对着不工作的 file://
+    去查别的地方。
+    """
+
+    def run_interactive(self, *args: str) -> str:
+        import io
+        import unittest.mock as mock
+
+        class Tty(io.StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        self.touch_dir("Library/Application Support/Google/Chrome")
+        with mock.patch.object(nh.pathlib.Path, "home", staticmethod(lambda: self.home)), \
+                mock.patch.object(nh, "platform_key", lambda *a: "darwin"), \
+                mock.patch.object(nh, "copy_to_clipboard", lambda text: False), \
+                mock.patch("sys.stderr", new=Tty()) as err:
+            nh.main(["browse install", "--browsers", "chrome",
+                     "--no-build", "--no-wait", *args])
+        return err.getvalue()
+
+    def test_all_three_toggles_are_listed(self) -> None:
+        out = self.run_interactive()
+        for word in ("固定到工具栏", "允许访问文件网址", "在无痕模式下启用"):
+            self.assertIn(word, out)
+
+    def test_they_are_marked_optional_not_required(self) -> None:
+        """写成必做步骤会让人以为不点就用不了 —— 三条都是按需。"""
+        self.assertIn("按需", self.run_interactive())
+
+    def test_it_says_nobody_can_click_them_for_you(self) -> None:
+        self.assertIn("只能你自己点", self.run_interactive())
+
+
 if __name__ == "__main__":
     unittest.main()
 
