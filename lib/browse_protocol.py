@@ -15,6 +15,7 @@
 
 帧格式（spec 第 8 节，思路取自 `hangwin/mcp-chrome:app/native-server/src/
 native-messaging-host.ts:31-90`）：4 字节**小端**长度前缀 + UTF-8 JSON body。
+单帧上限按方向不对称，见下面两个常量。
 `decode_frames` 是增量的——喂进任意切法的字节流，吐出已经完整的信封和还没凑齐的
 剩余缓冲，所以半个帧不会丢也不会被误读。
 """
@@ -25,9 +26,15 @@ import json
 import re
 import struct
 
-# Chrome 对 native host → 浏览器方向的单帧上限就是 1 MB，超了浏览器直接断连接，
-# 所以宁可在自己这边抛错，也别把注定被拒的帧发出去。
-MAX_FRAME_BYTES = 1024 * 1024
+# 帧上限按方向不对称，因为 Chrome 的限制本来就不对称：Python 侧是 native host，
+# host → 浏览器 1 MB，浏览器 → host 4 GB
+# （`.scratch/browser-control-extension/research/02-transport-options.md`）。
+#
+# 出站踩死 1 MB：这是对端的真实约束，超了浏览器直接丢，不如在自己这边早失败。
+MAX_OUTGOING_FRAME_BYTES = 1024 * 1024
+# 入站放到 64 MB：截图和 DOM dump 走的就是这个方向，必然超 1 MB。不跟到 4 GB 是
+# 因为声明长度来自对端——不设上限等于把任意内存分配的开关交给对端。
+MAX_INCOMING_FRAME_BYTES = 64 * 1024 * 1024
 
 # 错误码：WebDriver BiDi 标准枚举
 ERR_NO_SUCH_ELEMENT = "no such element"
@@ -135,8 +142,10 @@ def parse_message(obj) -> dict:
 def encode_frame(message: dict) -> bytes:
     """信封 → 一个完整帧（4 字节小端长度 + UTF-8 JSON）。先校验再编。"""
     body = json.dumps(parse_message(message), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    if len(body) > MAX_FRAME_BYTES:
-        raise ProtocolError(f"帧体 {len(body)} 字节，超过上限 {MAX_FRAME_BYTES}")
+    if len(body) > MAX_OUTGOING_FRAME_BYTES:
+        raise ProtocolError(
+            f"出站帧体 {len(body)} 字节，超过 host → 浏览器方向的上限 {MAX_OUTGOING_FRAME_BYTES}"
+        )
     return struct.pack("<I", len(body)) + body
 
 
@@ -150,8 +159,10 @@ def decode_frames(buf: bytes) -> tuple[list[dict], bytes]:
     rest = bytes(buf)
     while len(rest) >= 4:
         (length,) = struct.unpack("<I", rest[:4])
-        if length > MAX_FRAME_BYTES:
-            raise ProtocolError(f"帧声明 {length} 字节，超过上限 {MAX_FRAME_BYTES}")
+        if length > MAX_INCOMING_FRAME_BYTES:
+            raise ProtocolError(
+                f"入站帧声明 {length} 字节，超过浏览器 → host 方向的上限 {MAX_INCOMING_FRAME_BYTES}"
+            )
         if len(rest) - 4 < length:
             break
         body, rest = rest[4:4 + length], rest[4 + length:]

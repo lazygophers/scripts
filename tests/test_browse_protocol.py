@@ -14,7 +14,8 @@ from lib.browse_protocol import (  # noqa: E402
     ERR_INVALID_ARGUMENT,
     ERR_NOT_CONNECTED,
     ERROR_CODES,
-    MAX_FRAME_BYTES,
+    MAX_INCOMING_FRAME_BYTES,
+    MAX_OUTGOING_FRAME_BYTES,
     ProtocolError,
     check_code,
     check_id,
@@ -142,10 +143,20 @@ class TestFrames(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             encode_frame({"id": 1, "method": "nope"})
 
-    def test_encode_rejects_oversize_body(self):
+    def test_encode_rejects_body_over_one_megabyte(self):
+        """出站是 host → 浏览器，Chrome 那头硬卡 1 MB。"""
         with self.assertRaises(ProtocolError) as ctx:
-            encode_frame(command(1, "script.evaluate", {"src": "x" * (MAX_FRAME_BYTES + 1)}))
-        self.assertIn("超过上限", str(ctx.exception))
+            encode_frame(command(1, "script.evaluate", {"src": "x" * (MAX_OUTGOING_FRAME_BYTES + 1)}))
+        self.assertIn("host → 浏览器", str(ctx.exception))
+
+    def test_decode_accepts_two_megabyte_frame(self):
+        """入站是浏览器 → host，截图就走这个方向，1 MB 卡不住它。"""
+        big = "x" * (2 * 1024 * 1024)
+        body = json.dumps({"type": "success", "id": 1, "result": {"png": big}}).encode("utf-8")
+        self.assertGreater(len(body), MAX_OUTGOING_FRAME_BYTES)
+        messages, rest = decode_frames(frame(body))
+        self.assertEqual(messages[0]["result"]["png"], big)
+        self.assertEqual(rest, b"")
 
     def test_encode_keeps_unicode_raw(self):
         raw = encode_frame(command(1, "script.evaluate", {"t": "中文"}))
@@ -186,10 +197,11 @@ class TestFrames(unittest.TestCase):
         self.assertEqual(messages2, [event("log.entryAdded")])
         self.assertEqual(rest2, b"")
 
-    def test_decode_rejects_oversize_declared_length(self):
+    def test_decode_rejects_declared_length_over_incoming_cap(self):
+        """声明长度来自对端，超了 64 MB 直接拒，不给它分配内存的机会。"""
         with self.assertRaises(ProtocolError) as ctx:
-            decode_frames(struct.pack("<I", MAX_FRAME_BYTES + 1))
-        self.assertIn("超过上限", str(ctx.exception))
+            decode_frames(struct.pack("<I", MAX_INCOMING_FRAME_BYTES + 1))
+        self.assertIn("浏览器 → host", str(ctx.exception))
 
     def test_decode_rejects_bad_json(self):
         with self.assertRaises(ProtocolError):
