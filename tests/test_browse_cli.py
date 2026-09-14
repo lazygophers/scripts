@@ -19,7 +19,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from lib.browse_daemon import Daemon, connect, pack, read_frame  # noqa: E402
+from lib.browse_daemon import CONFIRM_METHOD, Daemon, connect, pack, read_frame  # noqa: E402
 from lib.browse_protocol import (  # noqa: E402
     ERR_INVALID_ARGUMENT,
     ERR_NOT_CONNECTED,
@@ -28,6 +28,7 @@ from lib.browse_protocol import (  # noqa: E402
     error,
     success,
 )
+from lib.browse_security import Security  # noqa: E402
 from lib.cli import browse  # noqa: E402
 
 TIMEOUT = 5.0
@@ -98,7 +99,10 @@ class Harness:
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(TIMEOUT)
 
     async def _start(self) -> None:
-        self.daemon = Daemon(path=self.sock, idle_timeout=600.0)
+        # 安全层指向临时目录：CLI 测试不许读写用户真实的 browse.yaml / 审计目录
+        self.daemon = Daemon(path=self.sock, idle_timeout=600.0,
+                             security=Security(cfg={}, config_path=self.dir / "browse.yaml",
+                                               audit_dir=self.dir / "audit"))
         await self.daemon.start()
         if self.handler is None:
             return
@@ -205,12 +209,17 @@ class TestParsing(unittest.TestCase):
                          ["input.click css=a", "script.evaluate 1+1"])
 
     def test_methods_table_matches_extension_handlers(self):
-        """CLI 的指令表必须和扩展侧 HANDLERS 逐条对齐，少一条就是 CLI 发不出去。"""
+        """CLI 的指令表必须和扩展侧 HANDLERS 逐条对齐，少一条就是 CLI 发不出去。
+
+        `lg:confirm.request` 例外：那是 daemon 主动问扩展的控制消息，不是能力。
+        CLI 能发它就等于「谁都能弹一个假确认框」，所以它**必须**不在 METHODS 里。
+        """
         source = (pathlib.Path(__file__).resolve().parent.parent
                   / "browser-extension/extension/src/handlers/index.ts").read_text(encoding="utf-8")
         import re
         handlers = set(re.findall(r'^\s+"([\w:]+\.\w+)":', source, re.M))
-        self.assertEqual(handlers, set(browse.METHODS))
+        self.assertEqual(handlers - {CONFIRM_METHOD}, set(browse.METHODS))
+        self.assertNotIn(CONFIRM_METHOD, browse.METHODS)
 
 
 # ---------------------------------------------------------------- 输出与退出码

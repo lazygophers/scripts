@@ -36,8 +36,15 @@ const V1 = [
   "lg:downloads.cancel",
 ];
 
-test("the command table is exactly the v1 capability list", () => {
-  assert.deepEqual(Object.keys(HANDLERS).sort(), [...V1].sort());
+/**
+ * Not capabilities — the daemon asking the extension something. Spec 4.4's
+ * confirmation is the only one, and it stays the only one: a second entry here
+ * means someone added a reverse RPC that needs its own review.
+ */
+const CONTROL = ["lg:confirm.request"];
+
+test("the command table is exactly the v1 capability list plus the control methods", () => {
+  assert.deepEqual(Object.keys(HANDLERS).sort(), [...V1, ...CONTROL].sort());
 });
 
 test("a command outside v1 is unsupported operation, never a guess", async () => {

@@ -9,6 +9,7 @@ import {
   browsingContextNavigate,
   browsingContextReload,
 } from "./browsingContext.ts";
+import { confirmRequest } from "./confirm.ts";
 import { downloadsCancel, downloadsList, downloadsStart } from "./downloads.ts";
 import { historyDelete, historySearch } from "./history.ts";
 import { inputClick, inputKey, inputScroll, inputType } from "./input.ts";
@@ -67,6 +68,9 @@ export const HANDLERS: Record<string, Handler> = {
   "lg:bookmarks.search": bookmarksSearch,
   "lg:bookmarks.create": bookmarksCreate,
   "lg:bookmarks.remove": bookmarksRemove,
+
+  // Not a capability — the daemon asking the user a question (spec 4.4).
+  "lg:confirm.request": confirmRequest,
 
   "lg:downloads.start": downloadsStart,
   "lg:downloads.list": downloadsList,

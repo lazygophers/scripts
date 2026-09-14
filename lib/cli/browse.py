@@ -490,6 +490,12 @@ HELP = """browse — 用命令行驱动浏览器扩展
   定位器四种前缀：css= / text= / xpath= / js=，不写前缀默认 css=
   选哪个标签页：--context <id> > --match-url '<glob>' > 当前活动标签页
 
+确认（读 cookie、跑 JS 这类高危动作）
+  策略写在 ~/.config/lazygophers/scripts/browse.yaml 的 confirm_mode：
+  silent 直接执行（默认） / per_domain 每个域名问一次 / always 每次都问
+  要问的时候浏览器会弹一个小窗，最多等 60 秒，不点就按拒绝算（退出码 4）
+  deny_domains 里的域名一律拒绝，连窗都不弹
+
 退出码
   0 成功   1 指令失败   2 参数写错   3 浏览器未连接   4 用户拒绝确认
 

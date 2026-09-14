@@ -10,6 +10,17 @@
 传输与路由而已，指令语义全在扩展侧。daemon 只认识 `network.subscribe` /
 `network.unsubscribe` 两个方法名，原因见 SUBSCRIBE_METHOD 处的注释。
 
+**安全是转发前的一道闸**（spec 4.4，T11）。每条 CLI 指令先过 `Security.check()`：
+
+    放行            → 照常转发
+    命中拒绝名单    → 当场 error，一个包都不发给浏览器
+    要确认          → 先 `lg:confirm.request` 问扩展，用户点了才转发
+
+`lg:confirm.request` 是唯一一条 daemon 主动问扩展的路径。它和普通指令共用 `_seq`
+id 空间、共用 `_pending`，区别只在 `_Pending.confirm` 上挂了个 future。策略全部在
+Python 侧：扩展收到的只有「弹这个框」，收不到 confirm_mode、免确认名单、拒绝名单。
+反方向（扩展 → daemon）只有 `lg:approvals.*` 三条，给插件面板读写免确认名单用。
+
 鉴权就是文件权限（spec 4.2）：父目录 0700、socket 0600，且**创建的那一刻就是**——
 先 bind 再 chmod 中间那个窗口足够别的用户连进来。
 
@@ -38,13 +49,17 @@ from pathlib import Path
 from lib.browse_protocol import (
     ERR_INVALID_ARGUMENT,
     ERR_NOT_CONNECTED,
+    ERR_UNKNOWN_COMMAND,
+    ERR_USER_REJECTED,
     MAX_INCOMING_FRAME_BYTES,
     MAX_OUTGOING_FRAME_BYTES,
     ProtocolError,
     command,
     decode_frames,
     error,
+    success,
 )
+from lib.browse_security import Security, SecurityError, domain_of
 
 IDLE_TIMEOUT = 30 * 60.0
 # 累积缓冲上限。协议层的 64 MB 是**单帧**上限，拦不住「一直发不完整的帧」——那样
@@ -67,6 +82,18 @@ KEEPALIVE_METHOD = "lg:keepalive.ping"
 # 由 daemon 发（`sub-N`），扩展给的 id 只在 daemon 内部当转发地址，重连后重建时换掉。
 SUBSCRIBE_METHOD = "network.subscribe"
 UNSUBSCRIBE_METHOD = "network.unsubscribe"
+
+# 唯一一条 daemon 主动问扩展的路径（spec 4.4）：策略在 Python 侧算完，扩展只负责把
+# 问题摆到用户面前再把布尔值送回来。params 的形状就是 `Security.check()` 的返回值。
+CONFIRM_METHOD = "lg:confirm.request"
+# 用户不点就永远不回，所以必须有上限。到点按**拒绝**处理 —— 确认这件事只能 fail closed。
+CONFIRM_TIMEOUT = 60.0
+
+# 反方向：扩展面板要能列出/增删 per_domain 免确认名单（spec 4.5）。这几条在 daemon
+# 本地执行，不转发给任何人。
+APPROVALS_LIST = "lg:approvals.list"
+APPROVALS_APPROVE = "lg:approvals.approve"
+APPROVALS_REVOKE = "lg:approvals.revoke"
 
 
 def socket_path() -> Path:
@@ -158,7 +185,7 @@ class _Conn:
 
 @dataclass
 class _Pending:
-    """一条在途指令。`cli` 为 None 表示 daemon 自己发的（订阅重建）。"""
+    """一条在途指令。`cli` 为 None 表示 daemon 自己发的（订阅重建、确认往返）。"""
 
     cli: _Conn | None
     cli_id: int
@@ -166,6 +193,10 @@ class _Pending:
     method: str
     params: dict = field(default_factory=dict)
     sub_id: str | None = None
+    # 有值表示这是一条确认往返，回包（或连接断开）去 set_result 它而不是转发
+    confirm: asyncio.Future | None = None
+    # 有值表示回包时要记一条审计，`started` 用来算 elapsed_ms
+    started: float | None = None
 
 
 @dataclass
@@ -184,6 +215,11 @@ class Daemon:
 
     path: Path
     idle_timeout: float = IDLE_TIMEOUT
+    # 安全层（spec 4.4）。默认 None = 第一条指令时按配置文件现建一个；建不出来
+    # （配置写错、命令行想放宽）只让那条指令失败，daemon 不倒。
+    security: Security | None = None
+    override_mode: str = ""
+    confirm_timeout: float = CONFIRM_TIMEOUT
 
     _server: asyncio.AbstractServer | None = field(default=None, init=False)
     _browser: _Conn | None = field(default=None, init=False)
@@ -327,31 +363,113 @@ class Daemon:
                                  "浏览器未连接：确认浏览器开着且扩展已启用"))
             return
 
-        params = message["params"]
-        if message["method"] == UNSUBSCRIBE_METHOD:
-            params = self._to_ext_subscription(params)
+        method, params, cli_id = message["method"], message["params"], message["id"]
+        started = time.monotonic()
+        if not await self._gate(cli, cli_id, method, params, started):
+            return
 
+        forward = self._to_ext_subscription(params) if method == UNSUBSCRIBE_METHOD else params
         self._seq += 1
         gid = self._seq
-        self._pending[gid] = _Pending(cli=cli, cli_id=message["id"], conn_id=self._browser.id,
-                                      method=message["method"], params=message["params"])
-        if not await self._browser.send(command(gid, message["method"], params),
+        self._pending[gid] = _Pending(cli=cli, cli_id=cli_id, conn_id=self._browser.id,
+                                      method=method, params=params, started=started)
+        if not await self._browser.send(command(gid, method, forward),
                                         limit=MAX_OUTGOING_FRAME_BYTES):
             del self._pending[gid]
-            await cli.send(error(message["id"], ERR_NOT_CONNECTED, "指令发不到浏览器：连接已断开"))
+            self._audit(method, params, started, result="error", err="指令发不到浏览器")
+            await cli.send(error(cli_id, ERR_NOT_CONNECTED, "指令发不到浏览器：连接已断开"))
+
+    # ------------------------------------------------------------ 安全（spec 4.4）
+    def _sec(self) -> Security:
+        """安全层单例。建不出来就抛 SecurityError，调用方负责变成 error 回包。"""
+        if self.security is None:
+            self.security = Security(override_mode=self.override_mode)
+        return self.security
+
+    def _audit(self, method: str, params: dict, started: float | None, *,
+               result: str, err: str | None = None) -> None:
+        """记一行审计。安全层没建起来就记不了 —— 那种情况下指令也没发出去。
+
+        ponytail: 同步写盘（append 一行 + 偶尔 prune），在事件循环里直接做。
+        真成瓶颈了再挪去 to_thread。
+        """
+        if self.security is None:
+            return
+        elapsed = None if started is None else (time.monotonic() - started) * 1000
+        with contextlib.suppress(OSError):
+            self.security.audit(method, params=params, result=result,
+                                elapsed_ms=elapsed, error=err)
+
+    async def _gate(self, cli: _Conn, cli_id: int, method: str, params: dict,
+                    started: float) -> bool:
+        """转发前的安全检查。放行返回 True；拒绝时已经把 error 回给 CLI 了。"""
+        try:
+            sec = self._sec()
+        except SecurityError as exc:
+            await cli.send(error(cli_id, exc.code, str(exc)))
+            return False
+        try:
+            req = sec.check(method, params)
+        except SecurityError as exc:
+            # 拒绝名单优先级高于确认：命中就直接拒，一个确认框都不弹
+            self._audit(method, params, started, result="denied", err=str(exc))
+            await cli.send(error(cli_id, exc.code, str(exc)))
+            return False
+        if req is None:
+            return True
+
+        if not await self._ask_confirm(req):
+            why = f"用户拒绝了 {req['action']}（{method}）"
+            self._audit(method, params, started, result="denied", err=why)
+            await cli.send(error(cli_id, ERR_USER_REJECTED, why))
+            return False
+        if sec.confirm_mode == "per_domain":
+            domain = domain_of(req["url"])
+            if domain:
+                sec.approve(domain)  # 同意即落盘，同域名下次不再问
+        return True
+
+    async def _ask_confirm(self, req: dict) -> bool:
+        """问扩展一次。超时、送不出去、连接中途断掉，一律算拒绝（fail closed）。"""
+        browser = self._browser
+        if browser is None:
+            return False
+        self._seq += 1
+        gid = self._seq
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._pending[gid] = _Pending(cli=None, cli_id=0, conn_id=browser.id,
+                                      method=CONFIRM_METHOD, confirm=fut)
+        try:
+            if not await browser.send(command(gid, CONFIRM_METHOD, req),
+                                      limit=MAX_OUTGOING_FRAME_BYTES):
+                return False
+            return await asyncio.wait_for(asyncio.shield(fut), self.confirm_timeout)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            return False
+        finally:
+            self._pending.pop(gid, None)
 
     async def _from_browser(self, conn: _Conn, message: dict) -> None:
         kind = message.get("type")
         if kind == "event":
             await self._fanout(message)
             return
+        if kind is None:
+            # 扩展面板问 daemon 要 per_domain 名单（spec 4.5）。本地执行，不转发。
+            await self._approvals(conn, message)
+            return
         if kind not in ("success", "error"):
-            return  # 浏览器不发 Command
+            return
         entry = self._pending.get(message["id"])
         if entry is None or entry.conn_id != conn.id:
             return  # 无主回包，或上一条连接的迟到回包 —— 丢掉，不许抢答
         del self._pending[message["id"]]
 
+        if entry.confirm is not None:
+            if not entry.confirm.done():
+                approved = kind == "success" and message.get("result", {}).get("approved") is True
+                entry.confirm.set_result(approved)
+            return
         if entry.cli is None:
             self._finish_rebuild(entry, message)
             return
@@ -359,7 +477,28 @@ class Daemon:
         out["id"] = entry.cli_id
         if kind == "success":
             out = self._track_subscription(entry, out)
+        self._audit(entry.method, entry.params, entry.started,
+                    result="success" if kind == "success" else "error",
+                    err=None if kind == "success" else message.get("message"))
         await entry.cli.send(out)
+
+    async def _approvals(self, conn: _Conn, message: dict) -> None:
+        """`lg:approvals.list / approve / revoke`，扩展面板的免确认名单读写。"""
+        method, cid = message["method"], message["id"]
+        if method not in (APPROVALS_LIST, APPROVALS_APPROVE, APPROVALS_REVOKE):
+            await conn.send(error(cid, ERR_UNKNOWN_COMMAND, f"daemon 不处理 {method}"))
+            return
+        try:
+            sec = self._sec()
+            if method != APPROVALS_LIST:
+                domain = domain_of(message["params"].get("domain"))
+                if not domain:
+                    raise SecurityError("要给一个 domain", code=ERR_INVALID_ARGUMENT)
+                (sec.approve if method == APPROVALS_APPROVE else sec.revoke)(domain)
+        except SecurityError as exc:
+            await conn.send(error(cid, exc.code, str(exc)))
+            return
+        await conn.send(success(cid, {"domains": sec.approvals()}))
 
     async def _fanout(self, message: dict) -> None:
         if message["method"] == KEEPALIVE_METHOD:
@@ -447,7 +586,12 @@ class Daemon:
         """浏览器断了，在途指令一条都回不来了，当场失败而不是让 CLI 挂着。"""
         for gid in [g for g, p in self._pending.items() if p.conn_id == conn_id]:
             entry = self._pending.pop(gid)
+            if entry.confirm is not None:
+                if not entry.confirm.done():
+                    entry.confirm.set_result(False)  # 没人能回答了，按拒绝算
+                continue
             if entry.cli is not None:
+                self._audit(entry.method, entry.params, entry.started, result="error", err=why)
                 await entry.cli.send(error(entry.cli_id, ERR_NOT_CONNECTED, why))
 
 
@@ -476,9 +620,11 @@ async def connect(role: str, path: Path | None = None) -> tuple[asyncio.StreamRe
     return reader, writer, ack["connectionId"]
 
 
-async def run(path: Path | None = None, idle_timeout: float = IDLE_TIMEOUT) -> bool:
+async def run(path: Path | None = None, idle_timeout: float = IDLE_TIMEOUT,
+              override_mode: str = "") -> bool:
     """起 daemon 并守到它退出。已经有一个在跑就直接返回 False。"""
-    daemon = Daemon(path=socket_path() if path is None else path, idle_timeout=idle_timeout)
+    daemon = Daemon(path=socket_path() if path is None else path, idle_timeout=idle_timeout,
+                    override_mode=override_mode)
     if not await daemon.start():
         return False
     try:
@@ -489,6 +635,11 @@ async def run(path: Path | None = None, idle_timeout: float = IDLE_TIMEOUT) -> b
 
 
 __all__ = [
+    "APPROVALS_APPROVE",
+    "APPROVALS_LIST",
+    "APPROVALS_REVOKE",
+    "CONFIRM_METHOD",
+    "CONFIRM_TIMEOUT",
     "Daemon",
     "IDLE_TIMEOUT",
     "MAX_BUFFER_BYTES",
