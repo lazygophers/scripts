@@ -20,8 +20,21 @@
 | :--- | :--- | :--- |
 | `-a, --auto_commit=AUTO_COMMIT` | 'bool' | False |
 
+## 快捷方式
+
+`push_canary` / `push_dev` / `push_develop` / `push_master` / `push_test` 都是 `push_branch` 的固定目标版本——`<target>` 提前写死在命令名里，不用再传分支名首参，其余行为（`all`/`auto`/`here`、`--auto_commit`、推送后切回原分支）完全一致：
+
+| 命令 | 等价于 | 说明 |
+| :--- | :--- | :--- |
+| `push_canary` | `push_branch canary` | 推送当前分支到 canary 后切回原分支（单仓 / 批量） |
+| `push_dev` | `push_branch dev` | 推送当前分支到 dev 后切回原分支（单仓 / 批量） |
+| `push_develop` | `push_branch develop` | 推送当前分支到 develop 后切回原分支（单仓 / 批量） |
+| `push_master` | `push_branch <默认主分支>` | 推送当前分支到默认主分支后切回原分支（单仓 / 批量） |
+| `push_test` | `push_branch test` | 推送当前分支到 test 后切回原分支（单仓 / 批量） |
+
 ## 示例
 
 ```bash
-push_branch feature/x
+push_branch feature/x   # 通用：推送到任意分支
+push_canary [--stay]    # 快捷方式：推送到 canary
 ```
