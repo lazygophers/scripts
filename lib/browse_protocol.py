@@ -39,7 +39,9 @@ MAX_INCOMING_FRAME_BYTES = 64 * 1024 * 1024
 # 错误码：WebDriver BiDi 标准枚举
 ERR_NO_SUCH_ELEMENT = "no such element"
 ERR_NO_SUCH_FRAME = "no such frame"
+ERR_NO_SUCH_SCRIPT = "no such script"
 ERR_UNKNOWN_COMMAND = "unknown command"
+ERR_UNKNOWN_ERROR = "unknown error"
 ERR_UNSUPPORTED_OPERATION = "unsupported operation"
 ERR_INVALID_ARGUMENT = "invalid argument"
 ERR_TIMEOUT = "timeout"
@@ -52,7 +54,9 @@ ERR_ABORTED = "lg:aborted"
 ERROR_CODES = frozenset({
     ERR_NO_SUCH_ELEMENT,
     ERR_NO_SUCH_FRAME,
+    ERR_NO_SUCH_SCRIPT,
     ERR_UNKNOWN_COMMAND,
+    ERR_UNKNOWN_ERROR,
     ERR_UNSUPPORTED_OPERATION,
     ERR_INVALID_ARGUMENT,
     ERR_TIMEOUT,

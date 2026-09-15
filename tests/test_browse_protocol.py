@@ -68,6 +68,10 @@ class TestScalarChecks(unittest.TestCase):
 
     def test_code_accepts_any_namespaced_extension(self):
         self.assertEqual(check_code("xx:something new"), "xx:something new")
+        # 扩展端 classify() 的兜底码（protocol.ts 的 ErrorCode 全集里还有
+        # no such script）——漏掉会被 decode_frames 当坏帧、daemon 直接断连
+        self.assertEqual(check_code("unknown error"), "unknown error")
+        self.assertEqual(check_code("no such script"), "no such script")
 
     def test_code_rejects_unknown_bare_string(self):
         for bad in ("boom", "", None, 5):
