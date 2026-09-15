@@ -10,8 +10,8 @@ hero:
       text: 简介
       link: /guide/introduction
     - theme: alt
-      text: 脚本功能
-      link: /guide/scripts
+      text: 快速开始
+      link: /guide/quick-start
 features:
   - title: Git 工作流
     details: merge_* / push_* / switch_branch / sync_master，单仓与批量一键完成。

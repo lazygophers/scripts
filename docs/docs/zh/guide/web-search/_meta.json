@@ -1,0 +1,5 @@
+[
+  { "type": "file", "name": "websearch", "label": "websearch" },
+  { "type": "file", "name": "webgrab", "label": "webgrab" },
+  { "type": "file", "name": "browse", "label": "browse" }
+]

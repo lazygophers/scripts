@@ -1,0 +1,10 @@
+[
+  { "type": "file", "name": "archery", "label": "archery" },
+  { "type": "file", "name": "grafana", "label": "grafana" },
+  { "type": "file", "name": "email", "label": "email" },
+  { "type": "file", "name": "ovpn", "label": "ovpn" },
+  { "type": "file", "name": "vpn-prio", "label": "vpn-prio" },
+  { "type": "file", "name": "ipinfo", "label": "ipinfo" },
+  { "type": "file", "name": "disable-ipv6", "label": "disable-ipv6" },
+  { "type": "file", "name": "enable-ipv6", "label": "enable-ipv6" }
+]

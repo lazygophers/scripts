@@ -1,12 +1,11 @@
 [
-  {
-    "type": "file",
-    "name": "introduction",
-    "label": "简介"
-  },
-  {
-    "type": "file",
-    "name": "scripts",
-    "label": "脚本功能"
-  }
+  { "type": "file", "name": "introduction", "label": "简介" },
+  { "type": "file", "name": "quick-start", "label": "快速开始" },
+  { "type": "dir", "name": "git-workflow", "label": "Git 工作流" },
+  { "type": "dir", "name": "git-collab", "label": "Git 协作" },
+  { "type": "dir", "name": "build-check", "label": "构建与检查" },
+  { "type": "dir", "name": "data-network", "label": "数据与网络" },
+  { "type": "dir", "name": "web-search", "label": "网页检索" },
+  { "type": "dir", "name": "process", "label": "进程与运行" },
+  { "type": "dir", "name": "filesystem", "label": "文件与系统" }
 ]

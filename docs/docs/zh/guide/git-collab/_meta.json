@@ -1,0 +1,8 @@
+[
+  { "type": "file", "name": "commit", "label": "commit" },
+  { "type": "file", "name": "mr", "label": "mr" },
+  { "type": "file", "name": "issue", "label": "issue" },
+  { "type": "file", "name": "squash_pr", "label": "squash_pr" },
+  { "type": "file", "name": "fetch_all", "label": "fetch_all" },
+  { "type": "file", "name": "list_branch", "label": "list_branch" }
+]

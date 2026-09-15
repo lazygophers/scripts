@@ -1,0 +1,6 @@
+[
+  { "type": "file", "name": "cpd", "label": "cpd" },
+  { "type": "file", "name": "n", "label": "n" },
+  { "type": "file", "name": "inject", "label": "inject" },
+  { "type": "file", "name": "graphwatch", "label": "graphwatch" }
+]

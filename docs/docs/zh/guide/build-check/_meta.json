@@ -1,0 +1,5 @@
+[
+  { "type": "file", "name": "checkwork", "label": "checkwork" },
+  { "type": "file", "name": "check_ai", "label": "check_ai" },
+  { "type": "file", "name": "cicd", "label": "cicd" }
+]

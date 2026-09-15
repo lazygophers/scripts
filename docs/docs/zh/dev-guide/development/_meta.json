@@ -1,0 +1,4 @@
+[
+  { "type": "file", "name": "add-script", "label": "加新脚本" },
+  { "type": "file", "name": "testing", "label": "测试" }
+]

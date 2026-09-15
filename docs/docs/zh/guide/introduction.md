@@ -10,21 +10,4 @@
 - **批量操作**: `merge_*` / `push_*` / `switch_branch` / `sync_master` 单仓与多仓批量一套命令。
 - **安全优先**: 进程管理自排除，Git 操作前工作区清洁检查与回滚。
 
-## 快速开始
-
-不想装，跑一次就走：
-
-```bash
-uvx git+https://github.com/lazygophers/scripts                     # 列出全部工具
-uvx --from git+https://github.com/lazygophers/scripts checkwork    # 跑其中任意一个
-```
-
-要常驻在本机：
-
-```bash
-./bin/inject            # 把 clone 下来的 bin/ 注入 shell PATH
-```
-
-之后重启 shell，即可在任意目录调用 `checkwork` / `merge_canary` / ...
-
-见[脚本功能](./scripts.md)与 GitHub 仓库 [lazygophers/scripts](https://github.com/lazygophers/scripts)。
+见[快速开始](./quick-start.md)与 GitHub 仓库 [lazygophers/scripts](https://github.com/lazygophers/scripts)。
