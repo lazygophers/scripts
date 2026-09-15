@@ -795,6 +795,9 @@ def _cmd_status(tokens: list[str]) -> int:
     elif not browsers and running:
         report.info("没有任何插件连着：确认浏览器开着且扩展已启用；"
                     "装完/升级后要重启浏览器才读新的通信配置")
+        report.info("注册之后才开的浏览器要**完全退出**(macOS 是 Cmd+Q，关窗口不算)再打开；"
+                    "unpacked 扩展不跨浏览器，每个浏览器要在 chrome://extensions 各加载一次;"
+                    "扩展侧连败 10 次后有 5 分钟冷却，重启浏览器即重置")
 
     healthy = running and browsers and any(r["registered"] for r in detected)
     if healthy:
