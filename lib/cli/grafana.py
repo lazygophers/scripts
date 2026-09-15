@@ -34,6 +34,7 @@ def _print_help() -> None:
         ("hosts", "列出已配置站点", "blue"),
         ("health", "查看 Grafana 健康状态", "blue"),
         ("search", "搜索仪表盘", "blue"),
+        ("logs", "查 Loki 日志最新 n 行", "blue"),
         ("api", "直接调用任意 Grafana API", "blue"),
     ])
     r.step("提示: 裸跑 `grafana` 会显示 `--skills`。")
@@ -164,10 +165,45 @@ class GrafanaCli(_Group):
         return 0
 
     @cmd
+    def logs(self, selector: str, filter=(), n: int = 10, since: str = "24h",
+             datasource: str = "", host: str = ""):
+        """查 Loki 日志最新 n 行。
+
+        selector: Loki 标签选择器，如 '{service_name="my-service"}'
+        filter: 行内必须包含的关键词，可多次传
+        since: 时间窗口，如 30m / 24h / 7d
+        datasource: Loki datasource uid，缺省自动找第一个 loki
+        """
+        import time as _time
+
+        rows = self._client(host).loki_logs(
+            selector, limit=n,
+            since_ns=_parse_since(since),
+            filters=tuple(filter) if isinstance(filter, str) else tuple(filter),
+            datasource_uid=datasource)
+        if not rows:
+            self._r.warn("没有匹配的日志")
+            return 1
+        for ts, who, line in rows:
+            stamp = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(ts / 1e9))
+            print(f"{stamp} {who} {line}")
+        return 0
+
+    @cmd
     def api(self, method: str, path: str, data="", host: str = "", **params):
         """直接调用任意 Grafana API。"""
         emit(self._client(host).request(method, path, json_body=parse_data(data), params=params or None))
         return 0
+
+
+def _parse_since(text: str) -> int:
+    import re
+
+    m = re.fullmatch(r"(\d+)\s*([smhd])", text.strip().lower())
+    if not m:
+        raise GrafanaError(f"--since 不认识: {text}（支持 30m / 24h / 7d）")
+    unit = {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+    return int(m.group(1)) * unit * 10**9
 
 
 def main():

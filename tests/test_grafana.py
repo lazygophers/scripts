@@ -69,6 +69,25 @@ class FakeGrafana(BaseHTTPRequestHandler):
         if self.path.startswith("/api/search?"):
             params = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             return self._authed(lambda: self._json(200, [{"title": params.get("query", [""])[0]}]))
+        if self.path == "/api/datasources":
+            return self._authed(lambda: self._json(200, [
+                {"uid": "prom1", "type": "prometheus", "name": "prom"},
+                {"uid": "loki1", "type": "loki", "name": "loki"},
+            ]))
+        if self.path.startswith("/api/datasources/proxy/uid/loki1/loki/api/v1/query_range"):
+            params = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            query = params.get("query", [""])[0]
+            if "error" in query:
+                return self._authed(lambda: self._json(200, {"status": "error", "data": "boom"}))
+            body = ["\x1b[31mred\x1b[0m plain", "keep me", "drop me"]
+            stream = {"stream": {"machine": "m-1", "service_name": "my-service"}, "values": []}
+            ts = 1789040867164282444
+            for i, line in enumerate(body):
+                if params.get("query", [""])[0] and "`keep`" in query and "keep" not in line and i == 2:
+                    continue
+                stream["values"].append([str(ts + i), line])
+            return self._authed(lambda: self._json(200, {"status": "success",
+                "data": {"resultType": "streams", "result": [stream]}}))
         return self._json(404, {"message": "not found"})
 
     def do_POST(self):
@@ -169,6 +188,27 @@ class TestClient(ServerCase):
         with unittest.mock.patch.dict(os.environ, {"http_proxy": dead_proxy, "HTTP_PROXY": dead_proxy}):
             got = self.client().get("/api/health")
         self.assertEqual(got["database"], "ok")
+
+
+class TestLokiLogs(ServerCase):
+    def test_autodetects_loki_uid_and_strips_ansi(self):
+        rows = self.client().loki_logs('{service_name="my-service"}')
+        self.assertEqual(rows[0], (1789040867164282444, "m-1", "red plain"))
+        self.assertTrue(rows[1][2] == "keep me")
+
+    def test_explicit_datasource_uid_wins(self):
+        self.client().loki_logs('{job="docker"}', datasource_uid="loki1")
+        path = FakeGrafana.state["calls"][-1][1]
+        self.assertIn("/proxy/uid/loki1/", path)
+
+    def test_no_loki_datasource_raises(self):
+        with unittest.mock.patch.object(GrafanaClient, "get", return_value=[{"uid": "x", "type": "prometheus"}]):
+            with self.assertRaises(GrafanaError):
+                self.client().loki_logs('{}')
+
+    def test_loki_error_status_raises(self):
+        with self.assertRaises(GrafanaError):
+            self.client().loki_logs('{job="error"}')
 
 
 class TestCliSmoke(ServerCase):

@@ -210,6 +210,40 @@ class GrafanaClient:
     def search(self, query: str):
         return self.get("/api/search", query=query)
 
+    def loki_uid(self, uid: str = "") -> str:
+        """给定 uid 直接返回；否则取第一个 type=loki 的 datasource uid。"""
+        if uid:
+            return uid
+        for ds in self.get("/api/datasources"):
+            if ds.get("type") == "loki":
+                return ds["uid"]
+        raise GrafanaError("没有找到 type=loki 的 datasource。用 --datasource 指定 uid")
+
+    def loki_logs(self, selector: str, *, limit: int = 10, since_ns: int = 24 * 3600 * 10**9,
+                  filters: tuple = (), datasource_uid: str = "") -> list[tuple[int, str, str]]:
+        """Loki query_range，返回按时间升序的 [(timestamp_ns, 标识, 行)]。"""
+        import re
+        import time
+
+        query = selector
+        for word in filters:
+            if word:
+                query += f' |= `{word}`'
+        end = time.time_ns()
+        d = self.get(f"/api/datasources/proxy/uid/{self.loki_uid(datasource_uid)}/loki/api/v1/query_range",
+                     query=query, limit=str(limit), direction="backward",
+                     start=str(end - since_ns), end=str(end))
+        if d.get("status") != "success":
+            raise GrafanaError(f"Loki 查询失败: {json.dumps(d, ensure_ascii=False)[:300]}")
+        rows: list[tuple[int, str, str]] = []
+        ansi = re.compile(r"\x1b\[[0-9;]*m")
+        for stream in d.get("data", {}).get("result", []):
+            labels = stream.get("stream", {})
+            who = labels.get("machine") or labels.get("host_name") or labels.get("job", "?")
+            for ts, line in stream.get("values", []):
+                rows.append((int(ts), who, ansi.sub("", line)))
+        return sorted(rows)[-limit:]
+
 
 def client_for(host: str = "", *, reporter=None,
                config_path: pathlib.Path | None = None,
