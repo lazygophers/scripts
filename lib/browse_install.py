@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -241,6 +243,75 @@ def _reg_delete(key: str) -> None:
         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
     except FileNotFoundError:
         pass
+
+
+def _reg_query(key: str) -> str | None:
+    """Windows：读注册表键的默认值（manifest 文件的绝对路径），没有就是 None。"""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as handle:
+            value, _ = winreg.QueryValueEx(handle, "")
+            return str(value)
+    except OSError:
+        return None
+
+
+_WRAPPER_BROWSE_RE = re.compile(r'"([^"]+)"\s+--native-host')
+
+
+def install_status(home: pathlib.Path, plat: str, *,
+                   reg_query=_reg_query) -> list[dict]:
+    """`browse status` 的安装侧：每个浏览器一行，链路上每一环都查。
+
+    链路是 manifest → wrapper → browse 三环：manifest 在注册位置吗、它指的 wrapper
+    存在且有执行位吗、wrapper 里写死的 browse 还在吗。任何一环断了，浏览器重启后
+    native host 就起不来，报的具体是哪一环就是排查顺序。
+    """
+    rows: list[dict] = []
+    for name, (flavor, probe_dir, dests) in BROWSERS[plat].items():
+        manifests: list[dict] = []
+        for dest in dests:
+            if dest.startswith("reg:"):
+                where = f"HKCU\\{dest[4:]}\\{HOST_NAME}"
+                keyed = reg_query(f"{dest[4:]}\\{HOST_NAME}")
+                # 键在就算「注册过」：它指向的文件没了同样要报断链，而不是报没注册
+                manifest_path = pathlib.Path(keyed) if keyed else home / "nowhere"
+                exists = bool(keyed)
+            else:
+                where = str(home / dest / f"{HOST_NAME}.json")
+                manifest_path = home / dest / f"{HOST_NAME}.json"
+                exists = manifest_path.is_file()
+            row = {"where": where, "exists": exists, "ok": False, "wrapper": "",
+                   "wrapper_ok": False, "browse_path": "", "browse_ok": False}
+            if exists:
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    wrapper = pathlib.Path(str(manifest.get("path", "")))
+                    row["wrapper"] = str(wrapper)
+                    row["wrapper_ok"] = wrapper.is_file() and os.access(wrapper, os.X_OK)
+                    if row["wrapper_ok"]:
+                        match = _WRAPPER_BROWSE_RE.search(wrapper.read_text(encoding="utf-8"))
+                        if match:
+                            browse_path = pathlib.Path(match.group(1))
+                            row["browse_path"] = str(browse_path)
+                            row["browse_ok"] = browse_path.exists()
+                    row["ok"] = row["wrapper_ok"] and row["browse_ok"]
+                except (OSError, ValueError):
+                    pass  # manifest 读不了/不是 JSON：整条按断链报
+            manifests.append(row)
+        # stale 只算「注册了但断链」的；从没装过的不算，那是「没注册」
+        registered = any(m["ok"] for m in manifests)
+        stale = [m["where"] for m in manifests if m["exists"] and not m["ok"]]
+        rows.append({
+            "browser": name,
+            "flavor": flavor,
+            "detected": (home / probe_dir).exists(),
+            "registered": registered,
+            "manifests": manifests,
+            "stale": stale,
+        })
+    return rows
 
 
 def _write_manifest(path: pathlib.Path, manifest: dict) -> None:

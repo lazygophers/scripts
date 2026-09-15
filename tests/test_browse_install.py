@@ -610,3 +610,65 @@ class TestInteractiveFlow(unittest.TestCase):
         with unittest.mock.patch.object(nh.subprocess, "run", fake_run), \
                 unittest.mock.patch.object(nh.time, "sleep", lambda _: None):
             self.assertTrue(nh.wait_for_extension(pathlib.Path("/x/browse"), timeout=99))
+
+
+class TestInstallStatus(TempHome):
+    """`install_status`：链路三环（manifest → wrapper → browse）逐环查。"""
+
+    def row(self, plat: str = "darwin", browser: str = "chrome") -> dict:
+        rows = nh.install_status(self.home, plat)
+        return next(r for r in rows if r["browser"] == browser)
+
+    def test_nothing_installed_is_unregistered_not_stale(self) -> None:
+        row = self.row()
+        self.assertFalse(row["detected"])
+        self.assertFalse(row["registered"])
+        self.assertEqual(row["stale"], [], "从没装过不是断链")
+
+    def test_healthy_chain_registers(self) -> None:
+        self.touch_dir("Library/Application Support/Google/Chrome")
+        real_browse = self.touch_dir("fake-browse") / "browse"
+        real_browse.write_text("#!/bin/sh\n", encoding="utf-8")
+        nh.install(self.home, "darwin", real_browse, browsers=["chrome"])
+        row = self.row()
+        self.assertTrue(row["detected"])
+        self.assertTrue(row["registered"])
+        self.assertEqual(row["stale"], [])
+        manifest = row["manifests"][0]
+        self.assertTrue(manifest["ok"])
+        self.assertEqual(manifest["browse_path"], str(real_browse))
+
+    def test_browse_moved_after_install_breaks_the_chain(self) -> None:
+        """wrapper 里写死的 browse 被挪走：注册了但断链 —— 这正是 status 要抓的。"""
+        self.touch_dir("Library/Application Support/Google/Chrome")
+        tmp = self.touch_dir("fake-browse") / "browse"
+        tmp.write_text("#!/bin/sh\n", encoding="utf-8")
+        nh.install(self.home, "darwin", tmp, browsers=["chrome"])
+        tmp.unlink()
+        row = self.row()
+        self.assertFalse(row["registered"])
+        self.assertEqual(len(row["stale"]), 1)
+        manifest = row["manifests"][0]
+        self.assertTrue(manifest["wrapper_ok"])
+        self.assertFalse(manifest["browse_ok"])
+
+    def test_corrupt_manifest_counts_as_stale_not_crash(self) -> None:
+        self.touch_dir("Library/Application Support/Google/Chrome/NativeMessagingHosts")
+        manifest = self.home / nh.BROWSERS["darwin"]["chrome"][2][0] / f"{nh.HOST_NAME}.json"
+        manifest.write_text("not json", encoding="utf-8")
+        row = self.row()
+        self.assertFalse(row["registered"])
+        self.assertEqual(row["stale"], [str(manifest)])
+
+    def test_windows_registry_path_is_probed_via_the_injectable(self) -> None:
+        """Windows 读注册表拿 manifest 路径：键没了 = 没注册，键在但文件没了 = 断链。"""
+        def fake_query(key: str) -> str | None:
+            return str(self.home / "nowhere.json") if "Google" in key else None
+
+        rows = nh.install_status(self.home, "win32", reg_query=fake_query)
+        chrome = next(r for r in rows if r["browser"] == "chrome")
+        self.assertFalse(chrome["registered"])
+        self.assertEqual(len(chrome["stale"]), 1, "键指向的文件不在 = 断链")
+        firefox = next(r for r in rows if r["browser"] == "firefox")
+        self.assertFalse(firefox["registered"])
+        self.assertEqual(firefox["stale"], [], "键本身没有 = 没注册")

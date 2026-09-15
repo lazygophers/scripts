@@ -2,6 +2,7 @@
 
 常用：
   browse install                            # 第一次用：构建扩展 + 注册通信配置 + 指引你加载扩展
+  browse status                             # 一条命令看链路：daemon / 浏览器连接 / 注册三环
   browse daemon start                       # 起中转服务（幂等；平时不用手动跑）
   browse browsingContext getTree --table    # 看浏览器连上没有、有哪些标签页
   browse browsingContext navigate https://example.com
@@ -500,6 +501,7 @@ HELP = """browse — 用命令行驱动浏览器扩展
 用法
   browse <module> <action> [位置参数...] [--参数 值...]
   browse run [--concurrency N] [--no-fail-fast] '<指令串>'... | browse run -
+  browse status                                      一条命令看完整条链路（装没装、连没连）
   browse daemon start | stop | status               status 会列出连着哪些浏览器
   browse stop                                       中止在途指令，daemon 留着
   browse audit [--limit N] [--table]                看审计日志（存在插件里）
@@ -507,6 +509,7 @@ HELP = """browse — 用命令行驱动浏览器扩展
 
 先跑起来
   browse install                                    第一次用：构建 + 注册 + 指引加载扩展
+  browse status                                     看链路：daemon / 浏览器连接 / 注册三环
   browse browsingContext getTree --table            看浏览器连上没有、有哪些标签页
   browse browsingContext navigate https://example.com
   browse page snapshot --table                      列出这一页能点/能填的元素
@@ -731,6 +734,64 @@ def _cmd_install(tokens: list[str], uninstall: bool) -> int:
     return install_main(["browse install", *(["--uninstall"] if uninstall else []), *tokens])
 
 
+def _cmd_status(tokens: list[str]) -> int:
+    """`browse status`：一条命令看完整条链路（`daemon status` 只看 daemon 一段）。
+
+    三段：daemon 在不在跑 → 有哪些浏览器的扩展连着 → native host 注册三环
+    （manifest → wrapper → browse）断没断。每段都给出「断在哪、下一步干什么」。
+    """
+    _, flags = split_tokens(tokens)
+    sock = _sock_of(flags)
+    report = reporter(stderr=True)
+
+    running = probe(sock)
+    pid = ""
+    if running:
+        try:
+            pid = pid_path(sock).read_text(encoding="utf-8").strip()
+        except OSError:
+            pid = "?"
+    report.ok(f"daemon: {'在跑' if running else '没在跑'}（{sock}）")
+
+    browsers: list[str] = []
+    if running:
+        outcome = asyncio.run(execute(BROWSERS_METHOD, {}, sock))
+        if outcome["status"] == "ok":
+            browsers = outcome["result"].get("browsers", [])
+    if browsers:
+        report.ok(f"浏览器: {', '.join(browsers)} 已连接（扩展已加载并在工作）")
+    elif running:
+        report.err("浏览器: 没有扩展连着 —— 确认浏览器开着且扩展已启用；"
+                   "装完/升级后要重启浏览器才读新的通信配置")
+    else:
+        report.info("浏览器: 看不了（daemon 没在跑）；随便跑一条指令会自动把它拉起来")
+
+    from lib import browse_install
+
+    home = pathlib.Path.home()
+    plat = browse_install.platform_key()
+    installed = browse_install.install_status(home, plat)
+    for row in installed:
+        if not row["detected"]:
+            continue
+        if row["registered"]:
+            report.ok(f"{row['browser']}: native host 已注册，链路完好")
+        elif row["stale"]:
+            report.err(f"{row['browser']}: 注册了但链路断着（{', '.join(row['stale'])}）"
+                       " —— 重跑 `browse install`，装完重启浏览器")
+        else:
+            report.err(f"{row['browser']}: 没注册 —— 跑 `browse install`，装完重启浏览器")
+    detected = [r for r in installed if r["detected"]]
+    if not detected:
+        report.err(f"没探测到任何浏览器（{plat}）—— 浏览器装了但没启动过时目录还不存在，"
+                   "`browse install --browsers <名字>` 手动指定")
+
+    healthy = running and browsers and any(r["registered"] for r in detected)
+    if healthy:
+        report.ok("整条链路是通的")
+    return EXIT_OK if healthy else EXIT_FAILED
+
+
 def _main(argv: list[str]) -> int:
     tokens = argv[1:]
     if not tokens or tokens[0] in ("-h", "--help", "help"):
@@ -739,6 +800,8 @@ def _main(argv: list[str]) -> int:
     try:
         if tokens[0] == "daemon":
             return _cmd_daemon(tokens[1:])
+        if tokens[0] == "status":
+            return _cmd_status(tokens[1:])
         if tokens[0] == "run":
             return _cmd_run(tokens[1:])
         if tokens[0] == "stop":
