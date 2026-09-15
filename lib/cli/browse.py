@@ -2,8 +2,8 @@
 
 常用：
   browse install                            # 第一次用：构建扩展 + 注册通信配置 + 指引你加载扩展
-  browse status                             # 一条命令看链路：daemon / 浏览器连接 / 注册三环
-  browse daemon start                       # 起中转服务（幂等；平时不用手动跑）
+  browse status                             # 一条命令看链路：bridge / 插件连接 / 心跳
+  browse bridge start                       # 起中转服务（幂等；平时不用手动跑）
   browse browsingContext getTree --table    # 看浏览器连上没有、有哪些标签页
   browse browsingContext navigate https://example.com
   browse page snapshot --table              # 这一页能点/能填的元素 + 可用 locator
@@ -40,7 +40,7 @@ import subprocess
 import sys
 import time
 
-from lib import browse_daemon
+from lib import browse_bridge
 from lib.browse_daemon import (
     ABORT_METHOD,
     BROWSERS_METHOD,
@@ -122,7 +122,7 @@ DEFAULT_CONCURRENCY = 4
 # 的就绪等待。
 SPAWN_TIMEOUT = 5.0
 # 自举是后台起进程、日志丢弃的，起不来时看不到原因；把手动前台跑的命令写进报错里。
-SPAWN_HINT = "看具体原因：把 `browse daemon run --socket <path>` 放前台跑一遍"
+SPAWN_HINT = "看具体原因：把 `browse bridge run --socket <path>` 放前台跑一遍"
 _DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)(ms|s|m|h)?$")
 
 
@@ -267,7 +267,7 @@ def ensure_daemon(sock: pathlib.Path, *, spawn: bool = True) -> bool:
     if not SCRIPT_PATH.is_file():
         raise UsageError(f"找不到 browse 自身的可执行文件 {SCRIPT_PATH}，没法自举 daemon")
     subprocess.Popen(
-        [sys.executable, str(SCRIPT_PATH), "daemon", "run", "--socket", str(sock)],
+        [sys.executable, str(SCRIPT_PATH), "bridge", "run", "--socket", str(sock)],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
@@ -280,9 +280,9 @@ def ensure_daemon(sock: pathlib.Path, *, spawn: bool = True) -> bool:
 
 
 async def _serve(sock: pathlib.Path, idle_timeout: float) -> bool:
-    """前台跑 daemon，收到 SIGTERM/SIGINT 就取消它 —— 取消点在 `wait_stopped()`，
-    `browse_daemon.run` 的 finally 会把 socket 收干净，不留死文件给下次误判。"""
-    task = asyncio.ensure_future(browse_daemon.run(sock, idle_timeout))
+    """前台跑 bridge，收到 SIGTERM/SIGINT 就取消它 —— 取消点在 `wait_stopped()`，
+    `browse_bridge.run` 的 finally 会把 socket 收干净，不留死文件给下次误判。"""
+    task = asyncio.ensure_future(browse_bridge.run(sock, idle_timeout))
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, task.cancel)
@@ -293,7 +293,7 @@ async def _serve(sock: pathlib.Path, idle_timeout: float) -> bool:
 
 
 def daemon_run(sock: pathlib.Path, idle_timeout: float) -> int:
-    """`browse daemon run`：前台守着，由 `ensure_daemon` 在后台拉起。
+    """`browse bridge run`（`daemon run` 是它的旧名）：前台守着，由 `ensure_daemon` 拉起。
 
     `_serve` 返回 False 表示这个 socket 上已经有另一个 daemon 在跑，这一次没起来 ——
     所以是失败，不是成功。
@@ -502,7 +502,7 @@ HELP = """browse — 用命令行驱动浏览器扩展
   browse <module> <action> [位置参数...] [--参数 值...]
   browse run [--concurrency N] [--no-fail-fast] '<指令串>'... | browse run -
   browse status                                      一条命令看完整条链路（装没装、连没连）
-  browse daemon start | stop | status               status 会列出连着哪些浏览器
+  browse bridge start | stop | status              （daemon 是旧名）status 列出插件连接
   browse stop                                       中止在途指令，daemon 留着
   browse audit [--limit N] [--table]                看审计日志（存在插件里）
   browse install | uninstall                        装 / 卸（扩展本体仍需你手动加载一次）
@@ -574,6 +574,7 @@ def _sock_of(opts: dict) -> pathlib.Path:
 
 
 def _cmd_daemon(tokens: list[str]) -> int:
+    """`browse bridge ...`（`daemon` 是旧名）。"""
     action = tokens[0] if tokens else "status"
     _, flags = split_tokens(tokens[1:])
     sock = _sock_of(flags)
@@ -606,7 +607,7 @@ def _cmd_daemon(tokens: list[str]) -> int:
         else:
             report.info("没有浏览器连着：确认浏览器开着且扩展已启用")
         return EXIT_OK
-    raise UsageError(f"daemon 只有 start / stop / status：{action!r}")
+    raise UsageError(f"bridge 只有 start / stop / status / run：{action!r}")
 
 
 def _cmd_run(tokens: list[str]) -> int:
@@ -735,76 +736,44 @@ def _cmd_install(tokens: list[str], uninstall: bool) -> int:
 
 
 def _cmd_status(tokens: list[str]) -> int:
-    """`browse status`：一条命令看完整条链路（`daemon status` 只看 daemon 一段）。
+    """`browse status`：一条命令看完整条链路。bridge 的连接表是唯一真相。
 
-    三段：daemon 在不在跑 → 有哪些浏览器的扩展连着 → native host 注册三环
-    （manifest → wrapper → browse）断没断。每段都给出「断在哪、下一步干什么」。
+    每条插件连接一行：浏览器名、connectionId、已连多久、上次心跳几秒前。
+    旧 native messaging 的注册（manifest/wrapper）只是残留提示 —— 它们不再是
+    连接的一部分，`browse uninstall` 可以清掉。
     """
+    from lib import browse_bridge, browse_install
+
     _, flags = split_tokens(tokens)
     sock = _sock_of(flags)
     report = reporter(stderr=True)
 
     running = probe(sock)
-    pid = ""
-    if running:
-        try:
-            pid = pid_path(sock).read_text(encoding="utf-8").strip()
-        except OSError:
-            pid = "?"
-    report.ok(f"daemon: {'在跑' if running else '没在跑'}（{sock}）")
+    report.ok(f"bridge: {'在跑' if running else '没在跑'}（{sock}）")
 
-    browsers: list[str] = []
+    conns: list[dict] = []
     if running:
-        outcome = asyncio.run(execute(BROWSERS_METHOD, {}, sock))
+        outcome = asyncio.run(execute(browse_bridge.CONNECTIONS_METHOD, {}, sock))
         if outcome["status"] == "ok":
-            browsers = outcome["result"].get("browsers", [])
-
-    from lib import browse_install
+            conns = outcome["result"].get("connections", [])
+    for conn in conns:
+        report.ok(
+            f"{conn['browser']}: 插件已连接 · connectionId {conn['connectionId']}"
+            f" · 已连 {conn['sinceSeconds']} 秒 · 心跳 {conn['idleSeconds']} 秒前")
+    if running and not conns:
+        report.err("没有任何插件连着：扩展加载后会自动连 bridge（装完/升级扩展要重新加载一次）")
+    elif not running:
+        report.info("bridge 没在跑，插件连接看不了；随便跑一条指令会自动把它拉起来")
 
     home = pathlib.Path.home()
     plat = browse_install.platform_key()
-    installed = browse_install.install_status(home, plat)
-    detected = [r for r in installed if r["detected"]]
+    leftovers = [row["browser"] for row in browse_install.install_status(home, plat)
+                 if any(m["exists"] for m in row["manifests"])]
+    if leftovers:
+        report.info(f"旧 native messaging 注册还在（{', '.join(sorted(set(leftovers)))}），"
+                    "已不影响连接；`browse uninstall` 可清理")
 
-    # 每个浏览器一行：插件连接状态（daemon 眼里的） + 注册链路，两边合在一起看
-    for row in detected:
-        name = row["browser"]
-        if name in browsers:
-            link = "插件已连接"
-        elif running:
-            link = "插件未连接"
-        else:
-            link = "插件状态看不了（daemon 没在跑）"
-        if row["registered"]:
-            chain = "注册完好"
-        elif row["stale"]:
-            chain = f"注册断链（{', '.join(row['stale'])}），重跑 `browse install` 并重启浏览器"
-        else:
-            chain = "没注册，跑 `browse install` 并重启浏览器"
-        if name in browsers and row["registered"]:
-            report.ok(f"{name}: {link} · {chain}")
-        else:
-            report.err(f"{name}: {link} · {chain}")
-    # 连着的浏览器一个都不在探测名单里：列出来，别让它隐形
-    for name in browsers:
-        if name not in {r["browser"] for r in detected}:
-            report.ok(f"{name}: 插件已连接（不在本机探测名单里，注册情况未知）")
-    if not detected:
-        report.err(f"没探测到任何浏览器（{plat}）—— 浏览器装了但没启动过时目录还不存在，"
-                   "`browse install --browsers <名字>` 手动指定")
-    elif not browsers and running:
-        report.info("没有任何插件连着：确认浏览器开着且扩展已启用；"
-                    "装完/升级后要重启浏览器才读新的通信配置")
-        report.info("注册之后才开的浏览器要**完全退出**(macOS 是 Cmd+Q，关窗口不算)再打开；"
-                    "unpacked 扩展不跨浏览器，每个浏览器要在 chrome://extensions 各加载一次;"
-                    "扩展侧连败 10 次后有 5 分钟冷却，重启浏览器即重置")
-
-    healthy = running and browsers and any(r["registered"] for r in detected)
-    if healthy:
-        up = [r["browser"] for r in detected
-              if r["browser"] in browsers and r["registered"]]
-        report.ok(f"整条链路是通的：{', '.join(up)} 可用，其余浏览器开着就会连上")
-    return EXIT_OK if healthy else EXIT_FAILED
+    return EXIT_OK if (running and conns) else EXIT_FAILED
 
 
 def _main(argv: list[str]) -> int:
@@ -813,7 +782,7 @@ def _main(argv: list[str]) -> int:
         sys.stderr.write(help_text())
         return EXIT_OK
     try:
-        if tokens[0] == "daemon":
+        if tokens[0] in ("bridge", "daemon"):
             return _cmd_daemon(tokens[1:])
         if tokens[0] == "status":
             return _cmd_status(tokens[1:])

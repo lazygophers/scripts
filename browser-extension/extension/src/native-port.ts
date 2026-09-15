@@ -2,7 +2,6 @@ import { nextDelay } from "./backoff.ts";
 import { dispatch } from "./handlers/index.ts";
 import {
   CommandError,
-  NATIVE_HOST,
   isCommand,
   type ErrorCode,
   type ErrorReply,
@@ -11,19 +10,76 @@ import {
 } from "./protocol.ts";
 
 /**
- * Keeps one `connectNative` port to the daemon open, reconnecting with
- * backoff whenever it drops (spec 3.4), and routes inbound Commands through
- * the handler table.
+ * 2026-09-15 起扩展直连本地 bridge 的 WebSocket（用户批准的连接层重做）。
+ * 以前是 native messaging：浏览器 fork 一个 host 进程，stdin/stdout 中转 —— 三层
+ * 生命周期互相不同步，Chrome/Arc 共享 manifest 还会互踢。现在只剩一条连接：
  *
- * The periodic ping is not a health check for the daemon: an MV3 service
- * worker is killed after 30s idle, and port traffic is what resets that timer.
- * Doing it over the existing port avoids asking for the `alarms` permission,
- * which spec 4.3 does not include.
+ *     扩展 SW ──WebSocket 127.0.0.1:9330──▶ browse bridge ──unix socket──▶ CLI
+ *
+ * 协议帧还是原来的 JSON 信封（command/success/error/event + hello），只是不再带
+ * 4 字节长度前缀 —— 一条 WS 消息就是一帧，bridge 那头适配（`lib/browse_bridge.py`）。
+ *
+ * 心跳仍走 `lg:keepalive.ping`（每 20 秒一条）：bridge 靠它刷新连接活跃时间，
+ * service worker 靠**发送消息本身**重置 MV3 的 30 秒闲置计时器（Chrome 116 起，
+ * manifest 的 minimum_chrome_version 已经钉在 116）。断线退避重连（`backoff.ts`），
+ * 另有 `background.ts` 的 30 秒 alarm 兜底把被杀的 worker 叫醒。
  */
+
+/** bridge 的 WS 地址。端口是双方约定死的常量（`lib/browse_bridge.py: DEFAULT_WS_PORT）。 */
+export const BRIDGE_URL = "ws://127.0.0.1:9330";
+
 const PING_INTERVAL_MS = 20_000;
 
 /** How many commands the panel's live log keeps (spec 4.5). */
 const LOG_SIZE = 20;
+
+/**
+ * 每台安装持久的实例 ID（`chrome.storage.local`，首次生成后不变）。`browserName()`
+ * 只是展示名，Arc/Chromium 分支识别不出品牌时会退化成同一个 "chromium" —— 这个
+ * ID 才是 bridge 用来分辨「这是不是同一个扩展实例重连」的凭据（`lib/browse_daemon.py`
+ * `_browser_slot`），两台都报 "chromium" 时不再互踢，而是各开一个槽位。
+ *
+ * `chrome.storage` 在测试环境里不存在，读不到就退化成一个不持久的随机 ID —— 单次
+ * 连接仍然唯一，只是重连后会变，测试不关心这个字段所以无妨。
+ */
+let cachedInstanceId: string | null = null;
+async function instanceId(): Promise<string> {
+  if (cachedInstanceId !== null) {
+    return cachedInstanceId;
+  }
+  const key = "browse:instanceId";
+  try {
+    const stored = await chrome.storage.local.get(key);
+    let id = stored[key];
+    if (typeof id !== "string" || id === "") {
+      id = crypto.randomUUID();
+      await chrome.storage.local.set({ [key]: id });
+    }
+    cachedInstanceId = id;
+  } catch {
+    cachedInstanceId = crypto.randomUUID();
+  }
+  return cachedInstanceId;
+}
+
+/** hello 里报的浏览器名。展示用 —— 路由不靠它猜，靠 bridge 的 connectionId + instanceId。 */
+function browserName(): string {
+  const brands = (navigator as { userAgentData?: { brands?: { brand: string }[] } })
+    .userAgentData?.brands ?? [];
+  for (const { brand } of brands) {
+    if (brand === "Google Chrome") {
+      return "chrome";
+    }
+    if (brand === "Microsoft Edge") {
+      return "edge";
+    }
+    const lower = brand.toLowerCase();
+    if (["brave", "opera", "vivaldi", "arc"].includes(lower)) {
+      return lower;
+    }
+  }
+  return "chromium"; // Arc 等 Chromium 分支不在 brands 里报自己 —— 展示名退化，路由不受影响
+}
 
 export type ConnectionState = "connected" | "disconnected";
 
@@ -38,7 +94,7 @@ export interface LogEntry {
 }
 
 export class NativeConnection {
-  private port: chrome.runtime.Port | null = null;
+  private socket: WebSocket | null = null;
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -70,56 +126,82 @@ export class NativeConnection {
   connect(): void {
     this.stopped = false;
     this.clearReconnect();
-    if (this.port) {
+    if (this.socket) {
       return;
     }
-    let port: chrome.runtime.Port;
+    let socket: WebSocket;
     try {
-      port = chrome.runtime.connectNative(NATIVE_HOST);
+      socket = new WebSocket(BRIDGE_URL);
     } catch (err) {
-      // Host manifest missing entirely: same treatment as a dropped port.
+      // bridge 不在/网络栈拒绝：和断线同一个处理，退避重试
       this.scheduleReconnect(describe(err));
       return;
     }
-    this.port = port;
-    port.onMessage.addListener((msg: unknown) => {
-      // The first message proves the host really started; connectNative
-      // succeeds even when the host binary is missing.
+    this.socket = socket;
+    socket.onopen = () => {
+      void instanceId().then((id) => {
+        if (this.socket !== socket) {
+          return; // 等 ID 的这一下 socket 已经被 disconnect() 或重连换掉了
+        }
+        socket.send(JSON.stringify({
+          type: "hello",
+          role: "extension",
+          browser: browserName(),
+          instanceId: id,
+        }));
+      });
+      this.onState("connected");
+      this.startPing();
+    };
+    socket.onmessage = (event) => {
+      // 第一条消息（含 hello-ack）证明 bridge 真的活着且认了我们
       this.attempt = 0;
-      void this.handle(msg);
-    });
-    port.onDisconnect.addListener(() => {
-      this.port = null;
-      this.scheduleReconnect(describe(chrome.runtime.lastError));
-    });
-    this.onState("connected");
-    this.startPing();
-    console.info(`[browse] connected to ${NATIVE_HOST}`);
+      if (typeof event.data !== "string") {
+        return;
+      }
+      try {
+        void this.handle(JSON.parse(event.data));
+      } catch {
+        console.warn("[browse] dropped non-JSON message");
+      }
+    };
+    const dropped = () => {
+      if (this.socket !== socket) {
+        return;
+      }
+      this.socket = null;
+      this.scheduleReconnect("bridge 连接断开");
+    };
+    socket.onclose = dropped;
+    socket.onerror = dropped;
   }
 
-  /** Panel / CLI brake: drop the port and stop reconnecting (spec 4.5). */
+  /** Panel / CLI brake: drop the socket and stop reconnecting (spec 4.5). */
   disconnect(): void {
     this.stopped = true;
     this.clearReconnect();
     this.stopPing();
-    this.port?.disconnect();
-    this.port = null;
+    this.socket?.close();
+    this.socket = null;
     this.onState("disconnected");
   }
 
   send(message: Outbound): void {
-    this.port?.postMessage(message);
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(message));
+    }
   }
 
   /**
-   * Ask the daemon something and wait for its reply. Only `lg:approvals.*`
+   * Ask the bridge something and wait for its reply. Only `lg:approvals.*`
    * uses this — the panel reading and editing the per-domain allow list
-   * (spec 4.5). The *policy* stays in Python; this carries the question.
+   * (spec 4.5). The *policy* stays in the extension (`policy.ts`); the bridge
+   * only carries the question, same as every other command.
    */
   request(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-    const port = this.port;
-    if (!port) {
-      return Promise.reject(new Error("daemon not connected"));
+    const socket = this.socket;
+    if (socket?.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error("bridge not connected"));
     }
     this.outSeq += 1;
     const id = this.outSeq;
@@ -131,11 +213,14 @@ export class NativeConnection {
           reject(new CommandError(reply.error, reply.message));
         }
       });
-      port.postMessage({ id, method, params });
+      socket.send(JSON.stringify({ id, method, params }));
     });
   }
 
   private async handle(msg: unknown): Promise<void> {
+    if ((msg as { type?: string })?.type === "hello-ack") {
+      return; // 握手应答，不是指令也不是回包
+    }
     const reply = asReply(msg);
     if (reply) {
       this.outbound.get(reply.id)?.(reply);
@@ -189,7 +274,7 @@ export class NativeConnection {
     const delay = nextDelay(this.attempt);
     this.attempt += 1;
     console.info(
-      `[browse] daemon unavailable (${reason}); retry #${this.attempt} in ${delay}ms`,
+      `[browse] bridge unavailable (${reason}); retry #${this.attempt} in ${delay}ms`,
     );
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

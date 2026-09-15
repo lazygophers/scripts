@@ -673,7 +673,7 @@ class TestDaemonCommands(unittest.TestCase):
 
         thread = threading.Thread(target=stop_later, daemon=True)
         thread.start()
-        self.assertEqual(browse._main(["browse", "daemon", "run", "--socket", str(sock)]), 0)
+        self.assertEqual(browse._main(["browse", "bridge", "run", "--socket", str(sock)]), 0)
         thread.join(TIMEOUT)
         self.assertEqual(stopped, [0])
         self.assertFalse(sock.exists())
@@ -759,7 +759,7 @@ class TestEnsureDaemon(unittest.TestCase):
              mock.patch.object(browse.SCRIPT_PATH.__class__, "is_file", return_value=True):
             self.assertFalse(browse.ensure_daemon(missing))
         argv = popen.call_args[0][0]
-        self.assertEqual(argv[1:], [str(browse.SCRIPT_PATH), "daemon", "run", "--socket", str(missing)])
+        self.assertEqual(argv[1:], [str(browse.SCRIPT_PATH), "bridge", "run", "--socket", str(missing)])
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
     def test_missing_entry_script_is_a_usage_error(self):

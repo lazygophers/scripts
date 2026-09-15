@@ -3,8 +3,6 @@
  * carry a `lg:` prefix (BiDi 3.3 reserves colon-prefixed module names).
  */
 
-export const NATIVE_HOST = "com.lazygophers.browse";
-
 export interface Command {
   id: number;
   method: string;

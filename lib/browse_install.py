@@ -1,29 +1,17 @@
 """把 browse 注册成浏览器的 native messaging host（三平台，用户级）
 
-常用：
-  browse install                      # 装到探测到的浏览器
-  browse install --list               # 只看探测到了谁，不写盘
-  browse uninstall                    # 全部卸干净
-  browse install --browsers chrome,firefox
-  browse install --extension-id <Edge 商店 ID>
+2026-09-15 连接层重做后，本模块只剩三件事：
 
-写两样东西：一份 JSON（manifest）和一个 wrapper 脚本。**native messaging 的 manifest
-没有 `args` 字段**（Chrome / Edge / Firefox 都没有），字段只有 name / description /
-path / type / allowed_origins（Firefox 是 allowed_extensions），所以 `--native-host`
-这个参数没地方传——manifest 的 `path` 只能指向一个自带该参数的 wrapper：
+- `EXTENSION_IDS`：bridge 的 WebSocket Origin 白名单（`lib/browse_bridge.py`）
+- `uninstall()`：清掉 2026-09-15 之前装的 native messaging 注册（manifest/wrapper/
+  注册表键），不留残留；`install_status()` 供 `browse status` 提示旧注册还在
+- `main()`：构建扩展 + 指引用户在 chrome://extensions 加载一次 + 等它连上 bridge。
+  不再写任何 native messaging 注册 —— 扩展自己连 bridge 的 WebSocket（ws://127.0.0.1:9330），
+  装完不需要重启浏览器
 
-    #!/bin/sh
-    exec /abs/path/to/browse --native-host "$@"
-
-浏览器是直接 fork 执行 `path` 的，所以 wrapper 必须有执行位；被它指向的 browse 不
-需要，native host 内部用 sys.executable 显式起（T03 `lib/browse_native_host.py`）。
-
-路径表出处：`.scratch/browser-control-extension/spec.md` 7.3，Firefox 一行出自
+路径表（BROWSERS/LEGACY_DESTS）只服务 uninstall/残留检测，历史出处：
+`.scratch/browser-control-extension/spec.md` 7.3 与
 <https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Native_manifests>。
-
-**住在 `lib/` 而不是 `browser-extension/install/`**：manifest 里写的是浏览器要 fork
-的绝对路径，所以装扩展这件事必须跟着 browse 一起发布。放在仓库的 extension 目录下
-时，`uvx` 装的人手上根本没有那个文件。
 """
 
 from __future__ import annotations
@@ -177,38 +165,6 @@ def platform_key(platform: str | None = None) -> str:
     return "linux"
 
 
-def build_manifest(flavor: str, host_path: pathlib.Path,
-                   extension_ids: tuple[str, ...] = EXTENSION_IDS,
-                   gecko_ids: tuple[str, ...] = GECKO_IDS) -> dict:
-    """一份 native host manifest。Chromium 系和 Firefox 的授权字段名不同。
-
-    host_path 是浏览器要 fork 的那个文件——**wrapper，不是 browse 本身**。
-    manifest 没有 args 字段，`--native-host` 只能由 wrapper 自己带上。
-    """
-    manifest = {
-        "name": HOST_NAME,
-        "description": DESCRIPTION,
-        "path": str(host_path),
-        "type": "stdio",
-    }
-    if flavor == GECKO:
-        manifest["allowed_extensions"] = list(dict.fromkeys(gecko_ids))
-    else:
-        # 末尾斜杠必带，且不支持通配符。
-        manifest["allowed_origins"] = [f"chrome-extension://{i}/"
-                                       for i in dict.fromkeys(extension_ids)]
-    return manifest
-
-
-def detect(home: pathlib.Path, plat: str) -> list[str]:
-    """探测装了哪些浏览器：看它的用户数据目录在不在。
-
-    浏览器装了但一次都没启动过时目录还不存在，这时用 --browsers 指定。
-    """
-    return [name for name, (_, probe, _) in BROWSERS[plat].items()
-            if (home / probe).exists()]
-
-
 def wrapper_path(home: pathlib.Path, plat: str, browser: str = "") -> pathlib.Path:
     """manifest 的 path 指向的那个脚本。Windows 上 .sh 跑不了，用 .cmd。
 
@@ -225,39 +181,9 @@ def wrapper_path(home: pathlib.Path, plat: str, browser: str = "") -> pathlib.Pa
     return home / WRAPPER_DIR / name
 
 
-def write_wrapper(home: pathlib.Path, plat: str, browse_path: pathlib.Path,
-                  browser: str = "") -> pathlib.Path:
-    """生成某个浏览器的 wrapper 并给上执行位，返回它的绝对路径。
-
-    `--browser <名字>` 写死在这里面。manifest 没有 `args` 字段，所以身份只能这么传。
-    """
-    path = wrapper_path(home, plat, browser)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    flag = f" --browser {browser}" if browser else ""
-    if plat == "win32":
-        # 需要: 实机验证 .cmd 这一路。Windows 上 browse 是 uv 装出来的 browse.exe
-        # 或 py 启动器认的脚本，这里只负责把参数原样透传。
-        body = f'@echo off\r\n"{browse_path}" --native-host{flag} %*\r\n'
-        newline = ""
-    else:
-        body = f'#!/bin/sh\nexec "{browse_path}" --native-host{flag} "$@"\n'
-        newline = "\n"
-    path.write_text(body, encoding="utf-8", newline=newline)
-    # 浏览器直接 fork 执行这个文件，没有执行位就是启动失败。
-    path.chmod(0o755)
-    return path
-
-
 def win_manifest_path(home: pathlib.Path, flavor: str) -> pathlib.Path:
     suffix = ".firefox.json" if flavor == GECKO else ".json"
     return home / WIN_MANIFEST_DIR / f"{HOST_NAME}{suffix}"
-
-
-def _reg_set(key: str, value: str) -> None:
-    import winreg
-
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key) as handle:
-        winreg.SetValueEx(handle, "", 0, winreg.REG_SZ, value)
 
 
 def _reg_delete(key: str) -> None:
@@ -338,44 +264,6 @@ def install_status(home: pathlib.Path, plat: str, *,
     return rows
 
 
-def _write_manifest(path: pathlib.Path, manifest: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
-    # 浏览器以当前用户身份读它，内容不含密钥，0644 即可。
-    path.chmod(0o644)
-
-
-def install(home: pathlib.Path, plat: str, browse_path: pathlib.Path, *,
-            browsers: list[str] | None = None,
-            extension_ids: tuple[str, ...] = EXTENSION_IDS,
-            gecko_ids: tuple[str, ...] = GECKO_IDS,
-            reg_set=_reg_set) -> list[tuple[str, str]]:
-    """写 wrapper + 给每个选中的浏览器写 manifest，返回 [(浏览器, 落点描述)]。"""
-    names = detect(home, plat) if browsers is None else browsers
-    # 升级路径：把旧版那个不带 `--browser` 的通用 wrapper 清掉，别留残留。留着的话它
-    # 仍然会被某个 manifest 指着，连上来落到 unknown 槽，白白多一条连接。
-    legacy = wrapper_path(home, plat)
-    if legacy.exists():
-        legacy.unlink()
-    done: list[tuple[str, str]] = []
-    for name in names:
-        flavor, _, dests = BROWSERS[plat][name]
-        wrapper = write_wrapper(home, plat, browse_path, name)
-        manifest = build_manifest(flavor, wrapper, extension_ids, gecko_ids)
-        for dest in dests:
-            if dest.startswith("reg:"):
-                path = win_manifest_path(home, flavor)
-                _write_manifest(path, manifest)
-                reg_set(f"{dest[4:]}\\{HOST_NAME}", str(path))
-                done.append((name, f"HKCU\\{dest[4:]}\\{HOST_NAME} -> {path}"))
-            else:
-                path = home / dest / f"{HOST_NAME}.json"
-                _write_manifest(path, manifest)
-                done.append((name, str(path)))
-    return done
-
-
 def uninstall(home: pathlib.Path, plat: str, *,
               reg_delete=_reg_delete) -> list[tuple[str, str]]:
     """删掉所有已知落点（不管当初探测到没有），不留残留。"""
@@ -414,31 +302,6 @@ def uninstall(home: pathlib.Path, plat: str, *,
     return removed
 
 
-def resolve_browse_path(given: str | None) -> pathlib.Path:
-    """manifest 里要写的 browse 绝对路径。
-
-    这个路径要长期有效：浏览器每次启动 native host 都按它去 fork。`uvx` 那种一次性
-    环境里的路径随时会消失，所以先找 PATH 上装好的那个（`uv tool install` /
-    `pipx install` 的落点），再退回仓库里的 `bin/browse`。
-    """
-    if given:
-        path = pathlib.Path(given).expanduser().resolve()
-        if not path.exists():
-            raise ValueError(f"--browse-path 指向的文件不存在：{path}")
-        return path
-    found = shutil.which("browse")
-    if found:
-        return pathlib.Path(found).resolve()
-    local = REPO_ROOT / "bin" / "browse"
-    if local.exists():
-        return local.resolve()
-    raise ValueError(
-        "PATH 上没有 browse，仓库里也没有 bin/browse。先 `uv tool install "
-        "git+https://github.com/lazygophers/scripts` 装成常驻命令，或用 "
-        "--browse-path 指一个不会消失的绝对路径"
-    )
-
-
 EXTENSION_SRC = REPO_ROOT / "browser-extension" / "extension"
 CONNECT_POLL_SECONDS = 2.0
 WAIT_TIMEOUT = 120.0
@@ -474,7 +337,7 @@ def copy_to_clipboard(text: str) -> bool:
         return False
 
 
-def wait_for_extension(browse_path: pathlib.Path, timeout: float) -> bool:
+def wait_for_extension(timeout: float) -> bool:
     """真跑一条指令，等它成功。成功返回 True，超时返回 False。
 
     故意走用户自己会走的那条路（`browse browsingContext getTree`）而不是探测
@@ -486,8 +349,9 @@ def wait_for_extension(browse_path: pathlib.Path, timeout: float) -> bool:
     """
     deadline = time.monotonic() + timeout
     while True:
+        # 重跑用户敲的那个 browse（sys.argv[0]）；它会自动把 bridge 拉起来
         done = subprocess.run(
-            [sys.executable, str(browse_path), "browsingContext", "getTree", "--no-say"],
+            [sys.executable, sys.argv[0], "browsingContext", "getTree", "--no-say"],
             capture_output=True,
         )
         if done.returncode == 0:
@@ -502,104 +366,37 @@ def wait_for_extension(browse_path: pathlib.Path, timeout: float) -> bool:
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="browse install",
-        description="把 browse 注册成浏览器的 native messaging host",
+        description="构建扩展 + 指引加载（bridge 由任意一条 browse 指令自动拉起）",
     )
-    parser.add_argument("--uninstall", action="store_true", help="删掉所有已知落点")
-    parser.add_argument("--list", action="store_true", dest="list_only",
-                        help="只打印探测到的浏览器和落点，不写任何东西")
-    parser.add_argument("--browsers", help="逗号分隔，跳过探测直接指定，如 chrome,firefox")
-    parser.add_argument("--browse-path", help="manifest 里写的 browse 绝对路径")
-    parser.add_argument("--extension-id", action="append", default=[],
-                        help="追加一个 Chromium 扩展 ID（Edge 商店另发的 ID 用这个补）")
+    parser.add_argument("--uninstall", action="store_true", help="清掉旧 native messaging 注册")
     parser.add_argument("--no-build", action="store_true",
                         help="不自动构建扩展（默认 dist/ 缺失时自动跑 npm run build）")
     parser.add_argument("--no-wait", action="store_true",
                         help="不等扩展连上就返回（默认等 120 秒）")
-    parser.add_argument("--gecko-id", action="append", default=[],
-                        help="追加一个 Firefox 扩展 ID（gecko.id）")
     return parser.parse_args(argv[1:])
 
 
 def main(argv: list[str]) -> int:
     """`browse install` / `browse uninstall` 的实现。
 
-    `--no-say` / `--debug` / 计时都由 `lib/cli/browse.py` 的入口统一处理过了，这里
-    不再包一层。
+    install 只做三件事：构建扩展、指引用户加载一次（Chrome 不允许任何程序替用户
+    装扩展：--load-extension 于 137 移除、CDP Extensions.loadUnpacked 要
+    browser-level target 而 136+ 拒绝对默认 profile 开调试端口）、等它连上 bridge。
+    bridge 本身不用装 —— 任何一条 browse 指令都会自动把它拉起。
+
+    `--no-say` / `--debug` / 计时都由 `lib/cli/browse.py` 的入口统一处理过了。
     """
     args = _parse(argv)
     out = reporter(stderr=True)
     home = pathlib.Path.home()
     plat = platform_key()
-    table = BROWSERS[plat]
-
-    if args.browsers:
-        names = [n.strip() for n in args.browsers.split(",") if n.strip()]
-        unknown = [n for n in names if n not in table]
-        if unknown:
-            out.err(f"{plat} 上不认识这些浏览器：{', '.join(unknown)}；"
-                    f"可选：{', '.join(table)}")
-            return EXIT_USAGE
-    else:
-        names = None
 
     if args.uninstall:
         removed = uninstall(home, plat)
         for name, where in removed:
             out.ok(f"{name}: 已删 {where}")
         if not removed:
-            out.info("没有找到任何已安装的 manifest")
-        return EXIT_OK
-
-    try:
-        browse_path = resolve_browse_path(args.browse_path)
-    except ValueError as exc:
-        out.err(str(exc))
-        return EXIT_USAGE
-
-    found = names if names is not None else detect(home, plat)
-    if not found:
-        out.err(f"没探测到任何浏览器（{plat}）。浏览器装了但没启动过时用户目录还不存在，"
-                f"用 --browsers 指定，可选：{', '.join(table)}")
-        return EXIT_FAILED
-
-    if args.list_only:
-        out.info(f"browse：{browse_path}")
-        out.info(f"wrapper（manifest 的 path 指向它，每个浏览器一个）："
-                 f"{wrapper_path(home, plat, '<浏览器>')}")
-        for name in found:
-            flavor, _, dests = table[name]
-            for dest in dests:
-                where = (f"HKCU\\{dest[4:]}\\{HOST_NAME}" if dest.startswith("reg:")
-                         else str(home / dest / f"{HOST_NAME}.json"))
-                out.info(f"{name} ({flavor}): {where}")
-        return EXIT_OK
-
-    done = install(
-        home, plat, browse_path,
-        browsers=found,
-        extension_ids=EXTENSION_IDS + tuple(args.extension_id),
-        gecko_ids=GECKO_IDS + tuple(args.gecko_id),
-    )
-    for name, where in done:
-        out.ok(f"{name}: {where}")
-    for name in found:
-        out.info(f"wrapper：{wrapper_path(home, plat, name)} -> "
-                 f"{browse_path} --native-host --browser {name}")
-    if len(found) > 1:
-        out.info(f"这台机器上有 {len(found)} 个浏览器会连上来。"
-                 f"指令加 `--browser <名字>` 指定发给谁，`browse daemon status` 看谁连着")
-    # wrapper 换了位置，浏览器只在启动时读 manifest —— 不重启就还在跑旧的那个
-    out.info("装完/升级后**要重启浏览器**，它才会去读新的通信配置")
-
-    # 到这里为止，只完成了「浏览器怎么找到 browse」。扩展本体还没装 —— 而且
-    # 装不了：Chrome 把所有程序化安装扩展的路都封了（--load-extension 于 137
-    # 移除、--disable-extensions-except 于 139 移除、开发者模式 pref 属受保护
-    # 配置会被重置、CDP Extensions.loadUnpacked 要 browser-level target 而
-    # 136+ 拒绝对默认 profile 开调试端口）。剩下的只能是人点一次。
-    # 非交互（管道、CI、测试）时到此为止：只做注册。构建、指引、等待都是给
-    # 坐在终端前的人看的，脚本里跑不该被一个 120 秒的等待卡住。
-    if not sys.stderr.isatty():
-        out.info("扩展本体要手动加载，见 browser-extension/README.md")
+            out.info("没有找到任何旧注册（本来就没装过 native messaging）")
         return EXIT_OK
 
     if args.no_build:
@@ -623,29 +420,28 @@ def main(argv: list[str]) -> int:
     if copied:
         out.info("     （路径已复制到剪贴板，文件选择框里按 Cmd+Shift+G 粘贴即可）")
     out.info("")
-    # 这三个开关**没有任何程序侧的入口**：`toolbar_pin` / `file_url_navigation_allowed`
-    # 要写浏览器的企业策略，而无痕那条连策略字段都不存在（`ExtensionSettings` 按扩展 ID
-    # 的 schema 里没有 incognito，见 README）。不写策略是明确要求：不动浏览器自己的配置。
-    # 所以这里如实列出来，并写清楚各自什么情况下才需要开，别让人以为是必做步骤。
+    out.info("加载后扩展自动连 bridge，不用重启浏览器。每个浏览器要各加载一次。")
+    out.info("")
     for line in MANUAL_TOGGLES:
         out.info(line)
     out.info("")
 
-    if args.no_wait:
-        out.info(f"装完自己验：{browse_path} browsingContext getTree --table")
+    if args.no_wait or not sys.stderr.isatty():
+        out.info("装完自己验：browse status")
         return EXIT_OK
 
     out.info(f"等你装上……（最多 {int(WAIT_TIMEOUT)} 秒，Ctrl-C 可中断）")
     try:
-        connected = wait_for_extension(browse_path, WAIT_TIMEOUT)
+        connected = wait_for_extension(WAIT_TIMEOUT)
     except KeyboardInterrupt:
-        out.info(f"没等到。装好后自己验：{browse_path} browsingContext getTree --table")
+        out.info("没等到。装好后自己验：browse status")
         return EXIT_OK
     if connected:
-        out.ok("扩展已连上，整条链路通了。试试：browse browsingContext getTree --table")
+        out.ok("扩展已连上 bridge，整条链路通了。试试：browse status")
         return EXIT_OK
     out.err("超时：扩展还没连上。排查顺序：")
     out.err("  1. chrome://extensions 里有没有看到这个扩展、是不是启用状态")
-    out.err("  2. 扩展 ID 是不是 podeceeeafjdcemppcgjhhokcokpcama（不是的话 manifest 的 key 被改过）")
-    out.err("  3. 点扩展卡片上的 service worker，看控制台有没有报错")
+    out.err("  2. 扩展 ID 是不是 podeceeeafjdcemppcgjhhokcokpcama（不是的话 dist 里的 manifest key 被改过）")
+    out.err("  3. 点扩展卡片上的 service worker，看控制台有没有报错（bridge 连接失败会打印原因）")
+    out.err("  4. browse bridge start 之后重试")
     return EXIT_FAILED

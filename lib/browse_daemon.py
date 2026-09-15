@@ -183,9 +183,14 @@ class _Conn:
     id: int
     role: str
     writer: asyncio.StreamWriter
-    # native-host：自己代表哪个浏览器（安装时写死在 wrapper 里）。
+    # native-host：自己代表哪个浏览器（安装时写死在 wrapper 里，或 bridge 场景下
+    # 扩展自己在 hello 里报的展示名）。
     # cli：这一次要发给哪个浏览器，空串表示「没指定，你替我挑」。
     browser: str = ""
+    # bridge 场景下扩展自己生成的持久实例 ID（`browser-extension/extension/src/
+    # native-port.ts` 的 `instanceId()`），装在 chrome.storage.local 里，同一次
+    # 安装重连不变。旧 native messaging 的 wrapper 不带这个字段，值就是空串。
+    instance: str = ""
 
     async def send(self, message: dict, limit: int = MAX_INCOMING_FRAME_BYTES) -> bool:
         """写一帧。对端已经走了就返回 False，不抛——路由不该被一个死客户端带停。"""
@@ -309,16 +314,28 @@ class Daemon:
 
         self._conn_seq += 1
         want = hello.get("browser")
+        instance = hello.get("instanceId")
         conn = _Conn(id=self._conn_seq, role=role, writer=writer,
-                     browser=want if isinstance(want, str) else "")
+                     browser=want if isinstance(want, str) else "",
+                     instance=instance if isinstance(instance, str) else "")
         if role == ROLE_NATIVE_HOST and not conn.browser:
             # 升级前装的通用 wrapper 不带 `--browser`。不认识就归到 unknown 槽，
             # 照常能用（单浏览器场景和以前一模一样），不让它把 daemon 带倒。
             conn.browser = UNKNOWN_BROWSER
-        if not await conn.send({"type": "hello-ack", "connectionId": conn.id}, MAX_HELLO_BYTES):
+        if conn.role != ROLE_CLI:
+            # hello-ack 要带上实际分到的槽位名（可能被 `_browser_slot` 加了数字
+            # 后缀消歧义，如 "chromium-2"）——bridge 的 WS 适配层（`lib/browse_
+            # bridge.py` 的 `_Adapter`）靠这个字段填 `lg:bridge.connections`。
+            # 这一步只算槽位名，不登记、不顶旧连接、不发订阅重建指令：那些要等
+            # ack 真发出去、对端确认握手完成后才能做（否则重建订阅会在 ack 之前
+            # 抢发一条指令帧，把等 ack 的客户端撞懵）。
+            conn.browser = self._browser_slot(conn)
+        if not await conn.send(
+            {"type": "hello-ack", "connectionId": conn.id, "browser": conn.browser},
+            MAX_HELLO_BYTES,
+        ):
             await _close(writer)
             return
-
         await self._attach(conn)
         try:
             await self._pump(conn, reader)
@@ -330,15 +347,37 @@ class Daemon:
         if conn.role == ROLE_CLI:
             self._clis[conn.id] = conn
             return
+        conn.browser = self._browser_slot(conn)  # 落地为实际分到的槽位名
         old = self._browsers.get(conn.browser)
         self._browsers[conn.browser] = conn
         if old is not None:
-            # 只顶掉**同一个浏览器**的旧连接（它重连了）。别的浏览器一概不动 ——
-            # 以前这里是一个全局插槽，Chrome 连上会踢掉 Brave，而扩展侧会退避重连，
-            # 两者相乘就是无限互踢。
+            # 只顶掉**同一个实例**的旧连接（它重连了）。别的实例一概不动 ——
+            # 以前这里是按浏览器展示名分槽，Chrome 连上会踢掉 Brave，而扩展侧会退避
+            # 重连，两者相乘就是无限互踢。
             await _close(old.writer)
             await self._fail_pending(old.id, f"{conn.browser} 的 native host 被新连接顶替")
         await self._rebuild_subscriptions(conn)
+
+    def _browser_slot(self, conn: _Conn) -> str:
+        """挑一个不会跟别的活连接**撞身份**的槽位名。
+
+        同一个实例（`instanceId` 相同）重连 → 复用同名槽位，这是正常顶替。
+        不同实例撞了同一个展示名（Arc/Chromium 分支猜不出品牌，都报
+        "chromium"；或两个 Chrome profile）→ 加数字后缀分开槽位，不互踢。
+        旧 native messaging 的 wrapper 不带 instanceId（`conn.instance` 是空串），
+        这时退回旧行为：同名即视为同一个，和以前一模一样。
+        """
+        base = conn.browser
+        occupant = self._browsers.get(base)
+        if occupant is None or occupant.instance == conn.instance:
+            return base
+        n = 2
+        while True:
+            key = f"{base}-{n}"
+            occupant = self._browsers.get(key)
+            if occupant is None or occupant.instance == conn.instance:
+                return key
+            n += 1
 
     async def _detach(self, conn: _Conn) -> None:
         if conn.role == ROLE_CLI:
@@ -579,7 +618,7 @@ async def _close(writer: asyncio.StreamWriter) -> None:
 
 # ---------------------------------------------------------------- 客户端
 async def connect(role: str, path: Path | None = None, *,
-                  browser: str = "") -> tuple[asyncio.StreamReader, asyncio.StreamWriter, int]:
+                  browser: str = "", instance: str = "") -> tuple[asyncio.StreamReader, asyncio.StreamWriter, int]:
     """连上 daemon 并握手，返回 (reader, writer, connectionId)。
 
     T03 的 native host 用 `role="native-host"`，T04 的 CLI 用 `role="cli"`。
@@ -588,11 +627,15 @@ async def connect(role: str, path: Path | None = None, *,
         raise ProtocolError(f"role 只能是 {sorted(ROLES)}: {role!r}")
     target = socket_path() if path is None else path
     reader, writer = await asyncio.open_unix_connection(str(target))
-    # native-host：我代表哪个浏览器（安装时写死在 wrapper 里）。
+    # native-host：我代表哪个浏览器（安装时写死在 wrapper 里），`instance` 是扩展
+    # 侧持久生成的实例 ID，用来在展示名撞车时（Arc/Chromium 都报 "chromium"）分开
+    # 槽位而不互踢，见 `Daemon._browser_slot`。
     # cli：这一次发给哪个浏览器，空串 = 让 daemon 替我挑。
     hello = {"type": "hello", "role": role}
     if browser:
         hello["browser"] = browser
+    if instance:
+        hello["instanceId"] = instance
     writer.write(pack(hello, MAX_HELLO_BYTES))
     await writer.drain()
     ack = await read_frame(reader, MAX_HELLO_BYTES)

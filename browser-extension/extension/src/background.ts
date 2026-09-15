@@ -16,7 +16,7 @@ function paintBadge(): void {
     title:
       state === "connected"
         ? `browse: connected${inFlight > 0 ? `, ${inFlight} running` : ""}`
-        : "browse: daemon not connected",
+        : "browse: bridge not connected",
   });
 }
 

@@ -10,28 +10,69 @@ type Any = Record<string, unknown>;
 const open: NativeConnection[] = [];
 
 /**
- * A `connectNative` port under test control: whatever the extension posts
- * lands in `sent`, and `reply` plays the daemon's answer back.
+ * A fake bridge WebSocket under test control: whatever the extension sends lands
+ * in `sent`, and `reply` plays the bridge's answer back. `drop` simulates a cut
+ * connection. 2026-09-15 起传输是 WebSocket（不再是 connectNative）。
  */
+const sockets: FakeSocket[] = [];
+let previousWebSocket: unknown;
+
+class FakeSocket {
+  static OPEN = 1;
+  static throwNext = false;
+  sent: Any[] = [];
+  readyState = 0;
+  onopen: ((ev: unknown) => void) | null = null;
+  onmessage: ((ev: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+
+  url: string;
+
+  constructor(url: string) {
+    this.url = url;
+    if (FakeSocket.throwNext) {
+      FakeSocket.throwNext = false;
+      throw new Error("bridge unreachable");
+    }
+    sockets.push(this);
+  }
+
+  send(data: string): void {
+    this.sent.push(JSON.parse(data));
+  }
+
+  close(): void {
+    this.readyState = 0;
+  }
+
+  /** Test-side: the socket is established. */
+  open(): void {
+    this.readyState = 1;
+    this.onopen?.({});
+  }
+
+  /** Test-side: the bridge says something. */
+  reply(message: Any): void {
+    this.onmessage?.({ data: JSON.stringify(message) });
+  }
+
+  /** Test-side: the connection is cut. */
+  drop(): void {
+    this.readyState = 0;
+    this.onclose?.();
+  }
+}
+
 function port(): {
   connection: NativeConnection;
   sent: Any[];
   reply: (message: Any) => void;
   drop: () => void;
 } {
-  const sent: Any[] = [];
-  let onMessage: (msg: unknown) => void = () => {};
-  let onDisconnect: () => void = () => {};
+  previousWebSocket = (globalThis as Any).WebSocket;
+  (globalThis as Any).WebSocket = FakeSocket;
   installChrome({
-    runtime: {
-      connectNative: () => ({
-        postMessage: (msg: Any) => sent.push(msg),
-        disconnect: () => {},
-        onMessage: { addListener: (fn: (msg: unknown) => void) => (onMessage = fn) },
-        onDisconnect: { addListener: (fn: () => void) => (onDisconnect = fn) },
-      }),
-      lastError: undefined,
-    },
     action: {
       setBadgeBackgroundColor: async () => {},
       setBadgeText: async () => {},
@@ -44,11 +85,13 @@ function port(): {
   );
   open.push(connection);
   connection.connect();
+  const socket = sockets.at(-1)!;
+  socket.open();
   return {
     connection,
-    sent,
-    reply: (message) => onMessage(message),
-    drop: () => onDisconnect(),
+    sent: socket.sent,
+    reply: (message) => socket.reply(message),
+    drop: () => socket.drop(),
   };
 }
 
@@ -56,6 +99,11 @@ afterEach(() => {
   while (open.length) {
     open.pop()?.disconnect();
   }
+  if (previousWebSocket !== undefined) {
+    (globalThis as Any).WebSocket = previousWebSocket;
+    previousWebSocket = undefined;
+  }
+  sockets.length = 0;
   clearChrome();
 });
 
@@ -103,25 +151,14 @@ test("a dropped port rejects everything in flight instead of hanging the panel",
   });
 });
 
-test("requesting with no port at all rejects rather than silently dropping", async () => {
-  installChrome({
-    runtime: {
-      connectNative: () => {
-        throw new Error("no host manifest");
-      },
-    },
-    action: {
-      setBadgeBackgroundColor: async () => {},
-      setBadgeText: async () => {},
-      setTitle: async () => {},
-    },
-  });
-  const connection = new NativeConnection(
-    () => {},
-    () => {},
-  );
+test("requesting with no bridge at all rejects rather than silently dropping", async () => {
+  previousWebSocket = (globalThis as Any).WebSocket;
+  (globalThis as Any).WebSocket = FakeSocket;
+  FakeSocket.throwNext = true;
+  const connection = new NativeConnection(() => {}, () => {});
   open.push(connection);
   connection.connect();
+  connection.disconnect(); // 刹车收掉退避重连的定时器
   await assert.rejects(connection.request("lg:approvals.list"), /not connected/);
 });
 

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>browse 连接层重做方案 · 基于 Trae browser-bridge 实证</title>
+<style>
+:root { color-scheme: dark; --bg:#101114; --card:#16181d; --line:#23262d; --fg:#e6e8ec; --dim:#9aa1ac; --blue:#7aa2f7; --green:#4ade80; --red:#f87171; --amber:#fbbf24; }
+* { box-sizing:border-box; }
+body { font:14px/1.75 -apple-system,system-ui,sans-serif; background:var(--bg); color:var(--fg); margin:0; padding:36px 24px 72px; }
+main { max-width:980px; margin:0 auto; }
+h1 { font-size:22px; margin:0 0 2px; letter-spacing:-.02em; }
+h2 { font-size:16px; margin:34px 0 10px; }
+p.sub { color:var(--dim); margin:0 0 4px; font-size:13px; }
+.src { color:#7a818c; font-size:12px; margin:0 0 22px; }
+.src code, code { font-family:ui-monospace,monospace; font-size:.92em; background:var(--card); border:1px solid var(--line); padding:1px 5px; border-radius:4px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 20px; margin:14px 0; }
+pre { font:12.5px/1.6 ui-monospace,monospace; background:#0c0d10; border:1px solid var(--line); border-radius:10px; padding:14px 16px; overflow-x:auto; margin:10px 0; }
+table { border-collapse:collapse; width:100%; font-size:13px; margin:10px 0; }
+th,td { text-align:left; padding:8px 10px; border-top:1px solid var(--line); vertical-align:top; }
+th { color:var(--dim); font-weight:600; border-top:0; }
+.ok { color:var(--green); } .bad { color:var(--red); } .warn { color:var(--amber); }
+.badge { display:inline-block; font-size:11px; font-family:ui-monospace,monospace; background:#0c0d10; border:1px solid var(--line); color:var(--dim); border-radius:999px; padding:0 8px; line-height:1.7; margin:1px 3px 1px 0; }
+.ev { border-left:3px solid var(--blue); padding-left:12px; margin:10px 0; font-size:13px; }
+.ev .k { color:var(--blue); font-weight:600; }
+.pill { font-size:11px; border-radius:999px; padding:0 8px; border:1px solid; line-height:1.8; margin-left:6px; }
+.pill.t1 { color:var(--green); border-color:var(--green); }
+.pill.g { color:var(--amber); border-color:var(--amber); }
+.pill.c { color:var(--dim); border-color:var(--dim); }
+button.cp { font:inherit; font-size:12px; padding:4px 12px; border-radius:7px; border:1px solid var(--line); background:#1c1f25; color:var(--fg); cursor:pointer; }
+button.cp:hover { border-color:#5b6270; }
+.pick { display:flex; gap:10px; margin-top:20px; flex-wrap:wrap; align-items:center; }
+ol li, ul li { margin:4px 0; }
+.small { font-size:12.5px; color:var(--dim); }
+</style>
+</head>
+<body><main>
+<h1>browse 连接层重做：Trae-style Browser Bridge</h1>
+<p class="sub">结论：撤回 CDP 方案；按本机 Trae CN 的真实实现，把 <code>daemon + native host + wrapper</code> 三层换成一个独立的 browser-bridge 常驻服务，扩展直连。</p>
+<p class="src">证据类型：<span class="pill t1">类1 官方</span> <span class="pill g">类3 本机二进制 strings</span> <span class="pill c">推测</span> ｜ 2026-09-15</p>
+
+<h2>一、Trae Worker 到底怎么做的（实证）</h2>
+<div class="card">
+<p>本机 <code>/Applications/Trae CN.app/Contents/Resources/app/modules/browser-bridge/browser-bridge</code> 是 Rust 编译的独立常驻服务（Mach-O arm64，源码路径字符串 <code>apps/icube_server_rs/modules/browser-bridge/src/main.rs</code>）。<span class="pill g">类3 · strings 实证</span></p>
+<div class="ev"><span class="k">通道</span>：<code>UDS</code> + <code>trae-browser-bridge.sock</code>（Unix 套接字，本机进程间管道）；同时含 <code>TCP</code> + <code>127.0.0.1:19234</code>（只监听本机的 TCP 口）</div>
+<div class="ev"><span class="k">认证</span>：<code>_auth</code> 字段族 —— <code>nonce</code>（一次性随机数）、<code>timestamp</code>、<code>signature</code>、<code>HMAC signature mismatch</code>（HMAC 签名校验失败的原话）、<code>browser-bridge-xor-mask-key!!@@#</code>（混淆 key 常量）、<code>Received request before auth, closing connection</code>（没认证先发请求 = 直接断）、<code>Auth timeout (5s)</code></div>
+<div class="ev"><span class="k">保活</span>：<code>heartbeat</code>、<code>Chrome channel closed</code>、<code>Client disconnected</code></div>
+<div class="ev"><span class="k">请求模型</span>：<code>method</code> / <code>id</code> 字段对 —— 每条请求带方法名和唯一 id</div>
+<p class="small">密钥怎么生成、握手字段顺序 —— 仅 strings 看不出，<span class="pill c">需要: 反汇编或抓包确认</span>，不猜。</p>
+</div>
+<pre>浏览器扩展
+    │  本机 TCP 127.0.0.1:19234 或 Unix socket
+    ▼
+browser-bridge（Rust 常驻服务，唯一连接中心）
+    ▲
+    │  进程内 / stdin
+Trae 主程序 / Worker</pre>
+<p class="small">Trae 的要害不是「用哪种 socket」，而是：<b>bridge 是唯一连接真相</b>。没有 per-browser manifest、没有 wrapper 猜身份、没有第二层中转。</p>
+
+<h2>二、现在的 browse 为什么不稳（已发生的实锤）</h2>
+<table>
+<tr><th>事故</th><th>根因（file:line）</th></tr>
+<tr><td class="bad">没装 opera，status 却显示「opera 已连接」</td><td><code>lib/browse_install.py</code> 旧 BROWSERS 表：brave/opera 写进 Chrome 共享 manifest 目录，后写的 wrapper 覆盖先写的，Chrome 的扩展 fork 到 opera 的 wrapper</td></tr>
+<tr><td class="bad">Chrome / Arc 互踢闪断（一半 E2E 指令 rc=3）</td><td>Arc 读 Chrome 目录（<span class="pill g">类3 Reddit/StopTheMadness</span>），与 Chrome 同槽；24 秒采样抓到两个 native host 分别父进程为 Chrome 和 Arc</td></tr>
+<tr><td class="bad">daemon 停后扩展不回连</td><td>MV3 service worker 空闲 30 秒被杀，重连定时器随它死（已用 alarms 缓解，治标）</td></tr>
+<tr><td class="bad">wrapper 判身份失败</td><td>Chrome fork 出的子进程 <code>$PPID</code> 不是浏览器主进程，case 匹配落空</td></tr>
+</table>
+<p class="small">这三层里每一层都有自己的生命周期，各自断线、各自重连、状态互不同步 —— 结构性不稳，不是 bug。</p>
+
+<h2>三、新架构：browse browser-bridge</h2>
+<pre>browse CLI ─┐
+            ├─ Unix socket ─▶ browser-bridge（常驻，唯一连接中心）
+Arc 扩展 ───┤                    │  连接表 / heartbeat / HMAC 认证
+Chrome 扩展 ┘                    ▼
+                          dispatch()（现有 handler 全保留）</pre>
+<div class="card">
+<b>逐条对应 Trae 的做法：</b>
+<table>
+<tr><th>能力</th><th>实现</th></tr>
+<tr><td>扩展直连</td><td>SW 启动即连 <code>ws://127.0.0.1:9229</code>（WebSocket；Chrome 116+ 收发消息自动给 SW 续命，<span class="pill t1">类1 developer.chrome.com/docs/extensions/how-to/web-platform/websockets</span>）</td></tr>
+<tr><td>认证</td><td>首条消息 <code>_auth{nonce,timestamp,signature}</code>，HMAC；未认证先发请求 = 断开（对齐 Trae 的 <code>Received request before auth, closing connection</code>）</td></tr>
+<tr><td>保活</td><td>heartbeat 每 10–20 秒（官方示例用 10s，<span class="pill g">类2 GoogleChrome/chrome-extensions-samples tutorial.websockets</span>）</td></tr>
+<tr><td>多浏览器</td><td>按 <b>connectionId</b> 隔离；browserName 只是展示字段 —— Chrome/Arc 共用扩展包也不再互踢</td></tr>
+<tr><td>状态真相</td><td>bridge 持有连接表：谁连着、上次心跳几秒前、重连过几次、上次断线原因；<code>browse status</code> 直接读它，不再从 manifest 反推</td></tr>
+<tr><td>安装</td><td>不再写任何 native-messaging manifest / wrapper / 注册表；装完扩展自动连，<b>无需重启浏览器</b></td></tr>
+</table>
+</div>
+<p class="small">为什么选 WebSocket 而不是让扩展连 Unix socket：浏览器沙箱里扩展代码只能开 TCP/WebSocket，够不到 Unix 套接字；CLI 侧才用 Unix socket 连 bridge。<span class="pill c">推测: 端口 9229 是占位，实现时定</span></p>
+
+<h2>四、为什么落选另外两条</h2>
+<table>
+<tr><th>落选方案</th><th>什么条件下才对</th></tr>
+<tr><td class="bad">CDP（<code>--remote-debugging-port</code>）</td><td>Chrome 136 起对默认用户数据目录禁用（<span class="pill t1">类1 developer.chrome.com/blog/remote-debugging-port</span>）——你的日常浏览器带全部登录态，按定义就在默认目录，此路不通。只在「愿意用一个独立的自动化专用浏览器实例」时才对</td></tr>
+<tr><td class="bad">继续修 native messaging</td><td>只在「必须让扩展从浏览器拿到第一推动力（浏览器主动 fork 本地程序）」时才对——那正是 Trae 没选的路</td></tr>
+</table>
+
+<h2>五、迁移步骤（保命令兼容，先并行后切换）</h2>
+<ol>
+<li><b>bridge 服务</b>：<code>lib/browser_bridge.py</code>（连接表 / heartbeat / HMAC 握手）+ <code>browse bridge start|stop|status</code> → 验证: 未认证连接 5 秒被断、认证后心跳维持 10 分钟</li>
+<li><b>扩展侧</b>：<code>extension/src/bridge.ts</code> 连 bridge（与现有 native-port 并存）→ 验证: Chrome+Arc 同时连、各自 connectionId、互不干扰</li>
+<li><b>CLI 切换</b>：CLI 优先连 bridge，bridge 不在再退 native 链 → 验证: <code>browse browsingContext getTree</code> 双链路结果一致</li>
+<li><b>全功能 E2E 重测</b>（上轮被互踢污染的那份作废）→ 验证: 28 条指令全绿，出具报告</li>
+<li><b>拆旧</b>：删 daemon/native-host/wrapper/BROWSERS 表 → 验证: 全量测试过、<code>browse install</code> 只剩「构建扩展 + 指引加载」</li>
+</ol>
+
+<div class="pick">
+<span class="small">点一下复制你的决定：</span>
+<button class="cp" onclick="navigator.clipboard.writeText('按 Trae-style bridge 做，先出第一阶段')">开工：bridge 第一阶段</button>
+<button class="cp" onclick="navigator.clipboard.writeText('先只做扩展侧 WS 连接原型，不动 CLI')">先做扩展侧原型</button>
+<button class="cp" onclick="navigator.clipboard.writeText('还有问题要问')">先问问题</button>
+</div>
+</main></body></html>
