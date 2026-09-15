@@ -248,12 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[webgrab] 抓取失败: {e}", file=sys.stderr)
         return 1
 
-    if args.html:
-        content = html
-        suffix = "html"
-    else:
-        content = to_markdown(html)
-        suffix = "md"
+    content = html if args.html else to_markdown(html)
 
     if args.output:
         out = Path(args.output)

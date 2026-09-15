@@ -1,6 +1,22 @@
-# 全部依赖：基础（全部 bin/* 命令）+ graphwatch 监听（graphifyy / watchdog）
-fire>=0.5
-rich>=13.0
-pyyaml>=6
-graphifyy[all]>=0.9.55  # [all]：sql/tree-sitter 等语言支持齐全，缺了会整类文件贡献 0 节点、触发 graphify 防丢数据护栏
-watchdog>=4
+# 全量依赖：装上这一份，bin/* 里每个命令都能跑（含 webgrab / websearch / graphwatch）。
+# 下界固定为 2026-09-10 查到的 PyPI 最新版；graphifyy 要求 Python >= 3.10，
+# playwright / requests 同为 >= 3.10，networkx >= 3.11——所以这份文件的实际底线是 3.11。
+# 只想要核心命令的话装 pyproject 的 [project] dependencies 即可（fire / rich / pyyaml）。
+
+# —— 核心：所有 bin/* 命令 ——
+fire>=0.7.1              # CLI 框架，lib/fire_base.py 顶层 import
+rich>=15.0.0             # 统一输出，lib/ui.py 缺席即报错，不静默降级
+pyyaml>=6.0.3            # 配置读写：archery / graphwatch / ovpn
+requests>=2.34.2         # HTTP 客户端：lib/archery.py、lib/grafana.py
+
+# —— graphwatch：知识图谱守护服务 ——
+# [all]：sql / tree-sitter 等语言支持齐全，缺了会整类文件贡献 0 节点、触发 graphify 防丢数据护栏
+graphifyy[all]>=0.9.57
+watchdog>=6.0.0          # graphify watch 的硬依赖，缺了子进程起不来
+networkx>=3.6.1          # 图数据结构，graphify 传出的 Graph 对象；tests/test_graphwatch_artifacts.py 直接用
+
+# —— webgrab / websearch：抓网页 ——
+curl-cffi>=0.16.3        # 带浏览器 TLS 指纹的 HTTP，绕过反爬
+beautifulsoup4>=4.15.0   # HTML 解析
+markdownify>=1.2.3       # HTML 转 Markdown，webgrab 的输出格式
+playwright>=1.62.0       # 真浏览器渲染兜底；装完还要跑 `playwright install chromium`

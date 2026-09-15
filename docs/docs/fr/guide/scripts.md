@@ -69,6 +69,7 @@ Sept catégories par usage. Index terminal : `lazyhelp` ; usage complet : `<outi
 | :--- | :--- | :--- |
 | `archery` | CLI Archery SQL (requêtes / workflow de mise en ligne, login par domaine) | `archery query execute 'select 1' --instance-name prod --db-name orders` |
 | `grafana` | CLI API HTTP Grafana (login par domaine) | `grafana health` |
+| `email` | Mail multi-comptes envoi/réception (QQ/Gmail/163/126/iCloud/Fastmail/Zoho, login par adresse) | `email inbox` |
 | `ovpn` | Client OpenVPN (identifiants & TOTP auto, split tunneling) | `ovpn connect` |
 | `vpn-prio` | Ajuste la priorité des services réseau macOS (baisse la route OpenVPN) | `vpn-prio --help` |
 | `ipinfo` | IP LAN + type de réseau (détection hotspot) | `ipinfo` |

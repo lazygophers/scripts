@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mail 工具可行性调研</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c232c; --line:#2b3440;
+    --fg:#e6edf3; --dim:#8b96a5; --accent:#58a6ff; --ok:#3fb950;
+    --warn:#d29922; --bad:#f85149; --purple:#bc8cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:15px/1.75 -apple-system,"PingFang SC","Helvetica Neue",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:48px 24px 96px}
+  h1{font-size:34px;margin:0 0 8px}
+  h2{font-size:24px;margin:56px 0 16px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+  h3{font-size:17px;margin:28px 0 10px;color:var(--accent)}
+  .sub{color:var(--dim);font-size:14px;margin-bottom:32px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin:14px 0}
+  .grid{display:grid;gap:14px}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:860px){.g3,.g2{grid-template-columns:1fr}}
+  .big{font-size:28px;font-weight:700;color:var(--accent);line-height:1.25}
+  .lbl{color:var(--dim);font-size:13px;margin-top:6px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:13px}
+  code{background:var(--panel2);padding:2px 6px;border-radius:5px;font-size:13px;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--purple)}
+  pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+      padding:16px 18px;overflow-x:auto;font-size:13px;line-height:1.65;margin:0}
+  pre code{background:none;padding:0;color:var(--fg)}
+  .cmd{position:relative;margin:12px 0}
+  .copy{position:absolute;top:10px;right:10px;background:var(--panel);color:var(--dim);
+        border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
+  .copy:hover{color:var(--fg);border-color:var(--accent)}
+  .copy.done{color:var(--ok);border-color:var(--ok)}
+  .tag{display:inline-block;padding:2px 9px;border-radius:20px;font-size:12px;margin-right:6px;white-space:nowrap}
+  .t-ok{background:rgba(63,185,80,.15);color:var(--ok)}
+  .t-warn{background:rgba(210,153,34,.15);color:var(--warn)}
+  .t-bad{background:rgba(248,81,73,.15);color:var(--bad)}
+  .t-dim{background:rgba(139,150,165,.15);color:var(--dim)}
+  .mermaid{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:24px;margin:16px 0;text-align:center}
+  a{color:var(--accent)}
+  ul{padding-left:22px} li{margin:6px 0}
+  .note{border-left:3px solid var(--accent);padding-left:14px;color:var(--dim);font-size:14px;margin:14px 0}
+  .q{border-left:3px solid var(--warn);padding-left:14px;margin:14px 0;font-size:14px}
+  .q b{color:var(--warn)}
+  .verdict{background:linear-gradient(135deg,rgba(63,185,80,.14),rgba(88,166,255,.10));
+           border:1px solid rgba(63,185,80,.35);border-radius:14px;padding:24px 26px;margin:20px 0}
+  .verdict .big{font-size:32px;color:var(--ok)}
+  footer{margin-top:64px;padding-top:20px;border-top:1px solid var(--line);color:var(--dim);font-size:13px}
+  .num{display:inline-flex;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#0e1117;
+       align-items:center;justify-content:center;font-weight:700;font-size:13px;margin-right:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>能不能写一个 mail 工具</h1>
+<div class="sub">
+  2026-09-10 · 调研对象：多账号收发邮件的命令行工具 ·
+  证据：各邮箱服务商官方文档 + docs.python.org + 本仓库源码
+</div>
+
+<div class="verdict">
+  <div class="big">能做，而且不用装任何东西</div>
+  <div style="margin-top:12px">
+    Python 自带的 <code>imaplib</code>（收信）、<code>smtplib</code>（发信）、<code>email</code>（解析邮件）就够了，零第三方依赖。<br>
+    <b>难的不是写代码，是登录。</b>各大邮箱这两年陆续关掉了「邮箱地址 + 密码」这条路。
+  </div>
+</div>
+
+<h2>你的三条需求，逐条对答</h2>
+
+<div class="card">
+<h3 style="margin-top:0"><span class="num">1</span>同时登录多个邮箱，自动管理收发</h3>
+<span class="tag t-ok">能做</span> 每个邮箱一条连接，用完就断。<br>
+<span class="tag t-warn">一个限制</span> Gmail 规定<b>同一账号最多 15 个客户端同时连着</b>（<a href="https://support.google.com/mail/answer/7126229">官方说明</a>）。如果工具每跑一次就新建连接又不回收，长期会撞墙。其他家的上限没查到。
+</div>
+
+<div class="card">
+<h3 style="margin-top:0"><span class="num">2</span>登录信息用现有的密钥存储格式，按 email 分开存</h3>
+<span class="tag t-ok">能做</span> <span class="tag t-warn">但有个前提问题</span><br>
+这套格式在 <code>lib/archery.py:59-178</code>，已经在跑了：<b>先写临时文件再原子换名</b>（别人读不到写一半的）、<code>flock</code> 跨进程锁、权限 0600。<br><br>
+<b>问题是：这套代码已经被抄过一遍了。</b><code>lib/grafana.py:26-115</code> 是它的逐行复制，只有异常类名和报错里的命令名不同。mail 会是第三份。
+</div>
+
+<div class="card">
+<h3 style="margin-top:0"><span class="num">3</span>只有一个就用它，有多个就要指定</h3>
+<span class="tag t-ok">已经写好了</span><br>
+<code>lib/archery.py:147-168</code> 的 <code>resolve_profile()</code> 干的正好是这件事——指定优先，其次默认账号，只有一个就直接用，多个又没指定就报错并告诉你下一步敲什么。<br>
+改成按 email 存，只需把「URL 转域名」换成「email 转小写」。<b>这条需求的工作量接近于零。</b>
+</div>
+
+<h2>最大的坑：现在还能不能用密码登录</h2>
+
+<div class="mermaid">
+flowchart TD
+  A["你的邮箱是哪家"] --> B{"国际大厂?"}
+  B -->|"Gmail / iCloud<br/>Fastmail / Zoho"| C["用应用专用密码<br/>网页端生成一串<br/>专给软件用的密码"]
+  B -->|"Outlook.com<br/>Hotmail / Live"| D["只能 OAuth2<br/>2024-09-16 起<br/>密码彻底失效"]
+  B -->|"QQ / 163 / 126"| E["用授权码<br/>要先去网页端<br/>手动开通服务"]
+  C --> F["纯标准库就能写<br/>几百行搞定"]
+  E --> F
+  D --> G["要注册 app<br/>本地起 HTTP 回调<br/>管理 token 刷新<br/>复杂度翻倍"]
+  style F fill:#238636,stroke:#3fb950,color:#fff
+  style G fill:#8b2c2c,stroke:#f85149,color:#fff
+  style D fill:#9e6a03,stroke:#d29922,color:#fff
+</div>
+
+<div class="note">
+<b>「应用专用密码 / 授权码」是什么</b>：不是你的登录密码，是邮箱服务商额外发给你的一串字符串，专门给第三方软件用。泄露了不影响主账号，随时能在网页端作废。生成它必须人工去网页点几下，<b>这一步 CLI 自动化不了</b>。
+</div>
+
+<table>
+<tr><th>邮箱</th><th>邮箱+登录密码</th><th>应用专用密码 / 授权码</th><th>关键日期</th></tr>
+<tr>
+  <td><b>Gmail</b></td>
+  <td><span class="tag t-bad">已关闭</span></td>
+  <td><span class="tag t-ok">可用</span>必须先开二步验证</td>
+  <td>2025-03-14 关闭「安全性较低的应用」</td>
+</tr>
+<tr>
+  <td><b>Outlook.com<br>Hotmail / Live</b></td>
+  <td><span class="tag t-bad">已关闭</span></td>
+  <td><span class="tag t-bad">没有这条路</span></td>
+  <td>2024-09-16 起 <b>只能 OAuth2</b></td>
+</tr>
+<tr>
+  <td><b>Microsoft 365 企业</b></td>
+  <td><span class="tag t-bad">已关闭且不可恢复</span></td>
+  <td><span class="tag t-bad">无</span></td>
+  <td>收信 2022-10-01 已关；发信 2026 年 12 月底关</td>
+</tr>
+<tr>
+  <td><b>iCloud</b></td>
+  <td><span class="tag t-bad">不行</span></td>
+  <td><span class="tag t-ok">必须用</span></td>
+  <td>—</td>
+</tr>
+<tr>
+  <td><b>QQ 邮箱</b></td>
+  <td><span class="tag t-bad">不行</span></td>
+  <td><span class="tag t-ok">16 位授权码</span></td>
+  <td>改账号密码会让授权码失效</td>
+</tr>
+<tr>
+  <td><b>163 / 126</b></td>
+  <td><span class="tag t-bad">不行</span></td>
+  <td><span class="tag t-ok">客户端授权密码</span></td>
+  <td>网页上<b>只显示一次</b>，要当场存好</td>
+</tr>
+<tr>
+  <td><b>Fastmail</b></td>
+  <td><span class="tag t-bad">不行</span></td>
+  <td><span class="tag t-ok">必须用</span></td>
+  <td>⚠️ Basic 套餐根本没有 IMAP 权限</td>
+</tr>
+<tr>
+  <td><b>Proton Mail</b></td>
+  <td colspan="2"><span class="tag t-bad">根本不支持标准 IMAP</span>必须装 Proton Bridge，且仅限付费套餐</td>
+  <td>—</td>
+</tr>
+</table>
+
+<div class="note">
+出处全部在 Markdown 版第二节，每一行都有官方文档链接和原文引用：<code>docs/research/mail-tool.md</code>
+</div>
+
+<h2>另外两个必须知道的坑</h2>
+
+<div class="grid g2">
+<div class="card">
+<h3 style="margin-top:0">SSL 默认不验证对方是谁</h3>
+Python 官方文档原话：用默认设置时「连接是加密的，但<b>不校验服务器证书和主机名</b>」。<br><br>
+意思是：加了密，但不确认对面到底是不是真的 Gmail。中间人可以直接冒充。<br><br>
+<b>这一行不能省：</b>
+<div class="cmd">
+<pre><code>ssl_context=ssl.create_default_context()</code></pre>
+<button class="copy">复制</button>
+</div>
+</div>
+
+<div class="card">
+<h3 style="margin-top:0"><code>imaplib</code> 给的是协议原语，不是邮件</h3>
+它返回一堆半解析的字节，UID、附件结构、中文文件夹名全要自己解析。这是最容易写出 bug 的地方。<br><br>
+<b>绕过去的写法</b>：只用 <code>imaplib</code> 干两件事——搜出 UID、把整封原始邮件拉下来；<b>所有解析交给 <code>email</code> 模块</b>。最难啃的那块直接跳过。<br><br>
+代价：带大附件的邮件会被整封下载。
+</div>
+</div>
+
+<h2>建议怎么做</h2>
+
+<div class="card">
+<b>第一版：只支持应用专用密码 / 授权码，纯标准库，不支持 Outlook.com。</b><br><br>
+覆盖 Gmail、iCloud、QQ、163、Fastmail、Zoho——够日常用了。零依赖，几百行。<br>
+把「怎么认证」抽成<b>一个函数</b>（不是一个类，就一个函数），以后真要加 Outlook 的 OAuth2，改动只落在那一个函数里。
+</div>
+
+<div class="card">
+<b>如果 IMAP 那层写到 200 行还在跟协议搏斗，就换 <code>imap_tools</code>。</b><br><br>
+<code>ikvk/imap_tools</code>，842 stars，最近发版 2026-08-06，<b>零外部依赖</b>，自带 OAuth2 认证方法。<br>
+它同时替掉「协议解析」和「邮件树遍历」两块，一个循环直接拿到解析好的邮件对象。<br><br>
+另外两个候选不推荐：<code>IMAPClient</code> 只省一半（不解析正文），<code>aiosmtplib</code> 这个场景用不上。
+</div>
+
+<h2>要你拍板的四件事</h2>
+
+<div class="card">
+<h3 style="margin-top:0"><span class="num">1</span>工具叫什么名字</h3>
+不能叫 <code>mail</code>：
+<div class="cmd">
+<pre><code>$ which mail mailx sendmail
+/usr/bin/mail
+/usr/bin/mailx
+/usr/sbin/sendmail</code></pre>
+<button class="copy">复制</button>
+</div>
+macOS 自带 <code>/usr/bin/mail</code>，而本仓库的 <code>bin/</code> 在 <code>PATH</code> 里排在系统目录<b>前面</b>——叫 <code>mail</code> 会把系统那个盖掉。这也正是当初 <code>ovpn</code> 不敢叫 <code>openvpn</code> 的原因。
+</div>
+
+<div class="card">
+<h3 style="margin-top:0"><span class="num">2</span>要不要顺手把重复的密钥存储抽出来</h3>
+现在 <code>archery</code> 和 <code>grafana</code> 各存了一份一模一样的代码，mail 会是第三份。<br>
+抽成一个 <code>lib/profile_store.py</code>，三个工具共用，参数只有两个：配置文件叫什么、key 怎么规范化。<br>
+<b>这才是「保持同一格式」在代码层面唯一说得通的做法</b>——否则三份会各自漂移。
+</div>
+
+<div class="card">
+<h3 style="margin-top:0"><span class="num">3</span>要支持哪几家邮箱</h3>
+你实际在用哪些？这直接决定要不要写 OAuth2 那一整套（注册 app、本地回调端口、token 刷新）。<br>
+只要清单里没有 Outlook.com / Hotmail / Live，就都不用写。
+</div>
+
+<div class="card">
+<h3 style="margin-top:0"><span class="num">4</span>要做到什么程度</h3>
+只发信？还是收信也要（列邮件、读正文、下附件、搜索、标已读）？<br>
+只发信的话，工作量是收发都要的三分之一不到。
+</div>
+
+<h2>还没查实的五件事</h2>
+
+<div class="q"><b>需要:</b> QQ 邮箱的服务器地址端口，官方页面抓不到原文——`webgrab`（含 `--render`）抓了 4 个页面都只返回导航、正文为空（页面是 JS 动态渲染的），WebFetch 对该域直接拒绝。现有数字来自搜索摘要。写代码时用 <code>openssl s_client -connect imap.qq.com:993</code> 自己验一次更快。</div>
+<div class="q"><b>需要:</b> 163/126 <b>免费版</b>邮箱的 IMAP 端口没有现行官方原文。抓到的是 VIP 版参数页和一个 2007 年的老页面。<b>推测:</b> <code>imap.163.com:993</code> / <code>smtp.163.com:465</code>。</div>
+<div class="q"><b>需要:</b> Proton Bridge 的本地地址端口。已确认 Bridge 必需、仅付费、仅桌面；端口由 Bridge 装完自己分配，文档里未必有固定答案。官方那页返回 404。</div>
+<div class="q"><b>需要:</b> 没找到一份官方明说「Gmail 应用专用密码 2026 年仍可用于 IMAP」的声明。两条间接证据都指向仍可用。<b>写代码时必须把「认证失败」当成正常分支处理</b>，给出人话错误信息。</div>
+<div class="q"><b>需要:</b> 并发连接上限只查到 Gmail（15 个）。QQ / 163 / iCloud / Fastmail 的未知。</div>
+
+<footer>
+Markdown 原文（给 AI 存档用，每条带官方文档链接和原文引用）：<code>docs/research/mail-tool.md</code><br>
+本页放在 <code>docs/research/</code>，不会被 rspress 文档站打包（站点根是 <code>docs/docs</code>）。
+</footer>
+
+</div>
+
+<script>
+mermaid.initialize({
+  startOnLoad:true, theme:'dark',
+  themeVariables:{
+    background:'#161b22', primaryColor:'#1c232c', primaryTextColor:'#e6edf3',
+    primaryBorderColor:'#2b3440', lineColor:'#58a6ff', fontSize:'14px'
+  }
+});
+document.querySelectorAll('.copy').forEach(b=>{
+  b.onclick=()=>{
+    navigator.clipboard.writeText(b.previousElementSibling.innerText.trim());
+    b.textContent='已复制'; b.classList.add('done');
+    setTimeout(()=>{b.textContent='复制';b.classList.remove('done')},1500);
+  };
+});
+</script>
+</body>
+</html>

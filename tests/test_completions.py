@@ -6,7 +6,16 @@ import pathlib
 import tempfile
 import unittest
 
-from lib.completions import bash_completion, completion_map, fish_completion, fish_completion_for, impl_path, subcommands, tool_names, zsh_completion
+from lib.completions import (
+    bash_completion,
+    completion_map,
+    fish_completion,
+    fish_completion_for,
+    impl_path,
+    subcommands,
+    tool_names,
+    zsh_completion,
+)
 
 
 class TestCompletions(unittest.TestCase):

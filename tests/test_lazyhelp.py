@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from lib.lazyhelp import TOOLS, CATEGORIES_ORDER, _all_bins, _render_table, main, show_full
+from lib.lazyhelp import CATEGORIES_ORDER, TOOLS, _all_bins, _render_table, main, show_full
 from lib.ui import Reporter
 
 

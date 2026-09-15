@@ -103,13 +103,22 @@ class TestSystemNameservers(unittest.TestCase):
         with mock.patch.object(pathlib.Path, "read_text", return_value=text):
             self.assertEqual(S.system_nameservers(), ["192.168.1.1", "1.1.1.1"])
 
+    # 断言比对常量本身，不再抄一份名单：这两个用例曾经被同名类顶掉、一次都没跑过，
+    # 期间 FALLBACK_NAMESERVERS 换过内容，抄下来的副本就这么烂在这里。
     def test_fallback_when_all_loopback(self):
         with mock.patch.object(pathlib.Path, "read_text", return_value="nameserver 127.0.0.1\n"):
-            self.assertEqual(S.system_nameservers(), ["1.1.1.1", "8.8.8.8"])
+            self.assertEqual(S.system_nameservers(), list(S.FALLBACK_NAMESERVERS))
 
     def test_fallback_when_unreadable(self):
         with mock.patch.object(pathlib.Path, "read_text", side_effect=OSError):
-            self.assertEqual(S.system_nameservers(), ["1.1.1.1", "8.8.8.8"])
+            self.assertEqual(S.system_nameservers(), list(S.FALLBACK_NAMESERVERS))
+
+    def test_fallback_is_not_the_live_list(self):
+        with mock.patch.object(pathlib.Path, "read_text", side_effect=OSError):
+            got = S.system_nameservers()
+        got.append("203.0.113.1")
+        self.assertNotIn("203.0.113.1", S.FALLBACK_NAMESERVERS,
+                         "回退名单要返回副本，调用方改它不能污染常量")
 
 
 class TestResolverFiles(unittest.TestCase):
@@ -473,7 +482,7 @@ class TestMalformedDnsMessages(unittest.TestCase):
         self.assertEqual(S.parse_answer_ips(answer), [])
 
 
-class TestSystemNameservers(unittest.TestCase):
+class TestSystemNameserversInvalidEntries(unittest.TestCase):
     def test_skips_invalid_and_loopback(self):
         text = "\n".join([
             "# comment",
@@ -774,9 +783,6 @@ class TestProbeUpstream(unittest.TestCase):
         self.assertTrue(socks[0].closed)
 
     def test_query_wire_format(self):
-        import io as _io
-        buf = _io.BytesIO()
-        socks = []
         sent = {}
 
         class _CapSock:

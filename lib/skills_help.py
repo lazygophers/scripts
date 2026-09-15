@@ -31,6 +31,14 @@ COMMAND_SKILLS: dict[str, list[str]] = {
         "任意 API: `grafana api GET /api/dashboards/uid/xxx --host grafana.example.com`。",
         "凭据缺失或过期时先 `grafana login` 再调 API 命令；`grafana hosts` 列已配置站点。",
     ],
+    "email": [
+        "多邮箱收发邮件；支持 QQ / Gmail / 163 / 126 / iCloud / Fastmail / Zoho，都用应用专用密码或授权码，不需要 OAuth2。",
+        "第一次用先 `email login`：选服务商 → 照引导去网页端拿授权码 → 真连一次 IMAP+SMTP 验证 → 通过才保存。",
+        "发信: `email send --to a@b.com --subject 标题 --body 正文 --attach ./x.pdf`；正文写 `-` 表示从 stdin 读。",
+        "收信: `email inbox --limit 20 --unread` 列最近的，`email read <UID>` 读正文，`email search 发票` 全文搜。",
+        "附件与标记: `email attach <UID> --out ~/Downloads`、`email mark <UID> [--unread]`。",
+        "配了多个邮箱时加 `--email me@qq.com` 指定；只配了一个就不用加。`email list` 看已配置的，`email check` 重验连接。",
+    ],
     "check_ai": [
         "用最小请求探测配置的 AI API 端点连通性: `check_ai probe`。",
         "跑 AI 工作流前用它区分端点/鉴权/网络故障。",

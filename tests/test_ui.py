@@ -3,7 +3,6 @@
 import io
 import sys
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -325,6 +324,15 @@ class TestPrintRuntime(unittest.TestCase):
         self.assertIn("⏱", out)
         self.assertIn("500ms", out)
 
+    def test_explicit_elapsed_wins_over_the_wall_clock_span(self):
+        buf = io.StringIO()
+        real_console = ui_mod.Console
+        with patch.object(ui_mod, "Console", lambda **kw: real_console(file=buf)):
+            ui_mod.print_runtime(1_700_000_000.0, 1_700_000_012.5, elapsed=1.0)
+        out = buf.getvalue()
+        self.assertIn("1.0s", out)
+        self.assertNotIn("12.5s", out, "给了 elapsed 就不该再拿两个墙上时刻相减")
+
 
 class TestTimed(unittest.TestCase):
     def test_returns_value_and_prints(self):
@@ -332,7 +340,21 @@ class TestTimed(unittest.TestCase):
         with patch.object(ui_mod, "print_runtime", lambda *a, **k: calls.append(k)):
             wrapped = ui_mod.timed(lambda a, b: a + b, label="sum")
             self.assertEqual(wrapped(1, b=2), 3)
-        self.assertEqual(calls, [{"label": "sum"}])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["label"], "sum")
+        self.assertGreaterEqual(calls[0]["elapsed"], 0)
+
+    def test_elapsed_survives_a_wall_clock_jump(self):
+        """NTP 校时或夏令时会让墙上时钟往回跳，耗时必须用 monotonic 量。"""
+        import time as time_mod
+
+        calls = []
+        wall = iter([1_700_000_100.0, 1_700_000_000.0])  # 结束时刻比开始还早
+        with patch.object(ui_mod, "print_runtime", lambda *a, **k: calls.append((a, k))), \
+             patch.object(time_mod, "time", lambda: next(wall)):
+            ui_mod.timed(lambda: None)()
+        self.assertGreaterEqual(calls[0][1]["elapsed"], 0,
+                                "时钟往回跳也不能报出负耗时")
 
     def test_prints_on_exception(self):
         calls = []

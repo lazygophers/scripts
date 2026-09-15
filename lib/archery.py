@@ -25,12 +25,14 @@ access 短命，请求收到 401 时先用 refresh 换新的；refresh 也失效
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import pathlib
 import sys
 import urllib.parse
+
+from lib.profile_store import ProfileStore
+from lib.profile_store import mask as mask  # noqa: PLC0414  （archery.mask 是对外名字，CLI 和测试都在用）
 
 CONFIG_PATH = pathlib.Path.home() / ".config" / "lazygophers" / "scripts" / "archery.yaml"
 
@@ -56,66 +58,6 @@ class ArcheryError(Exception):
 
 # ---------------------------------------------------------------- config
 
-def load_config(path: pathlib.Path | None = None) -> dict:
-    """读配置；文件不存在返回空 dict。不给路径时按当前身份推断（见 default_config_path）。"""
-    import yaml
-
-    target = path or default_config_path()
-    if not target.exists():
-        return {}
-    data = yaml.safe_load(target.read_text(encoding="utf-8"))
-    return data if isinstance(data, dict) else {}
-
-
-def save_config(data: dict, path: pathlib.Path | None = None) -> None:
-    """写配置，权限 0600（里面有明文密码和 TOTP 密钥）。
-
-    属主保持调用者自己，不像 ovpn 那样收归 root —— archery 的日常命令（查数据、
-    管工单）都是普通用户跑的，配置一旦变成 root 属主它们就全读不了了。
-
-    先写同目录临时文件再 os.replace 换上去：换名是原子的，别的进程要么读到旧的
-    完整内容，要么读到新的完整内容，不会读到写了一半的文件。
-    """
-    import yaml
-
-    target = path or default_config_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    # 先建 0600 再写，避免密码在 umask 宽松时短暂可读
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, target)
-    finally:
-        tmp.unlink(missing_ok=True)
-    os.chmod(target, 0o600)
-
-
-@contextlib.contextmanager
-def config_lock(path: pathlib.Path | None = None):
-    """跨进程互斥锁，锁住配置文件的「读—改—写」。
-
-    同时跑好几条 archery（并行查询、脚本里 for 循环）时，两个进程都在续 token /
-    换 cookie，谁后写谁就把对方刚存的那份覆盖掉。锁加在同目录的 .lock 文件上，
-    配置本身照旧用 os.replace 原子换名，读的人不需要拿锁。
-    """
-    import fcntl
-
-    target = path or default_config_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = target.with_name(f".{target.name}.lock")
-    fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        os.close(fd)
-
-
 def normalize_url(raw: str) -> str:
     """把用户输入的站点地址补成 `scheme://host[:port]`，去掉末尾斜杠与路径。
 
@@ -136,55 +78,6 @@ def normalize_url(raw: str) -> str:
 def host_key(raw: str) -> str:
     """profile 的 key：域名（含端口，不含 scheme），小写。"""
     return urllib.parse.urlsplit(normalize_url(raw)).netloc.lower()
-
-
-def profiles(cfg: dict) -> dict:
-    """配置里的所有 profile，key 是域名。"""
-    got = cfg.get("profiles")
-    return dict(got) if isinstance(got, dict) else {}
-
-
-def resolve_profile(cfg: dict, host: str = "") -> tuple[str, dict]:
-    """挑出要用的 profile：显式 --host 优先，其次 current，只有一个时直接用它。
-
-    返回 (key, profile)。找不到时抛 ArcheryError，消息里带下一步动作。
-    """
-    all_p = profiles(cfg)
-    if not all_p:
-        raise ArcheryError(f"还没有配置任何站点（{CONFIG_PATH} 为空）。跑 `archery login`")
-    if host:
-        key = host_key(host)
-        if key not in all_p:
-            known = ", ".join(sorted(all_p)) or "(无)"
-            raise ArcheryError(f"没有这个站点的配置: {key}（已配置: {known}）。跑 `archery login --url {host}`")
-        return key, dict(all_p[key])
-    current = str(cfg.get("current") or "")
-    if current and current in all_p:
-        return current, dict(all_p[current])
-    if len(all_p) == 1:
-        only = next(iter(all_p))
-        return only, dict(all_p[only])
-    known = ", ".join(sorted(all_p))
-    raise ArcheryError(f"配了多个站点但没指定用哪个（{known}）。跑 `archery use <域名>` 或加 --host")
-
-
-def put_profile(cfg: dict, key: str, profile: dict) -> dict:
-    """把 profile 写回 cfg（不落盘），没有 current 时顺手设成它。"""
-    all_p = profiles(cfg)
-    all_p[key] = profile
-    cfg["profiles"] = all_p
-    if not cfg.get("current"):
-        cfg["current"] = key
-    return cfg
-
-
-def mask(value: str) -> str:
-    """密码 / 密钥打码，两头留 2 位。"""
-    if not value:
-        return "(未设置)"
-    if len(value) <= 4:
-        return "*" * len(value)
-    return value[:2] + "*" * (len(value) - 4) + value[-2:]
 
 
 # ---------------------------------------------------------------- 提权
@@ -213,6 +106,22 @@ def default_config_path() -> pathlib.Path:
             if candidate.exists():
                 return candidate
     return CONFIG_PATH
+
+
+# 配置存储与 profile 解析都在 lib/profile_store.py（grafana / email 共用同一份）。
+# 这里保留模块级的函数名，调用点和测试照旧用 archery.load_config(...) 这种写法。
+# 属主保持调用者自己，不像 ovpn 那样收归 root —— archery 的日常命令（查数据、
+# 管工单）都是普通用户跑的，配置一旦变成 root 属主它们就全读不了了。
+_STORE = ProfileStore(
+    "archery.yaml", error=ArcheryError, key_fn=host_key,
+    tool="archery", path_resolver=default_config_path,
+)
+load_config = _STORE.load
+save_config = _STORE.save
+config_lock = _STORE.lock
+profiles = _STORE.profiles
+resolve_profile = _STORE.resolve
+put_profile = _STORE.put
 
 
 def sudo_argv(script: pathlib.Path, argv: list[str], config_path: pathlib.Path) -> list[str]:

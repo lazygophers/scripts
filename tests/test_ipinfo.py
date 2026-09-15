@@ -271,8 +271,8 @@ class TestCliOutput(unittest.TestCase):
         self.mod = mod
 
     def _capture(self, fn, *args):
-        import io
         import contextlib
+        import io
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             rc = fn(*args)
@@ -312,8 +312,8 @@ class TestCliOutput(unittest.TestCase):
         self.assertEqual(out.strip(), "Wi-Fi (热点)")
 
     def test_unknown_subcommand_writes_stderr(self):
-        import io
         import contextlib
+        import io
         cli = self.mod.IpinfoCli()
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf):

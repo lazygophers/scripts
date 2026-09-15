@@ -69,6 +69,7 @@ inject идемпотентен : повторный запуск не доба�
 | :--- | :--- | :--- |
 | `archery` | CLI платформы Archery SQL (запросы / workflow, вход по домену) | `archery query execute 'select 1' --instance-name prod --db-name orders` |
 | `grafana` | CLI для HTTP API Grafana (вход по домену) | `grafana health` |
+| `email` | Почта для нескольких ящиков: приём и отправка (QQ/Gmail/163/126/iCloud/Fastmail/Zoho, вход по адресу) | `email inbox` |
 | `ovpn` | Клиент OpenVPN (автозаполнение учётных данных и TOTP, split tunneling) | `ovpn connect` |
 | `vpn-prio` | Меняет приоритет сетевых сервисов macOS (понижает default-маршрут OpenVPN) | `vpn-prio --help` |
 | `ipinfo` | Локальный IP + тип сети (детект хотспота) | `ipinfo` |

@@ -20,7 +20,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from lib import commit_wf as cw  # noqa: E402
 
-
 ENV = {"LAZYGOPHERS_SCRIPTS_BASE_URL": "https://api.example.com/v1",
        "LAZYGOPHERS_SCRIPTS_TOKEN": "tok"}
 

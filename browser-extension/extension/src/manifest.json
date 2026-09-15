@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "lazygophers browse",
+  "version": "0.1.0",
+  "description": "Local browser control over native messaging. Driven by the `browse` CLI.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsf7WYYq5/Sd/cipQb2t4V1KO4qxDkgw0a2UV/Kbr2XLTeohPiA2LdL3e1Xtx0/B7nbo4H5ZHEYGnxBHkkGVIBP+ATkx5Wm0XguD2nOfYsIKFo9qnV+ewJP2BN9c4s0EkQsNHuLfiycsTs5ZXb7C7buOkahWQaSLROSgrLc9L6QZoEP5EPztV3WwjhlRscjXd1DEgMX4SHrYafNGKwLCs/lfuMfOCEUQnBWhc9rDsBSw43DA4jtUNziCI7Uj7/WDtbgjt+mlmpk4UeHKiVAU564wIgMEm4nBcPkvnFkhr4mZHNK/DAJRrgFpCJxutvC2yO6/YjwGPdW5EJY3rKsF4SQIDAQAB",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "browse@lazygophers.com",
+      "strict_min_version": "115.0"
+    }
+  },
+  "action": {
+    "default_title": "browse",
+    "default_popup": "panel.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "tabs",
+    "storage",
+    "cookies",
+    "scripting",
+    "webRequest",
+    "webNavigation",
+    "history",
+    "bookmarks",
+    "downloads",
+    "nativeMessaging"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "minimum_chrome_version": "116"
+}

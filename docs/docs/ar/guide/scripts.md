@@ -69,6 +69,7 @@ inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف 
 | :--- | :--- | :--- |
 | `archery` | CLI لمنصة Archery SQL (استعلامات / workflow، دخول لكل نطاق) | `archery query execute 'select 1' --instance-name prod --db-name orders` |
 | `grafana` | CLI لواجهة Grafana HTTP (دخول لكل نطاق) | `grafana health` |
+| `email` | بريد متعدد الحسابات إرسالاً واستقبالاً (QQ/Gmail/163/126/iCloud/Fastmail/Zoho، دخول لكل عنوان) | `email inbox` |
 | `ovpn` | عميل OpenVPN (تعبئة تلقائية للاعتماديات وTOTP، split tunneling) | `ovpn connect` |
 | `vpn-prio` | تعديل أولوية خدمات الشبكة في macOS (خفض مسار OpenVPN الافتراضي) | `vpn-prio --help` |
 | `ipinfo` | استعلام IP الشبكة المحلية + نوع الشبكة (كشف hotspot) | `ipinfo` |

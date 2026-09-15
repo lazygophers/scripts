@@ -11,7 +11,6 @@ from lib.ai_workflow import current_branch, generate_via_claude
 from lib.exec import run
 from lib.ui import reporter
 
-
 _COMMIT_SYSTEM = (
     "你是 git commit message 生成器。"
     "禁止输出思考过程、分析推理、内心独白或任何解释性文字——直接输出 commit message 本身。"
@@ -81,7 +80,7 @@ def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
             text = str(reason)
         r.err(f"LAZYGOPHERS API 连接失败：{text}")
         return ""
-    except (ValueError, KeyError, IndexError) as e:
+    except (ValueError, KeyError, IndexError):
         # JSON 解析 / 字段缺失：不暴露异常类名
         r.err("LAZYGOPHERS API 响应格式异常")
         return ""
@@ -297,8 +296,12 @@ def commit_all(
     默认不确认（对齐 push_*）。
     """
     from pathlib import Path
+
     from lib.batch_git import (
-        BatchResult, BatchRunner, CallbackBatchOperation, RepoPlan,
+        BatchResult,
+        BatchRunner,
+        CallbackBatchOperation,
+        RepoPlan,
     )
 
     r = reporter(stderr=True)

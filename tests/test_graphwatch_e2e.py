@@ -7,6 +7,7 @@ graphifyy 未安装的环境自动 skip，不挡 CI。
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -24,7 +25,123 @@ try:
 except ImportError:
     HAS_GRAPHIFY = False
 
-from lib import graphwatch
+from lib import graphwatch, graphwatch_daemon, graphwatch_rebuild
+
+
+@unittest.skipUnless(HAS_GRAPHIFY, "graphifyy 未安装，集成缝跳过")
+class TestSemanticBaseUrl(unittest.TestCase):
+    """_semantic 必须让配置的 base_url 生效，即使 graphify.llm 在 env 注入前就被 import。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+        self._env = os.environ.pop("GRAPHWATCH_HOME", None)
+        os.environ["GRAPHWATCH_HOME"] = str(self.home)
+        self.addCleanup(self._tmp.cleanup)
+        if self._env is None:
+            self.addCleanup(os.environ.pop, "GRAPHWATCH_HOME", None)
+        else:
+            self.addCleanup(os.environ.__setitem__, "GRAPHWATCH_HOME", self._env)
+        cfg = graphwatch.load_config()
+        cfg.update({"backend": "openai", "api_key": "k", "base_url": "http://proxy.invalid/v1"})
+        graphwatch.save_config(cfg)
+        import graphify.llm as gllm
+
+        self._saved = (gllm.BACKENDS["openai"]["base_url"], gllm.extract_corpus_parallel)
+        self.addCleanup(self._restore, gllm)
+
+    def _restore(self, gllm):
+        gllm.BACKENDS["openai"]["base_url"], gllm.extract_corpus_parallel = self._saved
+
+    def test_base_url_patched_even_when_llm_preimported(self):
+        import graphify.llm as gllm
+
+        gllm.BACKENDS["openai"]["base_url"] = "https://api.openai.com/v1"  # 模拟 import 早于 env 注入定格
+        captured = {}
+
+        def fake_extract(files, **kw):
+            captured["base_url"] = gllm.BACKENDS[kw["backend"]]["base_url"]
+            return {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 0, "output_tokens": 0}
+
+        gllm.extract_corpus_parallel = fake_extract
+        graphwatch_rebuild._semantic([Path("a.md")], Path("."))
+        self.assertEqual(captured["base_url"], "http://proxy.invalid/v1",
+                         "BACKENDS 必须在调用前改成配置的 base_url")
+
+
+@unittest.skipUnless(HAS_GRAPHIFY, "graphifyy 未安装，集成缝跳过")
+class TestRebuild(unittest.TestCase):
+    """重建管线（lib/graphwatch_rebuild.py）：/graphify --mode deep --wiki --update 的源码调用等价物。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        # 隔离 GRAPHWATCH_HOME：不隔离就会读到本机真实配置里的 backend，社区命名
+        # 会真的打 LLM API（慢 + 花钱），测试结果还随本机配置漂移。
+        self._env = os.environ.pop("GRAPHWATCH_HOME", None)
+        os.environ["GRAPHWATCH_HOME"] = str(self.home / "cfg")
+        if self._env is None:
+            self.addCleanup(os.environ.pop, "GRAPHWATCH_HOME", None)
+        else:
+            self.addCleanup(os.environ.__setitem__, "GRAPHWATCH_HOME", self._env)
+
+    def test_rebuild_full_pipeline_with_wiki(self):
+        repo = self.home / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+
+        self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0)
+        graph = repo / "graphify-out" / "graph.json"
+        wiki_index = repo / "graphify-out" / "wiki" / "index.md"
+        self.assertTrue(graph.is_file(), "首次重建应产出 graph.json")
+        self.assertTrue(wiki_index.is_file(), "重建应产出 wiki/index.md")
+        # 用户 2026-09-10 选定的全套产出物（不含 svg）
+        out = repo / "graphify-out"
+        for name in ("GRAPH_REPORT.md", "graph.html", "graph.graphml", "GRAPH_TREE.html"):
+            self.assertTrue((out / name).is_file(), f"重建应产出 {name}")
+        self.assertTrue((out / "obsidian" / "graph.canvas").is_file(), "重建应产出 obsidian canvas")
+        self.assertFalse((out / "graph.svg").exists(), "用户没选 svg，不该产出")
+        self.assertTrue((out / ".graphify_labels.json").is_file(), "社区名应落盘，避免下轮重复花钱")
+
+        (repo / "b.py").write_text("def beta():\n    return 2\n", encoding="utf-8")
+        self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0)
+        data = json.loads(graph.read_text(encoding="utf-8"))
+        labels = {n.get("label", n["id"]) for n in data["nodes"]}
+        self.assertIn("beta", " ".join(labels), "增量重建应纳入新文件的节点")
+        # manifest 必须落在项目自己的 graphify-out，而不是 daemon 的 cwd
+        self.assertTrue((repo / "graphify-out" / "manifest.json").is_file())
+
+    def test_deleting_files_shrinks_the_graph_instead_of_failing(self):
+        """删文件导致图变小时必须照写。graphify 的 #479 收缩护栏对 daemon 是死路：
+        它会让每一轮都撞同一堵墙、每一轮报一次失败，图永远停在删除之前。"""
+        repo = self.home / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+        (repo / "extra.py").write_text(
+            "def beta():\n    return 2\n\n\ndef gamma():\n    return 3\n", encoding="utf-8"
+        )
+        self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0)
+        graph = repo / "graphify-out" / "graph.json"
+        before = len(json.loads(graph.read_text(encoding="utf-8"))["nodes"])
+
+        (repo / "extra.py").unlink()
+        self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0, "删文件不该让重建失败")
+        after = json.loads(graph.read_text(encoding="utf-8"))["nodes"]
+        self.assertLess(len(after), before, "删掉的文件应该从图里被裁掉")
+        self.assertNotIn("gamma", " ".join(n.get("label", n["id"]) for n in after),
+                         "被删文件的节点不该还留在图里")
+
+    def test_rebuild_no_change_is_noop(self):
+        repo = self.home / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+        graphwatch_daemon._run_update(str(repo))
+        mtime = (repo / "graphify-out" / "graph.json").stat().st_mtime
+        time.sleep(0.05)
+        self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0)
+        self.assertEqual((repo / "graphify-out" / "graph.json").stat().st_mtime, mtime,
+                         "无变更时不应重写 graph.json")
 
 
 @unittest.skipUnless(HAS_GRAPHIFY, "graphifyy 未安装，集成缝跳过")
