@@ -87,7 +87,7 @@ inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.z
 | `ovpn` | OpenVPN 客户端 (自动填账密与二步验证码, 支持分流) | `ovpn connect` |
 | `vpn-prio` | 调整 macOS 网络服务优先级 (压低 OpenVPN 默认路由) | `vpn-prio --help` |
 | `ipinfo` | 查询内网 IP + 网络类型 (含热点识别) | `ipinfo` |
-| `disable-ipv6` / `enable-ipv6` | 关闭/开启本机所有网络服务的 IPv6 (需 sudo) | `sudo disable-ipv6` |
+| `ipv6` | 关闭/开启本机所有网络服务的 IPv6 (需 sudo) | `sudo ipv6 disable` / `sudo ipv6 enable` |
 
 ### 网页检索
 

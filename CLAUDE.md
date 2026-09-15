@@ -95,7 +95,7 @@ For `cpd`, a Python `unittest` suite exists:
 python3 -m unittest discover -s tests -q
 ```
 
-Redirect full-suite output to a file and grep it (`> /tmp/test.log 2>&1`, then `grep -n "^FAIL:\|^ERROR:\|^OK$"`); piping through `tail` drops earlier failures when later ones follow, and a truncated run reads as a false pass.
+Redirect full-suite output to a file and grep it (`> /tmp/test.log 2>&1`, then `grep -n "^FAIL:\|^ERROR:\|^OK$"`); piping through `tail` drops earlier failures when later ones follow, and a truncated run reads as a false pass. When checking a command's exit code, don't put it in a pipeline: `cmd | grep; echo $?` prints grep's exit status — redirect to a file first, then inspect.
 
 Any check that compares against a value formatted by a spec (Origin/Referer headers, URLs the browser itself constructs, etc.) needs at least one test using that exact real-world format — tests that only cover "header absent" and "wrong value" miss formatting bugs (e.g. a stray trailing slash) in the one case that matters most, the well-formed real client.
 

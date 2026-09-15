@@ -50,12 +50,14 @@ async function instanceId(): Promise<string> {
   const key = "browse:instanceId";
   try {
     const stored = await chrome.storage.local.get(key);
-    let id = stored[key];
-    if (typeof id !== "string" || id === "") {
-      id = crypto.randomUUID();
+    const existing = stored[key];
+    if (typeof existing === "string" && existing !== "") {
+      cachedInstanceId = existing;
+    } else {
+      const id = crypto.randomUUID();
       await chrome.storage.local.set({ [key]: id });
+      cachedInstanceId = id;
     }
-    cachedInstanceId = id;
   } catch {
     cachedInstanceId = crypto.randomUUID();
   }

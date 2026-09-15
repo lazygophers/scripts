@@ -1,8 +1,19 @@
 import { build, context } from "esbuild";
 import { cp, mkdir, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 
 const watch = process.argv.includes("--watch");
 const outdir = "dist";
+
+// esbuild 不做类型检查——没这道闸，类型错误只有读代码的人看得见（2026-09-15 之前
+// typecheck 还带着一个既有错误，信号彻底没人看）。watch 模式不加：增量重载不该
+// 被一个旧错误的失败卡住。
+if (!watch) {
+  const tsc = spawnSync("node_modules/.bin/tsc", ["--noEmit"], { stdio: "inherit" });
+  if (tsc.error || tsc.status !== 0) {
+    process.exit(tsc.status ?? 1);
+  }
+}
 
 await rm(outdir, { recursive: true, force: true });
 await mkdir(outdir, { recursive: true });
