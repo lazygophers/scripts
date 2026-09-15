@@ -27,6 +27,7 @@ macOS 上 inject 还会询问是否启用 Touch ID sudo 授权（指纹优先，
 - `mergec` / `mergedev` / `mergem` / `merget` → `merge_canary` / `merge_develop` / `merge_master` / `merge_test`
 - `pushc` / `pushdev` / `pushm` / `pusht` → `push_canary` / `push_develop` / `push_master` / `push_test`
 - `pushc_all` 已并入 `push_*`：在非 git 目录执行即自动批量，自动执行无确认，`--dry-run` 预览。
+- `disable-ipv6` / `enable-ipv6` 合并成 `ipv6`，原来的动作变成子命令：`ipv6 disable` / `ipv6 enable`。
 
 ## 环境变量
 

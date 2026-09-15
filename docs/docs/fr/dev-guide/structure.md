@@ -11,7 +11,7 @@ scripts/
 ├── lib/                          # toute la logique
 │   ├── cli/{nom}.py              # la CLI d'une commande (ce qui était dans bin/)
 │   ├── cli/gitwf.py              # implémentation commune merge_*/push_* + 12 fonctions d'entrée
-│   ├── cli/ipv6.py               # disable-ipv6 / enable-ipv6 (Python, plus du bash)
+│   ├── cli/ipv6.py               # ipv6 enable/disable subcommands (Python, plus du bash)
 │   ├── {nom}.py                  # module métier par commande (git_workflow / batch_git / build / ...)
 │   ├── fire_base.py              # BaseCli + run_cli + timed_cli, squelette commun des entrées
 │   ├── lazyhelp.py               # registre d'outils (TOOLS = nom → catégorie + description)

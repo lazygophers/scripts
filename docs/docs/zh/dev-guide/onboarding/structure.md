@@ -11,7 +11,7 @@ scripts/
 ├── lib/                          # 全部核心逻辑
 │   ├── cli/{名}.py               # 单个命令的 CLI（原来写在 bin/ 里的那部分）
 │   ├── cli/gitwf.py              # merge_*/push_* 的共用实现 + 12 个入口函数
-│   ├── cli/ipv6.py               # disable-ipv6 / enable-ipv6（改成 Python，不再是 bash）
+│   ├── cli/ipv6.py               # ipv6 enable/disable 子命令（fire 重构，改成 Python，不再是 bash）
 │   ├── {名}.py                   # 每个命令的业务模块（git_workflow / batch_git / build / ...）
 │   ├── fire_base.py              # BaseCli + run_cli + timed_cli，薄壳统一骨架
 │   ├── lazyhelp.py               # 工具目录注册表（TOOLS = 名称 → 分类 + 一句话功能）

@@ -9,7 +9,7 @@ unsleep timed 2h      # caffeinate 防休眠；forever 无限制
 n "文案"              # macOS 语音播报（say）
 ipinfo                # 内网 IP + 网络类型（lan / net / all）
 inject                # 把 bin/ 注入 shell PATH（幂等；--uninstall 卸载）
-enable-ipv6 / disable-ipv6
+ipv6 enable / ipv6 disable  # 开关本机所有网络服务的 IPv6（需 sudo）
 graphwatch add <目录>  # 注册目录，graphify 图谱自动保鲜（graphwatch list 看全部）
 vpn-prio              # 调整 macOS 网络服务优先级，压低 OpenVPN 默认路由
 ```

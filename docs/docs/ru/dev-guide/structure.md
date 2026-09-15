@@ -11,7 +11,7 @@ scripts/
 ├── lib/                          # вся логика
 │   ├── cli/{имя}.py              # CLI одной команды (то, что раньше лежало в bin/)
 │   ├── cli/gitwf.py              # общая реализация merge_*/push_* + 12 точек входа
-│   ├── cli/ipv6.py               # disable-ipv6 / enable-ipv6 (Python, больше не bash)
+│   ├── cli/ipv6.py               # ipv6 enable/disable subcommands (Python, больше не bash)
 │   ├── {имя}.py                  # бизнес-модуль на команду (git_workflow / batch_git / build / ...)
 │   ├── fire_base.py              # BaseCli + run_cli + timed_cli, общий каркас обёрток
 │   ├── lazyhelp.py               # реестр инструментов (TOOLS = имя → категория + описание)

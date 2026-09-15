@@ -11,7 +11,7 @@ scripts/
 ├── lib/                          # كل المنطق
 │   ├── cli/{الاسم}.py            # واجهة أمر واحد (ما كان في bin/ سابقًا)
 │   ├── cli/gitwf.py              # التنفيذ المشترك لـ merge_*/push_* + 12 دالة مدخل
-│   ├── cli/ipv6.py               # disable-ipv6 / enable-ipv6 (بايثون، لم تعد bash)
+│   ├── cli/ipv6.py               # ipv6 enable/disable subcommands (بايثون، لم تعد bash)
 │   ├── {اسم}.py                  # وحدة عمل لكل أمر (git_workflow / batch_git / build / ...)
 │   ├── fire_base.py              # BaseCli + run_cli + timed_cli، الهيكل الموحد
 │   ├── lazyhelp.py               # سجل الأدوات (TOOLS = اسم → فئة + سطر وصف)

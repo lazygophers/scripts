@@ -72,14 +72,6 @@ COMMAND_SKILLS: dict[str, list[str]] = {
         "单仓/批量删远端分支，参数形如 `delete_branch_remote here <分支名>`。",
         "对外可见的操作：调用前确认 remote/branch 无误。",
     ],
-    "disable-ipv6": [
-        "用 networksetup 关闭本机所有 macOS 网络服务的 IPv6: `sudo disable-ipv6`。",
-        "需要 sudo/root；改主机网络配置。",
-    ],
-    "enable-ipv6": [
-        "用 networksetup 恢复 IPv6 自动模式: `sudo enable-ipv6`。",
-        "需要 sudo/root；改主机网络配置。",
-    ],
     "fetch_all": [
         "为发现的所有 git 仓库 fetch 远程更新: `fetch_all all`。",
         "分支同步/合并/推送工作流前刷新 refs 用。",
@@ -91,6 +83,10 @@ COMMAND_SKILLS: dict[str, list[str]] = {
     "ipinfo": [
         "查全部: `ipinfo all`；仅内网 IP: `ipinfo lan`；仅网络类型: `ipinfo net`。",
         "跑对连通性敏感的命令前用它诊断网络环境（含热点识别）。",
+    ],
+    "ipv6": [
+        "用 networksetup 开关本机所有 macOS 网络服务的 IPv6: `sudo ipv6 disable` / `sudo ipv6 enable`。",
+        "需要 sudo/root；改主机网络配置。",
     ],
     "issue": [
         "用本地上下文 + AI 生成标题/正文创建 issue: `issue create`。",

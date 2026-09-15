@@ -87,7 +87,7 @@ inject идемпотентен : повторный запуск не дубл�
 | `ovpn` | Клиент OpenVPN (автозаполнение учётных данных и TOTP, split tunneling) | `ovpn connect` |
 | `vpn-prio` | Меняет приоритет сетевых сервисов macOS (понижает default-маршрут OpenVPN) | `vpn-prio --help` |
 | `ipinfo` | Локальный IP + тип сети (детект хотспота) | `ipinfo` |
-| `disable-ipv6` / `enable-ipv6` | Отключает/включает IPv6 на всех сетевых сервисах (нужен sudo) | `sudo disable-ipv6` |
+| `ipv6` | Отключает/включает IPv6 на всех сетевых сервисах (нужен sudo) | `sudo ipv6 disable` / `sudo ipv6 enable` |
 
 ### Веб-поиск
 

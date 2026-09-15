@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""disable-ipv6 薄壳入口 — 关闭本机所有网络服务的 IPv6（需 sudo）"""
+"""ipv6 薄壳入口 — 开关本机所有网络服务的 IPv6（enable/disable 子命令，fire）"""
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.cli.ipv6 import disable_ipv6 as main
+from lib.cli.ipv6 import main
 
 raise SystemExit(main())

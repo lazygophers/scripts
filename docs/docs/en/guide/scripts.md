@@ -73,7 +73,7 @@ Seven categories by purpose. Terminal index: `lazyhelp`; full usage: `<tool> --h
 | `ovpn` | OpenVPN client (auto-fills credentials & TOTP, split tunneling) | `ovpn connect` |
 | `vpn-prio` | Adjust macOS network service priority (lower OpenVPN default route) | `vpn-prio --help` |
 | `ipinfo` | Query LAN IP + network type (hotspot detection) | `ipinfo` |
-| `disable-ipv6` / `enable-ipv6` | Disable/enable IPv6 on all network services (sudo required) | `sudo disable-ipv6` |
+| `ipv6` | Disable/enable IPv6 on all network services (sudo required) | `sudo ipv6 disable` / `sudo ipv6 enable` |
 
 ### Web Search
 

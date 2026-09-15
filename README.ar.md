@@ -87,7 +87,7 @@ inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف 
 | `ovpn` | عميل OpenVPN (تعبئة تلقائية للاعتماديات وTOTP، split tunneling) | `ovpn connect` |
 | `vpn-prio` | تعديل أولوية خدمات الشبكة في macOS (خفض مسار OpenVPN الافتراضي) | `vpn-prio --help` |
 | `ipinfo` | استعلام IP الشبكة المحلية + نوع الشبكة (كشف hotspot) | `ipinfo` |
-| `disable-ipv6` / `enable-ipv6` | تعطيل/تمكين IPv6 على جميع خدمات الشبكة (يتطلب sudo) | `sudo disable-ipv6` |
+| `ipv6` | تعطيل/تمكين IPv6 على جميع خدمات الشبكة (يتطلب sudo) | `sudo ipv6 disable` / `sudo ipv6 enable` |
 
 ### بحث الويب
 

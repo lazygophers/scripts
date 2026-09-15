@@ -1,9 +1,0 @@
-#!/usr/bin/env python3
-"""enable-ipv6 薄壳入口 — 开启本机所有网络服务的 IPv6（需 sudo）"""
-import pathlib
-import sys
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from lib.cli.ipv6 import enable_ipv6 as main
-
-raise SystemExit(main())
