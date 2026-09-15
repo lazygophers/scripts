@@ -11,6 +11,9 @@
   "dependencies": {
     "@rspress/core": "^2.0.16"
   },
+  "overrides": {
+    "react-router": "^7.18.3"
+  },
   "devDependencies": {
     "@types/node": "^22.8.1",
     "@types/react": "^19.2.17",
