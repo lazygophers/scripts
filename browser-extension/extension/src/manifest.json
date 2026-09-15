@@ -30,8 +30,11 @@
     "history",
     "bookmarks",
     "downloads",
-    "nativeMessaging"
+    "nativeMessaging",
+    "alarms"
   ],
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "minimum_chrome_version": "116"
 }

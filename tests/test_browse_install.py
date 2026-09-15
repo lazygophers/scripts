@@ -155,6 +155,17 @@ class TestTable(unittest.TestCase):
             for dest in dests:
                 self.assertTrue(dest.startswith("reg:"), f"{name}: {dest}")
 
+    def test_no_two_browsers_share_a_dest(self) -> None:
+        """共享落点 = 两个浏览器写同一个文件互相覆盖，后写的 wrapper 赢 ——
+        2026-09-15 实锤：没装 opera 的机器上 Chrome 的连接被标成 opera。"""
+        for plat, table in nh.BROWSERS.items():
+            seen: dict[str, str] = {}
+            for name, (_, _, dests) in table.items():
+                for dest in dests:
+                    self.assertNotIn(dest, seen,
+                                     f"{plat}: {seen.get(dest)} 和 {name} 共用 {dest}")
+                    seen[dest] = name
+
     def test_posix_dests_are_all_dirs(self) -> None:
         for plat in ("darwin", "linux"):
             for name, (_, _, dests) in nh.BROWSERS[plat].items():
@@ -225,21 +236,25 @@ class TestInstallMac(TempHome):
         self.assertTrue(pathlib.Path(written).is_absolute())
         self.assertTrue(self.wrapper().stat().st_mode & stat.S_IXUSR)
 
-    def test_brave_writes_both_dirs(self) -> None:
-        """brave-core 指 Chrome 目录、KeePassXC 指 BraveSoftware 目录，两个都写。"""
+    def test_brave_writes_only_its_own_dir(self) -> None:
+        """每个浏览器只读自己的目录（Brave 官方社区同口径）。写进 Chrome 目录会
+        和 chrome 的 manifest 互相覆盖 —— 2026-09-15 实锤过身份错乱。"""
         self.touch_dir("Library/Application Support/BraveSoftware/Brave-Browser")
-        nh.install(self.home, "darwin", BROWSE)
+        done = nh.install(self.home, "darwin", BROWSE)
         brave = self.read("Library/Application Support/BraveSoftware/"
                           "Brave-Browser/NativeMessagingHosts")
-        chrome = self.read(nh._MAC_CHROME)
-        self.assertEqual(brave, chrome)
         self.assertIn("allowed_origins", brave)
+        self.assertFalse((self.home / nh._MAC_CHROME / f"{nh.HOST_NAME}.json").exists(),
+                         "brave 不该往 Chrome 目录写")
 
-    def test_opera_lands_in_chrome_dir(self) -> None:
+    def test_opera_writes_only_its_own_dir(self) -> None:
         self.touch_dir("Library/Application Support/com.operasoftware.Opera")
         done = nh.install(self.home, "darwin", BROWSE)
-        self.assertEqual(done, [("opera", str(self.home / nh._MAC_CHROME /
-                                              f"{nh.HOST_NAME}.json"))])
+        self.assertEqual(done, [("opera", str(
+            self.home / "Library/Application Support/com.operasoftware.Opera"
+            / "NativeMessagingHosts" / f"{nh.HOST_NAME}.json"))])
+        self.assertFalse((self.home / nh._MAC_CHROME / f"{nh.HOST_NAME}.json").exists(),
+                         "opera 不该往 Chrome 目录写")
 
     def test_firefox_dir_and_field(self) -> None:
         self.touch_dir("Library/Application Support/Firefox")
@@ -302,12 +317,12 @@ class TestInstallWindows(TempHome):
         self.assertEqual(path, self.home / nh.WIN_MANIFEST_DIR / f"{nh.HOST_NAME}.json")
         self.assertEqual(json.loads(path.read_text("utf-8"))["type"], "stdio")
 
-    def test_chromium_falls_back_to_chrome_key(self) -> None:
+    def test_chromium_writes_only_its_own_key(self) -> None:
+        """各读各的键。写 Chrome 键会和 chrome 互相覆盖（2026-09-15 身份错乱实锤）。"""
         reg = FakeRegistry()
         nh.install(self.home, "win32", BROWSE, browsers=["chromium"], reg_set=reg.set)
         self.assertEqual(sorted(reg.keys), [
             r"SOFTWARE\Chromium\NativeMessagingHosts\com.lazygophers.browse",
-            r"SOFTWARE\Google\Chrome\NativeMessagingHosts\com.lazygophers.browse",
         ])
 
     def test_firefox_uses_its_own_key_and_file(self) -> None:

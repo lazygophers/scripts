@@ -73,13 +73,16 @@ BROWSERS: dict[str, dict[str, tuple[str, str, tuple[str, ...]]]] = {
                      ("Library/Application Support/Chromium/NativeMessagingHosts",)),
         "edge": (CHROMIUM, "Library/Application Support/Microsoft Edge",
                  ("Library/Application Support/Microsoft Edge/NativeMessagingHosts",)),
-        # brave-core 源码（app/brave_main_delegate.cc:141-164）显式 override 到
-        # Chrome 目录，KeePassXC 与社区指 BraveSoftware 目录，两个来源冲突且实测机
-        # 上两个目录都存在——成本只是多拷一个文件，两个都写。
+        # 每个浏览器只读自己的目录（出处：developer.chrome.com/docs/extensions/
+        # develop/concepts/native-messaging 的 per-browser 路径表，Brave 官方社区
+        # community.brave.app/t/164487 同口径）。2026-09-15 实锤纠错：以前把
+        # brave/opera 的 manifest 也写进 Chrome 共享目录，多个浏览器写同一个文件，
+        # 后写的覆盖先写的 —— Chrome 的扩展 fork 到 opera 的 wrapper，daemon 就把
+        # Chrome 的连接标成 opera（用户机器上没装 opera 却显示「opera 已连接」）。
         "brave": (CHROMIUM, "Library/Application Support/BraveSoftware/Brave-Browser",
-                  ("Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",
-                   _MAC_CHROME)),
-        "opera": (CHROMIUM, "Library/Application Support/com.operasoftware.Opera", (_MAC_CHROME,)),
+                  ("Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",)),
+        "opera": (CHROMIUM, "Library/Application Support/com.operasoftware.Opera",
+                  ("Library/Application Support/com.operasoftware.Opera/NativeMessagingHosts",)),
         "vivaldi": (CHROMIUM, "Library/Application Support/Vivaldi",
                     ("Library/Application Support/Vivaldi/NativeMessagingHosts",)),
         # Arc 是 Chromium 分支，manifest 格式同 Chromium，但落点在自己的
@@ -97,10 +100,9 @@ BROWSERS: dict[str, dict[str, tuple[str, str, tuple[str, ...]]]] = {
         "edge": (CHROMIUM, ".config/microsoft-edge", (".config/microsoft-edge/NativeMessagingHosts",)),
         "brave": (CHROMIUM, ".config/BraveSoftware/Brave-Browser",
                   (".config/BraveSoftware/Brave-Browser/NativeMessagingHosts",)),
-        # spec 7.3 给 Opera 的 Linux 落点是系统级 /etc/opt/chrome/native-messaging-hosts，
-        # 要 root。这里走等价的用户级 Chrome 目录，不提权。
-        # 需要: 在装了 Opera 的 Linux 上确认用户级 Chrome 目录确实被读到。
-        "opera": (CHROMIUM, ".config/opera", (_LINUX_CHROME,)),
+        # Chromium 系各读各的用户级目录（developer.chrome.com 同一套约定），
+        # 不借 Chrome 的目录 —— 那会让两个浏览器写同一个文件互相覆盖（见 darwin 注释）
+        "opera": (CHROMIUM, ".config/opera", (".config/opera/NativeMessagingHosts",)),
         "vivaldi": (CHROMIUM, ".config/vivaldi", (".config/vivaldi/NativeMessagingHosts",)),
         "arc": (CHROMIUM, ".config/Arc", (".config/Arc/User Data/NativeMessagingHosts",)),
         "firefox": (GECKO, ".mozilla/firefox", (".mozilla/native-messaging-hosts",)),
@@ -113,26 +115,39 @@ BROWSERS: dict[str, dict[str, tuple[str, str, tuple[str, ...]]]] = {
         "chrome": (CHROMIUM, "AppData/Local/Google/Chrome/User Data",
                    (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",)),
         "chromium": (CHROMIUM, "AppData/Local/Chromium/User Data",
-                     (r"reg:SOFTWARE\Chromium\NativeMessagingHosts",
-                      r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts")),
+                     (r"reg:SOFTWARE\Chromium\NativeMessagingHosts",)),
         "edge": (CHROMIUM, "AppData/Local/Microsoft/Edge/User Data",
                  (r"reg:SOFTWARE\Microsoft\Edge\NativeMessagingHosts",)),
-        # Brave / Opera / Vivaldi 最终都落 Chrome 键（Opera 官方文档给的是 HKLM，
-        # 需要管理员；HKCU 同键对当前用户等效，这里只写 HKCU）。
+        # Windows 同一个约定：各读各的 HKCU\Software\<厂牌>\<浏览器>\NativeMessagingHosts
+        # （出处同 developer.chrome.com 的 Windows 一节）。旧版本把 brave/opera/
+        # vivaldi 都写到 Chrome 键上，同文件互相覆盖，卸载时由 LEGACY_DESTS 清理。
         "brave": (CHROMIUM, "AppData/Local/BraveSoftware/Brave-Browser/User Data",
-                  (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",)),
+                  (r"reg:SOFTWARE\BraveSoftware\Brave-Browser\NativeMessagingHosts",)),
         "opera": (CHROMIUM, "AppData/Roaming/Opera Software/Opera Stable",
-                  (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",)),
+                  (r"reg:SOFTWARE\Opera Software\NativeMessagingHosts",)),
         "vivaldi": (CHROMIUM, "AppData/Local/Vivaldi/User Data",
-                    (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",)),
+                    (r"reg:SOFTWARE\Vivaldi\NativeMessagingHosts",)),
+        # Windows 版 Arc 是 MSIX 打包，native messaging 落点没有公开文档；
+        # 按约定给独立键，需要: 实机验证
         "arc": (CHROMIUM, "AppData/Local/Packages/TheBrowserCompany.Arc",
-                (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",)),
+                (r"reg:SOFTWARE\Arc\NativeMessagingHosts",)),
         "firefox": (GECKO, "AppData/Roaming/Mozilla/Firefox",
                     (r"reg:SOFTWARE\Mozilla\NativeMessagingHosts",)),
     },
 }
 
 WIN_MANIFEST_DIR = "AppData/Local/lazygophers/browse"
+
+# 2026-09-15 之前 brave/opera/vivaldi 在 Windows 上错写 Chrome 注册表键，卸载时
+# 要把这些旧键一并清掉，不留指向已删 manifest 的死键。
+LEGACY_DESTS: dict[str, dict[str, tuple[str, ...]]] = {
+    "win32": {
+        "brave": (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",),
+        "opera": (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",),
+        "vivaldi": (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",),
+        "chromium": (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",),
+    },
+}
 # wrapper 的落点。位置必须稳定且是绝对路径——manifest 里写死的就是它，manifest 不
 # 接受相对路径，也不会去查 PATH。
 WRAPPER_DIR = ".local/state/lazygophers/scripts"
@@ -375,6 +390,11 @@ def uninstall(home: pathlib.Path, plat: str, *,
             if path.exists():
                 path.unlink()
                 removed.append((name, str(path)))
+    for name, dests in LEGACY_DESTS.get(plat, {}).items():
+        for dest in dests:
+            if dest.startswith("reg:"):
+                reg_delete(f"{dest[4:]}\\{HOST_NAME}")
+                removed.append((name, f"legacy HKCU\\{dest[4:]}\\{HOST_NAME}"))
     for flavor in (CHROMIUM, GECKO):
         path = win_manifest_path(home, flavor)
         if path.exists():

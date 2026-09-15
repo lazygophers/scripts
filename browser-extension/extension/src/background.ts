@@ -56,6 +56,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "browse-disconnect") {
     connection.disconnect();
+    braked = true; // 用户主动刹车：唤醒闹钟在下次浏览器启动前不再自动重连
     sendResponse({ ok: true });
     return false;
   }
@@ -71,5 +72,21 @@ chrome.windows?.onRemoved.addListener(windowClosed);
 paintBadge();
 connection.connect();
 
-chrome.runtime.onStartup.addListener(() => connection.connect());
+chrome.runtime.onStartup.addListener(() => {
+  braked = false;
+  connection.connect();
+});
 chrome.runtime.onInstalled.addListener(() => connection.connect());
+
+// 唤醒闹钟（2026-09-15，用户要求「装完/守护进程重启后不用重启浏览器」）。MV3 的
+// service worker 空闲 30 秒就会被杀，被杀时重连定时器跟着死掉，之后没有任何事件
+// 叫醒它 —— 连接就永远停在断开。30 秒一次的 alarm 是官方唯一的自唤醒途径；worker
+// 一起来，模块顶部的 connect() 就会跑。面板的「立即断开」是用户主动刹车，闹钟要
+// 尊重它，直到下一次浏览器启动。
+let braked = false;
+chrome.alarms?.create("reconnect", { periodInMinutes: 0.5 });
+chrome.alarms?.onAlarm.addListener((alarm) => {
+  if (alarm.name === "reconnect" && !braked) {
+    connection.connect();
+  }
+});
