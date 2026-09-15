@@ -75,6 +75,8 @@ export const FEATURES: Feature[] = [
       "browsingContext.navigate",
       "browsingContext.reload",
       "browsingContext.captureScreenshot",
+      "lg:tabs.group",
+      "lg:tabs.ungroup",
     ],
   },
   { id: "script", methods: ["script.evaluate", "script.callFunction"] },

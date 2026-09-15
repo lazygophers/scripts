@@ -105,6 +105,8 @@ METHODS: dict[str, tuple[str, ...]] = {
     "lg:downloads.start": ("url",),
     "lg:downloads.list": (),
     "lg:downloads.cancel": ("id",),
+    "lg:tabs.group": (),
+    "lg:tabs.ungroup": (),
     "lg:page.snapshot": (),
     # 审计存在插件的 chrome.storage.local 里，这两条是把它捞出来的唯一一条路
     # （`browse audit`）。2026-09-14 的架构反转之后 Python 侧不再有审计文件。
@@ -118,6 +120,8 @@ METHODS: dict[str, tuple[str, ...]] = {
 # lg:downloads.cancel 的 id）：裸数字会被 _coerce 解析成 JSON 数字、扩展端拒收。
 STRING_NUMERIC_PARAMS: dict[str, tuple[str, ...]] = {
     "lg:bookmarks.remove": ("id",),
+    "lg:tabs.group": ("group",),
+    "lg:tabs.ungroup": ("group",),
 }
 
 CLI_FLAGS = frozenset({"table", "socket", "concurrency", "failFast", "duration",

@@ -194,6 +194,13 @@ class TestParsing(unittest.TestCase):
         _, params, _ = browse.parse_command(
             ["bookmarks", "remove", "--id", "1691"])
         self.assertEqual(params["id"], "1691")
+        # tabs.group / tabs.ungroup 的 group（分组 id）线上也是 string
+        _, params, _ = browse.parse_command(
+            ["tabs", "group", "--context", "1163532091", "--group", "42"])
+        self.assertEqual(params["group"], "42")
+        _, params, _ = browse.parse_command(
+            ["tabs", "ungroup", "--group", "42"])
+        self.assertEqual(params["group"], "42")
         # 真数字参数不受影响
         _, params, _ = browse.parse_command(
             ["input", "click", "css=a", "--index", "3"])

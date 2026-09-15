@@ -18,6 +18,7 @@ import { inputClick, inputKey, inputScroll, inputType } from "./input.ts";
 import { networkSubscribe, networkUnsubscribe } from "./network.ts";
 import { pageSnapshot } from "./page.ts";
 import { scriptCallFunction, scriptEvaluate } from "./script.ts";
+import { tabsGroup, tabsUngroup } from "./tabs.ts";
 import {
   storageDeleteCookies,
   storageGetCookies,
@@ -82,6 +83,9 @@ export const HANDLERS: Record<string, Handler> = {
   "lg:downloads.start": downloadsStart,
   "lg:downloads.list": downloadsList,
   "lg:downloads.cancel": downloadsCancel,
+
+  "lg:tabs.group": tabsGroup,
+  "lg:tabs.ungroup": tabsUngroup,
 };
 
 /**
