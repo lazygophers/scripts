@@ -758,37 +758,49 @@ def _cmd_status(tokens: list[str]) -> int:
         outcome = asyncio.run(execute(BROWSERS_METHOD, {}, sock))
         if outcome["status"] == "ok":
             browsers = outcome["result"].get("browsers", [])
-    if browsers:
-        report.ok(f"浏览器: {', '.join(browsers)} 已连接（扩展已加载并在工作）")
-    elif running:
-        report.err("浏览器: 没有扩展连着 —— 确认浏览器开着且扩展已启用；"
-                   "装完/升级后要重启浏览器才读新的通信配置")
-    else:
-        report.info("浏览器: 看不了（daemon 没在跑）；随便跑一条指令会自动把它拉起来")
 
     from lib import browse_install
 
     home = pathlib.Path.home()
     plat = browse_install.platform_key()
     installed = browse_install.install_status(home, plat)
-    for row in installed:
-        if not row["detected"]:
-            continue
-        if row["registered"]:
-            report.ok(f"{row['browser']}: native host 已注册，链路完好")
-        elif row["stale"]:
-            report.err(f"{row['browser']}: 注册了但链路断着（{', '.join(row['stale'])}）"
-                       " —— 重跑 `browse install`，装完重启浏览器")
-        else:
-            report.err(f"{row['browser']}: 没注册 —— 跑 `browse install`，装完重启浏览器")
     detected = [r for r in installed if r["detected"]]
+
+    # 每个浏览器一行：插件连接状态（daemon 眼里的） + 注册链路，两边合在一起看
+    for row in detected:
+        name = row["browser"]
+        if name in browsers:
+            link = "插件已连接"
+        elif running:
+            link = "插件未连接"
+        else:
+            link = "插件状态看不了（daemon 没在跑）"
+        if row["registered"]:
+            chain = "注册完好"
+        elif row["stale"]:
+            chain = f"注册断链（{', '.join(row['stale'])}），重跑 `browse install` 并重启浏览器"
+        else:
+            chain = "没注册，跑 `browse install` 并重启浏览器"
+        if name in browsers and row["registered"]:
+            report.ok(f"{name}: {link} · {chain}")
+        else:
+            report.err(f"{name}: {link} · {chain}")
+    # 连着的浏览器一个都不在探测名单里：列出来，别让它隐形
+    for name in browsers:
+        if name not in {r["browser"] for r in detected}:
+            report.ok(f"{name}: 插件已连接（不在本机探测名单里，注册情况未知）")
     if not detected:
         report.err(f"没探测到任何浏览器（{plat}）—— 浏览器装了但没启动过时目录还不存在，"
                    "`browse install --browsers <名字>` 手动指定")
+    elif not browsers and running:
+        report.info("没有任何插件连着：确认浏览器开着且扩展已启用；"
+                    "装完/升级后要重启浏览器才读新的通信配置")
 
     healthy = running and browsers and any(r["registered"] for r in detected)
     if healthy:
-        report.ok("整条链路是通的")
+        up = [r["browser"] for r in detected
+              if r["browser"] in browsers and r["registered"]]
+        report.ok(f"整条链路是通的：{', '.join(up)} 可用，其余浏览器开着就会连上")
     return EXIT_OK if healthy else EXIT_FAILED
 
 
