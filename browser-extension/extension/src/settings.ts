@@ -10,14 +10,18 @@
  * 不存在「改了但那边还没重新加载」的窗口。
  */
 import { localize, msg } from "./i18n.ts";
+import { read as readAudit } from "./audit.ts";
 import {
   CONFIG_KEY,
   CONFIRM_MODES,
   FEATURES,
+  FEATURE_OF,
+  RISKY_METHODS,
   readConfig,
   revoke as revokeDomain,
   setConfig,
   type BrowseConfig,
+  type Feature,
 } from "./policy.ts";
 
 export { CONFIRM_MODES, FEATURES, type BrowseConfig };
@@ -100,7 +104,11 @@ export function render(config: BrowseConfig, path: string): void {
 
 /**
  * 功能目录的展示和开关（spec 4.4 的延伸）。目录本身在 `policy.FEATURES`，这里只画：
- * 一行一个功能，勾选框管全局禁用，旁边一格填「只对这些域名禁用」。
+ * 一行一个功能 —— 名称 + 一句话说明 + （高危标记）+ 方法 badge + 最近使用次数，
+ * 右边一格填「只对这些域名禁用」，开关默认全勾（勾 = 启用）。
+ *
+ * 「最近 N 次」来自审计日志（chrome.storage.local，同一份存储，直接读）。读失败就
+ * 整行不显示次数 —— 设置页不该因为日志坏了而打不开。
  */
 function renderFeatures(config: BrowseConfig): void {
   const box = byId("features-list");
@@ -115,44 +123,98 @@ function renderFeatures(config: BrowseConfig): void {
   }
   box.replaceChildren();
   for (const feature of FEATURES) {
-    const row = document.createElement("div");
-    row.className = "feature";
-    row.dataset.feature = feature.id;
-
-    const meta = document.createElement("div");
-    const label = document.createElement("label");
-    const off = document.createElement("input");
-    off.type = "checkbox";
-    off.className = "switch feat-off";
-    // 勾 = 启用（默认）。存进配置的是「禁用名单」，所以这里取反
-    off.checked = !config.disabled_features.includes(feature.id);
-    label.append(off);
-    const name = document.createElement("b");
-    name.textContent = msg(`settingsFeat${feature.id.slice(0, 1).toUpperCase()}${feature.id.slice(1)}`);
-    label.append(name);
-    meta.append(label);
-
-    const badges = document.createElement("span");
-    badges.className = "badges";
-    for (const method of feature.methods) {
-      const badge = document.createElement("code");
-      badge.className = "badge";
-      badge.textContent = method;
-      badges.append(badge);
-    }
-    meta.append(badges);
-    row.append(meta);
-
-    const domains = document.createElement("input");
-    domains.type = "text";
-    domains.className = "txt feat-domains";
-    domains.placeholder = msg("settingsFeatDomains");
-    domains.spellcheck = false;
-    domains.value = (perDomain[feature.id] ?? []).join(" ");
-    row.append(domains);
-
-    box.append(row);
+    box.append(renderFeature(feature, config, perDomain));
   }
+  // 审计计数异步补 —— 拿到再画，不阻塞表单
+  void readAudit()
+    .then((entries) => {
+      const counts = new Map<string, number>();
+      for (const entry of entries) {
+        const id = featureIdOf(entry.method);
+        if (id) {
+          counts.set(id, (counts.get(id) ?? 0) + 1);
+        }
+      }
+      for (const [id, n] of counts) {
+        const node = box.querySelector<HTMLSpanElement>(
+          `.feature[data-feature="${id}"] .usage`,
+        );
+        if (node) {
+          node.textContent = msg("settingsFeatUsed", String(n));
+        }
+      }
+    })
+    .catch(() => undefined);
+}
+
+function featureIdOf(method: string): string | undefined {
+  return FEATURE_OF.get(method)?.id;
+}
+
+function renderFeature(
+  feature: Feature,
+  config: BrowseConfig,
+  perDomain: Record<string, string[]>,
+): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "feature";
+  row.dataset.feature = feature.id;
+
+  const meta = document.createElement("div");
+
+  const label = document.createElement("label");
+  const off = document.createElement("input");
+  off.type = "checkbox";
+  off.className = "switch feat-off";
+  // 勾 = 启用（默认）。存进配置的是「禁用名单」，所以这里取反
+  off.checked = !config.disabled_features.includes(feature.id);
+  label.append(off);
+  const name = document.createElement("b");
+  name.textContent = msg(`settingsFeat${feature.id.slice(0, 1).toUpperCase()}${feature.id.slice(1)}`);
+  label.append(name);
+  // 这个功能里有方法在 RISKY_METHODS 表上 = 高危（如跑 JS、读写 cookie），标出来
+  if (feature.methods.some((method) => method in RISKY_METHODS)) {
+    const risky = document.createElement("span");
+    risky.className = "risk";
+    risky.textContent = msg("settingsFeatRisky");
+    label.append(risky);
+  }
+  meta.append(label);
+
+  const desc = document.createElement("p");
+  desc.className = "desc";
+  desc.textContent = msg(
+    `settingsFeat${feature.id.slice(0, 1).toUpperCase()}${feature.id.slice(1)}Desc`,
+  );
+  meta.append(desc);
+
+  const badges = document.createElement("span");
+  badges.className = "badges";
+  for (const method of feature.methods) {
+    const badge = document.createElement("code");
+    badge.className = "badge";
+    badge.textContent = method;
+    badges.append(badge);
+  }
+  meta.append(badges);
+  row.append(meta);
+
+  const side = document.createElement("div");
+  side.className = "side";
+  const domains = document.createElement("input");
+  domains.type = "text";
+  domains.className = "txt feat-domains";
+  domains.placeholder = msg("settingsFeatDomains");
+  domains.spellcheck = false;
+  domains.value = (perDomain[feature.id] ?? []).join(" ");
+  side.append(domains);
+  const usage = document.createElement("span");
+  usage.className = "usage";
+  usage.textContent = msg("settingsFeatUnused");
+  side.append(usage);
+  row.append(side);
+
+  return row;
 }
 
 function renderApproved(domains: string[]): void {

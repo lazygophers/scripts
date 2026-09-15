@@ -281,20 +281,31 @@ nav.toc a:hover { color: var(--foreground); background: var(--accent); }
 .savebar .status.bad { color: var(--destructive); }
 .savebar .status.good { color: var(--foreground); }
 
-/* 功能开关行（settings）：名称+开关 一栏，按域名 一栏 */
+/* 功能开关行（settings）：名称/说明/方法 badge 一栏，按域名 + 使用次数 一栏 */
 .feature {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 170px;
-  gap: 14px;
-  align-items: center;
-  padding: 10px 0;
+  gap: 16px;
+  align-items: start;
+  padding: 12px 0;
 }
 .feature + .feature { border-top: 1px solid var(--border); }
 .feature label { display: inline-flex; align-items: center; gap: 9px; font-weight: 500; font-size: 13px; cursor: pointer; }
-.feature .badges { display: block; margin-top: 3px; min-width: 0; overflow: hidden; }
+.feature .risk {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--destructive);
+  border: 1px solid color-mix(in oklch, var(--destructive) 40%, transparent);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 1.6;
+}
+.feature .desc { color: var(--muted-foreground); font-size: 12px; margin: 2px 0 4px; }
+.feature .badges { display: block; min-width: 0; overflow: hidden; }
+.feature .side { display: flex; flex-direction: column; gap: 5px; }
+.feature .usage { color: var(--muted-foreground); font-size: 11px; padding-left: 2px; }
 @media (max-width: 720px) {
-  .feature { grid-template-columns: minmax(0, 1fr) 34px; }
-  .feature .txt { grid-column: 1 / -1; order: 3; }
+  .feature { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---------------------------------------------------------------- 面板/弹窗 */

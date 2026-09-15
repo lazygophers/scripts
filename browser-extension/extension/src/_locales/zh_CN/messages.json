@@ -224,5 +224,46 @@
   },
   "settingsNavApproved": {
     "message": "免确认名单"
+  },
+  "settingsFeatTabsDesc": {
+    "message": "列出、新建、关闭、切换标签页，导航、刷新、截图。"
+  },
+  "settingsFeatScriptDesc": {
+    "message": "在页面主环境执行任意脚本 —— 高危，等价于网页自己执行代码。"
+  },
+  "settingsFeatInputDesc": {
+    "message": "模拟鼠标点击、键盘输入、滚动和按键。"
+  },
+  "settingsFeatStorageDesc": {
+    "message": "读写站点的 Cookie 和 localStorage —— 高危，凭据常存在这里。"
+  },
+  "settingsFeatNetworkDesc": {
+    "message": "订阅 / 退订页面网络请求事件流。"
+  },
+  "settingsFeatHistoryDesc": {
+    "message": "搜索、删除浏览器历史 —— 涉及个人隐私。"
+  },
+  "settingsFeatBookmarksDesc": {
+    "message": "搜索、新建、删除书签。"
+  },
+  "settingsFeatSnapshotDesc": {
+    "message": "输出页面的可访问性结构快照。"
+  },
+  "settingsFeatDownloadsDesc": {
+    "message": "发起、列出、取消下载 —— 高危，会往磁盘写文件。"
+  },
+  "settingsFeatRisky": {
+    "message": "高危"
+  },
+  "settingsFeatUsed": {
+    "message": "最近 $1 次",
+    "placeholders": {
+      "1": {
+        "content": "$1"
+      }
+    }
+  },
+  "settingsFeatUnused": {
+    "message": "未用过"
   }
 }

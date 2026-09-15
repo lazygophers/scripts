@@ -17,8 +17,10 @@ function messages(lang: string): Record<string, { message: string }> {
 
 const langs = readdirSync(LOCALES).sort();
 
-test("both locales ship", () => {
-  assert.deepEqual(langs, ["en", "zh_CN"]);
+test("only zh_CN ships — the extension is Chinese-only by design", () => {
+  // 2026-09-15：删掉 en。Chrome 按浏览器界面语言挑语言包，英文界面的浏览器会拿到英文
+  // UI；这个扩展（CLI 也是全中文）只有中文一种目标受众，en 只会让用户看到非中文界面。
+  assert.deepEqual(langs, ["zh_CN"]);
 });
 
 test("every locale has exactly the same keys", () => {
