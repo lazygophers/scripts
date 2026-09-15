@@ -107,6 +107,13 @@ class BrowseE2E(unittest.TestCase):
         self.sock = self.tmp / "browse.sock"
         self.env = {**os.environ, "HOME": str(self.tmp), "SCRIPTS_NO_SAY": "1"}
         self.env.pop("XDG_RUNTIME_DIR", None)
+        # WS 端口默认钉死 9330（扩展读不到本地文件，双方只能约定常量，见
+        # `lib/browse_bridge.py: DEFAULT_WS_PORT`）。这些用例只走 Unix socket 那条
+        # 腿（StubHost 假扩展直连 daemon socket），根本用不上 WS，但子进程照样会去
+        # bind 9330——跟开发者机器上任何一个真在跑的 `browse bridge` 撞车，daemon
+        # 起不来，这批用例全挂且报错和真实业务 bug 长得一样。"0" 让内核分配临时
+        # 端口，彻底消除这个环境依赖。
+        self.env["BROWSE_BRIDGE_PORT"] = "0"
         self.stub: StubHost | None = None
         self.daemon = subprocess.Popen(
             [sys.executable, str(BROWSE), "daemon", "run", "--socket", str(self.sock),
