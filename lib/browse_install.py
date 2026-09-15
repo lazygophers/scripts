@@ -82,6 +82,12 @@ BROWSERS: dict[str, dict[str, tuple[str, str, tuple[str, ...]]]] = {
         "opera": (CHROMIUM, "Library/Application Support/com.operasoftware.Opera", (_MAC_CHROME,)),
         "vivaldi": (CHROMIUM, "Library/Application Support/Vivaldi",
                     ("Library/Application Support/Vivaldi/NativeMessagingHosts",)),
+        # Arc 是 Chromium 分支，manifest 格式同 Chromium，但落点在自己的
+        # `Arc/User Data/NativeMessagingHosts`（多一层 User Data）。
+        # 出处（类3）: https://www.reddit.com/r/StopTheMadnessSupport/comments/1jocs70/
+        # 需要: Windows 版 Arc 的注册表落点按 Chrome 键处理是推测，实机验证
+        "arc": (CHROMIUM, "Library/Application Support/Arc",
+                ("Library/Application Support/Arc/User Data/NativeMessagingHosts",)),
         "firefox": (GECKO, "Library/Application Support/Firefox",
                     ("Library/Application Support/Mozilla/NativeMessagingHosts",)),
     },
@@ -96,6 +102,7 @@ BROWSERS: dict[str, dict[str, tuple[str, str, tuple[str, ...]]]] = {
         # 需要: 在装了 Opera 的 Linux 上确认用户级 Chrome 目录确实被读到。
         "opera": (CHROMIUM, ".config/opera", (_LINUX_CHROME,)),
         "vivaldi": (CHROMIUM, ".config/vivaldi", (".config/vivaldi/NativeMessagingHosts",)),
+        "arc": (CHROMIUM, ".config/Arc", (".config/Arc/User Data/NativeMessagingHosts",)),
         "firefox": (GECKO, ".mozilla/firefox", (".mozilla/native-messaging-hosts",)),
     },
     # Windows 不按目录读，按注册表键读：键的默认值是 manifest 文件的绝对路径，
@@ -118,6 +125,8 @@ BROWSERS: dict[str, dict[str, tuple[str, str, tuple[str, ...]]]] = {
                   (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",)),
         "vivaldi": (CHROMIUM, "AppData/Local/Vivaldi/User Data",
                     (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",)),
+        "arc": (CHROMIUM, "AppData/Local/Packages/TheBrowserCompany.Arc",
+                (r"reg:SOFTWARE\Google\Chrome\NativeMessagingHosts",)),
         "firefox": (GECKO, "AppData/Roaming/Mozilla/Firefox",
                     (r"reg:SOFTWARE\Mozilla\NativeMessagingHosts",)),
     },
