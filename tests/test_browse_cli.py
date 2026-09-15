@@ -178,6 +178,27 @@ class TestParsing(unittest.TestCase):
         with self.assertRaises(browse.UsageError):
             browse.parse_command(["input"])
 
+    def test_parse_command_numeric_context_stays_string(self):
+        # 扩展端要求 context 是 string；裸数字不该被 JSON 解析成 number 打回去
+        _, params, _ = browse.parse_command(
+            ["script", "evaluate", "1", "--context", "1163532091"])
+        self.assertEqual(params["context"], "1163532091")
+        _, params, _ = browse.parse_command(
+            ["browsingContext", "getTree", "--root", "42"])
+        self.assertEqual(params["root"], "42")
+        # run 的指令串走同一条路
+        _, params = browse.parse_run_item("script.evaluate 1 --context 1163532091")
+        self.assertEqual(params["context"], "1163532091")
+        # 显式 JSON 引号的字符串、真数字参数不受影响
+        # bookmarks.remove 的 id 线上是 string（downloads.cancel 的才是 number）
+        _, params, _ = browse.parse_command(
+            ["bookmarks", "remove", "--id", "1691"])
+        self.assertEqual(params["id"], "1691")
+        # 真数字参数不受影响
+        _, params, _ = browse.parse_command(
+            ["input", "click", "css=a", "--index", "3"])
+        self.assertEqual(params["index"], 3)
+
     def test_parse_run_item_shell_style(self):
         method, params = browse.parse_run_item(
             "browsingContext.navigate https://a.com --wait none")

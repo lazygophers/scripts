@@ -114,6 +114,12 @@ METHODS: dict[str, tuple[str, ...]] = {
 
 # 这些 --flag 是 CLI 自己的，不进 params。都与线上参数名不冲突（对着 METHODS 的
 # handlers 逐个核过），所以不需要再加前缀去区分。
+# 线上要求 string 的 id 类参数（同名参数在别的方法上可能是 number，如
+# lg:downloads.cancel 的 id）：裸数字会被 _coerce 解析成 JSON 数字、扩展端拒收。
+STRING_NUMERIC_PARAMS: dict[str, tuple[str, ...]] = {
+    "lg:bookmarks.remove": ("id",),
+}
+
 CLI_FLAGS = frozenset({"table", "socket", "concurrency", "failFast", "duration",
                        "idleTimeout", "limit", "browser"})
 
@@ -205,6 +211,12 @@ def parse_command(tokens: list[str]) -> tuple[str, dict, dict]:
     params = {name: _coerce(value) for name, value in zip(names, positional)}
     opts = {key: flags.pop(key) for key in list(flags) if key in CLI_FLAGS}
     params.update(flags)
+    # context id（`<tabId>[.<frameId>]`）和 getTree 的 root 在线上是 string，但裸数字
+    # 会被 _coerce 解析成 JSON 数字，扩展端 asString 直接拒收——统一转回字符串。
+    # 显式写 `--context '"123"'` 的老写法本来就是字符串，不受影响。
+    for key in ("context", "root", *STRING_NUMERIC_PARAMS.get(method, ())):
+        if isinstance(params.get(key), (int, float)):
+            params[key] = str(params[key])
     return method, params, opts
 
 
