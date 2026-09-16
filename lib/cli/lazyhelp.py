@@ -5,10 +5,22 @@
 """
 from __future__ import annotations
 
+import pathlib
 import sys
 
+from lib.browse_install import EXTENSIONS_ROOT
 from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.lazyhelp import _all_bins, _render_table, show_full
+
+
+def browser_extensions(root: pathlib.Path = EXTENSIONS_ROOT) -> list[pathlib.Path]:
+    """返回仓库里所有可构建的浏览器扩展，公共构建目录除外。"""
+    if not root.is_dir():
+        return []
+    return sorted(
+        path for path in root.iterdir()
+        if (path / "package.json").is_file() and (path / "src" / "manifest.json").is_file()
+    )
 
 
 class LazyhelpCli(BaseCli):
@@ -43,26 +55,43 @@ class LazyhelpCli(BaseCli):
 
     @timed_cli
     def install(self, yes: bool = False):
-        """一次性跑完 browse + graphwatch 各自的完整安装流程
+        """构建全部浏览器扩展，并安装 graphwatch 后台服务
 
         用法: lazyhelp install [-y]
 
-        每个都单独确认一次，选了才装；`-y`/`--yes` 跳过确认，全部默认同意。
-        两边各自独立：一边失败/跳过不拦另一边，最后按「有一个真失败就非零」汇总
-        退出码（跳过不算失败）。
+        每项单独确认一次，选了才装；`-y`/`--yes` 跳过确认，全部默认同意。
+        各项独立：一项失败/跳过不拦其他项，最后按「有一个真失败就非零」汇总
+        退出码（跳过不算失败）。浏览器扩展仍需在扩展页手动加载一次。
         """
+        import subprocess
+
+        from lib.browse_install import build_extension
         from lib.browse_install import main as browse_install_main
         from lib.graphwatch import GraphwatchCli
         from lib.ui import ask_confirm
 
         failed = False
 
-        if yes or ask_confirm("装 browse（浏览器扩展 native messaging）？", default=True):
-            self._r.rule("browse install", style="blue")
-            if browse_install_main(["browse install"]):
+        for extension in browser_extensions():
+            name = extension.name
+            if not (yes or ask_confirm(f"构建 {name} 浏览器扩展？", default=True)):
+                self._r.step(f"跳过 {name}")
+                continue
+
+            self._r.rule(f"{name} extension", style="blue")
+            if name == "browse":
+                if browse_install_main(["browse install", "--no-wait"]):
+                    failed = True
+                continue
+
+            try:
+                dist = build_extension(extension)
+            except (OSError, subprocess.CalledProcessError) as error:
+                self._r.err(f"{name} 构建失败：{error}")
                 failed = True
-        else:
-            self._r.step("跳过 browse install")
+            else:
+                self._r.ok(f"{name} 已构建：{dist}")
+                self._r.info("在 chrome://extensions 点「加载已解压的扩展程序」，选择上面目录")
 
         if yes or ask_confirm("装 graphwatch（知识图谱后台服务）？", default=True):
             self._r.rule("graphwatch install", style="blue")

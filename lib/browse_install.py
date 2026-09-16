@@ -21,7 +21,6 @@ import json
 import os
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -29,6 +28,15 @@ import time
 from lib.ui import reporter
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def extension_root(root: pathlib.Path = REPO_ROOT) -> pathlib.Path:
+    """返回源码仓库或已安装 Python 包里的浏览器扩展目录。"""
+    source = root / "browser-extension"
+    return source if source.is_dir() else root / "browser_extension"
+
+
+EXTENSIONS_ROOT = extension_root()
 
 HOST_NAME = "com.lazygophers.browse"
 DESCRIPTION = "lazygophers browse — 用命令行驱动浏览器"
@@ -302,7 +310,7 @@ def uninstall(home: pathlib.Path, plat: str, *,
     return removed
 
 
-EXTENSION_SRC = REPO_ROOT / "browser-extension" / "browse"
+EXTENSION_SRC = EXTENSIONS_ROOT / "browse"
 CONNECT_POLL_SECONDS = 2.0
 WAIT_TIMEOUT = 300.0
 

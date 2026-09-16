@@ -5,8 +5,9 @@ description = "脚本工具集：版本控制、构建检查、进程管理、�
 requires-python = ">=3.9"
 # fire=CLI 框架(fire_base 顶层 import), rich=强制输出(ui.py 缺席即报错),
 # pyyaml=配置读写(archery/graphwatch), requests=HTTP(archery/grafana)
-# 下界跟到 2026-09-10 的最新版, 但保持 requires-python >=3.9 装得上;
-# 只在 extras 里出现的包(graphifyy/playwright)才要求 3.10+。
+# 下界跟到 2026-09-16 的最新版, 但保持 requires-python >=3.9 装得上:
+# requests 2.33 起要求 3.10, 所以核心依赖停在 2.32 这一档。
+# 只在 extras 里出现的包(graphifyy/playwright)本来就要 3.10+, 直接跟最新。
 dependencies = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.32"]
 
 # 每个命令一个 console_scripts 入口, 指向 lib/cli/<name>.py 里的函数。
@@ -64,12 +65,12 @@ websearch = "lib.cli.websearch:main"
 
 [project.optional-dependencies]
 # graphwatch 监听需要 graphify（PyPI 包名 graphifyy）+ 其硬依赖 watchdog，默认不装
-graphify = ["graphifyy[all]>=0.9.57", "watchdog>=6"]
+graphify = ["graphifyy[all]>=0.9.62", "watchdog>=6"]
 # webgrab / websearch 抓网页要的四件套，默认不装；playwright 装完还要 `playwright install chromium`
-web = ["curl-cffi>=0.16.3", "beautifulsoup4>=4.15.0", "markdownify>=1.2.3", "playwright>=1.62"]
+web = ["curl-cffi>=0.16.3", "beautifulsoup4>=4.15.0", "markdownify>=1.2.3", "playwright>=1.63"]
 all = [
-    "graphifyy[all]>=0.9.57", "watchdog>=6",
-    "curl-cffi>=0.16.3", "beautifulsoup4>=4.15.0", "markdownify>=1.2.3", "playwright>=1.62",
+    "graphifyy[all]>=0.9.62", "watchdog>=6",
+    "curl-cffi>=0.16.3", "beautifulsoup4>=4.15.0", "markdownify>=1.2.3", "playwright>=1.63",
 ]
 dev = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.32"]
 
@@ -78,10 +79,27 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["lib", "lib.cli"]
+# include-package-data=false: manifest 通道(egg_info filelist)不受
+# exclude-package-data 约束，会把扩展目录里的 dist/ 旧产物一并打进 wheel；
+# lib/ 只有 .py，不依赖任何数据文件，关掉后只走 package-data 白名单。
+include-package-data = false
+packages = ["lib", "lib.cli", "browser_extension"]
 
 [tool.setuptools.package-dir]
 lib = "lib"
+browser_extension = "browser-extension"
+
+[tool.setuptools.package-data]
+browser_extension = ["**/*"]
+
+[tool.setuptools.exclude-package-data]
+browser_extension = [
+    "*/dist/*", "*/dist/**/*", "*/dist-firefox/*", "*/dist-firefox/**/*",
+    "*/dist-package/*", "*/dist-package/**/*",
+    "*/node_modules/*", "*/node_modules/**/*",
+    "*/test/*", "*/test/**/*", "*/tests/*", "*/tests/**/*",
+    "reports/*", "reports/**/*",
+]
 
 [tool.ruff]
 line-length = 120

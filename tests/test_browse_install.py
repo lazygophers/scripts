@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import stat
 import subprocess
 import sys
 import tempfile
@@ -87,6 +86,19 @@ class TempHome(unittest.TestCase):
         return browse
 
 
+
+
+class TestExtensionRoot(unittest.TestCase):
+    def test_prefers_source_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / "browser-extension"
+            source.mkdir()
+            self.assertEqual(nh.extension_root(root), source)
+
+    def test_falls_back_to_installed_package(self) -> None:
+        root = pathlib.Path("/opt/lazygophers/site-packages")
+        self.assertEqual(nh.extension_root(root), root / "browser_extension")
 
 
 class TestPlatformKey(unittest.TestCase):

@@ -1,10 +1,7 @@
-"""lazyhelp 的 fire CLI 层（`LazyhelpCli`）测试：目前只有 `install` 子命令。
+"""lazyhelp 的 fire CLI 层测试。
 
-`tests/test_lazyhelp.py` 覆盖的是 `lib/lazyhelp.py` 那层域函数（TOOLS 注册表、
-`_render_table`、`main()` 的分发）；这里测的是 `lib/cli/lazyhelp.py` 里薄的
-fire 包装——`install` 转调 `browse install` + `graphwatch install` 并汇总
-退出码，外加逐个确认 / `-y` 跳过确认的分支。两边各自的安装逻辑、确认弹窗都是
-假的，不真的跑 native messaging / launchd / 读终端输入。
+`install` 自动发现全部浏览器扩展，逐个构建，再安装 graphwatch；这里用假的
+构建器和安装器验证分发、确认与退出码，不改真实浏览器或系统服务。
 """
 
 from __future__ import annotations
@@ -13,104 +10,95 @@ import contextlib
 import io
 import pathlib
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from lib.cli.lazyhelp import LazyhelpCli
+from lib.cli.lazyhelp import LazyhelpCli, browser_extensions
+
+EXTENSIONS = [pathlib.Path("/extensions/browse"), pathlib.Path("/extensions/toolbox"), pathlib.Path("/extensions/viewer")]
 
 
-class TestInstall(unittest.TestCase):
-    """`-y` 跳过确认，走真正的安装转调 + 退出码汇总。"""
+class TestBrowserExtensions(unittest.TestCase):
+    def test_discovers_only_buildable_extensions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            for name in ("browse", "toolbox", "viewer"):
+                (root / name / "src").mkdir(parents=True)
+                (root / name / "package.json").touch()
+                (root / name / "src" / "manifest.json").touch()
+            (root / "shared").mkdir()
+            (root / "reports").mkdir()
 
+            self.assertEqual([path.name for path in browser_extensions(root)], ["browse", "toolbox", "viewer"])
+
+    def test_missing_root_is_empty(self) -> None:
+        self.assertEqual(browser_extensions(pathlib.Path("/definitely/missing/extensions")), [])
+
+
+class InstallCase(unittest.TestCase):
     def setUp(self) -> None:
         self.cli = LazyhelpCli()
         self.cli._r = mock.MagicMock()
 
-    def _run(self, browse_rc: int, graphwatch_rc: int) -> int:
-        with mock.patch("lib.browse_install.main", return_value=browse_rc) as browse_main, \
-             mock.patch("lib.graphwatch.GraphwatchCli.install", return_value=graphwatch_rc) as gw_install, \
+    def run_install(self, *, answers=None, browse_rc=0, graphwatch_rc=0, build_error=None, yes=False) -> int:
+        build_effect = build_error if build_error is not None else lambda path: path / "dist"
+        with mock.patch("lib.cli.lazyhelp.browser_extensions", return_value=EXTENSIONS), \
+             mock.patch("lib.browse_install.main", return_value=browse_rc) as browse_main, \
+             mock.patch("lib.browse_install.build_extension", side_effect=build_effect) as build, \
+             mock.patch("lib.graphwatch.GraphwatchCli.install", return_value=graphwatch_rc) as graphwatch_install, \
+             mock.patch("lib.ui.ask_confirm", side_effect=answers or []) as ask, \
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            rc = self.cli.install(yes=True)
+            result = self.cli.install(yes=yes)
         self.browse_main = browse_main
-        self.gw_install = gw_install
-        return rc
-
-    def test_both_succeed(self) -> None:
-        rc = self._run(browse_rc=0, graphwatch_rc=0)
-        self.assertEqual(rc, 0)
-        self.browse_main.assert_called_once_with(["browse install"])
-        self.gw_install.assert_called_once()
-
-    def test_browse_fails_graphwatch_still_runs(self) -> None:
-        rc = self._run(browse_rc=1, graphwatch_rc=0)
-        self.assertEqual(rc, 1)
-        self.gw_install.assert_called_once()  # 没被 browse 的失败拦住
-
-    def test_graphwatch_fails_alone_is_still_nonzero(self) -> None:
-        rc = self._run(browse_rc=0, graphwatch_rc=1)
-        self.assertEqual(rc, 1)
-
-    def test_both_fail(self) -> None:
-        rc = self._run(browse_rc=1, graphwatch_rc=1)
-        self.assertEqual(rc, 1)
-
-
-class TestConfirmGate(unittest.TestCase):
-    """不带 `-y` 时逐个问；答否/非交互(None) 都是跳过而不是失败。"""
-
-    def setUp(self) -> None:
-        self.cli = LazyhelpCli()
-        self.cli._r = mock.MagicMock()
-
-    def _run(self, confirm_answers):
-        with mock.patch("lib.ui.ask_confirm", side_effect=confirm_answers) as ask, \
-             mock.patch("lib.browse_install.main", return_value=0) as browse_main, \
-             mock.patch("lib.graphwatch.GraphwatchCli.install", return_value=0) as gw_install, \
-             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            rc = self.cli.install()
+        self.build = build
+        self.graphwatch_install = graphwatch_install
         self.ask = ask
-        self.browse_main = browse_main
-        self.gw_install = gw_install
-        return rc
+        return result
 
-    def test_answer_yes_to_both_installs_both(self) -> None:
-        rc = self._run([True, True])
-        self.assertEqual(rc, 0)
+
+class TestInstall(InstallCase):
+    def test_yes_installs_every_extension_and_graphwatch(self) -> None:
+        self.assertEqual(self.run_install(yes=True), 0)
+        self.browse_main.assert_called_once_with(["browse install", "--no-wait"])
+        self.assertEqual([call.args[0].name for call in self.build.call_args_list], ["toolbox", "viewer"])
+        self.graphwatch_install.assert_called_once()
+        self.ask.assert_not_called()
+
+    def test_any_failure_makes_result_nonzero_without_stopping(self) -> None:
+        self.assertEqual(self.run_install(yes=True, browse_rc=1, graphwatch_rc=1, build_error=OSError("broken")), 1)
         self.browse_main.assert_called_once()
-        self.gw_install.assert_called_once()
-        self.assertEqual(self.ask.call_count, 2)
+        self.assertEqual(self.build.call_count, 2)
+        self.graphwatch_install.assert_called_once()
 
-    def test_answer_no_skips_without_failing(self) -> None:
-        rc = self._run([False, False])
-        self.assertEqual(rc, 0)  # 跳过不算失败
-        self.browse_main.assert_not_called()
-        self.gw_install.assert_not_called()
 
-    def test_non_interactive_none_is_treated_as_decline(self) -> None:
-        """`ask_confirm` 在非交互/EOF 场景返回 None，等同答否，不能瞎装。"""
-        rc = self._run([None, None])
-        self.assertEqual(rc, 0)
-        self.browse_main.assert_not_called()
-        self.gw_install.assert_not_called()
-
-    def test_mixed_answers_only_install_the_yes_one(self) -> None:
-        rc = self._run([True, False])
-        self.assertEqual(rc, 0)
+class TestConfirmGate(InstallCase):
+    def test_each_extension_and_graphwatch_has_own_confirmation(self) -> None:
+        self.assertEqual(self.run_install(answers=[True, True, True, True]), 0)
+        self.assertEqual(self.ask.call_count, 4)
         self.browse_main.assert_called_once()
-        self.gw_install.assert_not_called()
+        self.assertEqual(self.build.call_count, 2)
+        self.graphwatch_install.assert_called_once()
 
-    def test_yes_flag_bypasses_confirm_entirely(self) -> None:
-        with mock.patch("lib.ui.ask_confirm") as ask, \
-             mock.patch("lib.browse_install.main", return_value=0) as browse_main, \
-             mock.patch("lib.graphwatch.GraphwatchCli.install", return_value=0) as gw_install, \
-             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            rc = self.cli.install(yes=True)
-        self.assertEqual(rc, 0)
-        ask.assert_not_called()
-        browse_main.assert_called_once()
-        gw_install.assert_called_once()
+    def test_declined_items_are_skipped_without_failure(self) -> None:
+        self.assertEqual(self.run_install(answers=[False, False, False, False]), 0)
+        self.browse_main.assert_not_called()
+        self.build.assert_not_called()
+        self.graphwatch_install.assert_not_called()
+
+    def test_missing_answers_are_skipped_without_failure(self) -> None:
+        self.assertEqual(self.run_install(answers=[None, None, None, None]), 0)
+        self.browse_main.assert_not_called()
+        self.build.assert_not_called()
+        self.graphwatch_install.assert_not_called()
+
+    def test_mixed_answers_install_only_selected_items(self) -> None:
+        self.assertEqual(self.run_install(answers=[False, True, False, True]), 0)
+        self.browse_main.assert_not_called()
+        self.build.assert_called_once_with(pathlib.Path("/extensions/toolbox"))
+        self.graphwatch_install.assert_called_once()
 
 
 if __name__ == "__main__":
