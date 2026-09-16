@@ -1,0 +1,25 @@
+/**
+ * viewer 接管后的页面样式。只有深色一套，和常用编辑器观感一致。
+ *
+ * 颜色 token 来自公共层 `browser-extension/shared/palette.css`，构建时复制到 dist 根目录。
+ * 所有规则都挂在 `html.lfv-on` 下：切回「原始」时类名一摘，页面就回到浏览器自己的样子。
+ */
+
+@import "palette.css";
+
+html.lfv-on,
+html.lfv-on body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+html.lfv-on .lfv-text {
+  margin: 0;
+  padding: 2rem 2.5rem;
+  max-width: 100ch;
+  font: 13px / 1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  tab-size: 4;
+}

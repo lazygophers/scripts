@@ -1,0 +1,8 @@
+{
+  "extends": "../shared/tsconfig.base.json",
+  // `types` stays here, not in the base config: default `typeRoots` resolution
+  // starts at the config file's own directory, so a `types: ["chrome"]` in
+  // shared would look in `shared/node_modules/@types` and miss this package's.
+  "compilerOptions": { "types": ["chrome"] },
+  "include": ["src", "test"]
+}

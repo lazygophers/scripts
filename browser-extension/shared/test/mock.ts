@@ -17,10 +17,21 @@ export function clearChrome(): void {
   delete (globalThis as Any).chrome;
 }
 
-/** Install a jsdom realm as the globals page-side code reads off `globalThis`. */
-export function page(html: string): JSDOM {
-  const dom = new JSDOM(`<!doctype html><body>${html}</body>`, {
-    url: "https://example.test/page",
+/**
+ * Install a jsdom realm as the globals page-side code reads off `globalThis`.
+ *
+ * `url` and `contentType` are what viewer's takeover test reads, so both are
+ * settable. jsdom only accepts HTML/XML in its own `contentType` option, and a
+ * plain-text page is exactly the case under test — hence the redefine instead.
+ */
+export function page(
+  html: string,
+  { url = "https://example.test/page", contentType = "text/html" } = {},
+): JSDOM {
+  const dom = new JSDOM(`<!doctype html><body>${html}</body>`, { url });
+  Object.defineProperty(dom.window.document, "contentType", {
+    value: contentType,
+    configurable: true,
   });
   const g = globalThis as Any;
   for (const name of [
@@ -32,9 +43,15 @@ export function page(html: string): JSDOM {
     "MouseEvent",
     "KeyboardEvent",
     "Event",
-    "localStorage",
   ]) {
     g[name] = (dom.window as unknown as Any)[name];
+  }
+  // jsdom 对 `file://` 这类不透明来源会在取 `localStorage` 时直接抛错，而本地文件
+  // 页面正是被测的场景，所以这一个单独试着取，取不到就不装。
+  try {
+    g.localStorage = dom.window.localStorage;
+  } catch {
+    delete g.localStorage;
   }
   return dom;
 }
