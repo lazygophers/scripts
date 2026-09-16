@@ -1,10 +1,12 @@
 [
   {
     "text": "الدليل",
-    "link": "/guide/introduction"
+    "link": "/guide/introduction",
+    "activeMatch": "/guide/"
   },
   {
     "text": "دليل المطوّر",
-    "link": "/dev-guide/structure"
+    "link": "/dev-guide/structure",
+    "activeMatch": "/dev-guide/"
   }
 ]

@@ -1,10 +1,12 @@
 [
   {
     "text": "Guide",
-    "link": "/guide/introduction"
+    "link": "/guide/introduction",
+    "activeMatch": "/guide/"
   },
   {
     "text": "Developer Guide",
-    "link": "/dev-guide/structure"
+    "link": "/dev-guide/structure",
+    "activeMatch": "/dev-guide/"
   }
 ]
