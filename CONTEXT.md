@@ -21,6 +21,16 @@
 - **native host（本机宿主）**：浏览器按 native messaging 协议 fork 起来的那个进程，实为 `browse --native-host`。一头是浏览器给的 stdin/stdout 管道，一头是 daemon 的 socket，只搬运不解释。
 - **command（指令）**：一条 WebDriver BiDi 形状的请求信封 `{id, method, params}`，`method` 写成 `<module>.<action>`（私有能力带 `lg:` 前缀，如 `lg:history.search`）。回包只有 Success / Error 两种，错误码用 BiDi 标准枚举或带冒号的扩展码。
 
+## viewer（本地文件展示）
+
+- **纯文本页（plain-text page）**：浏览器没有当成网页渲染、只是把文件原文倒出来的那一类页面。判定三件事同时成立：`document.contentType` 是纯文本类、`body` 下恰好一个 `<pre>`、`document.title` 为空。不限 `file://`，任何来源都算。
+- **美化（prettify）**：把一张纯文本页换成按文件类型渲染过的样子——markdown 渲染、代码高亮、json/yaml 折叠树、csv 表格、log 分列上色。反面是**原始（raw）**，即那张纯文本页本来的样子。两者随时可切，切换状态不跨页记忆。
+- **接管（takeover）**：viewer 决定对某一页做美化。三档：白名单内的文件类型直接接管；明确是网页的不碰；剩下拿不准的不接管，只浮一个「美化一下」按钮交给人点。
+- **方言（dialect）**：markdown 的一种扩展写法。本仓认七种：GFM、front-matter、Obsidian 双括号链接、脚注、`:::` 提示框、Pandoc、MDX。MDX 只做降级渲染——它要编译成 JavaScript 再执行，而扩展禁止执行运行时生成的代码。
+- **降级渲染（degraded render）**：某种语法做不到完整效果时，仍按普通 markdown 渲染正文，在做不到的那个位置留一个写明原因的占位块。信息不丢，是「这里本来有东西」的痕迹。
+- **下载（download）**：浏览器判定某文件类型不可内联，转而存盘。存盘的页面根本不存在，viewer 无从接管。默认不管已被下载的类型；**强制拦截（force intercept）**是一个用户自己开的开关，开了就在导航发生前把这类文件改跳到 viewer 自己的页面。
+- **file 权限开关**：`chrome://extensions` 里那个「允许访问文件网址」。扩展声明 `host_permissions` 不够，必须用户手动打开，运行时可用 `chrome.extension.isAllowedFileSchemeAccess()` 读到真实状态。
+
 ## git 工作流
 
 - **分支会话（branch session）**：切到目标分支（不存在则建跟踪分支）并在退出时按路径决定是否回原分支的保证。错误路径默认回滚，成功路径默认留在目标分支。回滚幂等：已在原分支则跳过。
