@@ -63,15 +63,11 @@
     "search",
     "webAuthenticationProxy",
     "sidePanel",
-    "processes",
     "system.cpu",
     "system.display",
     "system.memory",
     "system.storage",
-    "printing",
-    "printingMetrics",
     "printerProvider",
-    "dns",
     "idle",
     "power",
     "notifications",
@@ -82,10 +78,6 @@
   ],
   "host_permissions": [
     "<all_urls>"
-  ],
-  "optional_host_permissions": [
-    "https://*/*",
-    "http://*/*"
   ],
   "minimum_chrome_version": "122"
 }
