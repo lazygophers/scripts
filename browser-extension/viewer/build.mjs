@@ -19,8 +19,11 @@ await buildExtension({
     "src/log.ts",
     "src/listing.ts",
     "src/search.ts",
+    "src/background.ts",
+    "src/settings-page.ts",
+    "src/viewer-page.ts",
   ],
-  copy: ["viewer.css"],
+  copy: ["viewer.css", "settings.html", "viewer.html"],
   // KaTeX 的样式表要带着它自己的字体走：`url()` 交给 esbuild 改写成 dist 里的文件，
   // 页面上因此不会去网络取字体（扩展的内容安全策略也不允许）。
   loader: { ".woff": "file", ".woff2": "file", ".ttf": "file" },

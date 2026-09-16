@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>viewer 设置</title>
+    <link rel="stylesheet" href="palette.css" />
+    <link rel="stylesheet" href="viewer.css" />
+  </head>
+  <body class="lfv-page">
+    <main class="lfv-panel">
+      <section id="lfv-welcome" hidden>
+        <h1>viewer 装好了</h1>
+        <p>再做一步它才能显示你电脑里的文件。</p>
+      </section>
+
+      <h2>文件访问权限</h2>
+      <p id="lfv-access" class="lfv-state">读取中…</p>
+      <ol id="lfv-steps" hidden>
+        <li>地址栏输入 <code>chrome://extensions</code> 回车。</li>
+        <li>找到 viewer 这一项，点它的「详情」。</li>
+        <li>把「允许访问文件网址」那个开关打开。</li>
+        <li>回到本页刷新一下，上面那行会变成「已经打开」。</li>
+      </ol>
+
+      <h2>强制拦截</h2>
+      <p>
+        有几类文件（例如 <code>.yaml</code>、<code>.csv</code>）浏览器会直接下载，
+        viewer 没机会显示。打开这个开关，这类本地文件改为在 viewer 里打开；关掉就立刻回到下载。
+      </p>
+      <label class="lfv-switch">
+        <input id="lfv-force" type="checkbox" />
+        打开强制拦截
+      </label>
+    </main>
+    <script type="module" src="settings.js"></script>
+  </body>
+</html>

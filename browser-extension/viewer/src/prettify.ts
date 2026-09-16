@@ -81,10 +81,21 @@ export function classify(url: string): Kind {
   return "unknown";
 }
 
+/**
+ * 这个页面展示的是哪个文件。
+ *
+ * 浏览器直接打开文件时，页面地址就是文件地址。开了强制拦截之后，文件是在扩展自己那张
+ * 展示页里显示的，页面地址成了 `chrome-extension://…/viewer.html`，真地址由那张页面
+ * 写在 `<html data-lfv-url>` 上——按扩展名分流、解析相对链接都得认真地址，不是页面地址。
+ */
+function sourceUrl(doc: Document): string {
+  return doc.documentElement.dataset["lfvUrl"] ?? doc.URL;
+}
+
 export function prettify(doc: Document): void {
   if (isDirectoryIndex(doc)) return mountListing(doc);
   if (!isPlainTextPage(doc)) return;
-  const kind = classify(doc.URL);
+  const kind = classify(sourceUrl(doc));
   if (kind === "webpage") return;
 
   const pre = doc.body.children[0] as HTMLElement;
@@ -93,6 +104,18 @@ export function prettify(doc: Document): void {
   if (new TextEncoder().encode(text).length > MAX_BYTES) {
     return offer(doc, pre, "强制美化");
   }
+  mount(doc, pre, true);
+}
+
+/**
+ * 扩展自己那张展示页的入口：文件已经取好了，直接照美化档渲染。
+ *
+ * 浏览器把这几类文件直接下载掉，内容脚本根本没机会出手，所以走这条路进来。
+ */
+export function show(doc: Document, url: string, text: string): void {
+  doc.documentElement.dataset["lfvUrl"] = url;
+  const pre = doc.createElement("pre");
+  pre.textContent = text;
   mount(doc, pre, true);
 }
 
@@ -167,7 +190,7 @@ const DATA_EXTS = new Set(["json", "yaml", "yml"]);
 
 /** 按扩展名分流：markdown 走文档视图，json/yaml 走折叠树，认得的源码走代码视图，其余仍是纯文本。 */
 function render(doc: Document, text: string): HTMLElement {
-  const ext = extOf(doc.URL);
+  const ext = extOf(sourceUrl(doc));
   if (MARKDOWN_EXTS.has(ext)) return renderDocument(doc, text);
   if (DATA_EXTS.has(ext)) return renderData(doc, text, ext !== "json");
   if (ext === "csv") return renderCsv(doc, text);
@@ -290,7 +313,7 @@ function renderDocument(doc: Document, text: string): HTMLElement {
 async function fillDocument(doc: Document, host: HTMLElement, text: string): Promise<void> {
   const module = await import(chrome.runtime.getURL("markdown.js"));
   const render = module.renderMarkdown as (d: Document, t: string, mdx: boolean) => HTMLElement;
-  const article = render(doc, text, extOf(doc.URL) === "mdx");
+  const article = render(doc, text, extOf(sourceUrl(doc)) === "mdx");
   const toc = (module.renderToc as (d: Document, a: HTMLElement) => HTMLElement | null)(doc, article);
   host.replaceChildren(...(toc === null ? [article] : [toc, article]));
 
@@ -333,11 +356,11 @@ function wireLocalLinks(doc: Document, host: HTMLElement): void {
     // 提示里那个「仍然打开」是用户明确说了要去，不再探第二遍。
     if (link?.classList.contains("lfv-anyway")) return;
 
-    const target = new URL(href, doc.URL);
+    const target = new URL(href, sourceUrl(doc));
     if (target.protocol !== "file:") return;
     if (!WHITELIST_EXTS.has(extOf(target.href))) return;
     // 同一份文件里的锚点跳转是浏览器的活，不该走这条路。
-    if (target.href.split("#")[0] === doc.URL.split("#")[0]) return;
+    if (target.href.split("#")[0] === sourceUrl(doc).split("#")[0]) return;
 
     event.preventDefault();
     void follow(doc, host, target.href);

@@ -797,3 +797,50 @@ html.lfv-on .lfv-hit-current {
   color: #1c1917;
   background: #fb923c;
 }
+
+/* ---- 设置页 ---- */
+
+.lfv-page {
+  margin: 0;
+  color: var(--foreground);
+  background: var(--background);
+}
+
+.lfv-panel {
+  max-width: 44rem;
+  padding: 2rem 1.5rem 3rem;
+  margin: 0 auto;
+  line-height: 1.7;
+}
+
+.lfv-panel h2 {
+  margin-top: 2rem;
+}
+
+.lfv-panel code {
+  padding: 0.1rem 0.3rem;
+  background: var(--card);
+  border-radius: 0.25rem;
+}
+
+.lfv-state {
+  padding: 0.5rem 0.75rem;
+  background: var(--card);
+  border-left: 3px solid var(--border);
+  border-radius: 0.375rem;
+}
+
+.lfv-state[data-state="on"] {
+  border-left-color: #4ade80;
+}
+
+.lfv-state[data-state="off"] {
+  border-left-color: #fb923c;
+}
+
+.lfv-switch {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  cursor: pointer;
+}
