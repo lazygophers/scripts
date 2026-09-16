@@ -304,7 +304,7 @@ def uninstall(home: pathlib.Path, plat: str, *,
 
 EXTENSION_SRC = REPO_ROOT / "browser-extension" / "extension"
 CONNECT_POLL_SECONDS = 2.0
-WAIT_TIMEOUT = 120.0
+WAIT_TIMEOUT = 300.0
 
 
 def build_extension(src: pathlib.Path = EXTENSION_SRC) -> pathlib.Path:
