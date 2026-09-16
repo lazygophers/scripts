@@ -41,6 +41,25 @@ class LazyhelpCli(BaseCli):
             print(n)
         return 0
 
+    @timed_cli
+    def install(self):
+        """一次性跑完 browse + graphwatch 各自的完整安装流程
+
+        用法: lazyhelp install
+
+        两边各自独立：一边失败不拦另一边，最后按「有一个失败就非零」汇总退出码。
+        """
+        from lib.browse_install import main as browse_install_main
+        from lib.graphwatch import GraphwatchCli
+
+        self._r.rule("browse install", style="blue")
+        rc_browse = browse_install_main(["browse install"])
+
+        self._r.rule("graphwatch install", style="blue")
+        rc_graphwatch = GraphwatchCli().install()
+
+        return 1 if (rc_browse or rc_graphwatch) else 0
+
 
 def main():
     # 默认行为：fire 把类方法当 subcommand；无 subcommand 时 fire 默认打印总览，
