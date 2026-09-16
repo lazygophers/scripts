@@ -450,6 +450,95 @@ test("窄窗口下目录收起，宽窗口摊开", async () => {
   assert.equal((wideHost.querySelector(".lfv-toc") as HTMLDetailsElement).open, true);
 });
 
+test("Obsidian 双方括号链接变成可点的链接", async () => {
+  const dom = textFile("file:///tmp/a.md", "见 [[隔壁页面]] 和 [[api/index.md|接口文档]]。\n\n写坏的 [[没闭合。\n");
+  const doc = dom.window.document;
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  const links = host.querySelectorAll("a.lfv-wikilink");
+  assert.equal(links.length, 2);
+  assert.equal(links[0]?.getAttribute("href"), encodeURI("隔壁页面.md"));
+  assert.equal(links[0]?.textContent, "隔壁页面");
+  // 已经带扩展名的目标不再补 `.md`，还能自己写显示文字。
+  assert.equal(links[1]?.getAttribute("href"), "api/index.md");
+  assert.equal(links[1]?.textContent, "接口文档");
+  // 没闭合的那段退回普通文本，整篇文档照常渲染。
+  assert.equal(host.textContent?.includes("[[没闭合。"), true);
+});
+
+test("脚注渲染成上标加文末条目，两头互相跳", async () => {
+  const dom = textFile("file:///tmp/a.md", "正文[^1]。\n\n[^1]: 一条注解。\n");
+  const doc = dom.window.document;
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  const ref = host.querySelector("sup a") as HTMLAnchorElement;
+  const backref = host.querySelector(".footnotes a[href^='#']:last-of-type") as HTMLAnchorElement;
+  assert.ok(ref, "正文里应该有上标编号");
+  assert.equal(ref.getAttribute("href")?.startsWith("#"), true);
+  // 上标指向的条目真的在文末脚注区里。
+  const id = ref.getAttribute("href")?.slice(1) ?? "";
+  assert.ok(host.querySelector(".footnotes")?.querySelector(`#${id}`), "脚注条目应该在文末");
+  assert.equal(backref.getAttribute("href")?.startsWith("#"), true);
+  assert.equal(host.querySelector(".footnotes")?.textContent?.includes("一条注解。"), true);
+});
+
+test("三冒号提示框按类型上色，认不得的类型按 note 处理", async () => {
+  const dom = textFile(
+    "file:///tmp/a.md",
+    ":::warning\n小心**这里**\n:::\n\n:::外星类型\n还是块提示\n:::\n\n:::没闭合\n",
+  );
+  const doc = dom.window.document;
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  const notes = host.querySelectorAll(".lfv-note");
+  assert.equal(notes.length, 2);
+  assert.equal(notes[0]?.className, "lfv-note lfv-note-warning");
+  // 框里的 markdown 照常渲染。
+  assert.equal(notes[0]?.querySelector("strong")?.textContent, "这里");
+  assert.equal(notes[1]?.className, "lfv-note lfv-note-note");
+  assert.equal(host.textContent?.includes("没闭合"), true);
+});
+
+test("Pandoc 的上下标和定义列表都认得出来", async () => {
+  const dom = textFile("file:///tmp/a.md", "E=mc^2^ 和 H~2~O\n\n术语\n: 解释一句\n");
+  const doc = dom.window.document;
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  assert.equal(host.querySelector("sup")?.textContent, "2");
+  assert.equal(host.querySelector("sub")?.textContent, "2");
+  assert.equal(host.querySelector("dl dt")?.textContent, "术语");
+  assert.equal(host.querySelector("dl dd")?.textContent, "解释一句");
+  assert.equal(host.textContent?.includes("^"), false);
+});
+
+test("mdx 正文照常渲染，组件位置留一块写清楚的占位", async () => {
+  const dom = textFile("file:///tmp/doc.mdx", "");
+  const doc = dom.window.document;
+  // 直接写 textContent，免得这些组件标签在造页面时就被 jsdom 当标签解析掉。
+  first(doc).textContent =
+    'import Chart from "./chart";\n\n# 标题\n\n<Chart data={[1, 2]} />\n\n一段正文。\n\n<Callout>\n提示\n</Callout>\n';
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  const holes = host.querySelectorAll(".lfv-mdx");
+  assert.equal(holes.length, 2);
+  assert.equal(holes[0]?.querySelector("code")?.textContent, "Chart");
+  assert.equal(holes[1]?.querySelector("code")?.textContent, "Callout");
+  assert.equal(host.querySelector("h1")?.textContent?.startsWith("标题"), true);
+  assert.equal(host.textContent?.includes("一段正文。"), true);
+  // import 那行不该漏到正文里。
+  assert.equal(host.textContent?.includes("./chart"), false);
+});
+
 test("类型分档按扩展名，带 query 和 hash 也认得出来", () => {
   assert.equal(classify("file:///tmp/a.md"), "whitelist");
   assert.equal(classify("file:///tmp/a.yaml?x=1#y"), "whitelist");

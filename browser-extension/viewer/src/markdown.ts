@@ -9,6 +9,8 @@
 import DOMPurify, { type WindowLike } from "dompurify";
 import { Marked, type Tokens } from "marked";
 
+import { DIALECTS } from "./dialects.ts";
+
 /** front matter：文件开头用三根横线围起来的一段元信息。 */
 const FRONT_MATTER = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
@@ -48,7 +50,7 @@ function slugify(text: string): string {
 function parser(): Marked {
   const used = new Map<string, number>();
 
-  return new Marked({
+  return new Marked(...DIALECTS, {
     gfm: true,
     renderer: {
       heading(this: { parser: { parseInline: (t: Tokens.Generic[]) => string } }, token: Tokens.Heading) {
@@ -65,6 +67,28 @@ function parser(): Marked {
       },
     },
   });
+}
+
+/** MDX 里的 `import` / `export` 行，和正文无关，删掉。 */
+const MDX_MODULE = /^(?:import|export)\s[^\n]*\n?/gm;
+
+/** 顶格写的 React 组件，自闭合或成对都算。小写开头的是普通 HTML 标签，不动。 */
+const MDX_COMPONENT = /^<([A-Z][\w.]*)(?:[^>]*\/>|[\s\S]*?<\/\1>)[^\S\n]*$/gm;
+
+/**
+ * `.mdx` 的降级：正文按普通 markdown 渲染，组件位置留一块写清楚的占位。
+ *
+ * 这是硬约束不是偷懒：扩展的内容安全策略禁止运行临时生成的代码
+ * （<https://developer.chrome.com/docs/extensions/reference/manifest/content-security-policy>），
+ * 而 MDX 必须先编译成 JavaScript 再执行，所以组件在这里没法真的跑起来。
+ */
+export function degradeMdx(text: string): string {
+  return text.replace(MDX_MODULE, "").replace(
+    MDX_COMPONENT,
+    (_whole, name: string) =>
+      `<div class="lfv-mdx">这里本来有一个 <code>${name}</code> 组件。` +
+      `扩展不允许运行临时生成的代码，组件在这里跑不起来，其余内容照常显示。</div>`,
+  );
 }
 
 /** front matter 的信息表：键在左，值在右。 */
@@ -140,8 +164,8 @@ function spy(doc: Document, heads: HTMLElement[], links: HTMLElement[]): void {
  * 渲染成一个 `<article>`。文档里原有的 HTML 片段会先过一遍 DOMPurify，
  * `<script>`、`onerror=` 这类东西在插进页面之前就被摘掉。
  */
-export function renderMarkdown(doc: Document, text: string): HTMLElement {
-  const { meta, body } = splitFrontMatter(text);
+export function renderMarkdown(doc: Document, text: string, mdx = false): HTMLElement {
+  const { meta, body } = splitFrontMatter(mdx ? degradeMdx(text) : text);
   const html = DOMPurify(doc.defaultView as unknown as WindowLike).sanitize(
     parser().parse(body, { async: false }),
   );

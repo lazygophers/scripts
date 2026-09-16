@@ -277,6 +277,70 @@ html.lfv-on .lfv-md td {
   text-align: left;
 }
 
+/* 提示框：左边一道色条区分类型，底色用同一个色相压暗的版本。 */
+html.lfv-on .lfv-note {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--border);
+  border-radius: calc(var(--radius) / 2);
+  background: var(--card);
+}
+
+html.lfv-on .lfv-note > :first-child {
+  margin-top: 0;
+}
+
+html.lfv-on .lfv-note > :last-child {
+  margin-bottom: 0;
+}
+
+html.lfv-on .lfv-note-note,
+html.lfv-on .lfv-note-info {
+  border-left-color: var(--primary);
+}
+
+html.lfv-on .lfv-note-tip {
+  border-left-color: var(--accent);
+}
+
+html.lfv-on .lfv-note-warning,
+html.lfv-on .lfv-note-caution {
+  border-left-color: var(--ring);
+}
+
+html.lfv-on .lfv-note-danger {
+  border-left-color: var(--destructive);
+}
+
+/* MDX 占位块：灰的，一眼看出这里不是文件坏了，是跑不了。 */
+html.lfv-on .lfv-mdx {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px dashed var(--border);
+  border-radius: calc(var(--radius) / 2);
+  color: var(--muted-foreground);
+  background: var(--muted);
+  font-size: 0.9em;
+}
+
+/* 脚注区和正文拉开，编号淡一些。 */
+html.lfv-on .footnotes {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 0.9em;
+}
+
+html.lfv-on .lfv-md dt {
+  font-weight: 600;
+}
+
+html.lfv-on .lfv-md dd {
+  margin: 0 0 0.5rem 1.5rem;
+  color: var(--muted-foreground);
+}
+
 /* front matter 信息表：键那一列淡一些，整块和正文拉开距离。 */
 html.lfv-on .lfv-front-matter {
   margin-bottom: 2rem;

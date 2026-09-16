@@ -104,8 +104,8 @@ function mount(doc: Document, pre: HTMLElement, pretty: boolean): void {
   doc.body.replaceChildren(pretty ? render(doc, pre.textContent ?? "") : pre, button);
 }
 
-/** markdown 类的扩展名。`mdx` 暂时仍按纯文本，等方言那一票。 */
-const MARKDOWN_EXTS = new Set(["md", "markdown"]);
+/** markdown 类的扩展名。`mdx` 也走文档视图，只是组件位置换成占位块。 */
+const MARKDOWN_EXTS = new Set(["md", "markdown", "mdx"]);
 
 /** 按扩展名分流：markdown 走文档视图，认得的源码走代码视图，其余仍是排版好的纯文本。 */
 function render(doc: Document, text: string): HTMLElement {
@@ -162,7 +162,8 @@ function renderDocument(doc: Document, text: string): HTMLElement {
 
 async function fillDocument(doc: Document, host: HTMLElement, text: string): Promise<void> {
   const module = await import(chrome.runtime.getURL("markdown.js"));
-  const article = (module.renderMarkdown as (d: Document, t: string) => HTMLElement)(doc, text);
+  const render = module.renderMarkdown as (d: Document, t: string, mdx: boolean) => HTMLElement;
+  const article = render(doc, text, extOf(doc.URL) === "mdx");
   const toc = (module.renderToc as (d: Document, a: HTMLElement) => HTMLElement | null)(doc, article);
   host.replaceChildren(...(toc === null ? [article] : [toc, article]));
 
