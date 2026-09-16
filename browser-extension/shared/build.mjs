@@ -14,6 +14,8 @@ const SHARED = dirname(fileURLToPath(import.meta.url));
  * `root` is the extension directory (`browser-extension/<name>`); every other
  * path is relative to `root/src`. `target` picks the manifest flavour, and the
  * two browsers get separate output directories so one command can produce both.
+ *
+ * `sourcemap` 打包时关掉：sourcemap 只给开发看，viewer 带上是 27 MB，不带 2 MB 出头。
  */
 export async function buildExtension({
   root,
@@ -23,6 +25,7 @@ export async function buildExtension({
   loader = {},
   target = "chrome",
   watch = false,
+  sourcemap = true,
   outdir = target === "chrome" ? "dist" : `dist-${target}`,
 }) {
   const out = join(root, outdir);
@@ -47,7 +50,7 @@ export async function buildExtension({
     outdir: out,
     bundle: true,
     target: "chrome116",
-    sourcemap: true,
+    sourcemap,
     logLevel: "info",
     loader,
     // 打包的第三方库（mermaid 一个人就 11 MB）压过之后小一个量级，装进浏览器的就是这些文件。
