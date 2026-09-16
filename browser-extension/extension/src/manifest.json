@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "description": "__MSG_extDescription__",
   "default_locale": "zh_CN",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsf7WYYq5/Sd/cipQb2t4V1KO4qxDkgw0a2UV/Kbr2XLTeohPiA2LdL3e1Xtx0/B7nbo4H5ZHEYGnxBHkkGVIBP+ATQx5Wm0XguD2nOfYsIKFo9qnV+ewJPQ2BN9c4s0EkQsNHuLfiycsTs5ZXj7C7buOkahwQaSLROSgrLc9L6QZoEP5EPztV3WwjhlRscjXd1DEgMXjSHrYafNGKwLCs/lfqPvOCEUQnBWhl9rDsBSw43DA4jtUNziCI7Uj7/WDtbgjt+mlmpg4UeHKiVAU564wIgMEmM7nBcPkvnFkhr4mZHNK/DAJRrgMwJxutvC2yO6/YDwGPXQ3Wm9c4rKsF4SQIDAQAB",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsf7WYYq5/Sd/cipQb2t4V1KO4qxDkgw0a2UV/Kbr2XLTeohPiA2LdL3e1Xtx0/B7nbo4H5ZHEYGnxBHkkGVIBP+ATkx5Wm0XguD2nOfYsIKFo9qnV+ewJP2BN9c4s0EkQsNHuLfiycsTs5ZXb7C7buOkahWQaSLROSgrLc9L6QZoEP5EPztV3WwjhlRscjXd1DEgMX4SHrYafNGKwLCs/lfuMfOCEUQnBWhc9rDsBSw43DA4jtUNziCI7Uj7/WDtbgjt+mlmpk4UeHKiVAU564wIgMEm4nBcPkvnFkhr4mZHNK/DAJRrgFpCJxutvC2yO6/YjwGPdW5EJY3rKsF4SQIDAQAB",
   "browser_specific_settings": {
     "gecko": {
       "id": "browse@lazygophers.com",
