@@ -341,6 +341,20 @@ html.lfv-on .lfv-md dd {
   color: var(--muted-foreground);
 }
 
+/* 链接指向的文件找不到时的提示条：横跨整宽，红色边框，一眼看到。 */
+html.lfv-on .lfv-missing {
+  grid-column: 1 / -1;
+  padding: 0.75rem 2.5rem;
+  color: var(--foreground);
+  background: var(--card);
+  border-bottom: 2px solid var(--destructive);
+  font: 14px / 1.6 system-ui, sans-serif;
+}
+
+html.lfv-on .lfv-missing a {
+  color: var(--primary);
+}
+
 /* front matter 信息表：键那一列淡一些，整块和正文拉开距离。 */
 html.lfv-on .lfv-front-matter {
   margin-bottom: 2rem;

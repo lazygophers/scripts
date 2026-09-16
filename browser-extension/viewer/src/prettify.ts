@@ -176,8 +176,80 @@ async function fillDocument(doc: Document, host: HTMLElement, text: string): Pro
     }),
   );
 
+  wireLocalLinks(doc, host);
   host.classList.add("lfv-rendered");
   scrollToHash(doc);
+}
+
+/**
+ * 文档里指向本地文本文件的链接：点了先探一下文件在不在，在就跳过去，不在就当场说清楚。
+ *
+ * 跳转本身不需要别的花样——新页面还是 `file://`，内容脚本照样接管并渲染，
+ * 前进后退也就自然是浏览器原来的那一套。只有「文件不存在」这一种要拦，
+ * 因为那时浏览器给的是它自己的报错页，内容脚本进不去，话就没处说。
+ *
+ * 网络地址、图片压缩包这类 viewer 不管的扩展名、页内锚点，一律不拦。
+ */
+function wireLocalLinks(doc: Document, host: HTMLElement): void {
+  host.addEventListener("click", (event) => {
+    const mouse = event as MouseEvent;
+    // 新标签页打开、中键、右键都交回浏览器。
+    if (mouse.defaultPrevented || mouse.button !== 0 || mouse.metaKey || mouse.ctrlKey) return;
+
+    const link = (event.target as Element | null)?.closest?.("a");
+    const href = link?.getAttribute("href");
+    if (href === null || href === undefined) return;
+    // 提示里那个「仍然打开」是用户明确说了要去，不再探第二遍。
+    if (link?.classList.contains("lfv-anyway")) return;
+
+    const target = new URL(href, doc.URL);
+    if (target.protocol !== "file:") return;
+    if (!WHITELIST_EXTS.has(extOf(target.href))) return;
+    // 同一份文件里的锚点跳转是浏览器的活，不该走这条路。
+    if (target.href.split("#")[0] === doc.URL.split("#")[0]) return;
+
+    event.preventDefault();
+    void follow(doc, host, target.href);
+  });
+}
+
+async function follow(doc: Document, host: HTMLElement, url: string): Promise<void> {
+  if (await exists(url)) {
+    // `open(url, "_self")` 和 `location.assign` 在浏览器里是同一件事：当前标签页导航，留下一条历史。
+    doc.defaultView?.open(url, "_self");
+    return;
+  }
+  host.querySelector(".lfv-missing")?.remove();
+  host.prepend(missingNote(doc, url));
+}
+
+/**
+ * 探一下这个本地文件在不在。
+ *
+ * 需要: 读不到有两种可能——文件真的不存在，或者这一档上下文没有 `file://` 的读权限。
+ * 两者在 `fetch` 这一层分不开，所以提示里附一个「仍然打开」，真是权限问题时用户不会被卡住。
+ * 到底是哪一种，留给 16 票在真 Chrome 里跑一次确认。
+ */
+async function exists(url: string): Promise<boolean> {
+  try {
+    return (await fetch(url)).ok;
+  } catch {
+    return false;
+  }
+}
+
+function missingNote(doc: Document, url: string): HTMLElement {
+  const note = doc.createElement("div");
+  note.className = "lfv-missing";
+  const name = decodeURIComponent(url.split("/").pop() ?? url);
+  note.append(`找不到这个文件：${name}`);
+
+  const anyway = doc.createElement("a");
+  anyway.className = "lfv-anyway";
+  anyway.href = url;
+  anyway.textContent = "仍然打开";
+  note.append(" ", anyway);
+  return note;
 }
 
 /** 带着 `#小节` 打开时，渲染完自动滚到那个标题。 */

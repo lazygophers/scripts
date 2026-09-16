@@ -23,7 +23,13 @@ beforeEach(() => {
   });
 });
 
-afterEach(clearChrome);
+/** 链接那几个用例会把 `fetch` 换成桩，跑完放回来。 */
+const realFetch = globalThis.fetch;
+
+afterEach(() => {
+  clearChrome();
+  globalThis.fetch = realFetch;
+});
 
 /** 等着色那一拍落地。`lfv-colored` 是着色结束的信号，不着色也会打上。 */
 async function colored(doc: Document): Promise<HTMLElement> {
@@ -537,6 +543,120 @@ test("mdx 正文照常渲染，组件位置留一块写清楚的占位", async (
   assert.equal(host.textContent?.includes("一段正文。"), true);
   // import 那行不该漏到正文里。
   assert.equal(host.textContent?.includes("./chart"), false);
+});
+
+/**
+ * 造一张带链接的 markdown 页，等它渲染完，并把两件跟外界打交道的事换成可观察的桩：
+ * `fetch`（探文件在不在）和 `window.open`（跳转）。`existing` 里列的绝对地址算「文件存在」。
+ */
+async function linkPage(text: string, existing: string[] = []) {
+  const dom = textFile("file:///tmp/docs/guide.md", "");
+  const doc = dom.window.document;
+  // 直接写 textContent，免得 markdown 源码在造页面时就被 jsdom 当标签解析掉。
+  first(doc).textContent = text;
+
+  const opened: string[] = [];
+  const probed: string[] = [];
+  (dom.window as unknown as { open: unknown }).open = (url: string, target: string) => {
+    opened.push(`${url} ${target}`);
+    return null;
+  };
+  (globalThis as { fetch?: unknown }).fetch = async (url: string) => {
+    probed.push(url);
+    return { ok: existing.includes(url) } as Response;
+  };
+  // 没被拦下的链接会走 jsdom 的默认导航（它没实现，只会往控制台吐一行），这里统一收掉。
+  doc.addEventListener("click", (event) => event.preventDefault());
+
+  prettify(doc);
+  const host = await rendered(doc);
+  const click = (href: string) =>
+    host
+      .querySelector(`a[href="${href}"]`)
+      ?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  return { doc, host, opened, probed, click };
+}
+
+test("同级、子目录、上层的相对链接都解析对，文件在就在当前标签页翻过去", async () => {
+  const { opened, probed, click } = await linkPage(
+    "[同级](./api.md)\n\n[子目录](guide/x.md)\n\n[上层](../readme.md)\n",
+    ["file:///tmp/docs/api.md", "file:///tmp/docs/guide/x.md", "file:///tmp/readme.md"],
+  );
+
+  click("./api.md");
+  click("guide/x.md");
+  click("../readme.md");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.deepEqual(probed, [
+    "file:///tmp/docs/api.md",
+    "file:///tmp/docs/guide/x.md",
+    "file:///tmp/readme.md",
+  ]);
+  // `_self` = 当前标签页导航并留下一条历史，前进后退因此照常可用；
+  // 新页面还是 `file://`，内容脚本照样接管，所以退回来看到的仍是渲染好的样子。
+  assert.deepEqual(opened, [
+    "file:///tmp/docs/api.md _self",
+    "file:///tmp/docs/guide/x.md _self",
+    "file:///tmp/readme.md _self",
+  ]);
+});
+
+test("链接目标不存在时当场说找不到，不跳过去", async () => {
+  const { host, opened, click } = await linkPage("[没了](./gone.md)\n");
+
+  click("./gone.md");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const note = host.querySelector(".lfv-missing");
+  assert.equal(note?.textContent?.includes("找不到这个文件：gone.md"), true);
+  assert.deepEqual(opened, []);
+
+  // 点两次只留一条提示。
+  click("./gone.md");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(host.querySelectorAll(".lfv-missing").length, 1);
+
+  // 「仍然打开」是用户明确要去，不再拦第二遍。
+  (host.querySelector(".lfv-anyway") as HTMLElement).dispatchEvent(
+    new (host.ownerDocument.defaultView as unknown as { MouseEvent: typeof MouseEvent }).MouseEvent(
+      "click",
+      { bubbles: true, cancelable: true },
+    ),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(opened, []);
+});
+
+test("图片、压缩包这类链接交回浏览器，不拦", async () => {
+  const { opened, probed, click } = await linkPage("[图](./a.png)\n\n[包](./b.zip)\n");
+
+  click("./a.png");
+  click("./b.zip");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.deepEqual(probed, []);
+  assert.deepEqual(opened, []);
+});
+
+test("网络地址的链接照常打开，不被当成本地文件", async () => {
+  const { opened, probed, click } = await linkPage("[网页](https://example.test/a.md)\n");
+
+  click("https://example.test/a.md");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.deepEqual(probed, []);
+  assert.deepEqual(opened, []);
+});
+
+test("文档内的锚点跳转不走本地文件那条路", async () => {
+  const { opened, probed, click } = await linkPage("# 安装\n\n[回到安装](#安装)\n");
+
+  click("#安装");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.deepEqual(probed, []);
+  assert.deepEqual(opened, []);
 });
 
 test("类型分档按扩展名，带 query 和 hash 也认得出来", () => {
