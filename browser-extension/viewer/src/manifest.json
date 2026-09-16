@@ -27,6 +27,7 @@
         "katex.js",
         "data.js",
         "csv.js",
+        "log.js",
         "katex.css",
         "*.woff2",
         "*.woff",

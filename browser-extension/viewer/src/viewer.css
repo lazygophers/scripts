@@ -515,3 +515,99 @@ html.lfv-on .lfv-row-ragged td:first-child {
 html.lfv-on .lfv-cell-missing {
   background: color-mix(in oklab, var(--destructive) 12%, transparent);
 }
+
+/* 日志视图：外壳相对定位，复制按钮浮在右上角。 */
+html.lfv-on .lfv-logs {
+  position: relative;
+  padding: 2rem 2.5rem;
+}
+
+/* 过滤开关一排，按级别各自上色。 */
+html.lfv-on .lfv-log-filters {
+  display: flex;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  font: 13px / 1.6 system-ui, sans-serif;
+}
+
+html.lfv-on .lfv-log-filter {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  cursor: pointer;
+  text-transform: uppercase;
+}
+
+/* 三列对齐：时间、级别、消息。每行 `display: contents`，所以对齐是整篇统一的，
+   消息长短不会把时间那一列挤歪。 */
+html.lfv-on .lfv-log {
+  display: grid;
+  grid-template-columns: max-content max-content 1fr;
+  gap: 0 1rem;
+  font: 13px / 1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html.lfv-on .lfv-log-row {
+  display: contents;
+}
+
+html.lfv-on .lfv-log-time {
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+html.lfv-on .lfv-log-level {
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+html.lfv-on .lfv-log-message {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 整行是 JSON 的那些：收起来时只有一行，点开是折叠树。 */
+html.lfv-on details.lfv-log-message > summary {
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html.lfv-on .lfv-log-message .lfv-tree {
+  padding: 0.5rem 0 0.5rem 1rem;
+}
+
+/* 级别配色：错误红、警告黄、调试和 trace 淡，info 就是正文色。 */
+html.lfv-on .lfv-log-fatal .lfv-log-level,
+html.lfv-on .lfv-log-error .lfv-log-level,
+html.lfv-on .lfv-log-fatal .lfv-log-message,
+html.lfv-on .lfv-log-error .lfv-log-message,
+html.lfv-on .lfv-log-filter.lfv-log-error,
+html.lfv-on .lfv-log-filter.lfv-log-fatal {
+  color: var(--destructive);
+}
+
+html.lfv-on .lfv-log-warn .lfv-log-level,
+html.lfv-on .lfv-log-filter.lfv-log-warn {
+  color: var(--ring);
+}
+
+html.lfv-on .lfv-log-debug,
+html.lfv-on .lfv-log-trace,
+html.lfv-on .lfv-log-debug .lfv-log-message,
+html.lfv-on .lfv-log-trace .lfv-log-message,
+html.lfv-on .lfv-log-filter.lfv-log-debug,
+html.lfv-on .lfv-log-filter.lfv-log-trace {
+  color: var(--muted-foreground);
+}
+
+/* 关掉某一级：只是容器上多一个类，行本身不动。认不出级别的行没有这些类，永远看得见。 */
+html.lfv-on .lfv-hide-fatal .lfv-log-fatal,
+html.lfv-on .lfv-hide-error .lfv-log-error,
+html.lfv-on .lfv-hide-warn .lfv-log-warn,
+html.lfv-on .lfv-hide-info .lfv-log-info,
+html.lfv-on .lfv-hide-debug .lfv-log-debug,
+html.lfv-on .lfv-hide-trace .lfv-log-trace {
+  display: none;
+}

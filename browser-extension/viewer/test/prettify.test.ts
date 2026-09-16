@@ -22,6 +22,7 @@ beforeEach(() => {
         if (path === "katex.js") return new URL("./stub-katex.ts", import.meta.url).href;
         if (path === "data.js") return new URL("../src/data.ts", import.meta.url).href;
         if (path === "csv.js") return new URL("../src/csv.ts", import.meta.url).href;
+        if (path === "log.js") return new URL("../src/log.ts", import.meta.url).href;
         return `chrome-extension://viewer/${path}`;
       },
     },
@@ -138,7 +139,7 @@ test("拿不准的纯文本页只多一个「美化一下」按钮，点了才�
 
 test("超过 2MB 只出原始文本加一个「强制美化」按钮", () => {
   const big = "x".repeat(2 * 1024 * 1024 + 1);
-  const dom = textFile("file:///tmp/huge.log", big);
+  const dom = textFile("file:///tmp/huge.conf", big);
   const doc = dom.window.document;
 
   prettify(doc);
@@ -217,7 +218,7 @@ test("复制按钮把全文放进剪贴板，不含行号，并给出反馈", as
 });
 
 test("扩展名不是源码时不走代码视图，仍是纯文本", () => {
-  const dom = textFile("file:///tmp/notes.log", "line one\nline two\n");
+  const dom = textFile("file:///tmp/notes.conf", "line one\nline two\n");
   const doc = dom.window.document;
 
   prettify(doc);
@@ -982,4 +983,136 @@ test("类型分档按扩展名，带 query 和 hash 也认得出来", () => {
   assert.equal(classify("file:///tmp/a.svg"), "webpage");
   assert.equal(classify("file:///tmp/README"), "unknown");
   assert.equal(classify("file:///tmp/.bashrc"), "unknown");
+});
+
+/** 造一张日志页并等它渲染完。 */
+async function logPage(text: string, url = "file:///tmp/a.log") {
+  const dom = textFile(url, "");
+  const doc = dom.window.document;
+  first(doc).textContent = text;
+  prettify(doc);
+  for (let i = 0; i < 200; i += 1) {
+    const host = doc.querySelector(".lfv-logs.lfv-rendered");
+    if (host) return { dom, doc, host: host as HTMLElement };
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("等不到日志渲染完成");
+}
+
+/** 一行日志拆出来的三列。 */
+const columns = (row: Element) =>
+  [".lfv-log-time", ".lfv-log-level", ".lfv-log-message"].map(
+    (sel) => row.querySelector(sel)?.textContent,
+  );
+
+test("常见格式的日志行按级别上色，时间、级别、消息各自成列", async () => {
+  const { host } = await logPage(
+    "2026-09-16T03:04:05.123Z INFO 启动完成\n" +
+      "[2026-09-16 03:04:06] ERROR 连不上数据库\n" +
+      "2026-09-16 03:04:07 WARNING 重试中\n",
+  );
+
+  const rows = host.querySelectorAll(".lfv-log-row");
+  assert.equal(rows.length, 3);
+  assert.deepEqual(columns(rows[0] as Element), [
+    "2026-09-16T03:04:05.123Z",
+    "info",
+    "INFO 启动完成",
+  ]);
+  assert.equal(rows[0]?.className, "lfv-log-row lfv-log-info");
+  assert.equal(rows[1]?.className, "lfv-log-row lfv-log-error");
+  // WARNING 归到 warn，同一个类名。
+  assert.equal(rows[2]?.className, "lfv-log-row lfv-log-warn");
+  assert.equal((rows[1] as Element).querySelector(".lfv-log-time")?.textContent, "2026-09-16 03:04:06");
+});
+
+test("关掉某一级后对应行隐藏，再打开恢复；只列出文件里出现过的级别", async () => {
+  const { dom, host } = await logPage("INFO 一\nERROR 二\nINFO 三\n");
+  const view = host.querySelector(".lfv-log") as HTMLElement;
+  const boxes = Array.from(
+    host.querySelectorAll(".lfv-log-filters input"),
+    (n) => n as HTMLInputElement,
+  );
+
+  assert.deepEqual(
+    boxes.map((b) => b.dataset["level"]),
+    ["error", "info"],
+  );
+  assert.ok(boxes.every((b) => b.checked));
+
+  const toggleBox = (box: HTMLInputElement, checked: boolean) => {
+    box.checked = checked;
+    box.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  };
+
+  const info = boxes[1] as HTMLInputElement;
+  toggleBox(info, false);
+  assert.ok(view.classList.contains("lfv-hide-info"));
+  assert.equal(view.classList.contains("lfv-hide-error"), false);
+
+  toggleBox(info, true);
+  assert.equal(view.classList.contains("lfv-hide-info"), false);
+});
+
+test("整行为 JSON 的日志行可展开成折叠树", async () => {
+  const { host } = await logPage(
+    '{"time":"2026-09-16T03:04:05Z","level":"error","msg":"炸了","code":500}\n普通一行\n',
+  );
+
+  const rows = host.querySelectorAll(".lfv-log-row");
+  assert.equal(rows[0]?.className, "lfv-log-row lfv-log-error");
+  assert.deepEqual(
+    [
+      (rows[0] as Element).querySelector(".lfv-log-time")?.textContent,
+      (rows[0] as Element).querySelector(".lfv-log-level")?.textContent,
+    ],
+    ["2026-09-16T03:04:05Z", "error"],
+  );
+
+  const message = (rows[0] as Element).querySelector(".lfv-log-message") as HTMLElement;
+  assert.equal(message.tagName, "DETAILS");
+  assert.ok(message.querySelector(".lfv-tree"), "JSON 行里应该有一棵树");
+  assert.equal(message.querySelector("summary")?.textContent?.includes("炸了"), true);
+
+  // 第二行不是 JSON，仍是普通一行。
+  assert.equal((rows[1] as Element).querySelector(".lfv-log-message")?.tagName, "SPAN");
+});
+
+test("一行 JSON 都没有时不去加载树那个包", async () => {
+  await logPage("INFO 一\nERROR 二\n");
+  assert.equal(asked.includes("data.js"), false);
+  assert.equal(asked.includes("log.js"), true);
+});
+
+test("格式认不出来的行原样显示，也不被任何过滤开关藏起来", async () => {
+  const { dom, host } = await logPage("一段谁也认不出来的话\nERROR 二\n");
+
+  const rows = host.querySelectorAll(".lfv-log-row");
+  assert.equal(rows[0]?.className, "lfv-log-row");
+  assert.deepEqual(columns(rows[0] as Element), ["", "", "一段谁也认不出来的话"]);
+
+  // 把出现过的级别全关掉，这一行仍然没有任何级别类名，CSS 也就碰不到它。
+  const view = host.querySelector(".lfv-log") as HTMLElement;
+  for (const node of host.querySelectorAll(".lfv-log-filters input")) {
+    const box = node as HTMLInputElement;
+    box.checked = false;
+    box.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  }
+  assert.ok(view.classList.contains("lfv-hide-error"));
+  assert.equal(
+    Array.from(rows[0]?.classList ?? []).some((c) => c.startsWith("lfv-log-") && c !== "lfv-log-row"),
+    false,
+  );
+});
+
+test("空文件和超长单行都不报错", async () => {
+  const empty = await logPage("");
+  assert.equal(empty.host.querySelectorAll(".lfv-log-row").length, 0);
+  assert.equal(empty.host.querySelectorAll(".lfv-log-filters input").length, 0);
+
+  const long = "INFO " + "x".repeat(200_000);
+  const huge = await logPage(`${long}\n`);
+  const rows = huge.host.querySelectorAll(".lfv-log-row");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.querySelector(".lfv-log-message")?.textContent?.length, long.length);
 });

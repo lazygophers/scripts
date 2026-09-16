@@ -119,6 +119,7 @@ function render(doc: Document, text: string): HTMLElement {
   if (MARKDOWN_EXTS.has(ext)) return renderDocument(doc, text);
   if (DATA_EXTS.has(ext)) return renderData(doc, text, ext !== "json");
   if (ext === "csv") return renderCsv(doc, text);
+  if (ext === "log") return renderLog(doc, text);
   const language = LANGS[ext];
   if (language === undefined) {
     const view = doc.createElement("pre");
@@ -177,6 +178,21 @@ async function fillCsv(doc: Document, host: HTMLElement, text: string): Promise<
   const rows = (module.parseCsv as (t: string) => string[][])(text);
   const table = (module.renderTable as (d: Document, r: string[][]) => HTMLElement)(doc, rows);
   host.replaceChildren(makeCopyButton(doc, text), table);
+  host.classList.add("lfv-rendered");
+}
+
+/** 日志视图：壳子先挂上，拆行和上色在 log 包里异步做完再填进来。 */
+function renderLog(doc: Document, text: string): HTMLElement {
+  const host = doc.createElement("div");
+  host.className = "lfv-logs";
+  void fillLog(doc, host, text);
+  return host;
+}
+
+async function fillLog(doc: Document, host: HTMLElement, text: string): Promise<void> {
+  const module = await import(chrome.runtime.getURL("log.js"));
+  const render = module.renderLog as (d: Document, t: string) => Promise<HTMLElement>;
+  host.replaceChildren(makeCopyButton(doc, text), await render(doc, text));
   host.classList.add("lfv-rendered");
 }
 
