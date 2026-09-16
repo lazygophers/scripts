@@ -163,7 +163,8 @@ function renderDocument(doc: Document, text: string): HTMLElement {
 async function fillDocument(doc: Document, host: HTMLElement, text: string): Promise<void> {
   const module = await import(chrome.runtime.getURL("markdown.js"));
   const article = (module.renderMarkdown as (d: Document, t: string) => HTMLElement)(doc, text);
-  host.replaceChildren(article);
+  const toc = (module.renderToc as (d: Document, a: HTMLElement) => HTMLElement | null)(doc, article);
+  host.replaceChildren(...(toc === null ? [article] : [toc, article]));
 
   // 围栏代码块上 marked 已经写好了 `language-xx`，复用同一个高亮包着色。
   const blocks = article.querySelectorAll<HTMLElement>("pre > code[class*='language-']");

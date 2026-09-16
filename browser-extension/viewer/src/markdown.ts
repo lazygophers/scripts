@@ -83,6 +83,59 @@ function metaTable(doc: Document, meta: [string, string][]): HTMLElement {
   return table;
 }
 
+/** 侧边栏放不下的窗口宽度，和 `viewer.css` 里那条 `@media (max-width: 60rem)` 是同一个界。 */
+const NARROW = 960;
+
+/**
+ * 目录：把正文里的标题按层级列成一条侧边栏，没有标题就返回 null（页面上不留空侧栏）。
+ *
+ * 用 `<details>` 而不是自己写展开逻辑：窄窗口下它自带点开收起，宽窗口由 CSS 强制摊开。
+ * 跳转也不写 JS，`<a href="#id">` 本来就是浏览器的活。
+ */
+export function renderToc(doc: Document, article: HTMLElement): HTMLElement | null {
+  const heads = Array.from(article.querySelectorAll<HTMLElement>("h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]"));
+  if (heads.length === 0) return null;
+
+  const toc = doc.createElement("details");
+  toc.className = "lfv-toc";
+  // 宽屏摊开（CSS 把「目录」那个开关藏掉），窄屏收成一行，点开才占地方。
+  toc.open = (doc.defaultView?.innerWidth ?? 0) > NARROW;
+  const title = doc.createElement("summary");
+  title.textContent = "目录";
+  toc.append(title);
+
+  const links = heads.map((head) => {
+    const link = doc.createElement("a");
+    link.href = `#${head.id}`;
+    // 标题里那个锚点「#」不该出现在目录里。
+    link.textContent = head.textContent?.replace(/#$/, "") ?? "";
+    link.dataset["level"] = head.tagName.slice(1);
+    toc.append(link);
+    return link;
+  });
+
+  spy(doc, heads, links);
+  return toc;
+}
+
+/**
+ * 滚动时高亮当前所在的那一节：取最后一个已经滚过视口顶部的标题。
+ *
+ * ponytail: 直接读 `getBoundingClientRect()`，标题多到几百条时每次滚动都要量一遍；
+ * 真遇到卡顿再换 IntersectionObserver。
+ */
+function spy(doc: Document, heads: HTMLElement[], links: HTMLElement[]): void {
+  const update = () => {
+    let active = 0;
+    heads.forEach((head, i) => {
+      if (head.getBoundingClientRect().top <= 80) active = i;
+    });
+    links.forEach((link, i) => link.classList.toggle("lfv-active", i === active));
+  };
+  doc.defaultView?.addEventListener("scroll", update, { passive: true });
+  update();
+}
+
 /**
  * 渲染成一个 `<article>`。文档里原有的 HTML 片段会先过一遍 DOMPurify，
  * `<script>`、`onerror=` 这类东西在插进页面之前就被摘掉。

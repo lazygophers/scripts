@@ -114,6 +114,80 @@ html.lfv-on .hljs-meta {
   color: var(--destructive);
 }
 
+/* 文档视图：宽屏时目录一列、正文一列；没有目录时正文自己占满。 */
+html.lfv-on .lfv-doc {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+}
+
+/* 目录钉在左边跟着滚，自己超长时自己滚。 */
+html.lfv-on .lfv-toc {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 2rem 1rem;
+  width: 16rem;
+  border-right: 1px solid var(--border);
+  font-size: 0.85em;
+}
+
+/* 宽屏不需要「目录」这个开关：摊开就是了。 */
+html.lfv-on .lfv-toc > summary {
+  display: none;
+}
+
+html.lfv-on .lfv-toc a {
+  display: block;
+  padding: 0.2rem 0;
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+
+html.lfv-on .lfv-toc a:hover {
+  color: var(--foreground);
+}
+
+html.lfv-on .lfv-toc a.lfv-active {
+  color: var(--primary);
+}
+
+html.lfv-on .lfv-toc a[data-level="2"] {
+  padding-left: 1rem;
+}
+
+html.lfv-on .lfv-toc a[data-level="3"] {
+  padding-left: 2rem;
+}
+
+html.lfv-on .lfv-toc a[data-level="4"],
+html.lfv-on .lfv-toc a[data-level="5"],
+html.lfv-on .lfv-toc a[data-level="6"] {
+  padding-left: 3rem;
+}
+
+/* 窄窗口塞不下侧边栏：目录退回一行可点开的「目录」，正文占满整宽。 */
+@media (max-width: 60rem) {
+  html.lfv-on .lfv-doc {
+    grid-template-columns: 1fr;
+  }
+
+  html.lfv-on .lfv-toc {
+    position: static;
+    width: auto;
+    max-height: none;
+    padding: 1rem 2.5rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  html.lfv-on .lfv-toc > summary {
+    display: list-item;
+    cursor: pointer;
+  }
+}
+
 /* markdown 文档视图：一栏正文，宽度按可读行长收住。 */
 html.lfv-on .lfv-md {
   display: block;

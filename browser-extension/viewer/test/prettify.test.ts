@@ -368,6 +368,88 @@ test("文档里的原始 HTML 过一遍净化，脚本被摘掉", async () => {
   assert.equal((dom.window as unknown as { pwned?: number }).pwned, undefined);
 });
 
+test("markdown 左侧出现目录，按层级缩进，点条目跳到那一节", async () => {
+  const dom = textFile("file:///tmp/long.md", "# 开头\n\n## 安装\n\n### 细节\n\n## 用法\n");
+  const doc = dom.window.document;
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  // 目录排在正文前面，才是「左侧那一条」。
+  assert.equal(host.children[0]?.className, "lfv-toc");
+  const links = host.querySelectorAll(".lfv-toc a");
+  assert.deepEqual(
+    Array.from(links, (a) => [a.textContent, a.getAttribute("href"), (a as HTMLElement).dataset["level"]]),
+    [
+      ["开头", "#开头", "1"],
+      ["安装", "#安装", "2"],
+      ["细节", "#细节", "3"],
+      ["用法", "#用法", "2"],
+    ],
+  );
+  assert.ok(host.querySelector("#安装"), "目录指向的 id 在正文里真的存在");
+});
+
+test("滚动时目录高亮当前所在的那一节", async () => {
+  const dom = textFile("file:///tmp/long.md", "## 一\n\n## 二\n");
+  const doc = dom.window.document;
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  // jsdom 没有排版，自己摆两个标题的位置：一在视口上方，二还在下面。
+  const place = (id: string, top: number) =>
+    Object.defineProperty(doc.getElementById(id) as HTMLElement, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ top }) as DOMRect,
+    });
+  place("一", -10);
+  place("二", 500);
+  dom.window.dispatchEvent(new dom.window.Event("scroll"));
+
+  const links = host.querySelectorAll(".lfv-toc a");
+  assert.equal(links[0]?.classList.contains("lfv-active"), true);
+  assert.equal(links[1]?.classList.contains("lfv-active"), false);
+
+  // 往下滚过第二个标题，高亮跟着走。
+  place("二", 20);
+  dom.window.dispatchEvent(new dom.window.Event("scroll"));
+  assert.equal(links[0]?.classList.contains("lfv-active"), false);
+  assert.equal(links[1]?.classList.contains("lfv-active"), true);
+});
+
+test("没有标题的文档不出目录，非 markdown 页面也没有", async () => {
+  const dom = textFile("file:///tmp/flat.md", "只有一段话。\n");
+  const doc = dom.window.document;
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  assert.equal(host.querySelector(".lfv-toc"), null);
+  assert.equal(host.children.length, 1);
+
+  const code = textFile("file:///tmp/main.go", "package main\n");
+  prettify(code.window.document);
+  assert.equal(code.window.document.querySelector(".lfv-toc"), null);
+});
+
+test("窄窗口下目录收起，宽窗口摊开", async () => {
+  const narrow = textFile("file:///tmp/a.md", "## 一\n");
+  Object.defineProperty(narrow.window, "innerWidth", { configurable: true, value: 600 });
+  prettify(narrow.window.document);
+  const narrowHost = await rendered(narrow.window.document);
+  const narrowToc = narrowHost.querySelector(".lfv-toc") as HTMLDetailsElement;
+  assert.equal(narrowToc.tagName, "DETAILS");
+  assert.equal(narrowToc.open, false);
+  assert.equal(narrowToc.querySelector("summary")?.textContent, "目录");
+
+  const wide = textFile("file:///tmp/b.md", "## 一\n");
+  Object.defineProperty(wide.window, "innerWidth", { configurable: true, value: 1440 });
+  prettify(wide.window.document);
+  const wideHost = await rendered(wide.window.document);
+  assert.equal((wideHost.querySelector(".lfv-toc") as HTMLDetailsElement).open, true);
+});
+
 test("类型分档按扩展名，带 query 和 hash 也认得出来", () => {
   assert.equal(classify("file:///tmp/a.md"), "whitelist");
   assert.equal(classify("file:///tmp/a.yaml?x=1#y"), "whitelist");
