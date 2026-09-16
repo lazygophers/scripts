@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>浏览器工具箱 设置</title>
+    <link rel="stylesheet" href="ui.css" />
+  </head>
+  <body class="options">
+    <header>
+      <h1>设置</h1>
+    </header>
+
+    <main>
+      <section aria-labelledby="markdownTitle">
+        <h2 id="markdownTitle">Markdown 导出</h2>
+        <label class="check-row">
+          <input id="includeTitle" type="checkbox" checked />
+          <span>复制时在开头写入网页标题</span>
+        </label>
+        <label class="check-row">
+          <input id="includeSource" type="checkbox" checked />
+          <span>复制时写入来源链接</span>
+        </label>
+        <div class="actions">
+          <button id="save" type="button">保存</button>
+        </div>
+        <p class="hint">设置保存在本浏览器内，不会上传。</p>
+      </section>
+    </main>
+
+    <p id="notice" class="notice" aria-live="polite" hidden></p>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

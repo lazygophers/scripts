@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "浏览器工具箱",
+  "version": "0.0.2",
+  "description": "DNS 缓存入口和网页 Markdown 导出",
+  "action": {
+    "default_title": "浏览器工具箱",
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "clipboardWrite",
+    "storage"
+  ],
+  "minimum_chrome_version": "116"
+}

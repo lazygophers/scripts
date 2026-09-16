@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>浏览器工具箱</title>
+    <link rel="stylesheet" href="ui.css" />
+  </head>
+  <body>
+    <header>
+      <h1>浏览器工具箱</h1>
+      <nav aria-label="工具">
+        <button class="tab active" type="button" data-panel="markdownPanel">Markdown</button>
+        <button class="tab" type="button" data-panel="dnsPanel">DNS</button>
+      </nav>
+    </header>
+
+    <main>
+      <section id="markdownPanel" class="panel active" aria-labelledby="markdownTitle">
+        <h2 id="markdownTitle">网页转 Markdown</h2>
+        <p>有选中文字时复制选中部分；否则提取当前网页正文。</p>
+        <button id="copyMarkdown" type="button">复制为 Markdown</button>
+        <p class="hint">标题和当前网页地址会一起写入剪贴板。页面内容不会上传。</p>
+      </section>
+
+      <section id="dnsPanel" class="panel" aria-labelledby="dnsTitle">
+        <h2 id="dnsTitle">Chrome DNS 缓存</h2>
+        <p>打开 Chrome 内置页面后，请手动点击 <strong>Clear host cache</strong>。</p>
+        <button id="openDns" type="button">打开 DNS 缓存页面</button>
+        <p class="hint">此操作不切换 DNS，也不会自动清理缓存。</p>
+      </section>
+
+      <section id="markdownPanel" class="panel" aria-labelledby="markdownTitle">
+        <h2 id="markdownTitle">网页转 Markdown</h2>
+        <p>有选中文字时复制选中部分；否则提取当前网页正文。</p>
+        <button id="copyMarkdown" type="button">复制为 Markdown</button>
+        <p class="hint">标题和当前网页地址会一起写入剪贴板。页面内容不会上传。</p>
+      </section>
+    </main>
+
+    <p id="notice" class="notice" aria-live="polite" hidden></p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
