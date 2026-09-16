@@ -4,21 +4,20 @@ import { afterEach, beforeEach, test } from "node:test";
 import { clearChrome, installChrome, page, storageMock } from "./mock.ts";
 import { fileAccess, readSettings, renderSettings, writeSettings } from "../src/settings.ts";
 import { fileOf, load } from "../src/page.ts";
+import { rules } from "../src/rules.ts";
 
 /** 本轮开的标签页。欢迎页和展示页都是这么开出来的。 */
 let opened: string[] = [];
 
-/** 本轮被取消、被抹掉的下载。 */
-let cancelled: number[] = [];
-let erased: number[] = [];
+/** 本轮写进浏览器的拦截规则。开关拨一次写一次。 */
+let written: { removeRuleIds: number[]; addRules: { condition: { regexFilter: string } }[] }[] = [];
 
 /**
  * 装一套假的 chrome。`allowed` 是浏览器里「允许访问文件网址」那个开关的状态。
  */
 function setup({ allowed = true, stored = {} as Record<string, unknown> } = {}) {
   opened = [];
-  cancelled = [];
-  erased = [];
+  written = [];
   installChrome({
     runtime: {
       getURL: (path: string) =>
@@ -34,13 +33,9 @@ function setup({ allowed = true, stored = {} as Record<string, unknown> } = {}) 
         opened.push(url);
       },
     },
-    downloads: {
-      onCreated: { addListener: () => {} },
-      cancel: async (id: number) => {
-        cancelled.push(id);
-      },
-      erase: async ({ id }: { id: number }) => {
-        erased.push(id);
+    declarativeNetRequest: {
+      updateDynamicRules: async (change: (typeof written)[number]) => {
+        written.push(change);
       },
     },
   });
@@ -49,7 +44,7 @@ function setup({ allowed = true, stored = {} as Record<string, unknown> } = {}) 
 
 // `background.ts` 一加载就去挂浏览器的事件监听，所以先把假 chrome 装上再动态加载它。
 setup();
-const { interceptDownload, welcome } = await import("../src/background.ts");
+const { welcome } = await import("../src/background.ts");
 
 const realFetch = globalThis.fetch;
 
@@ -68,6 +63,7 @@ function settingsPage(url = "chrome-extension://viewer/settings.html") {
     `<section id="lfv-welcome" hidden></section>
      <p id="lfv-access">读取中…</p>
      <ol id="lfv-steps" hidden></ol>
+     <p id="lfv-firefox" hidden></p>
      <label><input id="lfv-force" type="checkbox" /></label>`,
     { url },
   );
@@ -154,47 +150,44 @@ test("权限已经开着的用户装完不被打扰，升级也不弹", async ()
   assert.deepEqual(opened, []);
 });
 
-test("开关关着时下载照旧，一个字节都不拦", async () => {
-  setup();
+test("开关打开后写进拦截规则，关掉后又撤干净", async () => {
+  const store = setup();
 
-  assert.equal(await interceptDownload({ id: 7, url: "file:///tmp/a.yaml" }), false);
-  assert.deepEqual(cancelled, []);
-  assert.deepEqual(opened, []);
+  await writeSettings({ force: true });
+  const on = written[0] as (typeof written)[number];
+  assert.deepEqual(
+    on.addRules.map((rule) => rule.condition.regexFilter),
+    ["^file:///.*\\.yaml$", "^file:///.*\\.yml$", "^file:///.*\\.csv$"],
+  );
+
+  await writeSettings({ force: false });
+  const off = written[1] as (typeof written)[number];
+  // 关掉就是把同一批 id 删掉，规则存在浏览器里，不删干净就不算恢复。
+  assert.deepEqual(off.addRules, []);
+  assert.deepEqual(off.removeRuleIds, on.removeRuleIds);
+  assert.deepEqual(store.data["viewer-settings"], { force: false });
 });
 
-test("开关打开后会被下载的本地文本文件改在展示页里打开", async () => {
-  setup({ stored: { "viewer-settings": { force: true } } });
+test("规则把整页导航改跳到展示页，地址里带上原来那个文件", () => {
+  const [first] = rules("chrome-extension://viewer/");
 
-  assert.equal(await interceptDownload({ id: 7, url: "file:///tmp/a b.yaml" }), true);
-  assert.deepEqual(cancelled, [7]);
-  // 取消掉的那条也从下载列表里抹掉。
-  assert.deepEqual(erased, [7]);
-  assert.deepEqual(opened, [
-    `chrome-extension://viewer/viewer.html?file=${encodeURIComponent("file:///tmp/a b.yaml")}`,
-  ]);
+  assert.equal(first?.action.redirect?.regexSubstitution, "chrome-extension://viewer/viewer.html?file=\\0");
+  assert.deepEqual(first?.condition.resourceTypes, ["main_frame"]);
 });
 
-test("开关打开也只管本地的、viewer 认得的那些文件", async () => {
-  setup({ stored: { "viewer-settings": { force: true } } });
+test("只拦实测会被下载的那几类，别的一概不碰", () => {
+  const matches = (url: string) =>
+    rules("chrome-extension://viewer/").some((rule) =>
+      new RegExp(rule.condition.regexFilter ?? "").test(url),
+    );
 
-  // 网上下来的文件不碰。
-  assert.equal(await interceptDownload({ id: 1, url: "https://example.test/a.yaml" }), false);
-  // 本地的压缩包 viewer 本来就不管。
-  assert.equal(await interceptDownload({ id: 2, url: "file:///tmp/a.zip" }), false);
-  assert.deepEqual(cancelled, []);
-});
-
-test("重定向过的下载按最终地址判断", async () => {
-  setup({ stored: { "viewer-settings": { force: true } } });
-
-  const taken = await interceptDownload({
-    id: 3,
-    url: "https://example.test/x",
-    finalUrl: "file:///tmp/a.csv",
-  });
-
-  assert.equal(taken, true);
-  assert.deepEqual(cancelled, [3]);
+  assert.equal(matches("file:///tmp/a.yaml"), true);
+  assert.equal(matches("file:///tmp/a.yml"), true);
+  assert.equal(matches("file:///tmp/a.csv"), true);
+  // markdown、源码这些浏览器本来就会内联显示，拦了反而是改掉用户熟悉的行为。
+  assert.equal(matches("file:///tmp/a.md"), false);
+  assert.equal(matches("file:///tmp/a.go"), false);
+  assert.equal(matches("https://example.test/a.yaml"), false);
 });
 
 test("展示页按真实文件地址渲染，和直接打开那个文件一样", async () => {
@@ -223,4 +216,19 @@ test("展示页从地址里取出要显示的文件", () => {
     "file:///tmp/a b.csv",
   );
   assert.equal(fileOf("chrome-extension://viewer/viewer.html"), "");
+});
+
+test("Firefox 上没有那个开关，改说一句话，也不弹欢迎页", async () => {
+  setup();
+  // Firefox 的 chrome.extension 没有 isAllowedFileSchemeAccess 这个方法。
+  (globalThis as unknown as { chrome: { extension: Record<string, unknown> } }).chrome.extension = {};
+
+  const doc = settingsPage().window.document;
+  await renderSettings(doc);
+
+  assert.equal((doc.getElementById("lfv-steps") as HTMLElement).hidden, true);
+  assert.equal((doc.getElementById("lfv-firefox") as HTMLElement).hidden, false);
+  assert.equal((doc.getElementById("lfv-access") as HTMLElement).dataset["state"], "on");
+  assert.equal(await welcome("install"), false);
+  assert.deepEqual(opened, []);
 });

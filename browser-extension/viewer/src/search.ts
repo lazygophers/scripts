@@ -127,20 +127,24 @@ export function openSearch(doc: Document): HTMLElement {
     show();
   };
 
-  const close = () => {
-    unmark(root);
-    bar.remove();
-  };
-
-  input.addEventListener("input", search);
-  bar.addEventListener("keydown", (event) => {
+  const keys = (event: Event) => {
     const key = (event as KeyboardEvent).key;
     if (!["Escape", "Enter", "ArrowDown", "ArrowUp"].includes(key)) return;
     // 上下箭头本来是在输入框里挪光标，这里改成跳命中。
     event.preventDefault();
     if (key === "Escape") return close();
     step(key === "ArrowUp" || (event as KeyboardEvent).shiftKey ? -1 : 1);
-  });
+  };
+
+  const close = () => {
+    doc.removeEventListener("keydown", keys);
+    unmark(root);
+    bar.remove();
+  };
+
+  input.addEventListener("input", search);
+  // 监听挂在整张页面上，不是搜索框上：点过正文之后焦点就不在框里了，Esc 和上下箭头照样要管用。
+  doc.addEventListener("keydown", keys);
 
   return bar;
 }

@@ -8,7 +8,7 @@
     "type": "module"
   },
   "options_page": "settings.html",
-  "permissions": ["storage", "downloads"],
+  "permissions": ["storage", "declarativeNetRequest"],
   "browser_specific_settings": {
     "gecko": {
       "id": "viewer@lazygophers.com",
@@ -36,6 +36,7 @@
         "log.js",
         "listing.js",
         "search.js",
+        "viewer.html",
         "katex.css",
         "*.woff2",
         "*.woff",

@@ -1477,3 +1477,16 @@ test("没被美化的页面不接管查找快捷键", async () => {
   find(doc);
   assert.ok(await searchBar(doc));
 });
+
+test("焦点回到正文后 Esc 一样关得掉搜索框", async () => {
+  const { doc, bar } = await searchPage("alpha beta alpha");
+  type(bar, "alpha");
+  assert.equal(doc.querySelectorAll(".lfv-hit").length, 2);
+
+  // 用户点过正文，焦点已经不在搜索框里了。
+  const view = doc.defaultView as Window & typeof globalThis;
+  doc.dispatchEvent(new view.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+  assert.equal(doc.querySelector(".lfv-search"), null);
+  assert.equal(doc.querySelectorAll(".lfv-hit").length, 0);
+});

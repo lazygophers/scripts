@@ -72,24 +72,25 @@ Firefox 官方的文件类型说明 <https://support.mozilla.org/en-US/kb/Managi
 
 ## 哪些文件会被浏览器直接下载
 
-有几类文件浏览器根本不显示，直接下载，扩展的内容脚本连页面都没有，所以帮不上忙。
-这时去扩展的选项页打开**强制拦截**：这类本地文件的下载会被取消，改在扩展自己的展示页里
-打开，看到的东西和直接打开一个文件完全一样。关掉开关立刻恢复原来的下载行为。
+有几类文件浏览器判定为不能内联显示，直接存盘，页面根本不存在，扩展的内容脚本也就无从注入。
+**Chrome + macOS 上实测只有三种**：
 
-判断哪些类型会被下载不靠猜：浏览器自己发出下载这个动作，就是它在说「这个我不显示」，
-扩展据此接管。所以清单只影响你要不要打开这个开关，不影响功能是否正确。
+| 扩展名 | 为什么 |
+| --- | --- |
+| `.yaml` `.yml` | 系统报成 `application/x-yaml`，不在浏览器的可渲染名单里 |
+| `.csv` | 在浏览器的 `kUnsupportedTextTypes` 拒绝名单里 |
 
-Chrome 决定一个本地文件的类型时，先查它自己写死的一张表，查不到再问操作系统
-（`chromium/chromium:net/base/mime_util.cc`）。写死的那张表里，下面这些一定会内联显示：
+其余常见的都会内联显示：`.md` 直接渲染；`.go` `.py` `.log` `.toml` `.conf` 这些系统 MIME 表里
+没有条目的走内容嗅探变成 `text/plain`。出处：`chromium/chromium:net/base/mime_util.cc`、
+`chromium/chromium:third_party/blink/common/mime_util/mime_util.cc`，决策见
+`docs/adr/0003-viewer-download-types-opt-in.md`。
 
-`.txt` `.text` `.html` `.htm` `.css` `.js` `.mjs` `.xml` `.csv` `.md` `.sh` `.json`
+要看这三类，去扩展的选项页打开**强制拦截**：它们的整页导航会在发生之前被改跳到扩展自己的
+展示页，看到的东西和直接打开一个文件完全一样，当前标签页和前进后退也都正常。关掉开关立刻
+恢复原来的下载行为，不用重装扩展。
 
-其余扩展名（`.yaml` `.yml` `.toml` `.ini` `.conf` `.log` `.go` `.py` `.ts` `.rs`
-`.java` `.rb` `.php` `.sql` `.scss` 等）交给操作系统回答，答案因机器上装了什么软件而异
-——比如装过某些 markdown 编辑器之后，`.md` 也会开始被下载。
-
-**要确认你这台机器上的实际情况**，开一个目录放几个空文件，逐个在浏览器里打开，
-能看到内容的就是内联显示，弹出下载的就需要强制拦截：
+Linux 和 Windows 的系统 MIME 表没有实测过，上面这三种之外可能还有别的。想确认自己这台机器，
+建一批空文件逐个打开，能看到内容的就是内联显示，弹出下载的就需要强制拦截：
 
 ```bash
 mkdir -p /tmp/lfv-probe

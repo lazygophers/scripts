@@ -6,4 +6,4 @@
 
 ## Consequences
 
-`declarativeNetRequest` 权限要常驻声明（规则集是静态的），即使开关关着。Firefox 从 113 起支持 dNR，能力对齐；但 Firefox 对 `text/markdown` 反而弹下载框，扩展侧绕不过去，只能在文档里教用户改系统 mime 表（`simov/markdown-viewer:firefox.md` 是同样的处理）。Linux / Windows 的系统 MIME 表未实测，可能有更多类型落进这一类。
+`declarativeNetRequest` 权限要常驻声明，即使开关关着。规则最终用动态规则（`updateDynamicRules`）而不是静态规则集：重定向地址要带上原文件地址（`regexSubstitution` 的 `\0`），前缀含扩展 id，静态文件里写死它就得连带把 id 钉死。动态规则存在浏览器里，重启仍在，因此关掉开关时按同一批 id 删干净才算真的恢复下载行为。Firefox 从 113 起支持 dNR，能力对齐；但 Firefox 对 `text/markdown` 反而弹下载框，扩展侧绕不过去，只能在文档里教用户改系统 mime 表（`simov/markdown-viewer:firefox.md` 是同样的处理）。Linux / Windows 的系统 MIME 表未实测，可能有更多类型落进这一类。
