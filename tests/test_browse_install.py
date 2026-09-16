@@ -145,7 +145,7 @@ class TestExtensionManifestAgreement(unittest.TestCase):
     """安装脚本里的 ID 必须和扩展 manifest 对得上，对不上就是授权失配。"""
 
     def setUp(self) -> None:
-        path = REPO_ROOT / "browser-extension" / "extension" / "src" / "manifest.json"
+        path = REPO_ROOT / "browser-extension" / "browse" / "src" / "manifest.json"
         self.manifest = json.loads(path.read_text("utf-8"))
 
     def test_chromium_id_matches_the_pinned_key(self) -> None:
@@ -290,7 +290,7 @@ class TestGeckoIdStaysInSync(unittest.TestCase):
 
     def test_manifest_gecko_id_matches_installer(self) -> None:
         manifest = json.loads(
-            (REPO_ROOT / "browser-extension" / "extension" / "src" / "manifest.json").read_text()
+            (REPO_ROOT / "browser-extension" / "browse" / "src" / "manifest.json").read_text()
         )
         gecko_id = manifest["browser_specific_settings"]["gecko"]["id"]
         self.assertIn(gecko_id, nh.GECKO_IDS)

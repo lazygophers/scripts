@@ -19,7 +19,7 @@
 `network.unsubscribe` 两个方法名，原因见 SUBSCRIBE_METHOD 处的注释。
 
 **daemon 不做任何裁决**（2026-09-14 起）。确认模式、拒绝名单、免确认名单、审计全部
-在插件里，存 `chrome.storage.local`（`browser-extension/extension/src/policy.ts`）。
+在插件里，存 `chrome.storage.local`（`browser-extension/browse/src/policy.ts`）。
 这里只剩转发：CLI 发什么就往浏览器递什么，浏览器回什么就往 CLI 递什么。
 
 为什么这样是对的：daemon 只有在转发指令时才需要裁决，而它能转发的前提就是插件连着。
@@ -187,7 +187,7 @@ class _Conn:
     # 扩展自己在 hello 里报的展示名）。
     # cli：这一次要发给哪个浏览器，空串表示「没指定，你替我挑」。
     browser: str = ""
-    # bridge 场景下扩展自己生成的持久实例 ID（`browser-extension/extension/src/
+    # bridge 场景下扩展自己生成的持久实例 ID（`browser-extension/browse/src/
     # native-port.ts` 的 `instanceId()`），装在 chrome.storage.local 里，同一次
     # 安装重连不变。旧 native messaging 的 wrapper 不带这个字段，值就是空串。
     instance: str = ""

@@ -261,7 +261,7 @@ class TestParsing(unittest.TestCase):
         任何问题，两条都没了，所以现在是**严格相等**，一个例外都不留。
         """
         source = (pathlib.Path(__file__).resolve().parent.parent
-                  / "browser-extension/extension/src/handlers/index.ts").read_text(encoding="utf-8")
+                  / "browser-extension/browse/src/handlers/index.ts").read_text(encoding="utf-8")
         import re
         handlers = set(re.findall(r'^\s+"([\w:]+\.\w+)":', source, re.M))
         self.assertEqual(handlers, set(browse.METHODS))

@@ -302,7 +302,7 @@ def uninstall(home: pathlib.Path, plat: str, *,
     return removed
 
 
-EXTENSION_SRC = REPO_ROOT / "browser-extension" / "extension"
+EXTENSION_SRC = REPO_ROOT / "browser-extension" / "browse"
 CONNECT_POLL_SECONDS = 2.0
 WAIT_TIMEOUT = 300.0
 

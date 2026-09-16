@@ -74,7 +74,7 @@ EXIT_REJECTED = 4
 
 # 每个线上方法的位置参数名，顺序即命令行上的顺序。这张表同时是「有哪些指令」的唯一
 # 事实来源：不在表里的 <module> <action> 直接按参数错误退出，不往 daemon 上发。
-# 内容与扩展侧的命令表一一对应（`browser-extension/extension/src/handlers/index.ts`
+# 内容与扩展侧的命令表一一对应（`browser-extension/browse/src/handlers/index.ts`
 # 的 HANDLERS），spec 5.1 的 v1 全集。
 METHODS: dict[str, tuple[str, ...]] = {
     "browsingContext.getTree": (),

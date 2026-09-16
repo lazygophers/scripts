@@ -4,4 +4,4 @@
 
 ## Consequences
 
-`browse` 的代码要从 `browser-extension/extension/` 搬到 `browser-extension/browse/`，`lib/browse_install.py` 里写死的路径要跟着改。native host manifest 的 `path` 指向 `bin/browse` 而非扩展目录，所以已经装过的用户不受影响。
+`browse` 的代码已经搬到 `browser-extension/browse/`（原先在 `extension/` 这个通名目录下），`lib/browse_install.py` 里写死的路径也跟着改了。native host manifest 的 `path` 指向 `bin/browse` 而非扩展目录，所以已经装过的用户不受影响。

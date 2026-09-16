@@ -623,7 +623,7 @@ class WiringCase(DaemonCase):
     """CLI ──▶ daemon ──▶ 扩展 的端到端脚手架。
 
     `self.browser_*` 就是 stub 扩展。确认那一段没有了 —— daemon 不再问任何问题，
-    弹不弹框是插件自己的事（`browser-extension/extension/src/policy.ts`）。
+    弹不弹框是插件自己的事（`browser-extension/browse/src/policy.ts`）。
     """
 
     async def asyncSetUp(self):

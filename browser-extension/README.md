@@ -10,12 +10,12 @@
 ### 第 1 步：构建出可加载的扩展目录
 
 ```bash
-cd browser-extension/extension
+cd browser-extension/browse
 npm install
 npm run build      # 产出 dist/，这就是要加载的那个目录
 ```
 
-`dist/` 的绝对路径下一步要用，先 `pwd` 记下来：`<仓库>/browser-extension/extension/dist`。
+`dist/` 的绝对路径下一步要用，先 `pwd` 记下来：`<仓库>/browser-extension/browse/dist`。
 
 ### 第 2 步：打开「开发者模式」，**此后一直开着**
 
@@ -176,7 +176,7 @@ browse@lazygophers.com
 ## 构建与开发
 
 ```bash
-cd browser-extension/extension
+cd browser-extension/browse
 npm install
 npm run build      # 产出 dist/，这就是可加载的扩展目录
 npm run typecheck  # tsc --noEmit，严格模式
