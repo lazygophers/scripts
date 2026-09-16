@@ -17,6 +17,9 @@ beforeEach(() => {
         // 懒加载的两个包在浏览器里是 dist 产物，测试里直接指回源码，让 `import()` 真的能加载。
         if (path === "highlight.js") return new URL("../src/highlight.ts", import.meta.url).href;
         if (path === "markdown.js") return new URL("../src/markdown.ts", import.meta.url).href;
+        // 画图和公式那两个包在 node 里跑不起来（一个要真的排版，一个 import 了 CSS），换成桩。
+        if (path === "mermaid.js") return new URL("./stub-mermaid.ts", import.meta.url).href;
+        if (path === "katex.js") return new URL("./stub-katex.ts", import.meta.url).href;
         return `chrome-extension://viewer/${path}`;
       },
     },
@@ -543,6 +546,65 @@ test("mdx 正文照常渲染，组件位置留一块写清楚的占位", async (
   assert.equal(host.textContent?.includes("一段正文。"), true);
   // import 那行不该漏到正文里。
   assert.equal(host.textContent?.includes("./chart"), false);
+});
+
+/** 造一张 markdown 页并等它渲染完。 */
+async function mdPage(text: string, url = "file:///tmp/doc.md") {
+  const dom = textFile(url, "");
+  const doc = dom.window.document;
+  // 直接写 textContent，免得 markdown 源码在造页面时就被 jsdom 当标签解析掉。
+  first(doc).textContent = text;
+  prettify(doc);
+  return { doc, host: await rendered(doc) };
+}
+
+test("标了 mermaid 的代码块画成图，不再走高亮那条路", async () => {
+  const { host } = await mdPage("# 流程\n\n```mermaid\ngraph TD;\nA-->B;\n```\n");
+
+  assert.equal(host.querySelector(".lfv-diagram svg")?.getAttribute("id"), "lfv-diagram-0");
+  assert.equal(host.querySelector(".lfv-diagram title")?.textContent, "graph TD;");
+  // 图取代了原来那个代码块。
+  assert.equal(host.querySelector("code.language-mermaid"), null);
+  assert.equal(asked.includes("mermaid.js"), true);
+  assert.equal(asked.includes("highlight.js"), false);
+});
+
+test("图的语法有错时留下原文加一句错在哪，整篇照常", async () => {
+  const { host } = await mdPage("```mermaid\n这行是错的\n```\n\n后面还有正文。\n");
+
+  const box = host.querySelector(".lfv-diagram-error");
+  assert.equal(box?.querySelector("pre")?.textContent, "这行是错的\n");
+  assert.equal(box?.querySelector("p")?.textContent, "这张图画不出来：解析失败");
+  assert.equal(host.textContent?.includes("后面还有正文。"), true);
+});
+
+test("行内和独立成行的公式都排版，样式表也挂上", async () => {
+  const { doc, host } = await mdPage("能量是 $E = mc^2$ 这么来的。\n\n$$\n\\sum_{i=1}^n i\n$$\n");
+
+  const inline = host.querySelector("span.lfv-math");
+  const block = host.querySelector("div.lfv-math.lfv-math-block");
+  assert.equal(inline?.textContent, "行内公式:E = mc^2");
+  assert.equal(block?.textContent, "块公式:\\sum_{i=1}^n i");
+  assert.equal(
+    doc.querySelector("link#lfv-katex-style")?.getAttribute("href"),
+    "chrome-extension://viewer/katex.css",
+  );
+  assert.equal(asked.includes("katex.js"), true);
+});
+
+test("美元金额不当成公式", async () => {
+  const { host } = await mdPage("这本书卖 $ 5，那本 $ 8。\n");
+
+  assert.equal(host.querySelector(".lfv-math"), null);
+  assert.equal(asked.includes("katex.js"), false);
+});
+
+test("文档里没有图也没有公式时，这两个包都不加载", async () => {
+  const { host } = await mdPage("# 标题\n\n一段普通正文。\n");
+
+  assert.equal(host.querySelector(".lfv-md")?.textContent?.includes("一段普通正文。"), true);
+  assert.equal(asked.includes("mermaid.js"), false);
+  assert.equal(asked.includes("katex.js"), false);
 });
 
 /**

@@ -20,6 +20,7 @@ export async function buildExtension({
   entryPoints = [],
   iifeEntryPoints = [],
   copy = [],
+  loader = {},
   target = "chrome",
   watch = false,
   outdir = target === "chrome" ? "dist" : `dist-${target}`,
@@ -48,6 +49,10 @@ export async function buildExtension({
     target: "chrome116",
     sourcemap: true,
     logLevel: "info",
+    loader,
+    // 打包的第三方库（mermaid 一个人就 11 MB）压过之后小一个量级，装进浏览器的就是这些文件。
+    // watch 模式不压：改一行等一次压缩不划算，sourcemap 两边都在。
+    minify: !watch,
   };
   const esm = { ...common, entryPoints, format: "esm" };
   const hasEsm = entryPoints.length > 0;

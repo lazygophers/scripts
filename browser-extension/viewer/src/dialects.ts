@@ -123,10 +123,46 @@ const admonition: MarkedExtension = createDirectives([
   },
 ]);
 
+/**
+ * 数学公式：`$x^2$` 行内，`$$…$$` 独立成行。
+ *
+ * 这里只把公式原文挑出来放进 `data-tex`，排版留给 `prettify.ts` 那边按需加载 KaTeX 去做——
+ * 文档里一个公式都没有时，KaTeX 就一次都不会被加载。节点里先摆原始文本：
+ * 万一 KaTeX 没能加载上，看到的是 `$x^2$` 而不是一片空白。
+ *
+ * `$` 后面紧跟空格的不算公式（`价格 $ 5`），美元金额因此不会被误认。
+ */
+const math: MarkedExtension = {
+  extensions: (
+    [
+      ["mathBlock", "block", /^\$\$([\s\S]+?)\$\$/, /\$\$/],
+      ["mathInline", "inline", /^\$(?!\s)((?:[^$\n]|\\\$)+?)(?<!\s)\$/, /\$/],
+    ] as const
+  ).map(([name, level, pattern, start]) => ({
+    name,
+    level: level as "block" | "inline",
+    start: (src: string) => src.search(start),
+    tokenizer(src: string) {
+      const matched = pattern.exec(src);
+      if (!matched) return undefined;
+      return { type: name, raw: matched[0], text: (matched[1] ?? "").trim() };
+    },
+    renderer(token: Tokens.Generic) {
+      const tex = String(token["text"]);
+      const [tag, extra] = name === "mathBlock" ? ["div", " lfv-math-block"] : ["span", ""];
+      return (
+        `<${tag} class="lfv-math${extra}" data-tex="${escapeHtml(tex)}">` +
+        `${escapeHtml(name === "mathBlock" ? `$$${tex}$$` : `$${tex}$`)}</${tag}>`
+      );
+    },
+  })),
+};
+
 /** 全部方言，直接摊给 `new Marked(...)`。 */
 export const DIALECTS: MarkedExtension[] = [
   wikilink,
   scripts,
+  math,
   definitionList,
   admonition,
   markedFootnote({ refMarkers: true }),

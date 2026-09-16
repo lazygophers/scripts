@@ -341,6 +341,38 @@ html.lfv-on .lfv-md dd {
   color: var(--muted-foreground);
 }
 
+/* Mermaid 图：居中一张，宽度跟着正文收。 */
+html.lfv-on .lfv-diagram {
+  margin: 1.5rem 0;
+  text-align: center;
+}
+
+html.lfv-on .lfv-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* 画不出来时：原文照留，底下一句说明画不出来的原因。 */
+html.lfv-on .lfv-diagram-error {
+  padding: 0.75rem 1rem;
+  border: 1px dashed var(--destructive);
+  border-radius: calc(var(--radius) / 2);
+  text-align: left;
+}
+
+html.lfv-on .lfv-diagram-error p {
+  margin: 0.5rem 0 0;
+  color: var(--destructive);
+  font-size: 0.9em;
+}
+
+/* 独立成行的公式自己占一行，横向放不下时自己滚。 */
+html.lfv-on .lfv-math-block {
+  overflow-x: auto;
+  margin: 1rem 0;
+  text-align: center;
+}
+
 /* 链接指向的文件找不到时的提示条：横跨整宽，红色边框，一眼看到。 */
 html.lfv-on .lfv-missing {
   grid-column: 1 / -1;

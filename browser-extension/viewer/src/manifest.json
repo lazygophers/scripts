@@ -18,7 +18,18 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["viewer.css", "palette.css", "highlight.js", "markdown.js"],
+      "resources": [
+        "viewer.css",
+        "palette.css",
+        "highlight.js",
+        "markdown.js",
+        "mermaid.js",
+        "katex.js",
+        "katex.css",
+        "*.woff2",
+        "*.woff",
+        "*.ttf"
+      ],
       "matches": ["<all_urls>"]
     }
   ],

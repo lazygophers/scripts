@@ -168,13 +168,17 @@ async function fillDocument(doc: Document, host: HTMLElement, text: string): Pro
   host.replaceChildren(...(toc === null ? [article] : [toc, article]));
 
   // 围栏代码块上 marked 已经写好了 `language-xx`，复用同一个高亮包着色。
+  // 标了 `mermaid` 的那些不着色，它们要画成图。
   const blocks = article.querySelectorAll<HTMLElement>("pre > code[class*='language-']");
-  await Promise.all(
-    Array.from(blocks, (code) => {
+  await Promise.all([
+    ...Array.from(blocks, (code) => {
       const language = /language-([\w-]+)/.exec(code.className)?.[1];
-      return language === undefined ? Promise.resolve() : colorize(code, language);
+      if (language === undefined || language === "mermaid") return Promise.resolve();
+      return colorize(code, language);
     }),
-  );
+    drawDiagrams(doc, article),
+    typesetMath(doc, article),
+  ]);
 
   wireLocalLinks(doc, host);
   host.classList.add("lfv-rendered");
@@ -252,6 +256,50 @@ function missingNote(doc: Document, url: string): HTMLElement {
   return note;
 }
 
+/**
+ * 标了 `mermaid` 的围栏代码块画成图。文档里一个都没有时，绘图包一次都不加载。
+ *
+ * 画不出来（语法写错）就把原文留在原地，底下补一句错在哪——整篇文档的其余部分照常。
+ */
+async function drawDiagrams(doc: Document, article: HTMLElement): Promise<void> {
+  const blocks = article.querySelectorAll<HTMLElement>("pre > code.language-mermaid");
+  if (blocks.length === 0) return;
+
+  const module = await import(chrome.runtime.getURL("mermaid.js"));
+  const draw = module.renderDiagram as (code: string, id: string) => Promise<string>;
+
+  await Promise.all(
+    Array.from(blocks, async (code, i) => {
+      const box = doc.createElement("div");
+      box.className = "lfv-diagram";
+      try {
+        box.innerHTML = await draw(code.textContent ?? "", `lfv-diagram-${i}`);
+      } catch (error) {
+        box.classList.add("lfv-diagram-error");
+        const source = doc.createElement("pre");
+        source.textContent = code.textContent ?? "";
+        const why = doc.createElement("p");
+        why.textContent = `这张图画不出来：${(error as Error).message}`;
+        box.replaceChildren(source, why);
+      }
+      code.parentElement?.replaceWith(box);
+    }),
+  );
+}
+
+/** `$…$` 排成公式。文档里一个公式都没有时，KaTeX 一次都不加载。 */
+async function typesetMath(doc: Document, article: HTMLElement): Promise<void> {
+  const nodes = article.querySelectorAll<HTMLElement>(".lfv-math[data-tex]");
+  if (nodes.length === 0) return;
+
+  ensureStylesheet(doc, "katex.css", "lfv-katex-style");
+  const module = await import(chrome.runtime.getURL("katex.js"));
+  const render = module.renderMath as (n: HTMLElement, tex: string, display: boolean) => void;
+  for (const node of nodes) {
+    render(node, node.dataset["tex"] ?? "", node.classList.contains("lfv-math-block"));
+  }
+}
+
 /** 带着 `#小节` 打开时，渲染完自动滚到那个标题。 */
 function scrollToHash(doc: Document): void {
   const id = decodeURIComponent(doc.location.hash.slice(1));
@@ -303,11 +351,12 @@ function makeButton(doc: Document, label: string, onClick: () => void): HTMLElem
 
 const STYLE_ID = "lfv-style";
 
-function ensureStylesheet(doc: Document): void {
-  if (doc.getElementById(STYLE_ID)) return;
+/** 挂一张扩展自带的样式表。同一个 id 只挂一次；KaTeX 的那张同样走这里，用完才挂。 */
+function ensureStylesheet(doc: Document, file = "viewer.css", id = STYLE_ID): void {
+  if (doc.getElementById(id)) return;
   const link = doc.createElement("link");
-  link.id = STYLE_ID;
+  link.id = id;
   link.setAttribute("rel", "stylesheet");
-  link.setAttribute("href", chrome.runtime.getURL("viewer.css"));
+  link.setAttribute("href", chrome.runtime.getURL(file));
   doc.head.append(link);
 }
