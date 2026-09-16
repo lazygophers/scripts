@@ -68,6 +68,8 @@
     "system.memory",
     "system.storage",
     "printerProvider",
+    "dns",
+    "processes",
     "idle",
     "power",
     "notifications",

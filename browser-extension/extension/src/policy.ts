@@ -160,21 +160,9 @@ export const FEATURES: Feature[] = [
     methods: [
       "lg:permissions.getAll",
       "lg:permissions.contains",
-      "lg:permissions.request",
-      "lg:permissions.remove",
     ],
   },
-  {
-    id: "printing",
-    methods: [
-      "lg:printing.printers",
-      "lg:printing.jobs",
-      "lg:printing.submit",
-      "lg:printing.cancelJob",
-      "lg:printing.metrics",
-      "lg:printing.respond",
-    ],
-  },
+  { id: "printing", methods: ["lg:printing.respond"] },
 ];
 
 /** method → 所属功能。不在目录里的（`lg:audit.*`）没有开关，永远放行。 */

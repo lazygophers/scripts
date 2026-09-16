@@ -2,9 +2,9 @@ import { CommandError } from "../protocol.ts";
 import { requireApi } from "./context.ts";
 
 /**
- * `chrome.permissions` + `optional_host_permissions`：把高危 host 权限从
- * 「安装即警告」改成「用时再申请」。request 只能在用户手势里成功——CLI 发来的
- * 指令没有手势，会得到浏览器的拒绝；真正要申请时从插件面板/设置页发起。
+ * `chrome.permissions` 的只读面：查当前授予了什么。manifest 没有
+ * `optional_permissions` 段，Chrome 规定只能申请预先列过的权限，所以
+ * request/remove 没有语义（remove 还是单向门），不暴露。
  */
 
 function parsePerms(params: Record<string, unknown>): chrome.permissions.Permissions {
@@ -37,15 +37,4 @@ export async function permissionsGetAll(): Promise<unknown> {
 export async function permissionsContains(params: Record<string, unknown>): Promise<{ contains: boolean }> {
   requireApi("permissions", "querying granted permissions");
   return { contains: await chrome.permissions.contains(parsePerms(params)) };
-}
-
-export async function permissionsRequest(params: Record<string, unknown>): Promise<{ granted: boolean }> {
-  requireApi("permissions", "requesting permissions");
-  // 需要用户手势；没有手势时 Chrome 直接返回 false，不会抛
-  return { granted: await chrome.permissions.request(parsePerms(params)) };
-}
-
-export async function permissionsRemove(params: Record<string, unknown>): Promise<{ removed: boolean }> {
-  requireApi("permissions", "removing permissions");
-  return { removed: await chrome.permissions.remove(parsePerms(params)) };
 }

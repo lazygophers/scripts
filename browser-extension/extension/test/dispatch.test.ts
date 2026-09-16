@@ -71,8 +71,6 @@ const V1 = [
   "lg:proxy.clear",
   "lg:permissions.getAll",
   "lg:permissions.contains",
-  "lg:permissions.request",
-  "lg:permissions.remove",
   "lg:gcm.id",
   "lg:gcm.token",
   "lg:gcm.deleteToken",
@@ -91,11 +89,6 @@ const V1 = [
   "lg:wauth.attach",
   "lg:wauth.detach",
   "lg:wauth.complete",
-  "lg:printing.printers",
-  "lg:printing.jobs",
-  "lg:printing.submit",
-  "lg:printing.cancelJob",
-  "lg:printing.metrics",
   "lg:printing.respond",
 ];
 

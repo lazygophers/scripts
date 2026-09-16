@@ -48,16 +48,9 @@ import { pageSnapshot } from "./page.ts";
 import {
   permissionsContains,
   permissionsGetAll,
-  permissionsRemove,
-  permissionsRequest,
 } from "./perms.ts";
 import {
-  printingCancelJob,
-  printingJobs,
-  printingMetrics,
-  printingPrinters,
   printingRespond,
-  printingSubmit,
 } from "./printing.ts";
 import { proxyClear, proxyGet, proxySet } from "./proxy.ts";
 import {
@@ -189,8 +182,6 @@ export const HANDLERS: Record<string, Handler> = {
 
   "lg:permissions.getAll": permissionsGetAll,
   "lg:permissions.contains": permissionsContains,
-  "lg:permissions.request": permissionsRequest,
-  "lg:permissions.remove": permissionsRemove,
 
   "lg:gcm.id": gcmId,
   "lg:gcm.token": gcmToken,
@@ -214,11 +205,6 @@ export const HANDLERS: Record<string, Handler> = {
   "lg:wauth.detach": wauthDetach,
   "lg:wauth.complete": wauthComplete,
 
-  "lg:printing.printers": printingPrinters,
-  "lg:printing.jobs": printingJobs,
-  "lg:printing.submit": printingSubmit,
-  "lg:printing.cancelJob": printingCancelJob,
-  "lg:printing.metrics": printingMetrics,
   "lg:printing.respond": printingRespond,
 };
 

@@ -212,8 +212,8 @@ class TestParsing(unittest.TestCase):
             ["wauth", "complete", "42", "get"])
         self.assertEqual(params["request"], "42")
         _, params, _ = browse.parse_command(
-            ["printing", "cancelJob", "7"])
-        self.assertEqual(params["job"], "7")
+            ["printing", "respond", "7", "--status", "OK"])
+        self.assertEqual(params["request"], "7")
         # 真数字参数不受影响
         _, params, _ = browse.parse_command(
             ["input", "click", "css=a", "--index", "3"])

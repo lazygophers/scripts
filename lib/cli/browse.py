@@ -142,8 +142,6 @@ METHODS: dict[str, tuple[str, ...]] = {
     "lg:proxy.clear": (),
     "lg:permissions.getAll": (),
     "lg:permissions.contains": (),
-    "lg:permissions.request": (),
-    "lg:permissions.remove": (),
     "lg:gcm.id": (),
     "lg:gcm.token": ("entity",),
     "lg:gcm.deleteToken": ("entity",),
@@ -162,11 +160,6 @@ METHODS: dict[str, tuple[str, ...]] = {
     "lg:wauth.attach": (),
     "lg:wauth.detach": (),
     "lg:wauth.complete": ("request", "kind"),
-    "lg:printing.printers": (),
-    "lg:printing.jobs": (),
-    "lg:printing.submit": ("printer", "title"),
-    "lg:printing.cancelJob": ("job",),
-    "lg:printing.metrics": (),
     "lg:printing.respond": ("request",),
 }
 
@@ -182,7 +175,6 @@ STRING_NUMERIC_PARAMS: dict[str, tuple[str, ...]] = {
     # 线上是 string 的 id 类参数（2026-09-16 扩容面）
     "lg:capture.recordStop": ("recording",),
     "lg:wauth.complete": ("request",),
-    "lg:printing.cancelJob": ("job",),
     "lg:printing.respond": ("request",),
 }
 
