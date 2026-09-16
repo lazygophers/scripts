@@ -1,0 +1,29 @@
+/**
+ * 两个扩展共用的一份深色调色板。token 语义照搬 ui.shadcn.com/docs/theming：
+ * background/foreground 成对，组件只认语义名。zinc 色值按 Tailwind 阶梯换算。
+ *
+ * 只放颜色 token，组件样式各扩展自己写。要支持亮色时在这里加 prefers-color-scheme
+ * 覆盖即可，页面无需改动。
+ */
+
+:root {
+  color-scheme: dark;
+  --radius: 0.5rem;
+  /* zinc · dark（选定方向 A） */
+  --background: oklch(0.141 0.005 285.823);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.21 0.006 285.885);
+  --card-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.141 0.005 285.823);
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.552 0.016 285.938);
+}

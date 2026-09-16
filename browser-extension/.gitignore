@@ -1,5 +1,6 @@
-extension/node_modules/
-extension/dist/
+node_modules/
+dist/
+dist-firefox/
 # Signing key for the extension ID. Losing it means a new ID (see README).
-extension/keys/
+*/keys/
 *.pem

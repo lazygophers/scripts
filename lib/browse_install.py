@@ -320,8 +320,12 @@ def build_extension(src: pathlib.Path = EXTENSION_SRC) -> pathlib.Path:
     dist = src / "dist"
     if not (src / "package.json").exists():
         raise FileNotFoundError(f"扩展源码不在 {src}，用 --no-build 跳过构建")
-    if not (src / "node_modules").exists():
-        subprocess.run(["npm", "install"], cwd=src, check=True)
+    # 构建脚本走 `browser-extension/shared/build.mjs`，esbuild 是从 shared 自己的
+    # node_modules 里解析的（Node 从导入文件所在目录往上找），所以新克隆的仓库
+    # 两处都得装，只装 src 会在 shared 的 import 上炸。
+    for pkg_dir in (src.parent / "shared", src):
+        if (pkg_dir / "package.json").exists() and not (pkg_dir / "node_modules").exists():
+            subprocess.run(["npm", "install"], cwd=pkg_dir, check=True)
     subprocess.run(["npm", "run", "build"], cwd=src, check=True)
     return dist
 
