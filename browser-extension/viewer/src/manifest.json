@@ -18,7 +18,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["viewer.css", "palette.css", "highlight.js"],
+      "resources": ["viewer.css", "palette.css", "highlight.js", "markdown.js"],
       "matches": ["<all_urls>"]
     }
   ],

@@ -113,3 +113,103 @@ html.lfv-on .hljs-deletion,
 html.lfv-on .hljs-meta {
   color: var(--destructive);
 }
+
+/* markdown 文档视图：一栏正文，宽度按可读行长收住。 */
+html.lfv-on .lfv-md {
+  display: block;
+  margin: 0 auto;
+  padding: 2rem 2.5rem;
+  max-width: 80ch;
+  font: 15px / 1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  word-break: break-word;
+}
+
+html.lfv-on .lfv-md h1,
+html.lfv-on .lfv-md h2,
+html.lfv-on .lfv-md h3,
+html.lfv-on .lfv-md h4,
+html.lfv-on .lfv-md h5,
+html.lfv-on .lfv-md h6 {
+  margin: 2rem 0 1rem;
+  line-height: 1.3;
+}
+
+html.lfv-on .lfv-md h1,
+html.lfv-on .lfv-md h2 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 锚点平时隐身，鼠标移到标题上才露出来，不干扰阅读。 */
+html.lfv-on .lfv-anchor {
+  margin-left: 0.4em;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  opacity: 0;
+}
+
+html.lfv-on .lfv-md :hover > .lfv-anchor,
+html.lfv-on .lfv-anchor:focus {
+  opacity: 1;
+}
+
+html.lfv-on .lfv-md a {
+  color: var(--primary);
+}
+
+html.lfv-on .lfv-md code {
+  padding: 0.15em 0.4em;
+  border-radius: calc(var(--radius) / 2);
+  background: var(--muted);
+  font: 0.9em / 1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html.lfv-on .lfv-md pre {
+  overflow-x: auto;
+  padding: 1rem 1.25rem;
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+html.lfv-on .lfv-md pre code {
+  padding: 0;
+  background: none;
+}
+
+html.lfv-on .lfv-md blockquote {
+  margin: 1rem 0;
+  padding: 0.25rem 1rem;
+  color: var(--muted-foreground);
+  border-left: 3px solid var(--border);
+}
+
+html.lfv-on .lfv-md hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+html.lfv-on .lfv-md img {
+  max-width: 100%;
+}
+
+html.lfv-on .lfv-md table {
+  border-collapse: collapse;
+}
+
+html.lfv-on .lfv-md th,
+html.lfv-on .lfv-md td {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+/* front matter 信息表：键那一列淡一些，整块和正文拉开距离。 */
+html.lfv-on .lfv-front-matter {
+  margin-bottom: 2rem;
+  font-size: 0.9em;
+}
+
+html.lfv-on .lfv-front-matter th {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}

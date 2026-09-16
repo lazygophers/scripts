@@ -104,9 +104,14 @@ function mount(doc: Document, pre: HTMLElement, pretty: boolean): void {
   doc.body.replaceChildren(pretty ? render(doc, pre.textContent ?? "") : pre, button);
 }
 
-/** 按扩展名分流：认得的源码走代码视图，其余仍是排版好的纯文本。 */
+/** markdown 类的扩展名。`mdx` 暂时仍按纯文本，等方言那一票。 */
+const MARKDOWN_EXTS = new Set(["md", "markdown"]);
+
+/** 按扩展名分流：markdown 走文档视图，认得的源码走代码视图，其余仍是排版好的纯文本。 */
 function render(doc: Document, text: string): HTMLElement {
-  const language = LANGS[extOf(doc.URL)];
+  const ext = extOf(doc.URL);
+  if (MARKDOWN_EXTS.has(ext)) return renderDocument(doc, text);
+  const language = LANGS[ext];
   if (language === undefined) {
     const view = doc.createElement("pre");
     view.className = "lfv-text";
@@ -142,6 +147,42 @@ function renderCode(doc: Document, text: string, language: string): HTMLElement 
   wrap.append(makeCopyButton(doc, text), gutter, view);
   void colorize(code, language);
   return wrap;
+}
+
+/**
+ * markdown 视图：先挂一个空壳子，排版和净化在 markdown 包里异步做完再填进来。
+ * `prettify` 因此仍然是同步的。填完打 `lfv-rendered` 标记，和 `lfv-colored` 同一个约定。
+ */
+function renderDocument(doc: Document, text: string): HTMLElement {
+  const host = doc.createElement("div");
+  host.className = "lfv-doc";
+  void fillDocument(doc, host, text);
+  return host;
+}
+
+async function fillDocument(doc: Document, host: HTMLElement, text: string): Promise<void> {
+  const module = await import(chrome.runtime.getURL("markdown.js"));
+  const article = (module.renderMarkdown as (d: Document, t: string) => HTMLElement)(doc, text);
+  host.replaceChildren(article);
+
+  // 围栏代码块上 marked 已经写好了 `language-xx`，复用同一个高亮包着色。
+  const blocks = article.querySelectorAll<HTMLElement>("pre > code[class*='language-']");
+  await Promise.all(
+    Array.from(blocks, (code) => {
+      const language = /language-([\w-]+)/.exec(code.className)?.[1];
+      return language === undefined ? Promise.resolve() : colorize(code, language);
+    }),
+  );
+
+  host.classList.add("lfv-rendered");
+  scrollToHash(doc);
+}
+
+/** 带着 `#小节` 打开时，渲染完自动滚到那个标题。 */
+function scrollToHash(doc: Document): void {
+  const id = decodeURIComponent(doc.location.hash.slice(1));
+  if (id === "") return;
+  doc.getElementById(id)?.scrollIntoView();
 }
 
 /**

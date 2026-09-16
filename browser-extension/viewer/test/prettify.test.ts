@@ -14,8 +14,9 @@ beforeEach(() => {
     runtime: {
       getURL: (path: string) => {
         asked.push(path);
-        // 高亮包在浏览器里是 dist 产物，测试里直接指回源码，让 `import()` 真的能加载。
+        // 懒加载的两个包在浏览器里是 dist 产物，测试里直接指回源码，让 `import()` 真的能加载。
         if (path === "highlight.js") return new URL("../src/highlight.ts", import.meta.url).href;
+        if (path === "markdown.js") return new URL("../src/markdown.ts", import.meta.url).href;
         return `chrome-extension://viewer/${path}`;
       },
     },
@@ -34,6 +35,16 @@ async function colored(doc: Document): Promise<HTMLElement> {
   throw new Error("等不到着色完成");
 }
 
+/** 等 markdown 那一拍落地。`lfv-rendered` 是排版加着色都结束的信号。 */
+async function rendered(doc: Document): Promise<HTMLElement> {
+  for (let i = 0; i < 200; i += 1) {
+    const host = doc.querySelector(".lfv-doc.lfv-rendered");
+    if (host) return host as HTMLElement;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("等不到 markdown 渲染完成");
+}
+
 /** 造一张浏览器打开本地文本文件时生成的页面：正文只有一个 `<pre>`，没有标题。 */
 function textFile(url: string, text: string, contentType = "text/plain") {
   return page(`<pre>${text}</pre>`, { url, contentType });
@@ -43,7 +54,7 @@ const toggle = (doc: Document) => doc.querySelector(".lfv-toggle") as HTMLElemen
 const first = (doc: Document) => doc.body.children[0] as HTMLElement;
 
 test("白名单类型的纯文本页直接接管", () => {
-  const dom = textFile("file:///tmp/notes.md", "# 标题");
+  const dom = textFile("file:///tmp/notes.txt", "# 标题");
   prettify(dom.window.document);
 
   const doc = dom.window.document;
@@ -220,13 +231,141 @@ test("空文件不报错，显示为空内容", async () => {
   assert.equal(doc.querySelector(".lfv-gutter")?.textContent, "");
 });
 
-test("非代码页面不去加载高亮库", () => {
+test("没有围栏代码块的 markdown 不去加载高亮库", async () => {
   const dom = textFile("file:///tmp/notes.md", "# 标题");
+  const doc = dom.window.document;
 
-  prettify(dom.window.document);
+  prettify(doc);
+  await rendered(doc);
 
+  assert.equal(asked.includes("markdown.js"), true);
   assert.equal(asked.includes("highlight.js"), false);
-  assert.equal(dom.window.document.querySelector(".lfv-code"), null);
+  assert.equal(doc.querySelector(".lfv-code"), null);
+});
+
+test("常见 markdown 语法都排好版", async () => {
+  const source = [
+    "# 大标题",
+    "",
+    "一段正文，带 `行内代码` 和 [链接](https://example.test/)。",
+    "",
+    "- 无序一",
+    "- 无序二",
+    "",
+    "1. 有序一",
+    "",
+    "> 引用",
+    "",
+    "| 头 | 值 |",
+    "| --- | --- |",
+    "| a | 1 |",
+    "",
+    "---",
+    "",
+    "![图](p.png)",
+    "",
+  ].join("\n");
+  const dom = textFile("file:///tmp/readme.md", source);
+  const doc = dom.window.document;
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  assert.equal(host.querySelector("h1")?.textContent?.startsWith("大标题"), true);
+  assert.equal(host.querySelector("p code")?.textContent, "行内代码");
+  assert.equal(host.querySelector("p a")?.getAttribute("href"), "https://example.test/");
+  assert.equal(host.querySelectorAll("ul li").length, 2);
+  assert.equal(host.querySelectorAll("ol li").length, 1);
+  assert.equal(host.querySelector("blockquote")?.textContent?.trim(), "引用");
+  assert.equal(host.querySelector("table td")?.textContent, "a");
+  assert.ok(host.querySelector("hr"));
+  assert.equal(host.querySelector("img")?.getAttribute("src"), "p.png");
+});
+
+test("围栏代码块按标注的语言着色", async () => {
+  const dom = textFile("file:///tmp/readme.md", "```go\npackage main\n```\n");
+  const doc = dom.window.document;
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  const code = host.querySelector("pre > code.language-go") as HTMLElement;
+  assert.ok(code.querySelector(".hljs-keyword"), "关键字应该被包成 token");
+  assert.equal(code.textContent?.trim(), "package main");
+  assert.equal(asked.includes("highlight.js"), true);
+});
+
+test("front matter 变成顶部信息表，不出现在正文里", async () => {
+  const dom = textFile("file:///tmp/post.md", "---\ntitle: 一篇文章\ntags: a, b\n---\n\n正文\n");
+  const doc = dom.window.document;
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  const rows = host.querySelectorAll(".lfv-front-matter tr");
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0]?.querySelector("th")?.textContent, "title");
+  assert.equal(rows[0]?.querySelector("td")?.textContent, "一篇文章");
+  assert.equal(host.querySelector("p")?.textContent, "正文");
+  assert.equal(host.textContent?.includes("---"), false);
+});
+
+test("没有 front matter 就没有信息表", async () => {
+  const dom = textFile("file:///tmp/plain.md", "正文\n");
+  const doc = dom.window.document;
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  assert.equal(host.querySelector(".lfv-front-matter"), null);
+});
+
+test("标题带锚点，同名标题各有各的地址", async () => {
+  const dom = textFile("file:///tmp/a.md", "## 安装\n\n## 安装\n");
+  const doc = dom.window.document;
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  const heads = host.querySelectorAll("h2");
+  assert.equal(heads[0]?.getAttribute("id"), "安装");
+  assert.equal(heads[1]?.getAttribute("id"), "安装-1");
+  assert.equal(heads[0]?.querySelector("a.lfv-anchor")?.getAttribute("href"), "#安装");
+  assert.equal(heads[1]?.querySelector("a.lfv-anchor")?.getAttribute("href"), "#安装-1");
+});
+
+test("带锚点的地址打开时滚到那个标题", async () => {
+  const dom = textFile("file:///tmp/a.md#%E5%AE%89%E8%A3%85", "# 开头\n\n## 安装\n");
+  const doc = dom.window.document;
+  let scrolled: Element | null = null;
+  // jsdom 没实现 scrollIntoView，补一个只记录被滚到谁身上的桩。
+  Object.defineProperty(dom.window.Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value: function scrollIntoView(this: Element) {
+      scrolled = this;
+    },
+  });
+
+  prettify(doc);
+  await rendered(doc);
+
+  assert.equal((scrolled as Element | null)?.getAttribute("id"), "安装");
+});
+
+test("文档里的原始 HTML 过一遍净化，脚本被摘掉", async () => {
+  const dom = textFile("file:///tmp/x.md", "");
+  const doc = dom.window.document;
+  // 直接写 textContent，免得这段 HTML 在造页面时就被 jsdom 当标签解析掉。
+  first(doc).textContent =
+    '<div id="keep">留着<script>window.pwned = 1</script><img src="x" onerror="window.pwned = 1"></div>\n';
+
+  prettify(doc);
+  const host = await rendered(doc);
+
+  assert.equal(host.querySelector("#keep")?.textContent, "留着");
+  assert.equal(host.querySelector("script"), null);
+  assert.equal(host.querySelector("img")?.hasAttribute("onerror"), false);
+  assert.equal((dom.window as unknown as { pwned?: number }).pwned, undefined);
 });
 
 test("类型分档按扩展名，带 query 和 hash 也认得出来", () => {

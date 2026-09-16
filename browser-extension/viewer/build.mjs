@@ -9,7 +9,7 @@ await buildExtension({
   // The highlight bundle is a separate ESM module the content script imports at
   // runtime, so the highlighter's weight is only paid on code files.
   iifeEntryPoints: ["src/content.ts"],
-  entryPoints: ["src/highlight.ts"],
+  entryPoints: ["src/highlight.ts", "src/markdown.ts"],
   copy: ["viewer.css"],
   target: process.argv.includes("--firefox") ? "firefox" : "chrome",
   watch: process.argv.includes("--watch"),
