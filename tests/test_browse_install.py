@@ -157,7 +157,9 @@ class TestExtensionManifestAgreement(unittest.TestCase):
         import base64
         import hashlib
 
-        digest = hashlib.sha256(base64.b64decode(self.manifest["key"])).digest()[:16]
+        key = self.manifest["key"]
+        padded = key + "=" * (-len(key) % 4)  # manifest.json 里的 key 不带尾部 '='
+        digest = hashlib.sha256(base64.b64decode(padded)).digest()[:16]
         expect = "".join(chr(ord("a") + int(c, 16)) for c in digest.hex())
         self.assertEqual(nh.EXTENSION_IDS[0], expect)
 
@@ -351,3 +353,43 @@ class TestInstallStatus(TempHome):
         firefox = next(r for r in rows if r["browser"] == "firefox")
         self.assertFalse(firefox["registered"])
         self.assertEqual(firefox["stale"], [], "键本身没有 = 没注册")
+
+
+class TestWaitForExtension(unittest.TestCase):
+    """回归：`wait_for_extension` 不能假设 `sys.argv[0]` 是 browse 自己。
+
+    `lazyhelp install` 在同一个解释器里直接喊这个函数，这时 argv[0] 是
+    bin/lazyhelp 的路径，不是 bin/browse——之前硬编 argv[0] 会去跑
+    `lazyhelp browsingContext getTree`（lazyhelp 根本不认这个子命令），
+    第一次探测就失败，表现成「没等就直接超时」。
+    """
+
+    def test_probes_the_resolved_browse_binary_not_argv0(self) -> None:
+        done = subprocess.CompletedProcess([], 0)
+        with unittest.mock.patch.object(sys, "argv", ["/somewhere/bin/lazyhelp", "install"]), \
+             unittest.mock.patch("lib.lazyhelp._resolve", return_value="/repo/bin/browse") as resolve, \
+             unittest.mock.patch.object(nh.subprocess, "run", return_value=done) as run:
+            connected = nh.wait_for_extension(5.0)
+        self.assertTrue(connected)
+        resolve.assert_called_once_with("browse")
+        called_cmd = run.call_args[0][0]
+        self.assertEqual(called_cmd[0], "/repo/bin/browse")
+        self.assertNotIn("/somewhere/bin/lazyhelp", called_cmd)
+
+    def test_falls_back_to_bare_browse_when_unresolvable(self) -> None:
+        """PATH 上也找不到时（理论上不该发生）别整个炸掉，退回裸名字让 shell 报错更直观。"""
+        done = subprocess.CompletedProcess([], 0)
+        with unittest.mock.patch("lib.lazyhelp._resolve", return_value=None), \
+             unittest.mock.patch.object(nh.subprocess, "run", return_value=done) as run:
+            connected = nh.wait_for_extension(5.0)
+        self.assertTrue(connected)
+        self.assertEqual(run.call_args[0][0][0], "browse")
+
+    def test_times_out_without_hanging_past_deadline(self) -> None:
+        not_connected = subprocess.CompletedProcess([], 3)  # EXIT_NO_BROWSER：正常等待态
+        with unittest.mock.patch("lib.lazyhelp._resolve", return_value="/repo/bin/browse"), \
+             unittest.mock.patch.object(nh.subprocess, "run", return_value=not_connected), \
+             unittest.mock.patch.object(nh.time, "sleep") as sleep:
+            connected = nh.wait_for_extension(0.01)
+        self.assertFalse(connected)
+        sleep.assert_called()  # 真走了轮询，不是探测一次就放弃

@@ -347,11 +347,18 @@ def wait_for_extension(timeout: float) -> bool:
     退出码 3 = 浏览器没连上（`lib/cli/browse.py` 的 EXIT_NO_BROWSER），是等待中的
     正常状态；0 = 通了；其余退出码说明是别的毛病，不再干等。
     """
+    from lib.lazyhelp import _resolve
+
+    browse_bin = _resolve("browse") or "browse"
     deadline = time.monotonic() + timeout
     while True:
-        # 重跑用户敲的那个 browse（sys.argv[0]）；它会自动把 bridge 拉起来
+        # 不能假设 sys.argv[0] 是 browse 自己——`lazyhelp install` 之类的调用方
+        # 在同一个解释器里直接喊 wait_for_extension()，argv[0] 是调用方自己的
+        # 薄壳路径。跟 lib/lazyhelp.py:show_full() 一样，靠 _resolve() 找真正的
+        # browse 可执行文件：仓库内优先 bin/browse，装成包之后退回 PATH 里的
+        # `browse`；它会自动把 bridge 拉起来。
         done = subprocess.run(
-            [sys.executable, sys.argv[0], "browsingContext", "getTree", "--no-say"],
+            [browse_bin, "browsingContext", "getTree", "--no-say"],
             capture_output=True,
         )
         if done.returncode == 0:
