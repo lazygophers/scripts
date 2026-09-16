@@ -8,10 +8,7 @@
     "type": "module"
   },
   "options_page": "settings.html",
-  "permissions": [
-    "storage",
-    "downloads"
-  ],
+  "permissions": ["storage", "downloads"],
   "browser_specific_settings": {
     "gecko": {
       "id": "viewer@lazygophers.com",
@@ -20,12 +17,8 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content.js"
-      ],
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
       "run_at": "document_start"
     }
   ],
@@ -48,12 +41,8 @@
         "*.woff",
         "*.ttf"
       ],
-      "matches": [
-        "<all_urls>"
-      ]
+      "matches": ["<all_urls>"]
     }
   ],
-  "host_permissions": [
-    "file:///*"
-  ]
+  "host_permissions": ["file:///*"]
 }

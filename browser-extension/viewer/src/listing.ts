@@ -122,10 +122,9 @@ function toolbar(doc: Document, host: HTMLElement, table: HTMLElement): HTMLElem
 }
 
 /** 三列都能排，点一下正序，再点一下反序。名字按文字比，大小和时间按数值比。 */
-const KEYS = ["name", "size", "mtime"] as const;
+type Key = "name" | "size" | "mtime";
 
-function sorted(entries: Entry[], column: number, descending: boolean): Entry[] {
-  const key = KEYS[column] ?? "name";
+function sorted(entries: Entry[], key: Key, descending: boolean): Entry[] {
   const out = [...entries].sort((a, b) =>
     key === "name" ? a.name.localeCompare(b.name) : (a[key] as number) - (b[key] as number),
   );
@@ -208,20 +207,22 @@ export function renderListing(doc: Document, entries: Entry[], path: string): HT
   const headRow = doc.createElement("tr");
   const tbody = doc.createElement("tbody");
 
-  const state = { column: -1, descending: false };
+  // 默认按名字正序，和浏览器自己那张索引表一致。
+  const state: { key: Key; descending: boolean } = { key: "name", descending: false };
   const fill = () => {
     tbody.replaceChildren(
-      ...sorted(entries, state.column, state.descending).map((entry) => row(doc, entry)),
+      ...sorted(entries, state.key, state.descending).map((entry) => row(doc, entry)),
     );
   };
 
-  for (const [i, name] of ["名称", "大小", "修改时间"].entries()) {
+  const columns: [Key, string][] = [["name", "名称"], ["size", "大小"], ["mtime", "修改时间"]];
+  for (const [key, name] of columns) {
     const cell = doc.createElement("th");
     cell.textContent = name;
-    cell.dataset["column"] = String(i);
+    cell.dataset["column"] = key;
     cell.addEventListener("click", () => {
-      state.descending = state.column === i ? !state.descending : false;
-      state.column = i;
+      state.descending = state.key === key ? !state.descending : false;
+      state.key = key;
       for (const other of headRow.children) other.removeAttribute("data-sort");
       cell.setAttribute("data-sort", state.descending ? "desc" : "asc");
       fill();

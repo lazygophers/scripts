@@ -78,7 +78,8 @@ function reveal(hit: HTMLElement): void {
  *
  * 返回搜索框本身，测试和调用方都用得上。
  */
-export function openSearch(doc: Document, root: HTMLElement = doc.body): HTMLElement {
+export function openSearch(doc: Document): HTMLElement {
+  const root = doc.body;
   const existing = doc.querySelector(".lfv-search") as HTMLElement | null;
   if (existing !== null) {
     (existing.querySelector("input") as HTMLInputElement | null)?.focus();

@@ -19,10 +19,14 @@ const SKIP = /\.map$/;
 /**
  * 检查一份打好的 dist 是否装得起来。返回问题清单，空数组就是没问题。
  *
- * `files` 是 dist 里所有文件的相对路径，`manifest` 是已经解析好的 manifest 对象。
- * 两个参数都是纯数据，所以这条规则本身单测得动，不必真打一次包。
+ * `files` 是 dist 里所有文件的相对路径，`manifest` 是已经解析好的 manifest 对象，
+ * `pages` 是包里每张 html 的内容（文件名 -> 正文）。三个参数都是纯数据，所以这条规则
+ * 本身单测得动，不必真打一次包。
+ *
+ * html 也要扫：页面用 `<script src>` 引的那个 js 名字写错了，manifest 一点问题都看不出来，
+ * 装进浏览器也不报错，只是那张页面静静地什么都不做。
  */
-export function checkPackage(files, manifest) {
+export function checkPackage(files, manifest, pages = {}) {
   const problems = [];
   const has = (file) => files.includes(file);
 
@@ -33,6 +37,11 @@ export function checkPackage(files, manifest) {
 
   for (const file of referenced(manifest)) {
     if (!has(file)) problems.push(`manifest 点到名的文件不在包里：${file}`);
+  }
+  for (const [name, html] of Object.entries(pages)) {
+    for (const file of linked(html)) {
+      if (!has(file)) problems.push(`${name} 里引的文件不在包里：${file}`);
+    }
   }
   for (const file of files) {
     if (SKIP.test(file)) problems.push(`打包不该带上 sourcemap：${file}`);
@@ -57,6 +66,16 @@ function referenced(manifest) {
   return out;
 }
 
+/** 一张 html 里引到的本地文件。网址和页内锚点不算。 */
+function linked(html) {
+  const out = [];
+  for (const [, file] of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
+    if (/^(?:[a-z]+:|\/\/|#)/.test(file)) continue;
+    out.push(file);
+  }
+  return out;
+}
+
 /** 一个目录里的所有文件，路径相对这个目录本身。 */
 async function walk(dir, base = dir) {
   const out = [];
@@ -74,7 +93,11 @@ async function walk(dir, base = dir) {
 export async function packDist({ dist, out, name }) {
   const files = await walk(dist);
   const manifest = JSON.parse(await readFile(join(dist, "manifest.json"), "utf8"));
-  const problems = checkPackage(files, manifest);
+  const pages = {};
+  for (const file of files.filter((name) => name.endsWith(".html"))) {
+    pages[file] = await readFile(join(dist, file), "utf8");
+  }
+  const problems = checkPackage(files, manifest, pages);
   if (problems.length > 0) {
     throw new Error(`${name} 打包检查没过：\n  ${problems.join("\n  ")}`);
   }

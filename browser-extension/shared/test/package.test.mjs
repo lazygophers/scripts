@@ -57,3 +57,16 @@ test("sourcemap 不许进包", () => {
     "打包不该带上 sourcemap：markdown.js.map",
   ]);
 });
+
+test("html 里 <script src> 指到一个不在包里的文件也要拦下来", () => {
+  const html = '<link rel="stylesheet" href="viewer.css" /><script src="settings.js"></script>';
+  deepStrictEqual(checkPackage(files, manifest, { "settings.html": html }), [
+    "settings.html 里引的文件不在包里：settings.js",
+  ]);
+});
+
+test("html 里的网址和页内锚点不当成包里的文件", () => {
+  const html = `<a href="https://example.test/x">x</a><a href="#top">顶部</a>
+    <link rel="stylesheet" href="viewer.css" /><script src="background.js"></script>`;
+  deepStrictEqual(checkPackage(files, manifest, { "settings.html": html }), []);
+});

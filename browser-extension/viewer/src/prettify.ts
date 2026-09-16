@@ -132,17 +132,22 @@ function offer(doc: Document, pre: HTMLElement, label: string): void {
 }
 
 /**
- * 切换原始 / 美化。原始那一档放回的是最初那个 `<pre>` 节点本身，
- * 所以「原始」和浏览器自己的显示逐字节相同。选择不记忆，刷新就回到默认。
+ * 切换原始 / 美化，外加一个来回切的按钮。
+ *
+ * 「原始」那一档放回的是浏览器原来那些节点本身，所以它和浏览器自己的显示逐字节相同。
+ * 选择不记忆，刷新就回到默认。文件页和目录页的区别只在两边各摆什么节点，所以都走这里。
  */
-function mount(doc: Document, pre: HTMLElement, pretty: boolean): void {
+function swap(doc: Document, plain: HTMLElement[], pretty: () => HTMLElement[], on: boolean): void {
   ensureStylesheet(doc);
   wireSearch(doc);
-  const button = makeButton(doc, pretty ? "原始" : "美化", () =>
-    mount(doc, pre, !pretty),
-  );
-  doc.documentElement.classList.toggle("lfv-on", pretty);
-  doc.body.replaceChildren(pretty ? render(doc, pre.textContent ?? "") : pre, button);
+  const button = makeButton(doc, on ? "原始" : "美化", () => swap(doc, plain, pretty, !on));
+  doc.documentElement.classList.toggle("lfv-on", on);
+  doc.body.replaceChildren(...(on ? pretty() : plain), button);
+}
+
+/** 文件页：美化档每次都按原文重新渲染一遍，所以来回切不会留下上一次的状态。 */
+function mount(doc: Document, pre: HTMLElement, pretty: boolean): void {
+  swap(doc, [pre], () => [render(doc, pre.textContent ?? "")], pretty);
 }
 
 /**
@@ -154,32 +159,26 @@ function mountListing(doc: Document): void {
   const host = doc.createElement("div");
   host.className = "lfv-dir";
   void fillListing(doc, host, tbody);
-  swapListing(doc, original, host, true);
-}
-
-/** 目录页的原始 / 美化切换。和文件页一样，「原始」放回的是浏览器原来那些节点本身。 */
-function swapListing(
-  doc: Document,
-  original: HTMLElement[],
-  host: HTMLElement,
-  pretty: boolean,
-): void {
-  ensureStylesheet(doc);
-  wireSearch(doc);
-  const button = makeButton(doc, pretty ? "原始" : "美化", () =>
-    swapListing(doc, original, host, !pretty),
-  );
-  doc.documentElement.classList.toggle("lfv-on", pretty);
-  doc.body.replaceChildren(...(pretty ? [host] : original), button);
+  // 列表是异步填进 `host` 的，来回切也复用这一个节点，不重新解析那张表。
+  swap(doc, original, () => [host], true);
 }
 
 async function fillListing(doc: Document, host: HTMLElement, tbody: HTMLElement): Promise<void> {
-  const module = await import(chrome.runtime.getURL("listing.js"));
+  const module = await load("listing.js");
   const parse = module.parseListing as (t: HTMLElement) => Entry[];
   const render = module.renderListing as (d: Document, e: Entry[], p: string) => HTMLElement;
   // 这时表已经从页面上摘下来了，但节点还在手里，照样读得出来。
   host.replaceChildren(render(doc, parse(tbody), new URL(doc.URL).pathname));
   host.classList.add("lfv-rendered");
+}
+
+/**
+ * 按需加载一个懒加载包。这些包在浏览器里是 dist 里的独立文件，地址得问扩展自己要。
+ *
+ * 动态 `import()` 本身带缓存，同一个包加载第二次不会再下载一遍。
+ */
+function load(name: string): Promise<Record<string, unknown>> {
+  return import(chrome.runtime.getURL(name));
 }
 
 /** markdown 类的扩展名。`mdx` 也走文档视图，只是组件位置换成占位块。 */
@@ -223,7 +222,7 @@ async function fillData(
   text: string,
   yaml: boolean,
 ): Promise<void> {
-  const module = await import(chrome.runtime.getURL("data.js"));
+  const module = await load("data.js");
   const parse = module.parseData as (t: string, y: boolean) => Parsed;
   const parsed = parse(text, yaml);
 
@@ -249,7 +248,7 @@ function renderCsv(doc: Document, text: string): HTMLElement {
 }
 
 async function fillCsv(doc: Document, host: HTMLElement, text: string): Promise<void> {
-  const module = await import(chrome.runtime.getURL("csv.js"));
+  const module = await load("csv.js");
   const rows = (module.parseCsv as (t: string) => string[][])(text);
   const table = (module.renderTable as (d: Document, r: string[][]) => HTMLElement)(doc, rows);
   host.replaceChildren(makeCopyButton(doc, text), table);
@@ -265,7 +264,7 @@ function renderLog(doc: Document, text: string): HTMLElement {
 }
 
 async function fillLog(doc: Document, host: HTMLElement, text: string): Promise<void> {
-  const module = await import(chrome.runtime.getURL("log.js"));
+  const module = await load("log.js");
   const render = module.renderLog as (d: Document, t: string) => Promise<HTMLElement>;
   host.replaceChildren(makeCopyButton(doc, text), await render(doc, text));
   host.classList.add("lfv-rendered");
@@ -311,7 +310,7 @@ function renderDocument(doc: Document, text: string): HTMLElement {
 }
 
 async function fillDocument(doc: Document, host: HTMLElement, text: string): Promise<void> {
-  const module = await import(chrome.runtime.getURL("markdown.js"));
+  const module = await load("markdown.js");
   const render = module.renderMarkdown as (d: Document, t: string, mdx: boolean) => HTMLElement;
   const article = render(doc, text, extOf(sourceUrl(doc)) === "mdx");
   const toc = (module.renderToc as (d: Document, a: HTMLElement) => HTMLElement | null)(doc, article);
@@ -415,7 +414,7 @@ async function drawDiagrams(doc: Document, article: HTMLElement): Promise<void> 
   const blocks = article.querySelectorAll<HTMLElement>("pre > code.language-mermaid");
   if (blocks.length === 0) return;
 
-  const module = await import(chrome.runtime.getURL("mermaid.js"));
+  const module = await load("mermaid.js");
   const draw = module.renderDiagram as (code: string, id: string) => Promise<string>;
 
   await Promise.all(
@@ -443,7 +442,7 @@ async function typesetMath(doc: Document, article: HTMLElement): Promise<void> {
   if (nodes.length === 0) return;
 
   ensureStylesheet(doc, "katex.css", "lfv-katex-style");
-  const module = await import(chrome.runtime.getURL("katex.js"));
+  const module = await load("katex.js");
   const render = module.renderMath as (n: HTMLElement, tex: string, display: boolean) => void;
   for (const node of nodes) {
     render(node, node.dataset["tex"] ?? "", node.classList.contains("lfv-math-block"));
@@ -463,7 +462,7 @@ function scrollToHash(doc: Document): void {
  * 结束时打一个 `lfv-colored` 标记——不着色的情况也打，这样等它的人有确定的信号。
  */
 async function colorize(code: HTMLElement, language: string): Promise<void> {
-  const module = await import(chrome.runtime.getURL("highlight.js"));
+  const module = await load("highlight.js");
   const html = (module.colorize as (c: string, l: string) => string | null)(
     code.textContent ?? "",
     language,
@@ -516,7 +515,7 @@ function wireSearch(doc: Document): void {
     if (key.key !== "f" || !(key.metaKey || key.ctrlKey)) return;
     if (!doc.documentElement.classList.contains("lfv-on")) return;
     key.preventDefault();
-    void import(chrome.runtime.getURL("search.js")).then((module) => {
+    void load("search.js").then((module) => {
       (module.openSearch as (d: Document) => void)(doc);
     });
   });
