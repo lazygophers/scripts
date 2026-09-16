@@ -12,12 +12,70 @@ import {
   browsingContextNavigate,
   browsingContextReload,
 } from "./browsingContext.ts";
-import { downloadsCancel, downloadsList, downloadsStart } from "./downloads.ts";
+import {
+  captureRecordDesktop,
+  captureRecordStop,
+  captureRecordTab,
+  offscreenDocuments,
+  pageCaptureSaveMhtml,
+} from "./capture.ts";
+import { clipboardRead, clipboardWrite } from "./clipboard.ts";
+import {
+  downloadsCancel,
+  downloadsList,
+  downloadsOpen,
+  downloadsStart,
+} from "./downloads.ts";
+import { gcmDeleteToken, gcmId, gcmToken } from "./gcm.ts";
 import { historyDelete, historySearch } from "./history.ts";
+import {
+  dnsResolve,
+  idleState,
+  processesList,
+  searchQuery,
+  systemInfo,
+  topSitesList,
+} from "./info.ts";
 import { inputClick, inputKey, inputScroll, inputType } from "./input.ts";
 import { networkSubscribe, networkUnsubscribe } from "./network.ts";
+import {
+  notificationsClear,
+  notificationsShow,
+  powerKeepAwake,
+  powerRelease,
+} from "./notify.ts";
 import { pageSnapshot } from "./page.ts";
+import {
+  permissionsContains,
+  permissionsGetAll,
+  permissionsRemove,
+  permissionsRequest,
+} from "./perms.ts";
+import {
+  printingCancelJob,
+  printingJobs,
+  printingMetrics,
+  printingPrinters,
+  printingRespond,
+  printingSubmit,
+} from "./printing.ts";
+import { proxyClear, proxyGet, proxySet } from "./proxy.ts";
+import {
+  readingListAdd,
+  readingListList,
+  readingListRemove,
+  readingListUpdate,
+} from "./readingList.ts";
 import { scriptCallFunction, scriptEvaluate } from "./script.ts";
+import {
+  declContentClear,
+  declContentSetRules,
+  userScriptsList,
+  userScriptsRegister,
+  userScriptsReset,
+  userScriptsUnregister,
+  userScriptsWorld,
+} from "./scripts.ts";
 import { tabsGroup, tabsUngroup } from "./tabs.ts";
 import {
   storageDeleteCookies,
@@ -26,6 +84,14 @@ import {
   storageSetCookie,
   storageSetLocalStorage,
 } from "./storage.ts";
+import {
+  commandsList,
+  omniboxSetDefault,
+  sidePanelBehavior,
+  sidePanelClose,
+  sidePanelOpen,
+} from "./ui.ts";
+import { wauthAttach, wauthComplete, wauthDetach } from "./wauth.ts";
 
 export type Handler = (params: Record<string, unknown>) => Promise<unknown>;
 
@@ -34,11 +100,11 @@ export type Handler = (params: Record<string, unknown>) => Promise<unknown>;
  * payload of a Success reply. Throw `CommandError` to pick an error code;
  * anything else becomes `unknown error`.
  *
- * This is the whole of spec 5.1 (v1). Anything outside it — a v2 capability, a
- * CDP-only one — is absent on purpose and `dispatch` answers `unsupported
- * operation`. There is no per-browser variant of this table: spec 5.5 forbids
- * swapping in a different implementation on Firefox, so a missing `chrome.*`
- * namespace surfaces as an explicit refusal from `requireApi` instead.
+ * Anything outside the table is absent on purpose and `dispatch` answers
+ * `unsupported operation`. There is no per-browser variant of this table:
+ * spec 5.5 forbids swapping in a different implementation on Firefox, so a
+ * missing `chrome.*` namespace surfaces as an explicit refusal from
+ * `requireApi` instead.
  */
 export const HANDLERS: Record<string, Handler> = {
   "browsingContext.getTree": browsingContextGetTree,
@@ -83,9 +149,75 @@ export const HANDLERS: Record<string, Handler> = {
   "lg:downloads.start": downloadsStart,
   "lg:downloads.list": downloadsList,
   "lg:downloads.cancel": downloadsCancel,
+  "lg:downloads.open": downloadsOpen,
 
   "lg:tabs.group": tabsGroup,
   "lg:tabs.ungroup": tabsUngroup,
+
+  // 2026-09-16 扩容的能力面，全部 `lg:` 私有方法（BiDi §3.3 的冒号保留）。
+  "lg:pageCapture.saveMhtml": pageCaptureSaveMhtml,
+  "lg:capture.recordTab": captureRecordTab,
+  "lg:capture.recordStop": captureRecordStop,
+  "lg:capture.recordDesktop": captureRecordDesktop,
+  "lg:offscreen.documents": offscreenDocuments,
+
+  "lg:clipboard.read": clipboardRead,
+  "lg:clipboard.write": clipboardWrite,
+
+  "lg:readingList.list": readingListList,
+  "lg:readingList.add": readingListAdd,
+  "lg:readingList.update": readingListUpdate,
+  "lg:readingList.remove": readingListRemove,
+
+  "lg:topSites.list": topSitesList,
+  "lg:search.query": searchQuery,
+  "lg:dns.resolve": dnsResolve,
+  "lg:idle.state": idleState,
+  "lg:processes.list": processesList,
+  "lg:system.info": systemInfo,
+
+  "lg:notifications.show": notificationsShow,
+  "lg:notifications.clear": notificationsClear,
+  "lg:power.keepAwake": powerKeepAwake,
+  "lg:power.release": powerRelease,
+
+  "lg:proxy.get": proxyGet,
+  "lg:proxy.set": proxySet,
+  "lg:proxy.clear": proxyClear,
+
+  "lg:permissions.getAll": permissionsGetAll,
+  "lg:permissions.contains": permissionsContains,
+  "lg:permissions.request": permissionsRequest,
+  "lg:permissions.remove": permissionsRemove,
+
+  "lg:gcm.id": gcmId,
+  "lg:gcm.token": gcmToken,
+  "lg:gcm.deleteToken": gcmDeleteToken,
+
+  "lg:userScripts.register": userScriptsRegister,
+  "lg:userScripts.list": userScriptsList,
+  "lg:userScripts.unregister": userScriptsUnregister,
+  "lg:userScripts.reset": userScriptsReset,
+  "lg:userScripts.world": userScriptsWorld,
+  "lg:declContent.setRules": declContentSetRules,
+  "lg:declContent.clear": declContentClear,
+
+  "lg:commands.list": commandsList,
+  "lg:sidePanel.open": sidePanelOpen,
+  "lg:sidePanel.close": sidePanelClose,
+  "lg:sidePanel.behavior": sidePanelBehavior,
+  "lg:omnibox.setDefault": omniboxSetDefault,
+
+  "lg:wauth.attach": wauthAttach,
+  "lg:wauth.detach": wauthDetach,
+  "lg:wauth.complete": wauthComplete,
+
+  "lg:printing.printers": printingPrinters,
+  "lg:printing.jobs": printingJobs,
+  "lg:printing.submit": printingSubmit,
+  "lg:printing.cancelJob": printingCancelJob,
+  "lg:printing.metrics": printingMetrics,
+  "lg:printing.respond": printingRespond,
 };
 
 /**

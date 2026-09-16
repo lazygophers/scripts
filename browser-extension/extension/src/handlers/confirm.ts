@@ -26,7 +26,12 @@ export type RiskyAction =
   | "readHistory"
   | "writeHistory"
   | "readBookmarks"
-  | "writeBookmarks";
+  | "writeBookmarks"
+  | "readPage"
+  | "captureMedia"
+  | "readClipboard"
+  | "setProxy"
+  | "registerUserScript";
 
 export interface ConfirmRequest {
   action: RiskyAction;

@@ -20,8 +20,10 @@ await mkdir(outdir, { recursive: true });
 
 const options = {
   // The two extension pages ship as ESM like the worker: `confirm.html` is the
-  // spec 4.4 dialog, `panel.html` the spec 4.5 toolbar panel.
-  entryPoints: ["src/background.ts", "src/confirm-page.ts", "src/panel.ts", "src/settings.ts"],
+  // spec 4.4 dialog, `panel.html` the spec 4.5 toolbar panel. `offscreen.html`
+  // hosts the DOM the SW lacks (recorder + clipboard), `picker.html` is the
+  // user-gesture page desktopCapture needs.
+  entryPoints: ["src/background.ts", "src/confirm-page.ts", "src/panel.ts", "src/settings.ts", "src/offscreen-doc.ts", "src/picker.ts"],
   outdir,
   bundle: true,
   format: "esm",
@@ -50,10 +52,15 @@ if (watch) {
   await build(pageOptions);
 }
 
-for (const file of ["manifest.json", "confirm.html", "panel.html", "settings.html", "ui.css"]) {
+for (const file of ["manifest.json", "confirm.html", "panel.html", "settings.html", "offscreen.html", "picker.html", "ui.css"]) {
   await cp(`src/${file}`, `${outdir}/${file}`);
   console.log(`${file} -> ${outdir}/${file}`);
 }
+
+// 通知和工具栏图标要用（notifications.create 的 iconUrl 必须指向包内文件）。
+await mkdir(`${outdir}/assets`, { recursive: true });
+await cp("src/assets/icon.png", `${outdir}/assets/icon.png`);
+console.log("assets/icon.png -> dist/assets/icon.png");
 
 // `_locales` must sit at the extension root or `__MSG_*__` in the manifest
 // resolves to nothing and Chrome refuses to load the extension.

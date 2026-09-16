@@ -42,6 +42,7 @@ export type Outbound = Success | ErrorReply | Event;
  */
 export type ErrorCode =
   | "invalid argument"
+  | "timeout"
   | "no such element"
   | "no such frame"
   | "no such script"

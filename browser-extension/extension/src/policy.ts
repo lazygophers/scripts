@@ -103,7 +103,75 @@ export const FEATURES: Feature[] = [
   { id: "snapshot", methods: ["lg:page.snapshot"] },
   {
     id: "downloads",
-    methods: ["lg:downloads.start", "lg:downloads.list", "lg:downloads.cancel"],
+    methods: ["lg:downloads.start", "lg:downloads.list", "lg:downloads.cancel", "lg:downloads.open"],
+  },
+  // 2026-09-16 扩容的能力面（capture/clipboard/readingList/.../printing）。
+  {
+    id: "capture",
+    methods: [
+      "lg:pageCapture.saveMhtml",
+      "lg:capture.recordTab",
+      "lg:capture.recordStop",
+      "lg:capture.recordDesktop",
+      "lg:offscreen.documents",
+    ],
+  },
+  { id: "clipboard", methods: ["lg:clipboard.read", "lg:clipboard.write"] },
+  {
+    id: "readingList",
+    methods: ["lg:readingList.list", "lg:readingList.add", "lg:readingList.update", "lg:readingList.remove"],
+  },
+  { id: "topSites", methods: ["lg:topSites.list"] },
+  { id: "search", methods: ["lg:search.query"] },
+  { id: "wauth", methods: ["lg:wauth.attach", "lg:wauth.detach", "lg:wauth.complete"] },
+  {
+    id: "ui",
+    methods: [
+      "lg:commands.list",
+      "lg:sidePanel.open",
+      "lg:sidePanel.close",
+      "lg:sidePanel.behavior",
+      "lg:omnibox.setDefault",
+    ],
+  },
+  {
+    id: "diagnostics",
+    methods: ["lg:processes.list", "lg:system.info", "lg:dns.resolve", "lg:idle.state"],
+  },
+  { id: "power", methods: ["lg:power.keepAwake", "lg:power.release"] },
+  { id: "notifications", methods: ["lg:notifications.show", "lg:notifications.clear"] },
+  {
+    id: "userScripts",
+    methods: [
+      "lg:userScripts.register",
+      "lg:userScripts.list",
+      "lg:userScripts.unregister",
+      "lg:userScripts.reset",
+      "lg:userScripts.world",
+    ],
+  },
+  { id: "declContent", methods: ["lg:declContent.setRules", "lg:declContent.clear"] },
+  { id: "proxy", methods: ["lg:proxy.get", "lg:proxy.set", "lg:proxy.clear"] },
+  { id: "gcm", methods: ["lg:gcm.id", "lg:gcm.token", "lg:gcm.deleteToken"] },
+  {
+    id: "permissions",
+    methods: [
+      "lg:permissions.getAll",
+      "lg:permissions.contains",
+      "lg:permissions.request",
+      "lg:permissions.remove",
+    ],
+  },
+  {
+    id: "printing",
+    methods: [
+      "lg:printing.printers",
+      "lg:printing.jobs",
+      "lg:printing.submit",
+      "lg:printing.cancelJob",
+      "lg:printing.metrics",
+      "lg:printing.respond",
+    ],
   },
 ];
 
@@ -362,6 +430,12 @@ export const RISKY_METHODS: Record<string, string> = {
   "lg:bookmarks.search": "readBookmarks",
   "lg:bookmarks.create": "writeBookmarks",
   "lg:bookmarks.remove": "writeBookmarks",
+  "lg:pageCapture.saveMhtml": "readPage",
+  "lg:capture.recordTab": "captureMedia",
+  "lg:capture.recordDesktop": "captureMedia",
+  "lg:clipboard.read": "readClipboard",
+  "lg:proxy.set": "setProxy",
+  "lg:userScripts.register": "registerUserScript",
 };
 
 /**

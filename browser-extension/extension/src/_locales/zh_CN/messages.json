@@ -3,7 +3,7 @@
     "message": "lazygophers browse"
   },
   "extDescription": {
-    "message": "通过 native messaging 在本机控制浏览器，由 `browse` 命令行驱动。"
+    "message": "在本机控制浏览器，由 `browse` 命令行经本地 bridge（WebSocket）驱动。"
   },
   "actionTitle": {
     "message": "browse"
@@ -265,5 +265,119 @@
   },
   "settingsFeatUnused": {
     "message": "未用过"
+  },
+  "cmdSnapshot": {
+    "message": "把当前页快照发给 CLI（lg:commands.triggered 事件）"
+  },
+  "pickerTitle": {
+    "message": "browse — 选录制来源"
+  },
+  "pickerHeading": {
+    "message": "要录哪个？"
+  },
+  "pickerScreen": {
+    "message": "整个屏幕"
+  },
+  "pickerWindow": {
+    "message": "某个窗口"
+  },
+  "pickerTab": {
+    "message": "某个标签页"
+  },
+  "settingsFeatCapture": {
+    "message": "页面捕获"
+  },
+  "settingsFeatCaptureDesc": {
+    "message": "整页存 MHTML、录标签页、录屏幕/窗口（录屏经 offscreen 文档，desktopCapture 会弹小窗让你选来源）。"
+  },
+  "settingsFeatClipboard": {
+    "message": "剪贴板"
+  },
+  "settingsFeatClipboardDesc": {
+    "message": "读/写系统剪贴板，经 offscreen 文档完成。"
+  },
+  "settingsFeatReadingList": {
+    "message": "阅读列表"
+  },
+  "settingsFeatReadingListDesc": {
+    "message": "Chrome 自带「稍后阅读」列表的增删改查。"
+  },
+  "settingsFeatTopSites": {
+    "message": "常去站点"
+  },
+  "settingsFeatTopSitesDesc": {
+    "message": "读最常访问的站点列表。"
+  },
+  "settingsFeatSearch": {
+    "message": "搜索"
+  },
+  "settingsFeatSearchDesc": {
+    "message": "把一段文字交给默认搜索引擎。"
+  },
+  "settingsFeatWauth": {
+    "message": "WebAuthn 代理"
+  },
+  "settingsFeatWauthDesc": {
+    "message": "把网页的无密码登录请求转发出来，由 CLI 回答案。"
+  },
+  "settingsFeatUi": {
+    "message": "交互面"
+  },
+  "settingsFeatUiDesc": {
+    "message": "快捷键、侧边栏、地址栏关键词（br）的读取和设置。"
+  },
+  "settingsFeatDiagnostics": {
+    "message": "诊断信息"
+  },
+  "settingsFeatDiagnosticsDesc": {
+    "message": "进程占用、CPU/内存/显示器/存储信息、DNS 解析、空闲状态。"
+  },
+  "settingsFeatPower": {
+    "message": "防休眠"
+  },
+  "settingsFeatPowerDesc": {
+    "message": "长时间自动化时请求系统不睡眠。"
+  },
+  "settingsFeatNotifications": {
+    "message": "通知"
+  },
+  "settingsFeatNotificationsDesc": {
+    "message": "从命令行弹系统通知、清除通知。"
+  },
+  "settingsFeatUserScripts": {
+    "message": "用户脚本"
+  },
+  "settingsFeatUserScriptsDesc": {
+    "message": "按站点注入 JS（要先在 chrome://extensions 打开「允许用户脚本」）。"
+  },
+  "settingsFeatDeclContent": {
+    "message": "页面规则"
+  },
+  "settingsFeatDeclContentDesc": {
+    "message": "按 URL 规则在工具栏图标上亮标记（declarativeContent）。"
+  },
+  "settingsFeatProxy": {
+    "message": "代理"
+  },
+  "settingsFeatProxyDesc": {
+    "message": "读/改/清整个浏览器的代理设置。"
+  },
+  "settingsFeatGcm": {
+    "message": "推送"
+  },
+  "settingsFeatGcmDesc": {
+    "message": "推送通道的实例 ID 和 token；推送消息以事件转发。"
+  },
+  "settingsFeatPrinting": {
+    "message": "打印"
+  },
+  "settingsFeatPrintingDesc": {
+    "message": "打印机列表、提交/取消打印任务（仅 ChromeOS）。"
+  },
+  "settingsFeatPermissions": {
+    "message": "权限"
+  },
+  "settingsFeatPermissionsDesc": {
+    "message": "查/申请/移除扩展权限（申请要在用户手势里才会成功）。"
   }
 }

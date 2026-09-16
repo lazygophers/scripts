@@ -49,3 +49,16 @@ export async function downloadsCancel(
   await chrome.downloads.cancel(id);
   return { cancelled: id };
 }
+
+/** `lg:downloads.open`：用系统默认程序打开一个下载产物（downloads.open 权限）。 */
+export async function downloadsOpen(
+  params: Record<string, unknown>,
+): Promise<{ opened: number }> {
+  requireApi("downloads.open", "opening downloaded files");
+  const id = params.id;
+  if (typeof id !== "number") {
+    throw new CommandError("invalid argument", "id must be the numeric download id");
+  }
+  await chrome.downloads.open(id);
+  return { opened: id };
+}

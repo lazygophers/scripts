@@ -1,6 +1,12 @@
 import { answerConfirm, askUser, windowClosed } from "./confirm-ui.ts";
 import { setEventSink } from "./events.ts";
 import { setConfirmHook } from "./handlers/confirm.ts";
+import { desktopSourcePicked } from "./handlers/capture.ts";
+import { listenGcm } from "./handlers/gcm.ts";
+import { listenNotifications } from "./handlers/notify.ts";
+import { listenPrinting } from "./handlers/printing.ts";
+import { listenUi } from "./handlers/ui.ts";
+import { listenWauth } from "./handlers/wauth.ts";
 import { NativeConnection, type ConnectionState } from "./native-port.ts";
 
 /** Badge, spec 4.5: connected shows a dot, running commands show their count. */
@@ -60,8 +66,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
     return false;
   }
+  // desktopCapture 的选源小窗回传流 id（capture.ts 在等它）
+  if (message?.type === "browse-pick") {
+    sendResponse({ ok: desktopSourcePicked(message.streamId) });
+    return false;
+  }
   return false;
 });
+
+// 2026-09-16 扩容的事件面：快捷键/地址栏/推送/通知点击/WebAuthn 请求/打印请求，
+// 全部转发给订阅方（events.ts 的 sink）。
+listenUi();
+listenGcm();
+listenNotifications();
+listenWauth();
+listenPrinting();
 
 // Closing the dialog without choosing is a refusal — the daemon must not be
 // left waiting out its full timeout for a window that no longer exists.

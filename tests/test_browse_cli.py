@@ -201,6 +201,16 @@ class TestParsing(unittest.TestCase):
         _, params, _ = browse.parse_command(
             ["tabs", "ungroup", "--group", "42"])
         self.assertEqual(params["group"], "42")
+        # 2026-09-16 扩容面：录屏 id、WebAuthn request、打印 job/request 都是 string
+        _, params, _ = browse.parse_command(
+            ["capture", "recordStop", "rec-3"])
+        self.assertEqual(params["recording"], "rec-3")
+        _, params, _ = browse.parse_command(
+            ["wauth", "complete", "42", "get"])
+        self.assertEqual(params["request"], "42")
+        _, params, _ = browse.parse_command(
+            ["printing", "cancelJob", "7"])
+        self.assertEqual(params["job"], "7")
         # 真数字参数不受影响
         _, params, _ = browse.parse_command(
             ["input", "click", "css=a", "--index", "3"])
