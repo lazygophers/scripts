@@ -23,3 +23,93 @@ html.lfv-on .lfv-text {
   word-break: break-word;
   tab-size: 4;
 }
+
+/* 代码视图：行号一列、正文一列，复制按钮浮在右上角。 */
+html.lfv-on .lfv-code {
+  position: relative;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  padding: 1.5rem 0;
+}
+
+html.lfv-on .lfv-code .lfv-text {
+  padding: 0 2.5rem 0 1rem;
+  max-width: none;
+  overflow-x: auto;
+}
+
+html.lfv-on .lfv-code .lfv-text code {
+  font: inherit;
+}
+
+html.lfv-on .lfv-gutter {
+  margin: 0;
+  padding: 0 0 0 1.25rem;
+  text-align: right;
+  color: var(--muted-foreground);
+  border-right: 1px solid var(--border);
+  /* 行号不该进剪贴板：选不中就复制不走。 */
+  user-select: none;
+  font: 13px / 1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  tab-size: 4;
+}
+
+/* 复制按钮浮在代码块右上角，让开右上角那个「原始 / 美化」开关。 */
+html.lfv-on .lfv-copy {
+  position: absolute;
+  top: 8px;
+  right: 72px;
+  z-index: 1;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--foreground);
+  font: 12px / 1.4 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+/*
+ * highlight.js 的 token 类名映射到公共层的调色板。
+ * 只挑几组语义相近的 token 上色，其余继承正文色——配色少几档反而更像编辑器。
+ */
+html.lfv-on .hljs-comment,
+html.lfv-on .hljs-quote {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+html.lfv-on .hljs-keyword,
+html.lfv-on .hljs-selector-tag,
+html.lfv-on .hljs-literal,
+html.lfv-on .hljs-doctag {
+  color: var(--primary);
+}
+
+html.lfv-on .hljs-string,
+html.lfv-on .hljs-regexp,
+html.lfv-on .hljs-addition {
+  color: var(--accent);
+}
+
+html.lfv-on .hljs-number,
+html.lfv-on .hljs-symbol,
+html.lfv-on .hljs-bullet {
+  color: var(--ring);
+}
+
+html.lfv-on .hljs-title,
+html.lfv-on .hljs-name,
+html.lfv-on .hljs-section,
+html.lfv-on .hljs-attr,
+html.lfv-on .hljs-attribute {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+html.lfv-on .hljs-deletion,
+html.lfv-on .hljs-meta {
+  color: var(--destructive);
+}

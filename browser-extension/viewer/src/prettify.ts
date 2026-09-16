@@ -21,6 +21,21 @@ const WHITELIST_EXTS = new Set([
   "sql", "css", "scss",
 ]);
 
+/**
+ * 扩展名到 highlight.js 语言名。只列白名单里真的是源码的那些。
+ *
+ * 不在表里就不着色，也不会去加载高亮库——markdown 归后面的票渲染，
+ * `txt` / `log` / `csv` / `conf` 本来就没有语法。
+ */
+const LANGS: Record<string, string> = {
+  go: "go", py: "python", ts: "typescript", tsx: "typescript",
+  js: "javascript", jsx: "javascript", rs: "rust", java: "java",
+  c: "c", h: "c", cpp: "cpp", hpp: "cpp", cs: "csharp", rb: "ruby",
+  php: "php", sh: "bash", bash: "bash", zsh: "bash", sql: "sql",
+  css: "css", scss: "scss", ini: "ini", toml: "ini",
+  json: "json", yaml: "yaml", yml: "yaml",
+};
+
 export type Kind = "webpage" | "whitelist" | "unknown";
 
 /**
@@ -35,11 +50,16 @@ export function isPlainTextPage(doc: Document): boolean {
   return kids.length === 1 && kids[0]?.tagName === "PRE";
 }
 
-/** 按 URL 扩展名分三档。取不到扩展名就算拿不准。 */
-export function classify(url: string): Kind {
+/** URL 的小写扩展名。没有扩展名、或者是 `.bashrc` 这种纯点开头的，都算没有。 */
+function extOf(url: string): string {
   const name = url.split(/[?#]/)[0]?.split("/").pop() ?? "";
   const dot = name.lastIndexOf(".");
-  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
+
+/** 按 URL 扩展名分三档。取不到扩展名就算拿不准。 */
+export function classify(url: string): Kind {
+  const ext = extOf(url);
   if (WEBPAGE_EXTS.has(ext)) return "webpage";
   if (WHITELIST_EXTS.has(ext)) return "whitelist";
   return "unknown";
@@ -84,12 +104,71 @@ function mount(doc: Document, pre: HTMLElement, pretty: boolean): void {
   doc.body.replaceChildren(pretty ? render(doc, pre.textContent ?? "") : pre, button);
 }
 
-/** 这一版的唯一渲染器：排版好的纯文本。 */
+/** 按扩展名分流：认得的源码走代码视图，其余仍是排版好的纯文本。 */
 function render(doc: Document, text: string): HTMLElement {
+  const language = LANGS[extOf(doc.URL)];
+  if (language === undefined) {
+    const view = doc.createElement("pre");
+    view.className = "lfv-text";
+    view.textContent = text;
+    return view;
+  }
+  return renderCode(doc, text, language);
+}
+
+/**
+ * 代码视图：行号、正文、复制按钮三件套。
+ *
+ * 行号单独放一列而不是给每行包一个 span——高亮出来的标签会跨行，拆行要把它们逐个断开再接上；
+ * 单独一列还顺带满足「行号不进剪贴板」：那一列 `user-select: none`，框选时选不中。
+ */
+function renderCode(doc: Document, text: string, language: string): HTMLElement {
+  const wrap = doc.createElement("div");
+  wrap.className = "lfv-code";
+
+  const gutter = doc.createElement("pre");
+  gutter.className = "lfv-gutter";
+  gutter.setAttribute("aria-hidden", "true");
+  // 末尾那个换行不算新的一行，空文件是 0 行。
+  const lines = text === "" ? 0 : text.replace(/\n$/, "").split("\n").length;
+  gutter.textContent = Array.from({ length: lines }, (_, i) => `${i + 1}`).join("\n");
+
   const view = doc.createElement("pre");
   view.className = "lfv-text";
-  view.textContent = text;
-  return view;
+  const code = doc.createElement("code");
+  code.textContent = text;
+  view.append(code);
+
+  wrap.append(makeCopyButton(doc, text), gutter, view);
+  void colorize(code, language);
+  return wrap;
+}
+
+/**
+ * 着色是异步的：高亮库按需加载，所以先把纯文本挂上去，色彩晚一拍覆盖上来。
+ *
+ * 结束时打一个 `lfv-colored` 标记——不着色的情况也打，这样等它的人有确定的信号。
+ */
+async function colorize(code: HTMLElement, language: string): Promise<void> {
+  const module = await import(chrome.runtime.getURL("highlight.js"));
+  const html = (module.colorize as (c: string, l: string) => string | null)(
+    code.textContent ?? "",
+    language,
+  );
+  if (html !== null) code.innerHTML = html;
+  code.classList.add("lfv-colored");
+}
+
+function makeCopyButton(doc: Document, text: string): HTMLElement {
+  const button = doc.createElement("button");
+  button.className = "lfv-copy";
+  button.textContent = "复制";
+  button.addEventListener("click", () => {
+    void doc.defaultView?.navigator.clipboard.writeText(text).then(() => {
+      button.textContent = "已复制";
+    });
+  });
+  return button;
 }
 
 function makeButton(doc: Document, label: string, onClick: () => void): HTMLElement {

@@ -17,7 +17,7 @@ const SHARED = dirname(fileURLToPath(import.meta.url));
  */
 export async function buildExtension({
   root,
-  entryPoints,
+  entryPoints = [],
   iifeEntryPoints = [],
   copy = [],
   target = "chrome",
@@ -50,15 +50,16 @@ export async function buildExtension({
     logLevel: "info",
   };
   const esm = { ...common, entryPoints, format: "esm" };
+  const hasEsm = entryPoints.length > 0;
   // Injected with executeScript({ files }), which loads a classic script, not a
   // module — hence iife and a separate build from the ESM service worker.
   const iife = { ...common, entryPoints: iifeEntryPoints, format: "iife" };
 
   if (watch) {
-    await (await context(esm)).watch();
+    if (hasEsm) await (await context(esm)).watch();
     if (iifeEntryPoints.length) await (await context(iife)).watch();
   } else {
-    await build(esm);
+    if (hasEsm) await build(esm);
     if (iifeEntryPoints.length) await build(iife);
   }
 
