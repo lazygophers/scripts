@@ -20,6 +20,7 @@ beforeEach(() => {
         // 画图和公式那两个包在 node 里跑不起来（一个要真的排版，一个 import 了 CSS），换成桩。
         if (path === "mermaid.js") return new URL("./stub-mermaid.ts", import.meta.url).href;
         if (path === "katex.js") return new URL("./stub-katex.ts", import.meta.url).href;
+        if (path === "data.js") return new URL("../src/data.ts", import.meta.url).href;
         return `chrome-extension://viewer/${path}`;
       },
     },
@@ -719,6 +720,143 @@ test("文档内的锚点跳转不走本地文件那条路", async () => {
 
   assert.deepEqual(probed, []);
   assert.deepEqual(opened, []);
+});
+
+/** 等折叠树那一拍落地，并把页面和树一起给出来。 */
+async function dataPage(url: string, text: string) {
+  const dom = textFile(url, "");
+  const doc = dom.window.document;
+  first(doc).textContent = text;
+  prettify(doc);
+  for (let i = 0; i < 200; i += 1) {
+    const host = doc.querySelector(".lfv-data.lfv-rendered");
+    if (host) return { dom, doc, host: host as HTMLElement };
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("等不到折叠树渲染完成");
+}
+
+test("json 展开成可折叠的树，对象和数组报出元素个数", async () => {
+  const { host } = await dataPage(
+    "file:///tmp/a.json",
+    '{"name":"x","list":[1,2,3],"deep":{"on":true}}',
+  );
+
+  const root = host.querySelector("details.lfv-node") as HTMLDetailsElement;
+  assert.equal(root.querySelector("summary .lfv-count")?.textContent, "{…} 3 项");
+  assert.equal(root.open, true);
+  // 每个键一行，数组自己那行报 3 项。
+  const counts = Array.from(host.querySelectorAll(".lfv-count"), (n) => n.textContent);
+  assert.deepEqual(counts, ["{…} 3 项", "[…] 3 项", "{…} 1 项"]);
+  // 折叠是浏览器自带的：把 open 摘掉就收起来了，没有额外的 JS。
+  root.open = false;
+  assert.equal(root.open, false);
+});
+
+test("不同数据类型用不同的类名上色", async () => {
+  const { host } = await dataPage(
+    "file:///tmp/a.json",
+    '{"s":"字","n":1.5,"b":false,"z":null}',
+  );
+
+  const typed = Array.from(host.querySelectorAll(".lfv-tree span[class^='lfv-']"))
+    .filter((n) => !n.classList.contains("lfv-key") && !n.classList.contains("lfv-count"))
+    .map((n) => [n.className, n.textContent]);
+  assert.deepEqual(typed, [
+    ["lfv-str", '"字"'],
+    ["lfv-num", "1.5"],
+    ["lfv-bool", "false"],
+    ["lfv-null", "null"],
+  ]);
+});
+
+test("点节点的键复制它的路径，复制完给出反馈", async () => {
+  const { dom, host } = await dataPage("file:///tmp/a.json", '{"a":{"list":[10]}}');
+  let copied: string | null = null;
+  Object.defineProperty(dom.window.navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: (text: string) => {
+        copied = text;
+        return Promise.resolve();
+      },
+    },
+  });
+
+  const keys = host.querySelectorAll(".lfv-key");
+  assert.deepEqual(
+    Array.from(keys, (k) => (k as HTMLElement).dataset["path"]),
+    ["$.a", "$.a.list", "$.a.list[0]"],
+  );
+
+  const leaf = keys[2] as HTMLElement;
+  const before = leaf.textContent;
+  leaf.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(copied, "$.a.list[0]");
+  assert.equal(leaf.textContent, "已复制 ");
+  assert.notEqual(before, leaf.textContent);
+});
+
+test("yaml 走同一棵树", async () => {
+  const { host } = await dataPage("file:///tmp/a.yaml", "name: x\nlist:\n  - 1\n  - 2\n");
+
+  assert.equal(host.querySelector(".lfv-count")?.textContent, "{…} 2 项");
+  assert.equal(host.querySelector(".lfv-str")?.textContent, '"x"');
+  assert.equal(host.querySelectorAll(".lfv-num").length, 2);
+});
+
+test("json 语法有错时说清第几行错在哪，原文照常排版出来", async () => {
+  const { host } = await dataPage("file:///tmp/bad.json", '{\n  "a": 1,\n  "b": ,\n}\n');
+
+  const note = host.querySelector(".lfv-parse-error");
+  assert.equal(note?.textContent?.startsWith("第 3 行有语法错误："), true);
+  // 原文一个字不少地留在下面。
+  assert.equal(host.querySelector(".lfv-code .lfv-text")?.textContent, '{\n  "a": 1,\n  "b": ,\n}\n');
+  assert.equal(host.querySelector(".lfv-tree"), null);
+
+  // 另一种报法（解析器自己就带行号）同样落在出错那一行。
+  const missingComma = await dataPage("file:///tmp/bad2.json", '{\n  "a": 1\n  "b": 2\n}\n');
+  assert.equal(
+    missingComma.host.querySelector(".lfv-parse-error")?.textContent?.startsWith("第 3 行"),
+    true,
+  );
+
+  // 连位置都报不出来的（文件截断）退到第 1 行，原文照常摆出来。
+  const truncated = await dataPage("file:///tmp/bad3.json", '{\n  "a": [1,\n');
+  assert.equal(
+    truncated.host.querySelector(".lfv-parse-error")?.textContent?.startsWith("第 1 行"),
+    true,
+  );
+  assert.equal(truncated.host.querySelector(".lfv-code .lfv-text")?.textContent, '{\n  "a": [1,\n');
+});
+
+test("yaml 语法有错时同样报行号，原文照常排版出来", async () => {
+  const { host } = await dataPage("file:///tmp/bad.yaml", "a: 1\nb: [1, 2\nc: 3\n");
+
+  const note = host.querySelector(".lfv-parse-error");
+  assert.equal(note?.textContent?.startsWith("第 "), true);
+  assert.equal(note?.textContent?.includes("行有语法错误："), true);
+  assert.equal(host.querySelector(".lfv-code .lfv-text")?.textContent, "a: 1\nb: [1, 2\nc: 3\n");
+});
+
+test("空文件、单个标量、深层嵌套都不报错", async () => {
+  const empty = await dataPage("file:///tmp/empty.yaml", "");
+  assert.equal(empty.host.querySelector(".lfv-null")?.textContent, "null");
+  assert.equal(empty.host.querySelector(".lfv-parse-error"), null);
+
+  const one = await dataPage("file:///tmp/one.json", '"只有一个字符串"');
+  assert.equal(one.host.querySelector(".lfv-str")?.textContent, '"只有一个字符串"');
+
+  // 20 层嵌套，最里面那个值仍然在树上，路径也一路带下来。
+  const depth = 20;
+  const deep = '{"k":'.repeat(depth) + "1" + "}".repeat(depth);
+  const nested = await dataPage("file:///tmp/deep.json", deep);
+  const keys = nested.host.querySelectorAll(".lfv-key");
+  assert.equal(keys.length, depth);
+  assert.equal((keys[depth - 1] as HTMLElement).dataset["path"], `$${".k".repeat(depth)}`);
+  assert.equal(nested.host.querySelector(".lfv-num")?.textContent, "1");
 });
 
 test("类型分档按扩展名，带 query 和 hash 也认得出来", () => {

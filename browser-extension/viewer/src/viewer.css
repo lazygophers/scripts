@@ -397,3 +397,56 @@ html.lfv-on .lfv-front-matter th {
   color: var(--muted-foreground);
   font-weight: 500;
 }
+
+/* json / yaml 折叠树：整块相对定位，复制按钮和代码视图一样浮在右上角。 */
+html.lfv-on .lfv-data {
+  position: relative;
+}
+
+html.lfv-on .lfv-tree {
+  padding: 2rem 2.5rem;
+  font: 13px / 1.8 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* 每深一层往右挪一格，缩进就是层级，不用画连线。 */
+html.lfv-on .lfv-node .lfv-node {
+  margin-left: 1.25rem;
+}
+
+html.lfv-on .lfv-node > summary {
+  cursor: pointer;
+}
+
+html.lfv-on .lfv-key {
+  color: var(--foreground);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+html.lfv-on .lfv-count {
+  color: var(--muted-foreground);
+}
+
+/* 数据类型的颜色和代码高亮同源，一份调色板两处用。 */
+html.lfv-on .lfv-str {
+  color: var(--accent);
+}
+
+html.lfv-on .lfv-num {
+  color: var(--ring);
+}
+
+html.lfv-on .lfv-bool,
+html.lfv-on .lfv-null {
+  color: var(--primary);
+  font-style: italic;
+}
+
+/* 语法错误那一条：顶在原文上面，红边框拉住视线。 */
+html.lfv-on .lfv-parse-error {
+  padding: 0.75rem 2.5rem;
+  color: var(--foreground);
+  background: var(--card);
+  border-bottom: 2px solid var(--destructive);
+  font: 14px / 1.6 system-ui, sans-serif;
+}

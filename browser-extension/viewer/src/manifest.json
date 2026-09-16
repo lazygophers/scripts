@@ -25,6 +25,7 @@
         "markdown.js",
         "mermaid.js",
         "katex.js",
+        "data.js",
         "katex.css",
         "*.woff2",
         "*.woff",

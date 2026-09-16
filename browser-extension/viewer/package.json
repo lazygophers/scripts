@@ -25,6 +25,7 @@
     "marked": "^16.4.2",
     "marked-directive": "^1.0.7",
     "marked-footnote": "^1.4.0",
-    "mermaid": "^12.0.0"
+    "mermaid": "^12.0.0",
+    "yaml": "^2.9.1"
   }
 }

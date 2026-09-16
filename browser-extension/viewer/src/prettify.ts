@@ -4,6 +4,9 @@
  * 这一版只有「原样文本」一种渲染结果（排版好的纯文本），按类型分流的渲染器是后面的票。
  */
 
+// 只借类型，编译后这行就没了——data 包仍然是打开 json / yaml 时才加载的那一份。
+import type { DataError, Parsed } from "./data.ts";
+
 /** 纯文本类的 contentType。json / yaml / xml 的各种变体都算文本，所以单列。 */
 export const TEXT_TYPE = /^text\/|\/(json|[a-z-]*yaml|[a-z-]*xml)$/;
 
@@ -107,10 +110,14 @@ function mount(doc: Document, pre: HTMLElement, pretty: boolean): void {
 /** markdown 类的扩展名。`mdx` 也走文档视图，只是组件位置换成占位块。 */
 const MARKDOWN_EXTS = new Set(["md", "markdown", "mdx"]);
 
-/** 按扩展名分流：markdown 走文档视图，认得的源码走代码视图，其余仍是排版好的纯文本。 */
+/** 结构化数据的扩展名：这些渲染成可折叠的树。 */
+const DATA_EXTS = new Set(["json", "yaml", "yml"]);
+
+/** 按扩展名分流：markdown 走文档视图，json/yaml 走折叠树，认得的源码走代码视图，其余仍是纯文本。 */
 function render(doc: Document, text: string): HTMLElement {
   const ext = extOf(doc.URL);
   if (MARKDOWN_EXTS.has(ext)) return renderDocument(doc, text);
+  if (DATA_EXTS.has(ext)) return renderData(doc, text, ext !== "json");
   const language = LANGS[ext];
   if (language === undefined) {
     const view = doc.createElement("pre");
@@ -119,6 +126,41 @@ function render(doc: Document, text: string): HTMLElement {
     return view;
   }
   return renderCode(doc, text, language);
+}
+
+/**
+ * json / yaml 视图：先挂空壳子，解析和建树在 data 包里异步做完再填进来，`prettify` 仍是同步的。
+ *
+ * 语法有错时不是一片空白：顶上一条说清第几行错在哪，底下照常是排版好的原文。
+ */
+function renderData(doc: Document, text: string, yaml: boolean): HTMLElement {
+  const host = doc.createElement("div");
+  host.className = "lfv-data";
+  void fillData(doc, host, text, yaml);
+  return host;
+}
+
+async function fillData(
+  doc: Document,
+  host: HTMLElement,
+  text: string,
+  yaml: boolean,
+): Promise<void> {
+  const module = await import(chrome.runtime.getURL("data.js"));
+  const parse = module.parseData as (t: string, y: boolean) => Parsed;
+  const parsed = parse(text, yaml);
+
+  if (parsed.ok) {
+    const tree = (module.renderTree as (d: Document, v: unknown) => HTMLElement)(doc, parsed.value);
+    host.replaceChildren(makeCopyButton(doc, text), tree);
+  } else {
+    const note = (module.renderError as (d: Document, e: DataError) => HTMLElement)(
+      doc,
+      parsed.error,
+    );
+    host.replaceChildren(note, renderCode(doc, text, yaml ? "yaml" : "json"));
+  }
+  host.classList.add("lfv-rendered");
 }
 
 /**
