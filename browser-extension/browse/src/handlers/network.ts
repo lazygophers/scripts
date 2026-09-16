@@ -91,7 +91,8 @@ function matching(url: string, type: string): string[] {
   return hits;
 }
 
-const onBeforeRequest = (details: chrome.webRequest.WebRequestBodyDetails): void => {
+// 返回 undefined 而不是 void：onBeforeRequest 的监听签名允许返回一个拦截结果，这里从不拦。
+const onBeforeRequest = (details: chrome.webRequest.OnBeforeRequestDetails): undefined => {
   if (matching(details.url, details.type).length === 0) return;
   pending.set(details.requestId, {
     url: details.url,
@@ -103,12 +104,12 @@ const onBeforeRequest = (details: chrome.webRequest.WebRequestBodyDetails): void
   });
 };
 
-const onSendHeaders = (details: chrome.webRequest.WebRequestHeadersDetails): void => {
+const onSendHeaders = (details: chrome.webRequest.OnBeforeSendHeadersDetails): void => {
   const entry = pending.get(details.requestId);
   if (entry) entry.requestHeaders = details.requestHeaders ?? [];
 };
 
-const onCompleted = (details: chrome.webRequest.WebResponseCacheDetails): void => {
+const onCompleted = (details: chrome.webRequest.OnCompletedDetails): void => {
   const entry = pending.get(details.requestId);
   pending.delete(details.requestId);
   const subs = matching(details.url, details.type);
@@ -134,7 +135,7 @@ const onCompleted = (details: chrome.webRequest.WebResponseCacheDetails): void =
   });
 };
 
-const onErrorOccurred = (details: chrome.webRequest.WebResponseErrorDetails): void => {
+const onErrorOccurred = (details: chrome.webRequest.OnErrorOccurredDetails): void => {
   const entry = pending.get(details.requestId);
   pending.delete(details.requestId);
   const subs = matching(details.url, details.type);

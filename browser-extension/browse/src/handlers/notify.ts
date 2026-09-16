@@ -14,7 +14,7 @@ export async function notificationsShow(
     optionalString(params.iconUrl, "iconUrl") ?? chrome.runtime.getURL("assets/icon.png");
   // 旧版 @types 把 create/clear 标成 void；运行时回 id / 回布尔
   const create = chrome.notifications.create as unknown as (
-    options: chrome.notifications.NotificationOptions<true>,
+    options: chrome.notifications.NotificationOptions,
   ) => Promise<string>;
   const id = await create({
     type: "basic",

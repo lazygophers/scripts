@@ -12,7 +12,10 @@ import { requireApi } from "./context.ts";
 
 const STATUSES = ["OK", "INVALID_TICKET", "INVALID_DATA", "FAILED"] as const;
 
-const printResponders = new Map<string, (status: string) => void>();
+/** 打印结果只能是上面那四种，回调的类型也就跟着收窄了。 */
+type PrintStatus = (typeof STATUSES)[number];
+
+const printResponders = new Map<string, (status: PrintStatus) => void>();
 
 /** 打印请求转发给订阅方（background 启动时接线）。 */
 export function listenPrinting(): void {
@@ -42,6 +45,6 @@ export async function printingRespond(
     throw new CommandError("invalid argument", `no pending print request ${request}`);
   }
   printResponders.delete(request);
-  callback(status);
+  callback(status as PrintStatus);
   return { responded: request };
 }

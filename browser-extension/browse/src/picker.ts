@@ -22,7 +22,7 @@ for (const source of sources) {
   button.className = "btn";
   button.textContent = labels[source] ?? source;
   button.addEventListener("click", () => {
-    chrome.desktopCapture.chooseDesktopMedia([source], (streamId) => {
+    chrome.desktopCapture.chooseDesktopMedia([source as "screen" | "window" | "tab" | "audio"], (streamId) => {
       void chrome.runtime.sendMessage({ type: "browse-pick", streamId: streamId ?? null });
       window.close();
     });

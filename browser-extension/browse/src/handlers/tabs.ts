@@ -36,7 +36,7 @@ export async function tabsGroup(
       : await chrome.tabGroups.update(groupId, {
           ...(title === undefined ? {} : { title }),
           // COLORS 校验过了，这里只是把 string 收窄回 Chrome 的枚举类型
-          ...(color === undefined ? {} : { color: color as chrome.tabGroups.ColorEnum }),
+          ...(color === undefined ? {} : { color: color as `${chrome.tabGroups.Color}` }),
         });
   return { group: String(groupId), title: after?.title ?? "", color: after?.color ?? "" };
 }
@@ -55,7 +55,8 @@ export async function tabsUngroup(
     if (tabs.length === 0) {
       throw new CommandError("invalid argument", `no such group ${group}`);
     }
-    await chrome.tabs.ungroup(tabs.map((t) => t.id).filter((id): id is number => id !== undefined));
+    const ids = tabs.map((t) => t.id).filter((id): id is number => id !== undefined);
+    await chrome.tabs.ungroup(ids as [number, ...number[]]);
     return { ungrouped: tabs.length };
   }
   const target = await requireTabOnly(params);
@@ -78,7 +79,7 @@ export async function tabsGroups(
   }
   const found = await chrome.tabGroups.query({
     ...(title === undefined ? {} : { title }),
-    ...(color === undefined ? {} : { color: color as chrome.tabGroups.ColorEnum }),
+    ...(color === undefined ? {} : { color: color as `${chrome.tabGroups.Color}` }),
   });
   const tabs = await chrome.tabs.query({});
   return {
@@ -121,14 +122,15 @@ export async function tabsUpdateGroup(
   }
   const updated = await chrome.tabGroups.update(Number(group), {
     ...(title === undefined ? {} : { title }),
-    ...(color === undefined ? {} : { color: color as chrome.tabGroups.ColorEnum }),
+    ...(color === undefined ? {} : { color: color as `${chrome.tabGroups.Color}` }),
     ...(collapsed === undefined ? {} : { collapsed }),
   });
+  // 新版类型把返回值标成可能没有：真取不到就把请求里那几个值原样报回去。
   return {
-    group: String(updated.id),
-    title: updated.title ?? "",
-    color: updated.color,
-    collapsed: updated.collapsed,
+    group: String(updated?.id ?? group),
+    title: updated?.title ?? title ?? "",
+    color: updated?.color ?? color ?? "",
+    collapsed: updated?.collapsed ?? collapsed ?? false,
   };
 }
 

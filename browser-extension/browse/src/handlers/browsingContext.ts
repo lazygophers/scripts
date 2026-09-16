@@ -192,7 +192,7 @@ async function activate(tabId: number): Promise<void> {
 /** Resolve once the tab reports `status: "complete"`, or reject on timeout. */
 function waitForLoad(tabId: number, timeout: number): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const listener = (id: number, info: chrome.tabs.TabChangeInfo): void => {
+    const listener = (id: number, info: chrome.tabs.OnUpdatedInfo): void => {
       if (id === tabId && info.status === "complete") {
         settle();
       }

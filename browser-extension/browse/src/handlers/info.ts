@@ -45,7 +45,7 @@ export async function dnsResolve(
 
 export async function idleState(
   params: Record<string, unknown>,
-): Promise<{ state: chrome.idle.IdleState }> {
+): Promise<{ state: `${chrome.idle.IdleState}` }> {
   requireApi("idle", "checking idle state");
   const threshold = params.threshold;
   const seconds =

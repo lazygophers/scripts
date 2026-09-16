@@ -30,7 +30,7 @@ export async function downloadsList(
   const { id, state, urlRegex, limit } = params;
   const downloads = await chrome.downloads.search({
     ...(typeof id === "number" ? { id } : {}),
-    ...(typeof state === "string" ? { state: state as chrome.downloads.DownloadState } : {}),
+    ...(typeof state === "string" ? { state: state as chrome.downloads.DownloadItem["state"] } : {}),
     ...(typeof urlRegex === "string" ? { urlRegex } : {}),
     ...(typeof limit === "number" ? { limit } : {}),
   });
