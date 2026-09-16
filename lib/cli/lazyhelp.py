@@ -42,23 +42,36 @@ class LazyhelpCli(BaseCli):
         return 0
 
     @timed_cli
-    def install(self):
+    def install(self, yes: bool = False):
         """一次性跑完 browse + graphwatch 各自的完整安装流程
 
-        用法: lazyhelp install
+        用法: lazyhelp install [-y]
 
-        两边各自独立：一边失败不拦另一边，最后按「有一个失败就非零」汇总退出码。
+        每个都单独确认一次，选了才装；`-y`/`--yes` 跳过确认，全部默认同意。
+        两边各自独立：一边失败/跳过不拦另一边，最后按「有一个真失败就非零」汇总
+        退出码（跳过不算失败）。
         """
         from lib.browse_install import main as browse_install_main
         from lib.graphwatch import GraphwatchCli
+        from lib.ui import ask_confirm
 
-        self._r.rule("browse install", style="blue")
-        rc_browse = browse_install_main(["browse install"])
+        failed = False
 
-        self._r.rule("graphwatch install", style="blue")
-        rc_graphwatch = GraphwatchCli().install()
+        if yes or ask_confirm("装 browse（浏览器扩展 native messaging）？", default=True):
+            self._r.rule("browse install", style="blue")
+            if browse_install_main(["browse install"]):
+                failed = True
+        else:
+            self._r.step("跳过 browse install")
 
-        return 1 if (rc_browse or rc_graphwatch) else 0
+        if yes or ask_confirm("装 graphwatch（知识图谱后台服务）？", default=True):
+            self._r.rule("graphwatch install", style="blue")
+            if GraphwatchCli().install():
+                failed = True
+        else:
+            self._r.step("跳过 graphwatch install")
+
+        return 1 if failed else 0
 
 
 def main():
