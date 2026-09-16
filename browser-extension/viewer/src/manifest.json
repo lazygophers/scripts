@@ -29,6 +29,7 @@
         "csv.js",
         "log.js",
         "listing.js",
+        "search.js",
         "katex.css",
         "*.woff2",
         "*.woff",

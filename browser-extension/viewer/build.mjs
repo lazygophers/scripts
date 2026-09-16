@@ -18,6 +18,7 @@ await buildExtension({
     "src/csv.ts",
     "src/log.ts",
     "src/listing.ts",
+    "src/search.ts",
   ],
   copy: ["viewer.css"],
   // KaTeX 的样式表要带着它自己的字体走：`url()` 交给 esbuild 改写成 dist 里的文件，

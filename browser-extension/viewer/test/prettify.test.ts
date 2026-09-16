@@ -24,6 +24,7 @@ beforeEach(() => {
         if (path === "csv.js") return new URL("../src/csv.ts", import.meta.url).href;
         if (path === "log.js") return new URL("../src/log.ts", import.meta.url).href;
         if (path === "listing.js") return new URL("../src/listing.ts", import.meta.url).href;
+        if (path === "search.js") return new URL("../src/search.ts", import.meta.url).href;
         return `chrome-extension://viewer/${path}`;
       },
     },
@@ -1333,4 +1334,146 @@ test("不是目录索引页的页面不被这条判定误接管", () => {
   assert.equal(isDirectoryIndex(text.window.document), false);
 
   assert.equal(isDirectoryIndex(indexPage("").window.document), true);
+});
+
+/** 按一次查找快捷键。`meta` 是 macOS 的 Cmd，`ctrl` 是其他平台。 */
+function find(doc: Document): void {
+  const view = doc.defaultView as Window & typeof globalThis;
+  doc.dispatchEvent(new view.KeyboardEvent("keydown", { key: "f", metaKey: true, bubbles: true }));
+}
+
+/** 在搜索框里按一个键。事件从输入框冒上去，和真人按键一样。 */
+function press(bar: HTMLElement, key: string, shiftKey = false): void {
+  const input = bar.querySelector("input") as HTMLInputElement;
+  const view = (bar.ownerDocument.defaultView as Window & typeof globalThis);
+  input.dispatchEvent(new view.KeyboardEvent("keydown", { key, shiftKey, bubbles: true }));
+}
+
+/** 往搜索框里输入一个词，等它把命中标出来。 */
+function type(bar: HTMLElement, needle: string): void {
+  const input = bar.querySelector("input") as HTMLInputElement;
+  const view = bar.ownerDocument.defaultView as Window & typeof globalThis;
+  input.value = needle;
+  input.dispatchEvent(new view.Event("input"));
+}
+
+/** 等搜索框那一拍落地：它那个包是第一次按快捷键才去加载的。 */
+async function searchBar(doc: Document): Promise<HTMLElement> {
+  for (let i = 0; i < 200; i += 1) {
+    const bar = doc.querySelector(".lfv-search");
+    if (bar) return bar as HTMLElement;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("等不到搜索框出现");
+}
+
+/** 打开一个已经美化好的文本页，并把搜索框叫出来。 */
+async function searchPage(text: string): Promise<{ doc: Document; bar: HTMLElement }> {
+  const dom = textFile("file:///tmp/notes.txt", text);
+  const doc = dom.window.document;
+  prettify(doc);
+  find(doc);
+  return { doc, bar: await searchBar(doc) };
+}
+
+const counter = (bar: HTMLElement) => bar.querySelector(".lfv-search-count")?.textContent;
+
+test("按查找快捷键弹出扩展自己的搜索框，命中全部高亮，当前一处颜色不同", async () => {
+  const { doc, bar } = await searchPage("alpha beta alpha gamma alpha");
+  assert.equal(asked.includes("search.js"), true);
+
+  type(bar, "alpha");
+
+  const hits = doc.querySelectorAll(".lfv-hit");
+  assert.equal(hits.length, 3);
+  assert.equal(doc.querySelectorAll(".lfv-hit-current").length, 1);
+  assert.equal(hits[0]?.classList.contains("lfv-hit-current"), true);
+  assert.equal(counter(bar), "第 1 个 / 共 3 个");
+});
+
+test("回车和上下箭头在命中之间循环跳", async () => {
+  const { doc, bar } = await searchPage("x1 x2 x3");
+  type(bar, "x");
+
+  const current = () => doc.querySelector(".lfv-hit-current")?.parentElement?.textContent;
+  assert.equal(counter(bar), "第 1 个 / 共 3 个");
+
+  press(bar, "Enter");
+  assert.equal(counter(bar), "第 2 个 / 共 3 个");
+  press(bar, "ArrowDown");
+  assert.equal(counter(bar), "第 3 个 / 共 3 个");
+
+  // 最后一个再往下回到第一个。
+  press(bar, "Enter");
+  assert.equal(counter(bar), "第 1 个 / 共 3 个");
+  // 第一个往上回到最后一个。
+  press(bar, "ArrowUp");
+  assert.equal(counter(bar), "第 3 个 / 共 3 个");
+  press(bar, "Enter", true);
+  assert.equal(counter(bar), "第 2 个 / 共 3 个");
+  assert.ok(current()?.includes("x1 x2 x3"));
+});
+
+test("命中落在折叠起来的节点里时自动展开", async () => {
+  const { doc, bar } = await searchPage("外面");
+  const details = doc.createElement("details");
+  details.innerHTML = "<summary>折起来的</summary><p>里面藏着 needle</p>";
+  doc.body.append(details);
+  assert.equal(details.open, false);
+
+  type(bar, "needle");
+
+  assert.equal(details.open, true);
+  assert.equal(doc.querySelectorAll(".lfv-hit").length, 1);
+});
+
+test("Esc 关掉搜索框，高亮全部清掉，文本回到原样", async () => {
+  const { doc, bar } = await searchPage("alpha beta alpha");
+  const before = (doc.querySelector(".lfv-text") as HTMLElement).innerHTML;
+
+  type(bar, "alpha");
+  assert.equal(doc.querySelectorAll(".lfv-hit").length, 2);
+
+  press(bar, "Escape");
+
+  assert.equal(doc.querySelector(".lfv-search"), null);
+  assert.equal(doc.querySelectorAll(".lfv-hit").length, 0);
+  assert.equal((doc.querySelector(".lfv-text") as HTMLElement).innerHTML, before);
+});
+
+test("没有命中时明说没有找到，词清空后提示也跟着消失", async () => {
+  const { doc, bar } = await searchPage("alpha beta");
+
+  type(bar, "zzz");
+  assert.equal(doc.querySelectorAll(".lfv-hit").length, 0);
+  assert.equal(counter(bar), "没有找到");
+
+  type(bar, "");
+  assert.equal(counter(bar), "");
+});
+
+test("已经开着的搜索框不会再开第二个", async () => {
+  const { doc } = await searchPage("alpha");
+
+  find(doc);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+
+  assert.equal(doc.querySelectorAll(".lfv-search").length, 1);
+});
+
+test("没被美化的页面不接管查找快捷键", async () => {
+  const dom = textFile("file:///tmp/data.unknownext", "alpha");
+  const doc = dom.window.document;
+  prettify(doc);
+
+  // 这一档只挂了「美化一下」按钮，快捷键应当留给浏览器自己。
+  find(doc);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(doc.querySelector(".lfv-search"), null);
+  assert.equal(asked.includes("search.js"), false);
+
+  // 美化之后才接管。
+  toggle(doc).click();
+  find(doc);
+  assert.ok(await searchBar(doc));
 });

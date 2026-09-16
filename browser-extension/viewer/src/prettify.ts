@@ -114,6 +114,7 @@ function offer(doc: Document, pre: HTMLElement, label: string): void {
  */
 function mount(doc: Document, pre: HTMLElement, pretty: boolean): void {
   ensureStylesheet(doc);
+  wireSearch(doc);
   const button = makeButton(doc, pretty ? "原始" : "美化", () =>
     mount(doc, pre, !pretty),
   );
@@ -141,6 +142,7 @@ function swapListing(
   pretty: boolean,
 ): void {
   ensureStylesheet(doc);
+  wireSearch(doc);
   const button = makeButton(doc, pretty ? "原始" : "美化", () =>
     swapListing(doc, original, host, !pretty),
   );
@@ -472,6 +474,29 @@ function makeButton(doc: Document, label: string, onClick: () => void): HTMLElem
   );
   button.addEventListener("click", onClick);
   return button;
+}
+
+/** 已经装过查找快捷键的页面。一个页面只装一次，来回切换不重复装。 */
+const wired = new WeakSet<Document>();
+
+/**
+ * 接管查找快捷键（macOS 的 `Cmd+F`，其余平台的 `Ctrl+F`）。
+ *
+ * 只在美化档接管：`lfv-on` 不在就什么都不做，浏览器自带的查找照常弹出来。
+ * 搜索那套代码单独一个包，第一次真按下去才去加载。
+ */
+function wireSearch(doc: Document): void {
+  if (wired.has(doc)) return;
+  wired.add(doc);
+  doc.addEventListener("keydown", (event) => {
+    const key = event as KeyboardEvent;
+    if (key.key !== "f" || !(key.metaKey || key.ctrlKey)) return;
+    if (!doc.documentElement.classList.contains("lfv-on")) return;
+    key.preventDefault();
+    void import(chrome.runtime.getURL("search.js")).then((module) => {
+      (module.openSearch as (d: Document) => void)(doc);
+    });
+  });
 }
 
 const STYLE_ID = "lfv-style";

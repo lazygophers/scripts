@@ -753,3 +753,47 @@ html.lfv-on .lfv-dir-empty {
   padding: 1rem 0;
   color: var(--muted-foreground);
 }
+
+/* ---- 页内搜索 ---- */
+
+html.lfv-on .lfv-search {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 10;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.4rem 0.6rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 25%);
+}
+
+html.lfv-on .lfv-search-input {
+  padding: 0.25rem 0.5rem;
+  font: inherit;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+}
+
+html.lfv-on .lfv-search-count {
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+/* 命中用固定的黄和橙：调色板里没有对应的变量，而这两种颜色在深浅两套底色上都看得见。 */
+html.lfv-on .lfv-hit {
+  color: #1c1917;
+  background: #fde047;
+  border-radius: 0.125rem;
+}
+
+html.lfv-on .lfv-hit-current {
+  color: #1c1917;
+  background: #fb923c;
+}
