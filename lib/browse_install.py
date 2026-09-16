@@ -308,14 +308,16 @@ WAIT_TIMEOUT = 300.0
 
 
 def build_extension(src: pathlib.Path = EXTENSION_SRC) -> pathlib.Path:
-    """构建扩展，返回 dist 目录。已经构建过就直接返回，不重复跑。
+    """构建扩展，返回 dist 目录。每次都强制重新跑，不检查 dist 是否已存在。
 
     浏览器加载的是 dist/ 而不是 src/，忘了构建的话扩展装上去也是坏的
-    （`page-locate.js` 不在，所有 input.* 都会失败）。
+    （`page-locate.js` 不在，所有 input.* 都会失败）；`dist/` 已存在也不代表
+    是最新的——之前「存在就跳过」导致改完 src/manifest.json 之后 `dist/` 还是
+    旧内容，Chrome 报 key 无效，且 `dist/` 本来就没进 git（`.gitignore`），
+    留着旧的没有任何好处。真想跳过构建走 `--no-build`（`main()` 里单独判断，
+    不经过这个函数）。
     """
     dist = src / "dist"
-    if (dist / "manifest.json").exists():
-        return dist
     if not (src / "package.json").exists():
         raise FileNotFoundError(f"扩展源码不在 {src}，用 --no-build 跳过构建")
     if not (src / "node_modules").exists():
