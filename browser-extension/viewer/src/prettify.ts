@@ -6,6 +6,7 @@
 
 // 只借类型，编译后这行就没了——data 包仍然是打开 json / yaml 时才加载的那一份。
 import type { DataError, Parsed } from "./data.ts";
+import type { Entry } from "./listing.ts";
 
 /** 纯文本类的 contentType。json / yaml / xml 的各种变体都算文本，所以单列。 */
 export const TEXT_TYPE = /^text\/|\/(json|[a-z-]*yaml|[a-z-]*xml)$/;
@@ -53,6 +54,18 @@ export function isPlainTextPage(doc: Document): boolean {
   return kids.length === 1 && kids[0]?.tagName === "PRE";
 }
 
+/**
+ * 判定「这是浏览器给本地目录生成的索引页」。
+ *
+ * 它不是纯文本页：有标题、内容是 `text/html`，所以判定规则单独一条。
+ * 那张表是浏览器自己拼出来的，`#tbody` 和 `#theader` 两个 id 都写死在模板里
+ * （chromium `net/base/dir_header.html`），两个都在才算数，别的网页碰不上。
+ */
+export function isDirectoryIndex(doc: Document): boolean {
+  if (!doc.URL.startsWith("file://")) return false;
+  return doc.querySelector("tbody#tbody") !== null && doc.querySelector("#theader") !== null;
+}
+
 /** URL 的小写扩展名。没有扩展名、或者是 `.bashrc` 这种纯点开头的，都算没有。 */
 function extOf(url: string): string {
   const name = url.split(/[?#]/)[0]?.split("/").pop() ?? "";
@@ -69,6 +82,7 @@ export function classify(url: string): Kind {
 }
 
 export function prettify(doc: Document): void {
+  if (isDirectoryIndex(doc)) return mountListing(doc);
   if (!isPlainTextPage(doc)) return;
   const kind = classify(doc.URL);
   if (kind === "webpage") return;
@@ -105,6 +119,42 @@ function mount(doc: Document, pre: HTMLElement, pretty: boolean): void {
   );
   doc.documentElement.classList.toggle("lfv-on", pretty);
   doc.body.replaceChildren(pretty ? render(doc, pre.textContent ?? "") : pre, button);
+}
+
+/**
+ * 目录视图：先把浏览器那张表摘下来留着（切回「原始」时原样放回），再挂个空壳子异步填。
+ */
+function mountListing(doc: Document): void {
+  const original = Array.from(doc.body.children) as HTMLElement[];
+  const tbody = doc.querySelector("tbody#tbody") as HTMLElement;
+  const host = doc.createElement("div");
+  host.className = "lfv-dir";
+  void fillListing(doc, host, tbody);
+  swapListing(doc, original, host, true);
+}
+
+/** 目录页的原始 / 美化切换。和文件页一样，「原始」放回的是浏览器原来那些节点本身。 */
+function swapListing(
+  doc: Document,
+  original: HTMLElement[],
+  host: HTMLElement,
+  pretty: boolean,
+): void {
+  ensureStylesheet(doc);
+  const button = makeButton(doc, pretty ? "原始" : "美化", () =>
+    swapListing(doc, original, host, !pretty),
+  );
+  doc.documentElement.classList.toggle("lfv-on", pretty);
+  doc.body.replaceChildren(...(pretty ? [host] : original), button);
+}
+
+async function fillListing(doc: Document, host: HTMLElement, tbody: HTMLElement): Promise<void> {
+  const module = await import(chrome.runtime.getURL("listing.js"));
+  const parse = module.parseListing as (t: HTMLElement) => Entry[];
+  const render = module.renderListing as (d: Document, e: Entry[], p: string) => HTMLElement;
+  // 这时表已经从页面上摘下来了，但节点还在手里，照样读得出来。
+  host.replaceChildren(render(doc, parse(tbody), new URL(doc.URL).pathname));
+  host.classList.add("lfv-rendered");
 }
 
 /** markdown 类的扩展名。`mdx` 也走文档视图，只是组件位置换成占位块。 */

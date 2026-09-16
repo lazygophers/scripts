@@ -28,6 +28,7 @@
         "data.js",
         "csv.js",
         "log.js",
+        "listing.js",
         "katex.css",
         "*.woff2",
         "*.woff",

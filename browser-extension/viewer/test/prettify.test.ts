@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 
 import { colorize } from "../src/highlight.ts";
-import { classify, isPlainTextPage, prettify } from "../src/prettify.ts";
+import { classify, isDirectoryIndex, isPlainTextPage, prettify } from "../src/prettify.ts";
 import { clearChrome, installChrome, page } from "./mock.ts";
 
 /** 本轮 `getURL` 被问过的路径。用来证明非代码页从没去取过高亮包。 */
@@ -23,6 +23,7 @@ beforeEach(() => {
         if (path === "data.js") return new URL("../src/data.ts", import.meta.url).href;
         if (path === "csv.js") return new URL("../src/csv.ts", import.meta.url).href;
         if (path === "log.js") return new URL("../src/log.ts", import.meta.url).href;
+        if (path === "listing.js") return new URL("../src/listing.ts", import.meta.url).href;
         return `chrome-extension://viewer/${path}`;
       },
     },
@@ -1115,4 +1116,221 @@ test("空文件和超长单行都不报错", async () => {
   const rows = huge.host.querySelectorAll(".lfv-log-row");
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.querySelector(".lfv-log-message")?.textContent?.length, long.length);
+});
+
+/** 一条目录项，照浏览器索引页原样拼：名字格一个 `<a>`，大小和时间把原始数值放 `data-value`。 */
+function indexRow(name: string, dir: boolean, size: number, mtime: number, date: string) {
+  const shown = dir ? `${name}/` : name;
+  return (
+    `<tr><td data-value="${name}"><a class="icon ${dir ? "dir" : "file"}" href="${shown}">${shown}</a></td>` +
+    `<td class="detailsColumn" data-value="${size}">${dir ? "" : `${size} B`}</td>` +
+    `<td class="detailsColumn" data-value="${mtime}">${date}</td></tr>`
+  );
+}
+
+/** 造一张浏览器的本地目录索引页。 */
+function indexPage(rows: string, url = "file:///tmp/dir/") {
+  const dom = page(
+    '<h1 id="header">Index of /tmp/dir/</h1>' +
+      '<table><thead><tr class="header" id="theader">' +
+      '<th id="nameColumnHeader">Name</th><th class="detailsColumn">Size</th>' +
+      '<th class="detailsColumn">Date Modified</th></tr></thead>' +
+      `<tbody id="tbody">${rows}</tbody></table>`,
+    { url, contentType: "text/html" },
+  );
+  dom.window.document.title = "/tmp/dir/";
+  return dom;
+}
+
+/** 造目录页并等列表建好。 */
+async function dirPage(rows: string, url = "file:///tmp/dir/") {
+  const dom = indexPage(rows, url);
+  const doc = dom.window.document;
+  prettify(doc);
+  for (let i = 0; i < 200; i += 1) {
+    const host = doc.querySelector(".lfv-dir.lfv-rendered");
+    if (host) return { dom, doc, host: host as HTMLElement };
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("等不到目录列表渲染完成");
+}
+
+const SAMPLE =
+  indexRow("src", true, 0, 300, "2026/9/14 10:00:00") +
+  indexRow("b.go", false, 30, 200, "2026/9/15 10:00:00") +
+  indexRow("a.png", false, 500, 100, "2026/9/16 10:00:00") +
+  indexRow(".env", false, 5, 400, "2026/9/13 10:00:00");
+
+/** 表格里看得见的条目名（不含被 CSS 藏起来的隐藏文件，那一档单独测）。 */
+const names = (host: HTMLElement) =>
+  Array.from(host.querySelectorAll("tbody tr .lfv-entry"), (n) => n.textContent);
+
+test("打开本地目录时换成美化后的列表，条目按类型给图标", async () => {
+  const { doc, host } = await dirPage(SAMPLE);
+
+  assert.ok(doc.documentElement.classList.contains("lfv-on"));
+  assert.equal(doc.querySelector("#tbody"), null, "浏览器那张表已经换掉了");
+  assert.deepEqual(names(host), [".env", "a.png", "b.go", "src/"]);
+
+  const icon = (name: string) =>
+    Array.from(host.querySelectorAll(".lfv-entry")).find((n) => n.textContent === name)?.className;
+  assert.equal(icon("src/"), "lfv-entry lfv-icon-dir");
+  assert.equal(icon("b.go"), "lfv-entry lfv-icon-code");
+  assert.equal(icon("a.png"), "lfv-entry lfv-icon-image");
+});
+
+test("切回原始拿回浏览器那张索引表", async () => {
+  const { doc } = await dirPage(SAMPLE);
+
+  toggle(doc).click();
+  assert.equal(doc.documentElement.classList.contains("lfv-on"), false);
+  assert.equal(doc.querySelectorAll("#tbody tr").length, 4);
+
+  toggle(doc).click();
+  assert.ok(doc.querySelector(".lfv-dir-table"));
+});
+
+test("名称、大小、修改时间三种排序可用且可反向", async () => {
+  const { dom, host } = await dirPage(SAMPLE);
+  const click = (i: number) =>
+    (host.querySelectorAll("thead th")[i] as HTMLElement).dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+
+  click(1); // 大小：0 < 5 < 30 < 500
+  assert.deepEqual(names(host), ["src/", ".env", "b.go", "a.png"]);
+  assert.equal(host.querySelectorAll("thead th")[1]?.getAttribute("data-sort"), "asc");
+
+  click(1);
+  assert.deepEqual(names(host), ["a.png", "b.go", ".env", "src/"]);
+  assert.equal(host.querySelectorAll("thead th")[1]?.getAttribute("data-sort"), "desc");
+
+  click(2); // 时间：100 < 200 < 300 < 400
+  assert.deepEqual(names(host), ["a.png", "b.go", "src/", ".env"]);
+  assert.equal(host.querySelectorAll("thead th")[1]?.hasAttribute("data-sort"), false);
+
+  click(0);
+  assert.deepEqual(names(host), [".env", "a.png", "b.go", "src/"]);
+});
+
+test("过滤框随输入实时筛选条目", async () => {
+  const { dom, host } = await dirPage(SAMPLE);
+  const box = host.querySelector(".lfv-dir-filter") as HTMLInputElement;
+  const visible = () =>
+    Array.from(host.querySelectorAll("tbody tr"))
+      .filter((tr) => !(tr as HTMLElement).hidden)
+      .map((tr) => (tr as HTMLElement).dataset["name"]);
+
+  box.value = "o";
+  box.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert.deepEqual(visible(), ["b.go"]);
+
+  // 大小写不论，清空恢复全部。
+  box.value = "A.PNG";
+  box.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert.deepEqual(visible(), ["a.png"]);
+
+  box.value = "";
+  box.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert.equal(visible().length, 4);
+});
+
+test("面包屑显示当前层级，点任意一层跳过去", async () => {
+  const { host } = await dirPage(SAMPLE, "file:///tmp/dir/");
+
+  assert.deepEqual(
+    Array.from(host.querySelectorAll(".lfv-crumb"), (n) => [
+      n.textContent,
+      n.getAttribute("href"),
+    ]),
+    [
+      ["/", "file:///"],
+      ["tmp", "file:///tmp/"],
+      ["dir", "file:///tmp/dir/"],
+    ],
+  );
+});
+
+test("隐藏文件默认收起，开关打开才摊出来", async () => {
+  const { dom, host } = await dirPage(SAMPLE);
+  const view = host.querySelector(".lfv-dir-view") as HTMLElement;
+  const dot = host.querySelector("tbody tr.lfv-dot") as HTMLElement;
+
+  // 藏不藏交给 CSS：行标着 `lfv-dot`，容器默认没有 `lfv-show-hidden`。
+  assert.equal(dot.dataset["name"], ".env");
+  assert.equal(view.classList.contains("lfv-show-hidden"), false);
+
+  const box = host.querySelector(".lfv-dir-dotfiles input") as HTMLInputElement;
+  box.checked = true;
+  box.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.ok(view.classList.contains("lfv-show-hidden"));
+
+  box.checked = false;
+  box.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.equal(view.classList.contains("lfv-show-hidden"), false);
+});
+
+test("悬停文本文件浮出开头几行，图片这类不触发", async () => {
+  const { dom, host } = await dirPage(SAMPLE);
+  let fetched: string | null = null;
+  globalThis.fetch = (async (url: string) => {
+    fetched = url;
+    return { text: async () => "1\n2\n3\n4\n5\n6\n7\n" };
+  }) as unknown as typeof fetch;
+
+  const hover = (name: string) =>
+    (Array.from(host.querySelectorAll(".lfv-entry")).find(
+      (n) => n.textContent === name,
+    ) as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+
+  hover("b.go");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const preview = host.querySelector(".lfv-preview") as HTMLElement;
+  // 只要开头 5 行。
+  assert.equal(preview.textContent, "1\n2\n3\n4\n5");
+  assert.equal(String(fetched), "file:///tmp/dir/b.go");
+
+  // 移开收起，再回来不重读。
+  (
+    Array.from(host.querySelectorAll(".lfv-entry")).find(
+      (n) => n.textContent === "b.go",
+    ) as HTMLElement
+  ).dispatchEvent(new dom.window.MouseEvent("mouseleave"));
+  assert.equal(preview.hidden, true);
+
+  fetched = null;
+  hover("b.go");
+  assert.equal(preview.hidden, false);
+  assert.equal(fetched, null);
+
+  // 图片不是文本，根本不去读。
+  hover("a.png");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(host.querySelectorAll(".lfv-preview").length, 1);
+  assert.equal(fetched, null);
+});
+
+test("空目录不报错，直说这个目录是空的", async () => {
+  const { host } = await dirPage("");
+
+  assert.equal(host.querySelectorAll("tbody tr").length, 0);
+  assert.equal(host.querySelector(".lfv-dir-empty")?.textContent, "这个目录是空的");
+});
+
+test("不是目录索引页的页面不被这条判定误接管", () => {
+  // 普通网页里就算有一张 id 相同的表，也不是 file:// 上的索引页。
+  const web = page('<table><tr id="theader"></tr><tbody id="tbody"></tbody></table>', {
+    url: "https://example.test/list",
+  });
+  assert.equal(isDirectoryIndex(web.window.document), false);
+
+  // 本地的普通 html 文件没有那两个 id。
+  const local = page("<table><tbody></tbody></table>", { url: "file:///tmp/a.html" });
+  assert.equal(isDirectoryIndex(local.window.document), false);
+
+  // 文本文件页也不会被误判。
+  const text = textFile("file:///tmp/a.go", "package main");
+  assert.equal(isDirectoryIndex(text.window.document), false);
+
+  assert.equal(isDirectoryIndex(indexPage("").window.document), true);
 });
