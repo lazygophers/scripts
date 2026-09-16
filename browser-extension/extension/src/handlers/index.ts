@@ -76,7 +76,7 @@ import {
   userScriptsUnregister,
   userScriptsWorld,
 } from "./scripts.ts";
-import { tabsGroup, tabsUngroup } from "./tabs.ts";
+import { tabsGroup, tabsGroups, tabsUngroup, tabsUpdateGroup } from "./tabs.ts";
 import {
   storageDeleteCookies,
   storageGetCookies,
@@ -153,6 +153,8 @@ export const HANDLERS: Record<string, Handler> = {
 
   "lg:tabs.group": tabsGroup,
   "lg:tabs.ungroup": tabsUngroup,
+  "lg:tabs.groups": tabsGroups,
+  "lg:tabs.updateGroup": tabsUpdateGroup,
 
   // 2026-09-16 扩容的能力面，全部 `lg:` 私有方法（BiDi §3.3 的冒号保留）。
   "lg:pageCapture.saveMhtml": pageCaptureSaveMhtml,

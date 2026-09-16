@@ -63,6 +63,75 @@ export async function tabsUngroup(
   return { ungrouped: 1 };
 }
 
+/**
+ * `lg:tabs.groups`（私有方法）：列出标签组。可选按标题/颜色过滤，每组的 tab
+ * 清单一并带回（CLI 不用再逐个查）。
+ */
+export async function tabsGroups(
+  params: Record<string, unknown>,
+): Promise<{ groups: { group: string; title: string; color: string; collapsed: boolean; window: number; tabs: number[] }[] }> {
+  requireApi("tabGroups", "listing tab groups");
+  const title = optionalString(params.title, "title");
+  const color = optionalString(params.color, "color");
+  if (color !== undefined && !COLORS.has(color)) {
+    throw new CommandError("invalid argument", `color must be one of ${[...COLORS].join(", ")}`);
+  }
+  const found = await chrome.tabGroups.query({
+    ...(title === undefined ? {} : { title }),
+    ...(color === undefined ? {} : { color: color as chrome.tabGroups.ColorEnum }),
+  });
+  const tabs = await chrome.tabs.query({});
+  return {
+    groups: found.map((group) => ({
+      group: String(group.id),
+      title: group.title ?? "",
+      color: group.color,
+      collapsed: group.collapsed,
+      window: group.windowId,
+      tabs: tabs
+        .filter((tab) => tab.groupId === group.id)
+        .map((tab) => tab.id)
+        .filter((id): id is number => id !== undefined),
+    })),
+  };
+}
+
+/**
+ * `lg:tabs.updateGroup`（私有方法）：改组的标题/颜色/折叠态。
+ */
+export async function tabsUpdateGroup(
+  params: Record<string, unknown>,
+): Promise<{ group: string; title: string; color: string; collapsed: boolean }> {
+  requireApi("tabGroups", "updating a tab group");
+  const group = optionalString(params.group, "group", ", a group id from lg:tabs.groups");
+  if (group === undefined || !/^\d+$/.test(group)) {
+    throw new CommandError("invalid argument", `group must be a group id, got ${group}`);
+  }
+  const title = optionalString(params.title, "title");
+  const color = optionalString(params.color, "color");
+  if (color !== undefined && !COLORS.has(color)) {
+    throw new CommandError("invalid argument", `color must be one of ${[...COLORS].join(", ")}`);
+  }
+  const collapsed = params.collapsed;
+  if (collapsed !== undefined && typeof collapsed !== "boolean") {
+    throw new CommandError("invalid argument", "collapsed must be true or false");
+  }
+  if (title === undefined && color === undefined && collapsed === undefined) {
+    throw new CommandError("invalid argument", "give at least one of title / color / collapsed");
+  }
+  const updated = await chrome.tabGroups.update(Number(group), {
+    ...(title === undefined ? {} : { title }),
+    ...(color === undefined ? {} : { color: color as chrome.tabGroups.ColorEnum }),
+    ...(collapsed === undefined ? {} : { collapsed }),
+  });
+  return {
+    group: String(updated.id),
+    title: updated.title ?? "",
+    color: updated.color,
+    collapsed: updated.collapsed,
+  };
+}
+
 /** group works on a tab; a frame id is rejected, same rule as close/activate. */
 async function requireTabOnly(params: Record<string, unknown>): Promise<Target> {
   const target = await resolveContext(params);

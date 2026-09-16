@@ -77,6 +77,8 @@ export const FEATURES: Feature[] = [
       "browsingContext.captureScreenshot",
       "lg:tabs.group",
       "lg:tabs.ungroup",
+      "lg:tabs.groups",
+      "lg:tabs.updateGroup",
     ],
   },
   { id: "script", methods: ["script.evaluate", "script.callFunction"] },

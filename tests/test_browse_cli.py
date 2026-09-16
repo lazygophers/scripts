@@ -201,6 +201,9 @@ class TestParsing(unittest.TestCase):
         _, params, _ = browse.parse_command(
             ["tabs", "ungroup", "--group", "42"])
         self.assertEqual(params["group"], "42")
+        _, params, _ = browse.parse_command(
+            ["tabs", "updateGroup", "42", "--title", "新名"])
+        self.assertEqual(params["group"], "42")
         # 2026-09-16 扩容面：录屏 id、WebAuthn request、打印 job/request 都是 string
         _, params, _ = browse.parse_command(
             ["capture", "recordStop", "rec-3"])

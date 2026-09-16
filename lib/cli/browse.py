@@ -107,6 +107,8 @@ METHODS: dict[str, tuple[str, ...]] = {
     "lg:downloads.cancel": ("id",),
     "lg:tabs.group": (),
     "lg:tabs.ungroup": (),
+    "lg:tabs.groups": (),
+    "lg:tabs.updateGroup": ("group",),
     "lg:page.snapshot": (),
     # 审计存在插件的 chrome.storage.local 里，这两条是把它捞出来的唯一一条路
     # （`browse audit`）。2026-09-14 的架构反转之后 Python 侧不再有审计文件。
@@ -176,6 +178,7 @@ STRING_NUMERIC_PARAMS: dict[str, tuple[str, ...]] = {
     "lg:bookmarks.remove": ("id",),
     "lg:tabs.group": ("group",),
     "lg:tabs.ungroup": ("group",),
+    "lg:tabs.updateGroup": ("group",),
     # 线上是 string 的 id 类参数（2026-09-16 扩容面）
     "lg:capture.recordStop": ("recording",),
     "lg:wauth.complete": ("request",),

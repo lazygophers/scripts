@@ -38,6 +38,8 @@ const V1 = [
   "lg:downloads.cancel",
   "lg:tabs.group",
   "lg:tabs.ungroup",
+  "lg:tabs.groups",
+  "lg:tabs.updateGroup",
   // Spec 6.4's discovery command, listed alongside the locator schemes rather
   // than in the 5.1 block.
   "lg:page.snapshot",
