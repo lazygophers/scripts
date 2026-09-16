@@ -118,6 +118,7 @@ function render(doc: Document, text: string): HTMLElement {
   const ext = extOf(doc.URL);
   if (MARKDOWN_EXTS.has(ext)) return renderDocument(doc, text);
   if (DATA_EXTS.has(ext)) return renderData(doc, text, ext !== "json");
+  if (ext === "csv") return renderCsv(doc, text);
   const language = LANGS[ext];
   if (language === undefined) {
     const view = doc.createElement("pre");
@@ -160,6 +161,22 @@ async function fillData(
     );
     host.replaceChildren(note, renderCode(doc, text, yaml ? "yaml" : "json"));
   }
+  host.classList.add("lfv-rendered");
+}
+
+/** csv 视图：同样先挂空壳子，切分和建表在 csv 包里异步做完再填进来。 */
+function renderCsv(doc: Document, text: string): HTMLElement {
+  const host = doc.createElement("div");
+  host.className = "lfv-csv";
+  void fillCsv(doc, host, text);
+  return host;
+}
+
+async function fillCsv(doc: Document, host: HTMLElement, text: string): Promise<void> {
+  const module = await import(chrome.runtime.getURL("csv.js"));
+  const rows = (module.parseCsv as (t: string) => string[][])(text);
+  const table = (module.renderTable as (d: Document, r: string[][]) => HTMLElement)(doc, rows);
+  host.replaceChildren(makeCopyButton(doc, text), table);
   host.classList.add("lfv-rendered");
 }
 

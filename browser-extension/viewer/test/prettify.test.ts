@@ -21,6 +21,7 @@ beforeEach(() => {
         if (path === "mermaid.js") return new URL("./stub-mermaid.ts", import.meta.url).href;
         if (path === "katex.js") return new URL("./stub-katex.ts", import.meta.url).href;
         if (path === "data.js") return new URL("../src/data.ts", import.meta.url).href;
+        if (path === "csv.js") return new URL("../src/csv.ts", import.meta.url).href;
         return `chrome-extension://viewer/${path}`;
       },
     },
@@ -857,6 +858,122 @@ test("空文件、单个标量、深层嵌套都不报错", async () => {
   assert.equal(keys.length, depth);
   assert.equal((keys[depth - 1] as HTMLElement).dataset["path"], `$${".k".repeat(depth)}`);
   assert.equal(nested.host.querySelector(".lfv-num")?.textContent, "1");
+});
+
+/** 造一张 csv 页并等表格建好。 */
+async function csvPage(text: string, url = "file:///tmp/a.csv") {
+  const dom = textFile(url, "");
+  const doc = dom.window.document;
+  first(doc).textContent = text;
+  prettify(doc);
+  for (let i = 0; i < 200; i += 1) {
+    const host = doc.querySelector(".lfv-csv.lfv-rendered");
+    if (host) return { dom, doc, host: host as HTMLElement };
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("等不到表格渲染完成");
+}
+
+/** 表格正文，一行一个数组。 */
+const cells = (host: HTMLElement) =>
+  Array.from(host.querySelectorAll("tbody tr"), (tr) =>
+    Array.from(tr.querySelectorAll("td"), (td) => td.textContent),
+  );
+
+test("csv 第一行当表头，其余是正文", async () => {
+  const { host } = await csvPage("名字,数量\n苹果,3\n梨,10\n");
+
+  assert.deepEqual(
+    Array.from(host.querySelectorAll("thead th .lfv-th-label"), (n) => n.textContent),
+    ["名字", "数量"],
+  );
+  assert.deepEqual(cells(host), [
+    ["苹果", "3"],
+    ["梨", "10"],
+  ]);
+});
+
+test("点表头排序，再点一次反向；数字列按数值大小排", async () => {
+  const { dom, host } = await csvPage("名字,数量\n苹果,3\n梨,10\n桃,2\n");
+  const click = (i: number) =>
+    (host.querySelectorAll("thead th .lfv-th-label")[i] as HTMLElement).dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+
+  click(1);
+  // 按数值：2 < 3 < 10。按字符会排成 10、2、3。
+  assert.deepEqual(cells(host).map((r) => r[1]), ["2", "3", "10"]);
+  assert.equal(host.querySelectorAll("thead th")[1]?.getAttribute("data-sort"), "asc");
+
+  click(1);
+  assert.deepEqual(cells(host).map((r) => r[1]), ["10", "3", "2"]);
+  assert.equal(host.querySelectorAll("thead th")[1]?.getAttribute("data-sort"), "desc");
+
+  // 换一列排，文字列按文字排，上一列的箭头让出来。
+  click(0);
+  assert.deepEqual(cells(host).map((r) => r[0]), ["桃", "梨", "苹果"].sort((a, b) => a.localeCompare(b)));
+  assert.equal(host.querySelectorAll("thead th")[1]?.hasAttribute("data-sort"), false);
+});
+
+test("拖列边界改列宽", async () => {
+  const { dom, host } = await csvPage("名字,数量\n苹果,3\n");
+  const th = host.querySelectorAll("thead th")[0] as HTMLElement;
+  // jsdom 没有排版，自己给这一列一个初始宽度。
+  Object.defineProperty(th, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({ width: 100 }) as DOMRect,
+  });
+  const grip = th.querySelector(".lfv-grip") as HTMLElement;
+  const at = (type: string, x: number) =>
+    new dom.window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x });
+
+  grip.dispatchEvent(at("mousedown", 200));
+  dom.window.document.dispatchEvent(at("mousemove", 260));
+  assert.equal(th.style.width, "160px");
+
+  // 拖没了也留得住：最窄 40px。
+  dom.window.document.dispatchEvent(at("mousemove", 0));
+  assert.equal(th.style.width, "40px");
+
+  // 松手之后再动鼠标就不改宽度了。
+  dom.window.document.dispatchEvent(at("mouseup", 0));
+  dom.window.document.dispatchEvent(at("mousemove", 400));
+  assert.equal(th.style.width, "40px");
+
+  // 拖把手那一下不触发排序。
+  assert.equal(host.querySelector("thead th")?.hasAttribute("data-sort"), false);
+});
+
+test("带引号的字段、字段里的逗号和换行都切对", async () => {
+  const { host } = await csvPage('a,b\n"含,逗号","含\n换行"\n"带""引号""的",末尾\n');
+
+  assert.deepEqual(cells(host), [
+    ["含,逗号", "含\n换行"],
+    ['带"引号"的', "末尾"],
+  ]);
+});
+
+test("列数不齐的行照样渲染，缺格留空并标出来", async () => {
+  const { host } = await csvPage("a,b,c\n1,2\n1,2,3,4\n");
+
+  assert.deepEqual(cells(host), [
+    ["1", "2", ""],
+    ["1", "2", "3"],
+  ]);
+  const rows = host.querySelectorAll("tbody tr");
+  assert.equal(rows[0]?.className, "lfv-row-ragged");
+  assert.equal(rows[0]?.querySelectorAll(".lfv-cell-missing").length, 1);
+  assert.equal(rows[1]?.className, "lfv-row-ragged");
+});
+
+test("空文件和只有表头的文件都不报错", async () => {
+  const empty = await csvPage("");
+  assert.equal(empty.host.querySelectorAll("thead th").length, 0);
+  assert.equal(empty.host.querySelectorAll("tbody tr").length, 0);
+
+  const headOnly = await csvPage("a,b\n");
+  assert.equal(headOnly.host.querySelectorAll("thead th").length, 2);
+  assert.equal(headOnly.host.querySelectorAll("tbody tr").length, 0);
 });
 
 test("类型分档按扩展名，带 query 和 hash 也认得出来", () => {

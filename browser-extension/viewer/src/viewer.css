@@ -450,3 +450,68 @@ html.lfv-on .lfv-parse-error {
   border-bottom: 2px solid var(--destructive);
   font: 14px / 1.6 system-ui, sans-serif;
 }
+
+/* csv 表格：整块相对定位，复制按钮和代码视图一样浮在右上角。 */
+html.lfv-on .lfv-csv {
+  position: relative;
+  padding: 2rem 2.5rem;
+  overflow-x: auto;
+}
+
+html.lfv-on .lfv-table {
+  border-collapse: collapse;
+  font: 13px / 1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* 表头钉在顶部：往下滚也看得见每列是什么。 */
+html.lfv-on .lfv-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.35rem 0.75rem;
+  text-align: left;
+  white-space: nowrap;
+  background: var(--card);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+html.lfv-on .lfv-table th[data-sort="asc"] .lfv-th-label::after {
+  content: " ↑";
+}
+
+html.lfv-on .lfv-table th[data-sort="desc"] .lfv-th-label::after {
+  content: " ↓";
+}
+
+/* 列边界那道把手：贴着右边一条窄条，光标变成左右箭头。 */
+html.lfv-on .lfv-grip {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+}
+
+html.lfv-on .lfv-table td {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+
+/* 隔行换底色，长表不串行。 */
+html.lfv-on .lfv-table tbody tr:nth-child(even) {
+  background: var(--muted);
+}
+
+/* 格子数对不上的行标出来，缺的那几格自己也标上。 */
+html.lfv-on .lfv-row-ragged td:first-child {
+  border-left: 2px solid var(--destructive);
+}
+
+html.lfv-on .lfv-cell-missing {
+  background: color-mix(in oklab, var(--destructive) 12%, transparent);
+}

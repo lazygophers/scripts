@@ -26,6 +26,7 @@
         "mermaid.js",
         "katex.js",
         "data.js",
+        "csv.js",
         "katex.css",
         "*.woff2",
         "*.woff",

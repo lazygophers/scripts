@@ -15,6 +15,7 @@ await buildExtension({
     "src/mermaid.ts",
     "src/katex.ts",
     "src/data.ts",
+    "src/csv.ts",
   ],
   copy: ["viewer.css"],
   // KaTeX 的样式表要带着它自己的字体走：`url()` 交给 esbuild 改写成 dist 里的文件，
