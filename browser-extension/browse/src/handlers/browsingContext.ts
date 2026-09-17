@@ -66,7 +66,53 @@ export async function browsingContextCreate(
   if (tab.id === undefined) {
     throw new CommandError("unknown error", "tab opened without an id");
   }
+  await adopt(tab.id, tab.windowId);
   return { context: String(tab.id) };
+}
+
+/** 自己开的标签页都收进这一组，用户一次就能全关掉。 */
+const GROUP_TITLE = "browse";
+
+/**
+ * 每个窗口记一个分组 id。分组是属于窗口的，跨窗口塞不进去，所以不能只记一个。
+ *
+ * service worker 睡醒后这张表是空的，那时会再建一组——比错认一个已经不存在的
+ * 分组要好，代价只是多一组。
+ */
+const groups = new Map<number, number>();
+
+/**
+ * 把新开的标签页收进 browse 自己的分组。
+ *
+ * 为什么只对新开的做：用户自己那些标签页本来就在他安排好的位置上，被自动搬进
+ * 另一个分组是在动他的东西。命令行开出来的则相反——它们是这条命令的产物，聚成一组
+ * 用户才能一次清干净。
+ *
+ * 分组能力缺席（Firefox 没有 `tabs.group`）或者分组已经被用户关掉时，**标签页照常
+ * 打开**：分组是顺手的整理，不是这条指令的目的，不能因为它失败就让 create 失败。
+ */
+async function adopt(tabId: number, windowId: number | undefined): Promise<void> {
+  if (typeof chrome.tabs.group !== "function" || windowId === undefined) {
+    return;
+  }
+  const known = groups.get(windowId);
+  try {
+    const groupId = await chrome.tabs.group(
+      known === undefined ? { tabIds: [tabId] } : { tabIds: [tabId], groupId: known },
+    );
+    groups.set(windowId, groupId);
+    if (known === undefined) {
+      await chrome.tabGroups?.update(groupId, { title: GROUP_TITLE, color: "blue" });
+    }
+  } catch {
+    // 记着的那一组已经没了（用户关掉了整组）：忘掉它，下一个标签页会新开一组。
+    groups.delete(windowId);
+  }
+}
+
+/** 测试用：清掉记着的分组，让每个用例从「还没有分组」开始。 */
+export function forgetGroups(): void {
+  groups.clear();
 }
 
 /** `browsingContext.close`. Closes the tab; a frame id is rejected. */

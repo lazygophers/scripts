@@ -7,6 +7,7 @@ import {
   browsingContextCreate,
   browsingContextNavigate,
   browsingContextReload,
+  forgetGroups,
 } from "../src/handlers/browsingContext.ts";
 import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
 
@@ -22,7 +23,14 @@ function tabsMock(tab: Any = {}): { calls: Any[]; chrome: Any } {
       get: async () => state,
       create: async (opts: Any) => {
         calls.push({ create: opts });
-        return { id: 99 };
+        return { id: 99, windowId: 3 };
+      },
+      group: async (opts: Any) => {
+        calls.push({ group: opts });
+        if (opts.groupId === 404) {
+          throw new Error("No group with id: 404.");
+        }
+        return (opts.groupId as number | undefined) ?? 11;
       },
       remove: async (id: number) => {
         calls.push({ remove: id });
@@ -45,6 +53,12 @@ function tabsMock(tab: Any = {}): { calls: Any[]; chrome: Any } {
           setTimeout(() => fn(state.id as number, { status: "complete" }), 0);
         },
         removeListener: () => undefined,
+      },
+    },
+    tabGroups: {
+      update: async (id: number, opts: Any) => {
+        calls.push({ groupUpdate: [id, opts] });
+        return { id, ...opts };
       },
     },
     windows: {
@@ -146,4 +160,88 @@ test("a full-page screenshot is refused, not silently answered with the viewport
   );
   assert.match(err.message, /scroll-and-stitch/);
   clearChrome();
+});
+
+test("a tab browse opened lands in its own group, so one click closes them all", async () => {
+  forgetGroups();
+  const { calls } = tabsMock();
+  try {
+    await browsingContextCreate({ url: "https://a.test/" });
+    assert.deepEqual(calls[1], { group: { tabIds: [99] } });
+    // 第一次建组时给它起名上色，用户在标签栏上认得出这是谁开的
+    assert.deepEqual(calls[2], { groupUpdate: [11, { title: "browse", color: "blue" }] });
+
+    await browsingContextCreate({ url: "https://b.test/" });
+    // 第二个标签页进同一组，而不是每次新开一组
+    assert.deepEqual(calls[4], { group: { tabIds: [99], groupId: 11 } });
+    assert.equal(calls.filter((call) => "groupUpdate" in call).length, 1);
+  } finally {
+    clearChrome();
+  }
+});
+
+test("operating on an existing tab never moves it into a group", async () => {
+  forgetGroups();
+  const { calls } = tabsMock();
+  try {
+    await browsingContextNavigate({ context: "7", url: "https://a.test/" });
+    await browsingContextActivate({ context: "7" });
+    await browsingContextReload({ context: "7" });
+    assert.equal(calls.filter((call) => "group" in call).length, 0,
+                 "用户自己的标签页被搬进了分组");
+  } finally {
+    clearChrome();
+  }
+});
+
+test("a group the user has closed is forgotten, and the next tab starts a fresh one", async () => {
+  forgetGroups();
+  const calls: Any[] = [];
+  let alive = true;
+  installChrome({
+    tabs: {
+      create: async () => ({ id: 99, windowId: 3 }),
+      group: async (opts: Any) => {
+        calls.push({ group: opts });
+        if (opts.groupId !== undefined && !alive) {
+          // 用户把整组关掉之后，Chrome 就是这么报的
+          throw new Error(`No group with id: ${String(opts.groupId)}.`);
+        }
+        return (opts.groupId as number | undefined) ?? 11;
+      },
+    },
+    tabGroups: { update: async () => ({}) },
+  });
+  try {
+    await browsingContextCreate({});
+    alive = false;
+    // 这一个分不进去了，但标签页照样开出来 —— 分组失败不该让 create 失败
+    assert.deepEqual(await browsingContextCreate({}), { context: "99" });
+    assert.deepEqual(calls[1], { group: { tabIds: [99], groupId: 11 } });
+    // 忘掉那一组之后，下一个标签页重新建一组，而不是一直撞同一个死 id
+    alive = true;
+    await browsingContextCreate({});
+    assert.deepEqual(calls[2], { group: { tabIds: [99] } });
+  } finally {
+    clearChrome();
+  }
+});
+
+test("without tabs.group the tab still opens — grouping is a nicety, not the job", async () => {
+  forgetGroups();
+  const calls: Any[] = [];
+  installChrome({
+    tabs: {
+      create: async (opts: Any) => {
+        calls.push({ create: opts });
+        return { id: 99, windowId: 3 };
+      },
+    },
+  });
+  try {
+    assert.deepEqual(await browsingContextCreate({ url: "https://a.test/" }), { context: "99" });
+    assert.equal(calls.length, 1);
+  } finally {
+    clearChrome();
+  }
 });
