@@ -95,6 +95,22 @@ export interface LogEntry {
   error: string;
 }
 
+/** 面板显示的连接近况。`state` 之外的几项都是为了回答「为什么连不上」。 */
+export type ConnectionStatus = {
+  state: ConnectionState;
+  url: string;
+  /** 已经重试了几次；0 表示没在重连。 */
+  attempt: number;
+  /** 用户按过「立即断开」：此后不自动重连。 */
+  stopped: boolean;
+  /** 连上的时刻（毫秒）；没连上是 0。 */
+  connectedAt: number;
+  /** 最后一次收到 bridge 消息的时刻（毫秒）。心跳每 20 秒一次，所以它也是「还活着」的凭据。 */
+  lastMessageAt: number;
+  /** 上一次断开的原因。 */
+  reason: string;
+};
+
 export class NativeConnection {
   private socket: WebSocket | null = null;
   private attempt = 0;
@@ -110,6 +126,10 @@ export class NativeConnection {
   // Newest last. The payload never enters it — same rule as the audit log
   // (spec 4.6): what was done, not what was read.
   private log: LogEntry[] = [];
+  // 面板要显示的那几个数：连上的时刻、最后一次收到消息的时刻、上次断开的原因。
+  private connectedAt = 0;
+  private lastMessageAt = 0;
+  private lastReason = "";
 
   // Assigned in the body, not as constructor parameter properties: Node's
   // type-stripping (`node --test` on .ts sources) rejects those, same as
@@ -152,12 +172,15 @@ export class NativeConnection {
           instanceId: id,
         }));
       });
+      this.connectedAt = Date.now();
+      this.lastReason = "";
       this.onState("connected");
       this.startPing();
     };
     socket.onmessage = (event) => {
       // 第一条消息（含 hello-ack）证明 bridge 真的活着且认了我们
       this.attempt = 0;
+      this.lastMessageAt = Date.now();
       if (typeof event.data !== "string") {
         return;
       }
@@ -250,6 +273,24 @@ export class NativeConnection {
     }
   }
 
+  /**
+   * 连接自己的近况，面板用来回答「现在通不通、上次为什么断」。
+   *
+   * 这些字段本来只活在重连逻辑里（只写进 console），出问题时用户看不到；面板要显示
+   * bridge 状态，第一手就是这几个数。
+   */
+  status(): ConnectionStatus {
+    return {
+      state: this.socket?.readyState === WebSocket.OPEN ? "connected" : "disconnected",
+      url: BRIDGE_URL,
+      attempt: this.attempt,
+      stopped: this.stopped,
+      connectedAt: this.connectedAt,
+      lastMessageAt: this.lastMessageAt,
+      reason: this.lastReason,
+    };
+  }
+
   /** The panel's live log, newest first (spec 4.5). */
   recent(): LogEntry[] {
     return [...this.log].reverse();
@@ -263,6 +304,8 @@ export class NativeConnection {
   }
 
   private scheduleReconnect(reason: string): void {
+    this.lastReason = reason;
+    this.connectedAt = 0;
     this.stopPing();
     this.onState("disconnected");
     // Nobody is left to answer these; leaving them pending hangs the panel.

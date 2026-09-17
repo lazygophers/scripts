@@ -21,6 +21,15 @@ export function localize(root: ParentNode = document): void {
       node.textContent = message;
     }
   }
+  // 输入框的提示文字不是节点内容，单独一条属性。
+  for (const node of Array.from(
+    root.querySelectorAll<HTMLInputElement>("[data-i18n-placeholder]"),
+  )) {
+    const message = chrome.i18n.getMessage(node.dataset.i18nPlaceholder ?? "");
+    if (message) {
+      node.placeholder = message;
+    }
+  }
 }
 
 /** One message, with `$1`, `$2`… filled in. */

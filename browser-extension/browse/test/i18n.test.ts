@@ -52,7 +52,7 @@ test("every key referenced by the pages exists", () => {
   ];
   for (const file of files) {
     const text = readFileSync(join(SRC, file), "utf8");
-    for (const [, key] of text.matchAll(/data-i18n="([^"]+)"/g)) used.add(key);
+    for (const [, key] of text.matchAll(/data-i18n(?:-placeholder)?="([^"]+)"/g)) used.add(key);
     for (const [, key] of text.matchAll(/\bmsg\(\s*"([^"]+)"/g)) used.add(key);
     for (const [, key] of text.matchAll(/__MSG_([A-Za-z0-9_@]+)__/g)) used.add(key);
   }

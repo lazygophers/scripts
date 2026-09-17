@@ -60,6 +60,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true, entries: connection.recent(), state });
     return false;
   }
+  // 面板要显示 bridge 的服务情况和日志。连接近况是 service worker 自己的；
+  // bridge 那两条只读方法要走 WebSocket 问它，所以这一支是异步的。
+  if (message?.type === "browse-bridge") {
+    void bridgeReport(Number(message.limit) || 30).then(sendResponse);
+    return true;
+  }
   if (message?.type === "browse-disconnect") {
     connection.disconnect();
     braked = true; // 用户主动刹车：唤醒闹钟在下次浏览器启动前不再自动重连
@@ -73,6 +79,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   return false;
 });
+
+/**
+ * bridge 的服务情况 + 服务端日志。bridge 没连上时照样返回连接近况——那正是用户
+ * 这时候最需要看的东西，所以服务端那两项缺了不算失败。
+ */
+async function bridgeReport(limit: number): Promise<Record<string, unknown>> {
+  const status = connection.status();
+  try {
+    const [info, log] = await Promise.all([
+      connection.request("lg:bridge.info"),
+      connection.request("lg:bridge.log", { limit }),
+    ]);
+    return { ok: true, status, info, lines: (log as { lines?: unknown[] }).lines ?? [] };
+  } catch (err) {
+    return { ok: false, status, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 // 2026-09-16 扩容的事件面：快捷键/地址栏/推送/通知点击/WebAuthn 请求/打印请求，
 // 全部转发给订阅方（events.ts 的 sink）。

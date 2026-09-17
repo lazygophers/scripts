@@ -11,9 +11,21 @@
       <button id="settings" class="btn" data-i18n="panelSettings">Settings</button>
     </div>
 
+    <h2 data-i18n="panelBridge">Bridge service</h2>
+    <p class="hint" id="bridgeStatus" data-i18n="panelLoading">loading…</p>
+    <ul id="bridge" class="rows"></ul>
+
     <h2 data-i18n="panelRecent">Recent commands</h2>
     <p class="hint" id="logStatus" data-i18n="panelLoading">loading…</p>
+    <div class="stack row">
+      <input id="logFilter" class="filter" type="search" data-i18n-placeholder="panelFilter" />
+      <button id="logCopy" class="btn" data-i18n="panelCopy">Copy</button>
+    </div>
     <ul id="log" class="rows"></ul>
+
+    <h2 data-i18n="panelServerLog">Bridge log</h2>
+    <p class="hint" id="serverLogStatus" data-i18n="panelLoading">loading…</p>
+    <ul id="serverLog" class="rows"></ul>
 
     <h2 data-i18n="panelAllowed" style="margin-top:18px">Domains that skip confirmation</h2>
     <p class="hint" id="status" data-i18n="panelLoading">loading…</p>

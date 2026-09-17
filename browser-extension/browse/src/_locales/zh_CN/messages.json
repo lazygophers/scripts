@@ -379,5 +379,76 @@
   },
   "settingsFeatPermissionsDesc": {
     "message": "查/申请/移除扩展权限（申请要在用户手势里才会成功）。"
+  },
+  "panelBridge": {
+    "message": "bridge 服务"
+  },
+  "panelServerLog": {
+    "message": "bridge 日志"
+  },
+  "panelFilter": {
+    "message": "筛选指令"
+  },
+  "panelCopy": {
+    "message": "复制"
+  },
+  "panelCopied": {
+    "message": "已复制"
+  },
+  "panelBridgeUp": {
+    "message": "已连上（$1，已连 $2）",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      },
+      "p2": {
+        "content": "$2"
+      }
+    }
+  },
+  "panelBridgeDown": {
+    "message": "没连上：$1",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelBridgeRetrying": {
+    "message": "重连中，第 $1 次",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelBridgeStopped": {
+    "message": "已手动断开，不会自动重连"
+  },
+  "panelBridgeUnreachable": {
+    "message": "bridge 的服务情况读不到：$1",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "panelNoServerLog": {
+    "message": "日志是空的"
+  },
+  "panelBridgeLastSeen": {
+    "message": "上次通信"
+  },
+  "panelBridgeService": {
+    "message": "服务端"
+  },
+  "panelBridgeProcess": {
+    "message": "进程"
+  },
+  "panelBridgeUptime": {
+    "message": "已运行"
+  },
+  "panelBridgeLogPath": {
+    "message": "日志文件"
   }
 }
