@@ -15,11 +15,45 @@ obsidian，见 graphwatch_artifacts.write_artifacts）→ save_manifest。
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
 _EMPTY = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 0, "output_tokens": 0}
+
+
+def _acquire_rebuild_lock(root: Path):
+    """非阻塞获取目录级重建锁；正在构建时返回 None。"""
+    path = root / "graphify-out" / ".graphwatch-rebuild.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def _release_rebuild_lock(fd) -> None:
+    if sys.platform == "win32":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    os.close(fd)
 
 
 def _semantic(files: list[Path], root: Path) -> dict:
@@ -50,7 +84,20 @@ def _semantic(files: list[Path], root: Path) -> dict:
 
 
 def rebuild(folder: str) -> int:
-    """按 /graphify --update --mode deep --wiki 的 runbook 重建一个目录。返回 0/1。"""
+    """立即重建一个目录；已在构建则不等待，返回失败。"""
+    root = Path(folder).expanduser().resolve()
+    lock = _acquire_rebuild_lock(root)
+    if lock is None:
+        print(f"[graphwatch] {root}: 已在构建，不排队等待", file=sys.stderr)
+        return 1
+    try:
+        return _rebuild_unlocked(root)
+    finally:
+        _release_rebuild_lock(lock)
+
+
+def _rebuild_unlocked(root: Path) -> int:
+    """按 /graphify --update --mode deep --wiki 的 runbook 重建一个目录。"""
     from graphify.build import build_merge
     from graphify.cluster import cluster, score_all
     from graphify.detect import detect_incremental, save_manifest
@@ -60,7 +107,6 @@ def rebuild(folder: str) -> int:
 
     from lib.graphwatch_artifacts import resolve_labels, save_labels, write_artifacts
 
-    root = Path(folder)
     out = root / "graphify-out"
     out.mkdir(parents=True, exist_ok=True)
     graph_path = out / "graph.json"

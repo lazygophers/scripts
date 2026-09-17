@@ -75,7 +75,7 @@ def _cmd(method):
 
 
 class GraphwatchCli(BaseCli):
-    """graphwatch CLI。子命令：add / remove / list / run / config / install / start / stop / restart / uninstall / status。"""
+    """graphwatch CLI。子命令：add / remove / list / run / rebuild / config / install / start / stop / restart / uninstall / status。"""
 
     @_cmd
     def add(self, directory: str) -> int:
@@ -158,6 +158,34 @@ class GraphwatchCli(BaseCli):
             return 2
         run_wizard()
         return 0
+
+    @_cmd
+    def rebuild(self, directory: str = "") -> int:
+        """立即重建图谱：前台直跑，不进 daemon 队列、不等防抖。
+
+        用法: graphwatch rebuild            # 重建当前目录
+              graphwatch rebuild ~/code/x   # 重建指定目录
+        """
+        from lib.graphwatch_rebuild import rebuild as do_rebuild
+
+        folders = [Path(directory).expanduser()] if directory else [Path.cwd()]
+        valid: list[Path] = []
+        failed = False
+        for folder in folders:
+            if folder.is_dir():
+                valid.append(folder)
+            else:
+                self._r.err(f"目录不存在：{folder}")
+                failed = True
+        if valid:
+            ensure_graphify()
+        for folder in valid:
+            self._r.rule(f"rebuild {folder}", style="blue")
+            if do_rebuild(str(folder)):
+                failed = True
+        if failed:
+            self._r.err("有目录重建失败，详见上方日志")
+        return 1 if failed else 0
 
     @_cmd
     def install(self) -> int:

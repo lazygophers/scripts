@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -219,6 +220,52 @@ class TestCliList(GraphwatchCase):
         repo = self.mkdir()
         graphwatch.add_folder(repo)
         self.assertEqual(self._cli().list(), 0)
+
+
+class TestCliRebuild(GraphwatchCase):
+    def _run(self, rc=0, directory=""):
+        with unittest.mock.patch("lib.graphwatch.ensure_graphify"), \
+             unittest.mock.patch("lib.graphwatch_rebuild.rebuild", return_value=rc) as do, \
+             unittest.mock.patch("lib.graphwatch.Path.cwd", return_value=self.home / "cwd-repo"):
+            result = self._cli().rebuild(directory)
+        return result, do
+
+    def test_defaults_to_current_directory(self):
+        (self.home / "cwd-repo").mkdir()
+        graphwatch.add_folder(self.mkdir("registered-but-unused"))
+        result, do = self._run()
+        self.assertEqual(result, 0)
+        do.assert_called_once_with(str(self.home / "cwd-repo"))
+
+    def test_explicit_directory_skips_registry(self):
+        repo = self.mkdir()
+        with unittest.mock.patch("lib.graphwatch.ensure_graphify"), \
+             unittest.mock.patch("lib.graphwatch_rebuild.rebuild", return_value=0) as do:
+            result = self._cli().rebuild(str(repo))
+        self.assertEqual(result, 0)
+        do.assert_called_once_with(str(repo))
+
+    def test_missing_explicit_directory_fails_before_dependency_check(self):
+        missing = self.home / "missing"
+        with unittest.mock.patch("lib.graphwatch.ensure_graphify") as ensure, \
+             unittest.mock.patch("lib.graphwatch_rebuild.rebuild") as do:
+            result = self._cli().rebuild(str(missing))
+        self.assertEqual(result, 1)
+        ensure.assert_not_called()
+        do.assert_not_called()
+
+    def test_busy_directory_fails_without_waiting(self):
+        from lib import graphwatch_rebuild
+
+        repo = self.mkdir()
+        lock = graphwatch_rebuild._acquire_rebuild_lock(repo)
+        self.assertIsNotNone(lock)
+        try:
+            with unittest.mock.patch.object(graphwatch_rebuild, "_rebuild_unlocked") as do:
+                self.assertEqual(graphwatch_rebuild.rebuild(str(repo)), 1)
+            do.assert_not_called()
+        finally:
+            graphwatch_rebuild._release_rebuild_lock(lock)
 
 
 class TestConfigEdges(GraphwatchCase):
