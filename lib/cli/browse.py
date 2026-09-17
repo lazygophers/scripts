@@ -676,6 +676,10 @@ def _cmd_daemon(tokens: list[str]) -> int:
                 report.info("有多个连着，指令要加 --browser <名字> 指定发给谁")
         else:
             report.info("没有浏览器连着：确认浏览器开着且扩展已启用")
+        # 装没装成开机自启的服务。跑没跑是上面那行看的，这里只答「重启之后还在不在」
+        from lib import browse_install, browse_service
+        service = browse_service.status(pathlib.Path.home(), browse_install.platform_key())
+        report.info(f"开机自启：{'已装' if service['installed'] else '没装（browse install 可以装）'}")
         # bridge 自己的情况：跑了多久、日志在哪、每条连接多久没动静
         info = asyncio.run(execute(browse_bridge.INFO_METHOD, {}, sock))
         if info["status"] == "ok":

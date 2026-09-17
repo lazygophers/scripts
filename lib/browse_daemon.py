@@ -283,7 +283,13 @@ class Daemon:
         await self._stopping.wait()
 
     async def _watch_idle(self) -> None:
-        """连续 idle_timeout 没指令、且一个客户端都没连着，就自行退出。"""
+        """连续 idle_timeout 没指令、且一个客户端都没连着，就自行退出。
+
+        `idle_timeout <= 0` 是常驻模式（装成系统服务时用的就是它）：永不自退，
+        否则服务管理器只会一遍遍把它拉起来。
+        """
+        if self.idle_timeout <= 0:
+            return
         tick = min(30.0, max(0.05, self.idle_timeout / 4))
         while True:
             await asyncio.sleep(tick)

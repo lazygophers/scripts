@@ -25,6 +25,7 @@ import subprocess
 import sys
 import time
 
+from lib import browse_service
 from lib.ui import reporter
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -384,6 +385,27 @@ def wait_for_extension(timeout: float) -> bool:
         time.sleep(CONNECT_POLL_SECONDS)
 
 
+def install_service(out, home: pathlib.Path, plat: str) -> bool:
+    """把 bridge 装成开机自启的服务。装不上不算 install 失败——按需拉起那条路还在。"""
+    from lib.browse_daemon import socket_path
+    from lib.browse_log import log_path
+    from lib.lazyhelp import _resolve
+
+    exe = _resolve("browse")
+    if not exe:
+        out.info("找不到 browse 可执行文件，跳过服务安装（bridge 仍会按需自动拉起）")
+        return False
+    path, results = browse_service.install(
+        home, plat, str(exe), str(socket_path()), str(log_path()))
+    failed = [cmd for cmd, code in results if code != 0 and cmd[:2] != ["launchctl", "bootout"]]
+    if failed:
+        out.info(f"bridge 服务已写入 {path}，但启用没成功：{' '.join(failed[0])}")
+        out.info("手动启用一次即可；不启用也不影响使用，bridge 仍会按需自动拉起")
+        return False
+    out.ok(f"bridge 已装成开机自启的服务：{path}")
+    return True
+
+
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="browse install",
@@ -394,6 +416,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                         help="不自动构建扩展（默认 dist/ 缺失时自动跑 npm run build）")
     parser.add_argument("--no-wait", action="store_true",
                         help="不等扩展连上就返回（默认等 120 秒）")
+    parser.add_argument("--no-service", action="store_true",
+                        help="不把 bridge 装成开机自启的服务（默认装）")
     return parser.parse_args(argv[1:])
 
 
@@ -418,6 +442,11 @@ def main(argv: list[str]) -> int:
             out.ok(f"{name}: 已删 {where}")
         if not removed:
             out.info("没有找到任何旧注册（本来就没装过 native messaging）")
+        path, _ = browse_service.uninstall(home, plat)
+        if path is None:
+            out.info("bridge 没装成服务，不用卸")
+        else:
+            out.ok(f"bridge 服务已卸：{path}")
         return EXIT_OK
 
     if args.no_build:
@@ -430,6 +459,9 @@ def main(argv: list[str]) -> int:
             out.info(f"手动构建：cd {EXTENSION_SRC} && npm install && npm run build")
             return EXIT_FAILED
         out.ok(f"扩展已构建：{dist}")
+
+    if not args.no_service:
+        install_service(out, home, plat)
 
     copied = copy_to_clipboard(str(dist))
     out.info("")

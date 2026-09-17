@@ -11,7 +11,7 @@ browse — 用命令行驱动浏览器扩展
   browse <module> <action> [位置参数...] [--参数 值...]
   browse run [--concurrency N] [--no-fail-fast] '<指令串>'... | browse run -
   browse status                                      一条命令看完整条链路（装没装、连没连）
-  browse bridge start | stop | status              （daemon 是旧名）status 列出插件连接
+  browse bridge start | stop | status | log        （daemon 是旧名）status 列出插件连接，log 看服务端日志
   browse stop                                       中止在途指令，daemon 留着
   browse audit [--limit N] [--table]                看审计日志（存在插件里）
   browse install | uninstall                        装 / 卸（扩展本体仍需你手动加载一次）
