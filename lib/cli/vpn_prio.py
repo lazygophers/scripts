@@ -10,11 +10,17 @@
 from __future__ import annotations
 
 import os
+import pathlib
 import re
 import subprocess
 import sys
 
+from lib import privilege
 from lib.fire_base import BaseCli, run_cli, timed_cli
+
+# 提权时要原样重跑自己，所以这两个值必须在 fire 动 argv 之前就取好。
+SCRIPT_PATH = pathlib.Path(sys.argv[0]).resolve()
+ORIG_ARGV = list(sys.argv)
 
 # OpenVPN Connect 真实标识（不含 utunX 字面）：
 #   - root LaunchDaemon: org.openvpn.client / ovpnagent
@@ -146,6 +152,15 @@ class VpnPrioCli(BaseCli):
             print(f"  {mark} {i}. {s}")
         return 0
 
+    def _escalate(self) -> int:
+        """改 Service Order 要 root。列出和 dry-run 不用，所以提权放在真正动手那一步。"""
+        try:
+            privilege.become_root(SCRIPT_PATH, ORIG_ARGV[1:])
+        except privilege.NeedRoot as exc:
+            print(f"✗ {exc}", file=sys.stderr)
+            return 1
+        return 0
+
     @timed_cli
     def apply(self):
         """按目标顺序重排 Service Order（USB > Wi-Fi > 其他）
@@ -171,10 +186,12 @@ class VpnPrioCli(BaseCli):
             print(f"  {mark} {i}. {s}")
         print()
 
-        rc, out, err = _run(["networksetup", "-ordernetworkservices", *desired])
         if os.environ.get("SCRIPTS_DRY_RUN") == "1":
             print(f"[dry-run] would run: networksetup -ordernetworkservices {' '.join(desired)}")
             return 0
+        if self._escalate() != 0:
+            return 13
+        rc, out, err = _run(["networksetup", "-ordernetworkservices", *desired])
         if rc != 0:
             print(f"✗ 调整失败: {err.strip() or out.strip()}", file=sys.stderr)
             return rc
@@ -201,6 +218,8 @@ class VpnPrioCli(BaseCli):
         if os.environ.get("SCRIPTS_DRY_RUN") == "1":
             print(f"[dry-run] would run: networksetup -ordernetworkservices {' '.join(restored)}")
             return 0
+        if self._escalate() != 0:
+            return 13
         rc, out, err = _run(["networksetup", "-ordernetworkservices", *restored])
         if rc != 0:
             print(f"✗ 还原失败: {err.strip() or out.strip()}", file=sys.stderr)

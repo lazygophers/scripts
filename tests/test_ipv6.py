@@ -55,18 +55,29 @@ class TestServices(unittest.TestCase):
 
 
 class TestSudoGate(CliCase):
-    def test_disable_without_sudo_fails_without_touching_network(self) -> None:
-        with mock.patch.object(iv.os, "geteuid", return_value=501), \
+    """不是 root 时自己去拿：用 sudo 原样重跑一遍，而不是丢一句「需 sudo 运行」。
+
+    一台机器上十几个网络服务要逐个改，中途才第一次 sudo 就可能撞上授权过期；
+    先把整个进程提成 root，后面每一条 networksetup 都不必再问。
+    """
+
+    def test_disable_without_root_reruns_itself_and_touches_nothing(self) -> None:
+        with mock.patch.object(iv.privilege, "become_root") as become, \
              mock.patch.object(iv.subprocess, "run") as run:
-            rc, _ = self._call(self.cli.disable)
-        self.assertEqual(rc, 1)
+            self._call(self.cli.disable)
+        become.assert_called_once()
+        # 重跑的是自己这个脚本，参数原样带过去
+        self.assertEqual(become.call_args.args[0], iv.SCRIPT_PATH)
+        del run
+
+    def test_when_sudo_is_unavailable_it_says_so_instead_of_half_doing_it(self) -> None:
+        with mock.patch.object(iv.privilege, "become_root",
+                               side_effect=iv.privilege.NeedRoot("起不了 sudo")), \
+             mock.patch.object(iv.subprocess, "run") as run:
+            rc, _ = self._call(self.cli.enable)
+        self.assertEqual(rc, 13)
         run.assert_not_called()
         self.cli._r.err.assert_called_once()
-
-    def test_enable_without_sudo_fails(self) -> None:
-        with mock.patch.object(iv.os, "geteuid", return_value=501):
-            rc, _ = self._call(self.cli.enable)
-        self.assertEqual(rc, 1)
 
 
 class TestApply(CliCase):
@@ -81,7 +92,8 @@ class TestApply(CliCase):
                 return _completed(stdout=SERVICES_OUT)
             return _completed(returncode=next(results))
 
-        with mock.patch.object(iv.os, "geteuid", return_value=0), \
+        # 已经是 root 时提权什么都不做，等价于把它桩成空动作
+        with mock.patch.object(iv.privilege, "become_root"), \
              mock.patch.object(iv.subprocess, "run", side_effect=run):
             rc, out = self._call(method)
         return rc, out, calls

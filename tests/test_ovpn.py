@@ -192,8 +192,8 @@ class TestRootGate(unittest.TestCase):
     def test_require_root_reexecs_with_sudo(self):
         from unittest import mock
 
-        with mock.patch.object(ov, "is_root", return_value=False), \
-             mock.patch.object(ov.os, "execvp") as execvp:
+        with mock.patch.object(ov.privilege.os, "geteuid", return_value=501), \
+             mock.patch.object(ov.privilege.os, "execvp") as execvp:
             ov.require_root(pathlib.Path("/x/bin/ovpn"), ["show"])
         execvp.assert_called_once()
         name, cmd = execvp.call_args[0]
@@ -204,8 +204,8 @@ class TestRootGate(unittest.TestCase):
     def test_require_root_noop_when_root(self):
         from unittest import mock
 
-        with mock.patch.object(ov, "is_root", return_value=True), \
-             mock.patch.object(ov.os, "execvp") as execvp:
+        with mock.patch.object(ov.privilege.os, "geteuid", return_value=0), \
+             mock.patch.object(ov.privilege.os, "execvp") as execvp:
             ov.require_root(pathlib.Path("/x/bin/ovpn"), ["show"])
         execvp.assert_not_called()
 

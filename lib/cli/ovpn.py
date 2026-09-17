@@ -300,6 +300,11 @@ class OvpnCli(BaseCli):
 
         用法: ovpn disconnect
         """
+        # 断开要做三件要 root 的事（TERM、KILL、清 resolver 文件）。先一次性提权，
+        # 而不是每一步各弹一次 sudo——中间那几秒足够让上一次授权过期，届时进程已经
+        # 被杀了一半，resolver 文件却还留着。
+        if self._need_root("disconnect"):
+            return 13
         return do_disconnect(self._r)
 
     @timed_cli

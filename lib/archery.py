@@ -31,6 +31,7 @@ import pathlib
 import sys
 import urllib.parse
 
+from lib import privilege
 from lib.profile_store import ProfileStore
 from lib.profile_store import mask as mask  # noqa: PLC0414  （archery.mask 是对外名字，CLI 和测试都在用）
 
@@ -134,11 +135,14 @@ def sudo_argv(script: pathlib.Path, argv: list[str], config_path: pathlib.Path) 
     args = list(argv)
     if "--config" not in args:
         args += ["--config", str(config_path)]
-    return ["sudo", sys.executable, str(script), *args]
+    return privilege.sudo_argv(script, args)
 
 
 def require_root(script: pathlib.Path, argv: list[str], config_path: pathlib.Path) -> None:
-    """密钥类命令的门槛：不是 root 就用 sudo 原样重跑自己（execvp，不返回）。"""
+    """密钥类命令的门槛：不是 root 就用 sudo 原样重跑自己（execvp，不返回）。
+
+    重跑之后整个进程就是 root，不会中途再撞上 sudo 授权过期。
+    """
     if is_root():
         return
     cmd = sudo_argv(script, argv, config_path)

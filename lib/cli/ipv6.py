@@ -5,10 +5,16 @@
 """
 from __future__ import annotations
 
-import os
+import pathlib
 import subprocess
+import sys
 
+from lib import privilege
 from lib.fire_base import BaseCli, run_cli, timed_cli
+
+# 提权时要原样重跑自己，所以这两个值必须在 fire 动 argv 之前就取好。
+SCRIPT_PATH = pathlib.Path(sys.argv[0]).resolve()
+ORIG_ARGV = list(sys.argv)
 
 
 def _services() -> list[str]:
@@ -23,9 +29,13 @@ class Ipv6Cli(BaseCli):
     """开关本机所有网络服务的 IPv6（需 sudo）"""
 
     def _apply(self, mode: str, done_label: str) -> int:
-        if os.geteuid() != 0:
-            self._r.err("需 sudo 运行")
-            return 1
+        # 一台机器上的网络服务可能有十几个，逐个改的过程里 sudo 授权可能过期；
+        # 先把自己整个提成 root，后面每一条 networksetup 都不必再问。
+        try:
+            privilege.become_root(SCRIPT_PATH, ORIG_ARGV[1:])
+        except privilege.NeedRoot as exc:
+            self._r.err(str(exc))
+            return 13
         for svc in _services():
             ok = subprocess.run(
                 ["networksetup", mode, svc],

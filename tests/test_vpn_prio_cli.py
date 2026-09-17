@@ -32,6 +32,11 @@ class CliCase(unittest.TestCase):
         env = mock.patch.dict(os.environ, {"SCRIPTS_DRY_RUN": "0"})
         env.start()
         self.addCleanup(env.stop)
+        # 改 Service Order 要 root：真跑起来会用 sudo 重跑自己（execvp 不返回），
+        # 那会把测试进程本身替换掉。这里换成空动作，只留下「后面那几步照常做」。
+        root = mock.patch.object(vp.privilege, "become_root")
+        root.start()
+        self.addCleanup(root.stop)
 
     def _call(self, method, run_fn):
         """跑一个子命令，返回 (退出码, stdout 文本)。"""

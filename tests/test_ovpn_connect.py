@@ -176,14 +176,14 @@ class TestRealHome(unittest.TestCase):
 
 class TestRequireRoot(unittest.TestCase):
     def test_root_returns_immediately(self) -> None:
-        with mock.patch.object(ovpn, "is_root", return_value=True), \
-             mock.patch.object(ovpn.os, "execvp") as ex:
+        with mock.patch.object(ovpn.privilege.os, "geteuid", return_value=0), \
+             mock.patch.object(ovpn.privilege.os, "execvp") as ex:
             ovpn.require_root(pathlib.Path("/bin/ovpn"), ["show"])
         ex.assert_not_called()
 
     def test_non_root_re_execs_through_sudo(self) -> None:
-        with mock.patch.object(ovpn, "is_root", return_value=False), \
-             mock.patch.object(ovpn.os, "execvp") as ex:
+        with mock.patch.object(ovpn.privilege.os, "geteuid", return_value=501), \
+             mock.patch.object(ovpn.privilege.os, "execvp") as ex:
             ovpn.require_root(pathlib.Path("/bin/ovpn"), ["show"])
         cmd = ex.call_args[0][1]
         self.assertEqual(cmd[0], "sudo")

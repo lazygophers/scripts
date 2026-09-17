@@ -34,6 +34,8 @@ import tempfile
 import time
 import urllib.parse
 
+from lib import privilege
+
 
 def real_home() -> pathlib.Path:
     """sudo 下 `~` 会变成 /var/root，配置得留在真实用户的家目录里。"""
@@ -64,7 +66,7 @@ _EXTRA_BIN_DIRS = (
 # ---------------------------------------------------------------- config
 
 def is_root() -> bool:
-    return os.geteuid() == 0
+    return privilege.is_root()
 
 
 class NeedRoot(Exception):
@@ -74,16 +76,14 @@ class NeedRoot(Exception):
 def require_root(script: pathlib.Path, argv: list[str]) -> None:
     """碰配置的命令的门槛：不是 root 就用 sudo 原样重跑自己（execvp，不返回）。
 
-    解释器写成绝对路径（sys.executable），避免 sudo 的 PATH 里没有 mise/venv 的
-    python；配置路径不用传，`real_home()` 会按 `SUDO_USER` 回落到真实家目录。
+    重跑之后整个进程就是 root，中途再动路由、写 resolver 都不必回头找 sudo——也就
+    不会遇上「跑了十分钟，sudo 授权早过期了」。配置路径不用传，`real_home()` 会按
+    `SUDO_USER` 回落到真实家目录。
     """
-    if is_root():
-        return
-    cmd = ["sudo", sys.executable, str(script), *argv]
     try:
-        os.execvp("sudo", cmd)
-    except OSError as e:
-        raise NeedRoot(f"这条命令需要 root，但起不了 sudo: {e}") from e
+        privilege.become_root(script, argv)
+    except privilege.NeedRoot as exc:
+        raise NeedRoot(str(exc)) from exc
 
 
 def secure_config(path: pathlib.Path = CONFIG_PATH) -> bool:
