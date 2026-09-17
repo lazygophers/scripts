@@ -40,7 +40,7 @@ import subprocess
 import sys
 import time
 
-from lib import browse_bridge
+from lib import browse_bridge, browse_log
 from lib.browse_daemon import (
     ABORT_METHOD,
     BROWSERS_METHOD,
@@ -572,7 +572,7 @@ HELP = """browse — 用命令行驱动浏览器扩展
   browse <module> <action> [位置参数...] [--参数 值...]
   browse run [--concurrency N] [--no-fail-fast] '<指令串>'... | browse run -
   browse status                                      一条命令看完整条链路（装没装、连没连）
-  browse bridge start | stop | status              （daemon 是旧名）status 列出插件连接
+  browse bridge start | stop | status | log        （daemon 是旧名）status 列出插件连接，log 看服务端日志
   browse stop                                       中止在途指令，daemon 留着
   browse audit [--limit N] [--table]                看审计日志（存在插件里）
   browse install | uninstall                        装 / 卸（扩展本体仍需你手动加载一次）
@@ -676,8 +676,27 @@ def _cmd_daemon(tokens: list[str]) -> int:
                 report.info("有多个连着，指令要加 --browser <名字> 指定发给谁")
         else:
             report.info("没有浏览器连着：确认浏览器开着且扩展已启用")
+        # bridge 自己的情况：跑了多久、日志在哪、每条连接多久没动静
+        info = asyncio.run(execute(browse_bridge.INFO_METHOD, {}, sock))
+        if info["status"] == "ok":
+            data = info["result"]
+            report.info(f"已跑 {data['uptimeSeconds']} 秒（pid {data['pid']}，端口 {data['port']}）")
+            report.info(f"日志：{data['logPath']}（`browse bridge log` 看最近几条）")
         return EXIT_OK
-    raise UsageError(f"bridge 只有 start / stop / status / run：{action!r}")
+    if action == "log":
+        if not probe(sock):
+            report.info(f"daemon 没在跑：{sock}")
+            report.info(f"日志文件还在，直接看：{browse_log.log_path()}")
+            return EXIT_FAILED
+        outcome = asyncio.run(execute(
+            browse_bridge.LOG_METHOD, {"limit": int(flags.get("limit", 50))}, sock))
+        if outcome["status"] != "ok":
+            print_error(outcome)
+            return exit_code_for(outcome)
+        for line in outcome["result"].get("lines", []):
+            print(json.dumps(line, ensure_ascii=False))
+        return EXIT_OK
+    raise UsageError(f"bridge 只有 start / stop / status / log / run：{action!r}")
 
 
 def _cmd_run(tokens: list[str]) -> int:

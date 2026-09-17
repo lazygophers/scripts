@@ -9,14 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import pathlib
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from lib import browse_bridge, browse_install, browse_ws
+from lib import browse_bridge, browse_install, browse_log, browse_ws
 from lib.browse_daemon import connect as cli_connect, pack, read_frame
 from lib.browse_protocol import command
 
@@ -214,3 +216,138 @@ class BridgeCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LogCase(unittest.TestCase):
+    """服务端日志：写、轮转、读回。文件路径全程指到临时目录，不碰真实落点。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.path = pathlib.Path(self._tmp.name) / "bridge.log"
+
+    def test_record_then_tail_returns_entries_oldest_first(self) -> None:
+        browse_log.record("ws.open", path=self.path, browser="chrome")
+        browse_log.record("ws.close", path=self.path, browser="chrome", seconds=3)
+        lines = browse_log.tail(10, path=self.path)
+        self.assertEqual([entry["event"] for entry in lines], ["ws.open", "ws.close"])
+        self.assertEqual(lines[1]["seconds"], 3)
+        self.assertIsInstance(lines[0]["at"], float)
+
+    def test_tail_limit_keeps_the_newest(self) -> None:
+        for i in range(10):
+            browse_log.record("tick", path=self.path, i=i)
+        lines = browse_log.tail(3, path=self.path)
+        self.assertEqual([entry["i"] for entry in lines], [7, 8, 9])
+
+    def test_tail_caps_the_limit_and_survives_a_missing_file(self) -> None:
+        self.assertEqual(browse_log.tail(10, path=self.path), [])
+        for i in range(browse_log.MAX_TAIL + 5):
+            browse_log.record("tick", path=self.path, i=i)
+        self.assertEqual(len(browse_log.tail(10_000, path=self.path)), browse_log.MAX_TAIL)
+
+    def test_a_truncated_line_is_skipped_not_fatal(self) -> None:
+        browse_log.record("ws.open", path=self.path)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write('{"at": 1, "event": "half\n')
+        browse_log.record("ws.close", path=self.path)
+        self.assertEqual([entry["event"] for entry in browse_log.tail(10, path=self.path)],
+                         ["ws.open", "ws.close"])
+
+    def test_rotation_keeps_one_generation(self) -> None:
+        big = "x" * (browse_log.MAX_BYTES // 4)
+        for _ in range(5):
+            browse_log.record("fat", path=self.path, pad=big)
+        self.assertTrue(self.path.with_suffix(".log.1").is_file(), "没有轮转出上一代")
+        # 轮转之后当前文件从头写，仍然读得出来
+        self.assertTrue(browse_log.tail(10, path=self.path))
+
+    def test_a_write_failure_never_raises(self) -> None:
+        # 落点是个目录：写文件必然失败，但 bridge 不能因为记日志而倒下
+        blocked = pathlib.Path(self._tmp.name) / "as-a-dir"
+        blocked.mkdir()
+        browse_log.record("ws.open", path=blocked)  # 不抛就算过
+
+    def test_log_path_follows_the_environment_override(self) -> None:
+        with unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": "/tmp/x.log"}):
+            self.assertEqual(browse_log.log_path(), pathlib.Path("/tmp/x.log"))
+        with unittest.mock.patch.dict(os.environ, {"XDG_STATE_HOME": "/tmp/state"}, clear=False):
+            os.environ.pop("BROWSE_BRIDGE_LOG", None)
+            self.assertEqual(browse_log.log_path(),
+                             pathlib.Path("/tmp/state/lazygophers/scripts/browse-bridge.log"))
+
+
+class BridgeIntrospectionCase(BridgeCase):
+    """`lg:bridge.info` / `lg:bridge.log`：CLI 和扩展两个方向都问得到。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.log_path = pathlib.Path(self._tmp.name) / "bridge.log"
+        patch = unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": str(self.log_path)})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_cli_asks_for_bridge_info(self) -> None:
+        async def body(port: int) -> dict:
+            # 握着扩展那条连接：撒手就会被回收，连接一断连接表立刻空掉
+            er, ew, _ = await _ext_connect(port, "chrome")
+            cr, cw, _ = await cli_connect("cli", self.sock_path)
+            cw.write(pack(command(1, browse_bridge.INFO_METHOD, {})))
+            await cw.drain()
+            reply = await read_frame(cr, 1 << 20)
+            ew.close(); cw.close()
+            return reply
+        reply = self.run_bridge(body)
+        info = reply["result"]
+        self.assertEqual(info["socket"], str(self.sock_path))
+        self.assertEqual(info["logPath"], str(self.log_path))
+        self.assertEqual(len(info["connections"]), 1)
+        self.assertEqual(info["connections"][0]["browser"], "chrome")
+        self.assertGreater(info["pid"], 0)
+
+    def test_the_extension_may_read_info_and_log(self) -> None:
+        """面板要显示服务情况，所以扩展这个方向也得能问这两条。"""
+
+        async def body(port: int) -> tuple[dict, dict]:
+            er, ew, _ = await _ext_connect(port, "chrome")
+            await browse_ws.client_send(ew, json.dumps(
+                command(11, browse_bridge.INFO_METHOD, {})))
+            info = json.loads(await browse_ws.read_message(er, ew, 1 << 20))
+            await browse_ws.client_send(ew, json.dumps(
+                command(12, browse_bridge.LOG_METHOD, {"limit": 5})))
+            logs = json.loads(await browse_ws.read_message(er, ew, 1 << 20))
+            ew.close()
+            return info, logs
+        info, logs = self.run_bridge(body)
+        self.assertEqual(info["id"], 11)
+        self.assertEqual(info["type"], "success")
+        self.assertGreater(info["result"]["port"], 0)
+        self.assertEqual(logs["id"], 12)
+        # 这条连接自己接上来那一下就该在日志里
+        self.assertIn("ws.open", [entry["event"] for entry in logs["result"]["lines"]])
+
+    def test_the_extension_still_cannot_ask_anything_else(self) -> None:
+        """只开了两条只读方法的口子，别的照旧拒掉。"""
+
+        async def body(port: int) -> dict:
+            er, ew, _ = await _ext_connect(port, "chrome")
+            await browse_ws.client_send(ew, json.dumps(
+                command(13, "lg:config.set", {"confirm_mode": "silent"})))
+            reply = json.loads(await browse_ws.read_message(er, ew, 1 << 20))
+            ew.close()
+            return reply
+        reply = self.run_bridge(body)
+        self.assertEqual(reply["type"], "error")
+        self.assertEqual(reply["id"], 13)
+
+    def test_connections_and_lifecycle_land_in_the_log(self) -> None:
+        async def body(port: int) -> None:
+            er, ew, _ = await _ext_connect(port, "chrome")
+            ew.close()
+            await asyncio.sleep(0.1)  # 让适配泵的 finally 跑完
+        self.run_bridge(body)
+        events = [entry["event"] for entry in browse_log.tail(50, path=self.log_path)]
+        self.assertEqual(events[0], "bridge.start")
+        self.assertIn("ws.open", events)
+        self.assertIn("ws.close", events)
+        self.assertEqual(events[-1], "bridge.stop")

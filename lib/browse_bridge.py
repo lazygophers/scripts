@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lib import browse_ws
+from lib import browse_log, browse_ws
 from lib.browse_daemon import (
     BROWSERS_METHOD,
     IDLE_TIMEOUT,
@@ -51,6 +51,15 @@ DEFAULT_WS_PORT = 9330
 
 # CLI 查 bridge 连接表用的方法名（和 ABORT/BROWSERS 一样，bridge 本地执行不转发）。
 CONNECTIONS_METHOD = "lg:bridge.connections"
+
+# bridge 自己的情况和日志。这两条**两个方向都能问**：CLI 用来做 `browse bridge
+# status` / `browse bridge log`，扩展面板用来显示「服务在不在、刚才发生了什么」。
+# 扩展能问 bridge 的就这两条，都是只读，且永远不转发给别的浏览器。
+INFO_METHOD = "lg:bridge.info"
+LOG_METHOD = "lg:bridge.log"
+
+# 扩展这个方向只放行上面那两条只读方法，别的一律照旧拒掉。
+EXTENSION_READABLE = (INFO_METHOD, LOG_METHOD)
 
 # bridge 每 30 秒没收到扩展任何消息（心跳是每 10-20 秒一条）就认为它死了，断开。
 WS_SILENCE_TIMEOUT = 30.0
@@ -81,6 +90,8 @@ class Bridge(Daemon):
     """daemon（CLI 侧 unix socket）+ 扩展侧 WebSocket 监听。"""
 
     ws_port: int = field(default_factory=ws_port)
+    # bridge 起来的时刻（墙钟）。`lg:bridge.info` 用它算已经跑了多久。
+    _started: float = field(default=0.0, init=False)
     _ws_server: asyncio.AbstractServer | None = field(default=None, init=False)
     # daemon connId → {browser, since, lastSeen}。`browse status` 的数据源。
     _ws_meta: dict[int, dict] = field(default_factory=dict, init=False)
@@ -91,6 +102,9 @@ class Bridge(Daemon):
             return False
         self._ws_server = await asyncio.start_server(
             self._handle_ws, "127.0.0.1", self.ws_port)
+        self._started = time.time()
+        browse_log.record("bridge.start", pid=os.getpid(), port=self.ws_port,
+                          socket=str(self.path))
         return True
 
     async def stop(self) -> None:
@@ -101,6 +115,7 @@ class Bridge(Daemon):
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._ws_server.wait_closed(), 2.0)
             self._ws_server = None
+        browse_log.record("bridge.stop", pid=os.getpid())
         await super().stop()
 
     # ------------------------------------------------------------ WS 侧
@@ -110,8 +125,10 @@ class Bridge(Daemon):
             await browse_ws.server_handshake(reader, writer, origin_allowed=_origin_allowed)
             await self._adopt_ws(reader, writer)
         except (ConnectionError, asyncio.IncompleteReadError, browse_ws.WsClosed,
-                OSError, json.JSONDecodeError, ValueError):
-            pass  # 握手被拒 / 对端断开 / 坏消息 —— 这条连接不要了，不拖垮 bridge
+                OSError, json.JSONDecodeError, ValueError) as exc:
+            # 握手被拒 / 对端断开 / 坏消息 —— 这条连接不要了，不拖垮 bridge。
+            # 但要记一笔：扩展连不上时，被拒的原因就写在这儿。
+            browse_log.record("ws.dropped", reason=type(exc).__name__, detail=str(exc)[:200])
         finally:
             with contextlib.suppress(OSError):
                 writer.close()
@@ -143,20 +160,65 @@ class Bridge(Daemon):
                                      asyncio.IncompleteReadError, OSError):
                 await daemon_task
 
-    # ------------------------------------------------------------ CLI 侧本地方法
+    # ------------------------------------------------------------ bridge 本地方法
+    def connections(self) -> list[dict]:
+        """还挂着的扩展连接（断开时的清理由适配泵的 finally 做）。"""
+        now = time.monotonic()
+        return [{
+            "connectionId": cid,
+            "browser": meta["browser"],
+            "sinceSeconds": int(now - meta["since"]),
+            "idleSeconds": int(now - meta["lastSeen"]),
+        } for cid, meta in self._ws_meta.items()]
+
+    def info(self) -> dict:
+        """bridge 自己的情况。面板和 `browse bridge status` 看的是同一份。"""
+        return {
+            "pid": os.getpid(),
+            # 实际监听的端口：`ws_port=0` 是「随便给一个」，真实端口只有绑完才知道
+            "port": self._bound_port(),
+            "socket": str(self.path),
+            "startedAt": self._started,
+            "uptimeSeconds": int(time.time() - self._started) if self._started else 0,
+            "idleTimeoutSeconds": int(self.idle_timeout),
+            "logPath": str(browse_log.log_path()),
+            "connections": self.connections(),
+        }
+
+    def _bound_port(self) -> int:
+        if self._ws_server is None or not self._ws_server.sockets:
+            return self.ws_port
+        return int(self._ws_server.sockets[0].getsockname()[1])
+
+    def _local(self, method: str, params: dict) -> dict | None:
+        """bridge 自己就能答的方法。不是这几条就返回 None，交给上面的路由。"""
+        if method == CONNECTIONS_METHOD:
+            return {"connections": self.connections()}
+        if method == INFO_METHOD:
+            return self.info()
+        if method == LOG_METHOD:
+            return {"lines": browse_log.tail(params.get("limit", 100))}
+        return None
+
     async def _from_cli(self, cli, message: dict) -> None:
-        if "type" not in message and message.get("method") == CONNECTIONS_METHOD:
-            now = time.monotonic()
-            rows = [{
-                "connectionId": cid,
-                "browser": meta["browser"],
-                "sinceSeconds": int(now - meta["since"]),
-                "idleSeconds": int(now - meta["lastSeen"]),
-            } for cid, meta in self._ws_meta.items()]
-            # 只列还挂着的连接（daemon 侧断开时 _ws_meta 的清理由适配泵的 finally 做）
-            await cli.send(success(message["id"], {"connections": rows}))
-            return
+        if "type" not in message:
+            result = self._local(message.get("method", ""), message.get("params") or {})
+            if result is not None:
+                await cli.send(success(message["id"], result))
+                return
         await super()._from_cli(cli, message)
+
+    async def _from_browser(self, conn, message: dict) -> None:
+        """扩展这个方向只放行两条只读方法，别的照旧由 daemon 拒掉。
+
+        口子开得这么窄是有意的：裁决和审计仍然全在插件自己那儿，这两条只让它读
+        bridge 的运行状况，既不改任何状态，也不会被转发到别的浏览器。
+        """
+        if message.get("type") is None and message.get("method") in EXTENSION_READABLE:
+            result = self._local(message["method"], message.get("params") or {})
+            await conn.send(success(message.get("id", 0), result or {}))
+            return
+        await super()._from_browser(conn, message)
 
 
 @dataclass
@@ -181,7 +243,10 @@ class _Adapter:
             await asyncio.gather(self._ws_to_sock(), self._sock_to_ws())
         finally:
             if self.conn_id is not None:
-                self.meta.pop(self.conn_id, None)
+                entry = self.meta.pop(self.conn_id, None)
+                browse_log.record("ws.close", connectionId=self.conn_id,
+                                  browser=(entry or {}).get("browser", self._browser),
+                                  seconds=int(time.monotonic() - (entry or {}).get("since", time.monotonic())))
 
     async def _ws_to_sock(self) -> None:
         first = True
@@ -206,11 +271,13 @@ class _Adapter:
                 # 后才知道实际槽位名，所以优先用 hello-ack 里带回来的这个，不是
                 # `_touch` 记的原始展示名。
                 browser = message.get("browser")
+                name = browser if isinstance(browser, str) and browser else self._browser
                 self.meta[self.conn_id] = {
-                    "browser": browser if isinstance(browser, str) and browser else self._browser,
+                    "browser": name,
                     "since": time.monotonic(),
                     "lastSeen": time.monotonic(),
                 }
+                browse_log.record("ws.open", connectionId=self.conn_id, browser=name)
             await browse_ws.send_text(self.ws_writer, json.dumps(message, ensure_ascii=False))
 
     # hello 里的 browser 名，翻译后的第一条（hello）记下；之后的消息只刷新 lastSeen
@@ -245,6 +312,9 @@ async def run(path: Path | None = None, idle_timeout: float | None = None,
 __all__ = [
     "BROWSERS_METHOD",
     "CONNECTIONS_METHOD",
+    "EXTENSION_READABLE",
+    "INFO_METHOD",
+    "LOG_METHOD",
     "DEFAULT_WS_PORT",
     "ROLE_EXTENSION",
     "WS_SILENCE_TIMEOUT",
