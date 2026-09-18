@@ -334,16 +334,29 @@ async function fillDocument(doc: Document, host: HTMLElement, text: string): Pro
   scrollToHash(doc);
 }
 
+/** 扩展自己那张展示页（`chrome-extension://…/viewer.html`）。Firefox 那边协议名不同。 */
+function isExtensionPage(doc: Document): boolean {
+  return /^(chrome|moz)-extension:$/.test(new URL(doc.URL).protocol);
+}
+
 /**
- * 文档里指向本地文本文件的链接：点了先探一下文件在不在，在就跳过去，不在就当场说清楚。
+ * 文档里指向本地文件的链接。
  *
- * 跳转本身不需要别的花样——新页面还是 `file://`，内容脚本照样接管并渲染，
- * 前进后退也就自然是浏览器原来的那一套。只有「文件不存在」这一种要拦，
- * 因为那时浏览器给的是它自己的报错页，内容脚本进不去，话就没处说。
+ * **文件页（`file://`）上一个都不拦**：点 `file://` 链接本来就是浏览器份内的事，新页面
+ * 还是 `file://`，内容脚本照样接管并渲染，前进后退也就是浏览器原来那一套。
  *
- * 网络地址、图片压缩包这类 viewer 不管的扩展名、页内锚点，一律不拦。
+ * 这里原先会先 `fetch` 探一下文件在不在、不在就给提示。那条路在内容脚本里走不通：内容
+ * 脚本的请求用的是所在页面的源，`file://` 是不透明源、响应又没有 CORS 头，请求一律失败，
+ * 于是**每一个**本地链接都被判成「文件不存在」，点了打不开——这正是要修的毛病。
+ * 出处：<https://www.chromium.org/Home/chromium-security/extension-content-script-fetches/>
+ * 代价：链接指向的文件真的不存在时，看到的是浏览器自己的报错页，不再有我们那句提示。
+ *
+ * **展示页（`chrome-extension://`）上全拦**：Chrome 不让普通页面导航到 `file://`，
+ * 点了会毫无反应，所以那边把跳转交给后台脚本用 `chrome.tabs.update` 去做。
  */
 function wireLocalLinks(doc: Document, host: HTMLElement): void {
+  if (!isExtensionPage(doc)) return;
+
   host.addEventListener("click", (event) => {
     const mouse = event as MouseEvent;
     // 新标签页打开、中键、右键都交回浏览器。
@@ -352,57 +365,18 @@ function wireLocalLinks(doc: Document, host: HTMLElement): void {
     const link = (event.target as Element | null)?.closest?.("a");
     const href = link?.getAttribute("href");
     if (href === null || href === undefined) return;
-    // 提示里那个「仍然打开」是用户明确说了要去，不再探第二遍。
-    if (link?.classList.contains("lfv-anyway")) return;
+
+    // 页内锚点是浏览器的活。展示页上正文的地址是那个本地文件，所以 `#x` 解析出来也是
+    // `file:`，不先挡掉就会被当成跳文件。
+    if (href.startsWith("#")) return;
 
     const target = new URL(href, sourceUrl(doc));
     if (target.protocol !== "file:") return;
-    if (!WHITELIST_EXTS.has(extOf(target.href))) return;
-    // 同一份文件里的锚点跳转是浏览器的活，不该走这条路。
     if (target.href.split("#")[0] === sourceUrl(doc).split("#")[0]) return;
 
     event.preventDefault();
-    void follow(doc, host, target.href);
+    void chrome.runtime.sendMessage({ type: "lfv-open", url: target.href });
   });
-}
-
-async function follow(doc: Document, host: HTMLElement, url: string): Promise<void> {
-  if (await exists(url)) {
-    // `open(url, "_self")` 和 `location.assign` 在浏览器里是同一件事：当前标签页导航，留下一条历史。
-    doc.defaultView?.open(url, "_self");
-    return;
-  }
-  host.querySelector(".lfv-missing")?.remove();
-  host.prepend(missingNote(doc, url));
-}
-
-/**
- * 探一下这个本地文件在不在。
- *
- * 需要: 读不到有两种可能——文件真的不存在，或者这一档上下文没有 `file://` 的读权限。
- * 两者在 `fetch` 这一层分不开，所以提示里附一个「仍然打开」，真是权限问题时用户不会被卡住。
- * 到底是哪一种，留给 16 票在真 Chrome 里跑一次确认。
- */
-async function exists(url: string): Promise<boolean> {
-  try {
-    return (await fetch(url)).ok;
-  } catch {
-    return false;
-  }
-}
-
-function missingNote(doc: Document, url: string): HTMLElement {
-  const note = doc.createElement("div");
-  note.className = "lfv-missing";
-  const name = decodeURIComponent(url.split("/").pop() ?? url);
-  note.append(`找不到这个文件：${name}`);
-
-  const anyway = doc.createElement("a");
-  anyway.className = "lfv-anyway";
-  anyway.href = url;
-  anyway.textContent = "仍然打开";
-  note.append(" ", anyway);
-  return note;
 }
 
 /**

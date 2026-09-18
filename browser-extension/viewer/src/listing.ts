@@ -170,9 +170,15 @@ function wirePreview(doc: Document, link: HTMLElement, cell: HTMLElement, entry:
     box.className = "lfv-preview";
     box.textContent = "读取中…";
     cell.append(box);
-    void head(entry.url).then((text) => {
-      if (box !== null) box.textContent = text;
-    });
+    // 读不到时把原因写在原地：卡在「读取中…」看不出是文件的问题还是扩展的问题。
+    void head(entry.url).then(
+      (text) => {
+        if (box !== null) box.textContent = text;
+      },
+      (error: Error) => {
+        if (box !== null) box.textContent = `读不出这个文件：${error.message}`;
+      },
+    );
   });
   link.addEventListener("mouseleave", () => {
     if (box !== null) box.hidden = true;

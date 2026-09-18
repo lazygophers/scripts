@@ -1,17 +1,25 @@
 import assert from "node:assert/strict";
+import type { JSDOM } from "jsdom";
 import { afterEach, beforeEach, test } from "node:test";
 
 import { colorize } from "../src/highlight.ts";
-import { classify, isDirectoryIndex, isPlainTextPage, prettify } from "../src/prettify.ts";
+import { classify, isDirectoryIndex, isPlainTextPage, prettify, show } from "../src/prettify.ts";
 import { clearChrome, installChrome, page } from "./mock.ts";
 
 /** 本轮 `getURL` 被问过的路径。用来证明非代码页从没去取过高亮包。 */
 let asked: string[] = [];
 
+/** 本轮发给后台脚本的消息。展示页里点本地链接时应该有，文件页里一条都不该有。 */
+let sent: unknown[] = [];
+
 beforeEach(() => {
   asked = [];
+  sent = [];
   installChrome({
     runtime: {
+      sendMessage: async (message: unknown) => {
+        sent.push(message);
+      },
       getURL: (path: string) => {
         asked.push(path);
         // 懒加载的两个包在浏览器里是 dist 产物，测试里直接指回源码，让 `import()` 真的能加载。
@@ -613,10 +621,12 @@ test("文档里没有图也没有公式时，这两个包都不加载", async ()
 });
 
 /**
- * 造一张带链接的 markdown 页，等它渲染完，并把两件跟外界打交道的事换成可观察的桩：
- * `fetch`（探文件在不在）和 `window.open`（跳转）。`existing` 里列的绝对地址算「文件存在」。
+ * 造一张带链接的 markdown 文件页（`file://`），并把两件跟外界打交道的事换成可观察的桩：
+ * `fetch` 和 `window.open`。两个都不该再被用到——文件页上的链接一个都不拦。
+ *
+ * `click()` 返回 `true` 表示没有人调过 `preventDefault`，也就是这一下交给了浏览器自己。
  */
-async function linkPage(text: string, existing: string[] = []) {
+async function linkPage(text: string) {
   const dom = textFile("file:///tmp/docs/guide.md", "");
   const doc = dom.window.document;
   // 直接写 textContent，免得 markdown 源码在造页面时就被 jsdom 当标签解析掉。
@@ -630,100 +640,127 @@ async function linkPage(text: string, existing: string[] = []) {
   };
   (globalThis as { fetch?: unknown }).fetch = async (url: string) => {
     probed.push(url);
-    return { ok: existing.includes(url) } as Response;
+    return { ok: true } as Response;
   };
-  // 没被拦下的链接会走 jsdom 的默认导航（它没实现，只会往控制台吐一行），这里统一收掉。
-  doc.addEventListener("click", (event) => event.preventDefault());
-
   prettify(doc);
   const host = await rendered(doc);
-  const click = (href: string) =>
+  return { doc, host, opened, probed, click: clicker(dom, host) };
+}
+
+/**
+ * 造一张扩展自己的展示页（`chrome-extension://`），内容是某个本地 markdown 文件。
+ *
+ * 这一档里本地链接必须被拦下来交给后台脚本：Chrome 不让扩展页面自己导航到 `file://`。
+ */
+async function viewerPage(text: string) {
+  const dom = page("", { url: "chrome-extension://viewer/viewer.html" });
+  const doc = dom.window.document;
+  show(doc, "file:///tmp/docs/guide.md", text);
+  const host = await rendered(doc);
+  return { doc, host, click: clicker(dom, host) };
+}
+
+/**
+ * 点一个链接，返回「这一下有没有交给浏览器」：`true` = 没人拦，浏览器会照常导航。
+ *
+ * 判定看的是页面自己的监听跑完之后 `defaultPrevented` 的状态；拿到之后再统一 `preventDefault`，
+ * 免得 jsdom 去做它没实现的导航、往控制台吐一行。
+ */
+function clicker(dom: JSDOM, host: HTMLElement) {
+  return (href: string): boolean => {
+    let prevented = false;
+    const swallow = (event: Event) => {
+      prevented = event.defaultPrevented;
+      event.preventDefault();
+    };
+    host.ownerDocument.addEventListener("click", swallow);
     host
       .querySelector(`a[href="${href}"]`)
       ?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
-  return { doc, host, opened, probed, click };
+    host.ownerDocument.removeEventListener("click", swallow);
+    return !prevented;
+  };
 }
 
-test("同级、子目录、上层的相对链接都解析对，文件在就在当前标签页翻过去", async () => {
+test("写成绝对地址的本地链接和图片都保得住，点得动", async () => {
+  const { host } = await mdPage(
+    "[文件](file:///tmp/docs/api.md)\n\n![图](file:///tmp/docs/a.png)\n",
+  );
+
+  // DOMPurify 默认那张表里没有 `file:`，不放行就会摘掉 href / src，
+  // 渲染出来是个点不动的光秃秃 <a>——这正是本地文件链接点不开的第二个原因。
+  assert.equal(
+    host.querySelector("a[href='file:///tmp/docs/api.md']")?.textContent,
+    "文件",
+  );
+  assert.equal(host.querySelector("img")?.getAttribute("src"), "file:///tmp/docs/a.png");
+});
+
+test("放行 file: 之后，javascript: 这类地址照样挡着", async () => {
+  const { host } = await mdPage("[坏](javascript:alert(1))\n");
+
+  assert.equal(host.querySelector("a")?.hasAttribute("href"), false);
+});
+
+test("文件页上的本地链接一个都不拦，交给浏览器自己跳", async () => {
   const { opened, probed, click } = await linkPage(
     "[同级](./api.md)\n\n[子目录](guide/x.md)\n\n[上层](../readme.md)\n",
-    ["file:///tmp/docs/api.md", "file:///tmp/docs/guide/x.md", "file:///tmp/readme.md"],
   );
 
-  click("./api.md");
-  click("guide/x.md");
-  click("../readme.md");
-  await new Promise((resolve) => setTimeout(resolve, 20));
-
-  assert.deepEqual(probed, [
-    "file:///tmp/docs/api.md",
-    "file:///tmp/docs/guide/x.md",
-    "file:///tmp/readme.md",
-  ]);
-  // `_self` = 当前标签页导航并留下一条历史，前进后退因此照常可用；
-  // 新页面还是 `file://`，内容脚本照样接管，所以退回来看到的仍是渲染好的样子。
-  assert.deepEqual(opened, [
-    "file:///tmp/docs/api.md _self",
-    "file:///tmp/docs/guide/x.md _self",
-    "file:///tmp/readme.md _self",
-  ]);
-});
-
-test("链接目标不存在时当场说找不到，不跳过去", async () => {
-  const { host, opened, click } = await linkPage("[没了](./gone.md)\n");
-
-  click("./gone.md");
-  await new Promise((resolve) => setTimeout(resolve, 20));
-
-  const note = host.querySelector(".lfv-missing");
-  assert.equal(note?.textContent?.includes("找不到这个文件：gone.md"), true);
-  assert.deepEqual(opened, []);
-
-  // 点两次只留一条提示。
-  click("./gone.md");
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(host.querySelectorAll(".lfv-missing").length, 1);
-
-  // 「仍然打开」是用户明确要去，不再拦第二遍。
-  (host.querySelector(".lfv-anyway") as HTMLElement).dispatchEvent(
-    new (host.ownerDocument.defaultView as unknown as { MouseEvent: typeof MouseEvent }).MouseEvent(
-      "click",
-      { bubbles: true, cancelable: true },
-    ),
+  // 三次点击都没有被 preventDefault，浏览器会照常导航；新页面还是 `file://`，
+  // 内容脚本照样接管，所以前进后退回来仍是渲染好的样子。
+  assert.deepEqual(
+    [click("./api.md"), click("guide/x.md"), click("../readme.md")],
+    [true, true, true],
   );
   await new Promise((resolve) => setTimeout(resolve, 20));
+
+  // 关键回归：早先这里会先 fetch 探一下文件在不在，而内容脚本 fetch 不了 `file://`，
+  // 于是每个本地链接都被判成「文件不存在」、点了打不开。现在一次都不该探。
+  assert.deepEqual(probed, []);
   assert.deepEqual(opened, []);
+  assert.deepEqual(sent, []);
 });
 
-test("图片、压缩包这类链接交回浏览器，不拦", async () => {
-  const { opened, probed, click } = await linkPage("[图](./a.png)\n\n[包](./b.zip)\n");
+test("文件页上，图片压缩包、网络地址、页内锚点同样不拦", async () => {
+  const { opened, probed, click } = await linkPage(
+    "# 安装\n\n[图](./a.png)\n\n[包](./b.zip)\n\n[网页](https://example.test/a.md)\n\n[回到安装](#安装)\n",
+  );
 
-  click("./a.png");
-  click("./b.zip");
+  assert.deepEqual(
+    [click("./a.png"), click("./b.zip"), click("https://example.test/a.md"), click("#安装")],
+    [true, true, true, true],
+  );
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   assert.deepEqual(probed, []);
   assert.deepEqual(opened, []);
+  assert.deepEqual(sent, []);
 });
 
-test("网络地址的链接照常打开，不被当成本地文件", async () => {
-  const { opened, probed, click } = await linkPage("[网页](https://example.test/a.md)\n");
+test("展示页上的本地链接交给后台脚本跳转", async () => {
+  const { click } = await viewerPage("[同级](./api.md)\n\n[上层](../readme.md)\n");
 
-  click("https://example.test/a.md");
+  // 返回 false = 被 preventDefault 了：扩展页面自己导航到 `file://` 会被 Chrome 挡下，
+  // 所以这一档必须拦，改由后台脚本用 chrome.tabs.update 去跳。
+  assert.deepEqual([click("./api.md"), click("../readme.md")], [false, false]);
   await new Promise((resolve) => setTimeout(resolve, 20));
 
-  assert.deepEqual(probed, []);
-  assert.deepEqual(opened, []);
+  assert.deepEqual(sent, [
+    { type: "lfv-open", url: "file:///tmp/docs/api.md" },
+    { type: "lfv-open", url: "file:///tmp/readme.md" },
+  ]);
 });
 
-test("文档内的锚点跳转不走本地文件那条路", async () => {
-  const { opened, probed, click } = await linkPage("# 安装\n\n[回到安装](#安装)\n");
+test("展示页上的网络链接和页内锚点不拦", async () => {
+  const { click } = await viewerPage(
+    "# 安装\n\n[网页](https://example.test/a.md)\n\n[回到安装](#安装)\n",
+  );
 
-  click("#安装");
+  assert.deepEqual([click("https://example.test/a.md"), click("#安装")], [true, true]);
   await new Promise((resolve) => setTimeout(resolve, 20));
 
-  assert.deepEqual(probed, []);
-  assert.deepEqual(opened, []);
+  assert.deepEqual(sent, []);
 });
 
 /** 等折叠树那一拍落地，并把页面和树一起给出来。 */

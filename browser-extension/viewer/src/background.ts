@@ -20,3 +20,22 @@ export async function welcome(reason: string): Promise<boolean> {
 chrome.runtime.onInstalled.addListener((details: { reason: string }) => {
   void welcome(details.reason);
 });
+
+/**
+ * 展示页里点本地文件链接时的跳转。
+ *
+ * Chrome 不让 `chrome-extension://` 的页面自己导航到 `file://`（点了毫无反应），
+ * 但后台脚本调 `chrome.tabs.update` 可以——所以这一步只能由这里代劳。
+ * 文件页上的链接不走这条路，那边浏览器自己就能跳。
+ */
+export function openLocal(message: unknown, tabId: number | undefined): boolean {
+  const { type, url } = (message ?? {}) as { type?: unknown; url?: unknown };
+  if (type !== "lfv-open" || typeof url !== "string" || tabId === undefined) return false;
+  if (!url.startsWith("file://")) return false;
+  void chrome.tabs.update(tabId, { url });
+  return true;
+}
+
+chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.MessageSender) => {
+  openLocal(message, sender.tab?.id);
+});

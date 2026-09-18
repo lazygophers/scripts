@@ -161,6 +161,17 @@ function spy(doc: Document, heads: HTMLElement[], links: HTMLElement[]): void {
 }
 
 /**
+ * 放行的地址协议。DOMPurify 自带的那张表里**没有 `file:`**，于是文档里写成
+ * `file:///…` 的绝对链接会被摘掉 `href`、图片会被摘掉 `src`——渲染出来是个点不动的
+ * 光秃秃 `<a>`。本扩展干的就是看本地文件的活，这个协议必须放行。
+ *
+ * 这里是抄它 v3 的默认表再加一个 `file`，别的一个字没改：`javascript:` / `data:`
+ * 仍然挡着。出处：`node_modules/dompurify/dist/purify.cjs.js` 的 `IS_ALLOWED_URI`。
+ */
+const ALLOWED_URI =
+  /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|file):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
+
+/**
  * 渲染成一个 `<article>`。文档里原有的 HTML 片段会先过一遍 DOMPurify，
  * `<script>`、`onerror=` 这类东西在插进页面之前就被摘掉。
  */
@@ -168,6 +179,7 @@ export function renderMarkdown(doc: Document, text: string, mdx = false): HTMLEl
   const { meta, body } = splitFrontMatter(mdx ? degradeMdx(text) : text);
   const html = DOMPurify(doc.defaultView as unknown as WindowLike).sanitize(
     parser().parse(body, { async: false }),
+    { ALLOWED_URI_REGEXP: ALLOWED_URI },
   );
 
   const article = doc.createElement("article");

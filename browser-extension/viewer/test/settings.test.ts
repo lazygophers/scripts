@@ -26,6 +26,7 @@ function setup({ allowed = true, stored = {} as Record<string, unknown> } = {}) 
           ? new URL("../src/data.ts", import.meta.url).href
           : `chrome-extension://viewer/${path}`,
       onInstalled: { addListener: () => {} },
+      onMessage: { addListener: () => {} },
     },
     extension: { isAllowedFileSchemeAccess: async () => allowed },
     tabs: {
@@ -44,7 +45,7 @@ function setup({ allowed = true, stored = {} as Record<string, unknown> } = {}) 
 
 // `background.ts` 一加载就去挂浏览器的事件监听，所以先把假 chrome 装上再动态加载它。
 setup();
-const { welcome } = await import("../src/background.ts");
+const { welcome, openLocal } = await import("../src/background.ts");
 
 const realFetch = globalThis.fetch;
 
@@ -231,4 +232,30 @@ test("Firefox 上没有那个开关，改说一句话，也不弹欢迎页", asy
   assert.equal((doc.getElementById("lfv-access") as HTMLElement).dataset["state"], "on");
   assert.equal(await welcome("install"), false);
   assert.deepEqual(opened, []);
+});
+
+test("展示页要跳本地文件时，后台脚本替它跳", () => {
+  const updated: { id: number; url: string }[] = [];
+  installChrome({
+    tabs: { update: async (id: number, { url }: { url: string }) => void updated.push({ id, url }) },
+  });
+
+  assert.equal(openLocal({ type: "lfv-open", url: "file:///tmp/a.md" }, 7), true);
+  assert.deepEqual(updated, [{ id: 7, url: "file:///tmp/a.md" }]);
+});
+
+test("不是本地文件、不是这条消息、没有标签页，后台一律不动", () => {
+  installChrome({
+    tabs: {
+      update: async () => {
+        throw new Error("这几种情况都不该去跳转");
+      },
+    },
+  });
+
+  // 网页地址不跳：扩展页面自己就能导航到 http(s)，走这条路等于给了页面一个乱跳的口子。
+  assert.equal(openLocal({ type: "lfv-open", url: "https://example.test/" }, 7), false);
+  assert.equal(openLocal({ type: "别的消息", url: "file:///tmp/a.md" }, 7), false);
+  assert.equal(openLocal({ type: "lfv-open", url: "file:///tmp/a.md" }, undefined), false);
+  assert.equal(openLocal(null, 7), false);
 });
