@@ -87,6 +87,9 @@ export function storageMock(initial: Any = {}): {
 } {
   const store: Any = { ...initial };
   const state = { data: store, failNext: 0, sets: 0 };
+  // `chrome.storage.onChanged` 是跨标签页广播设置变更的那条路（viewer 的主题靠它
+  // 让已经开着的页面跟着换），所以桩里也要把它接上，`set` 之后真的通知下去。
+  const listeners: ((changes: Any, area: string) => void)[] = [];
   const local = {
     get: async (key: string) => (key in store ? { [key]: store[key] } : {}),
     set: async (items: Any) => {
@@ -96,12 +99,18 @@ export function storageMock(initial: Any = {}): {
         throw new Error("QUOTA_BYTES quota exceeded");
       }
       Object.assign(store, items);
+      const changes: Any = {};
+      for (const [key, value] of Object.entries(items)) changes[key] = { newValue: value };
+      for (const listener of listeners) listener(changes, "local");
     },
     remove: async (key: string) => {
       delete store[key];
     },
   };
+  const onChanged = {
+    addListener: (listener: (changes: Any, area: string) => void) => void listeners.push(listener),
+  };
   const existing = ((globalThis as Any).chrome as Any) ?? {};
-  installChrome({ ...existing, storage: { local } });
+  installChrome({ ...existing, storage: { local, onChanged } });
   return state;
 }

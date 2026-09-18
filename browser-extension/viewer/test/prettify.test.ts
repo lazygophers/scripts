@@ -4,7 +4,7 @@ import { afterEach, beforeEach, test } from "node:test";
 
 import { colorize } from "../src/highlight.ts";
 import { classify, isDirectoryIndex, isPlainTextPage, prettify, show } from "../src/prettify.ts";
-import { clearChrome, installChrome, page } from "./mock.ts";
+import { clearChrome, installChrome, page, storageMock } from "./mock.ts";
 
 /** 本轮 `getURL` 被问过的路径。用来证明非代码页从没去取过高亮包。 */
 let asked: string[] = [];
@@ -37,6 +37,8 @@ beforeEach(() => {
       },
     },
   });
+  // 主题从 `chrome.storage.local` 读，所以每个用例都要有这份存储桩。
+  storageMock();
 });
 
 /** 链接那几个用例会把 `fetch` 换成桩，跑完放回来。 */
@@ -1526,4 +1528,90 @@ test("焦点回到正文后 Esc 一样关得掉搜索框", async () => {
 
   assert.equal(doc.querySelector(".lfv-search"), null);
   assert.equal(doc.querySelectorAll(".lfv-hit").length, 0);
+});
+
+/** 造一张渲染好的 markdown 文件页，并把存储里的设置预置成 `stored`。 */
+async function themedPage(stored: Record<string, unknown> = {}) {
+  const store = storageMock({ "viewer-settings": stored });
+  const dom = textFile("file:///tmp/docs/guide.md", "");
+  const doc = dom.window.document;
+  first(doc).textContent = "# 标题\n\n一段正文。\n";
+  prettify(doc);
+  await rendered(doc);
+  // 主题是异步读存储之后才写上去的，等这一拍。
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  return { dom, doc, store };
+}
+
+test("没设置过时用默认主题「夜」，颜色和排版一起写到页面上", async () => {
+  const { doc } = await themedPage();
+
+  const style = doc.documentElement.style;
+  assert.equal(style.getPropertyValue("--background"), "#16171a");
+  assert.equal(style.getPropertyValue("--lfv-measure"), "74ch");
+  assert.equal(style.colorScheme, "dark");
+  assert.equal(doc.documentElement.dataset["lfvTheme"], "night");
+});
+
+test("存过的主题连字体一起换掉", async () => {
+  const { doc } = await themedPage({ theme: "paper" });
+
+  const style = doc.documentElement.style;
+  assert.equal(style.getPropertyValue("--background"), "#faf8f4");
+  // 「纸」换的不只是颜色：正文字体变成宋体、每行字数收到 68。
+  assert.match(style.getPropertyValue("--lfv-font"), /Songti SC/);
+  assert.equal(style.getPropertyValue("--lfv-measure"), "68ch");
+  assert.equal(style.colorScheme, "light");
+});
+
+test("别处改了主题，这一页跟着换——不用刷新", async () => {
+  const { doc, store } = await themedPage();
+  assert.equal(doc.documentElement.style.getPropertyValue("--background"), "#16171a");
+
+  // 模拟另一个标签页把设置改了：`chrome.storage` 的变更事件是跨标签页广播的。
+  await (chrome.storage.local as unknown as { set: (items: object) => Promise<void> }).set({
+    "viewer-settings": { theme: "eink" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(doc.documentElement.style.getPropertyValue("--background"), "#ffffff");
+  assert.equal(store.data["viewer-settings"], store.data["viewer-settings"]);
+});
+
+test("主题按钮点开是四种介质加自定义，点一个就存下来", async () => {
+  const { dom, doc, store } = await themedPage();
+
+  const button = doc.querySelector(".lfv-theme-toggle") as HTMLElement;
+  assert.equal(button.textContent, "主题");
+  // 和「原始 / 美化」不是同一个按钮，类名也不同，免得互相抓错。
+  assert.equal(button.classList.contains("lfv-toggle"), false);
+
+  button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const menu = doc.getElementById("lfv-theme-menu") as HTMLElement;
+  const items = [...menu.querySelectorAll("button")] as HTMLElement[];
+  assert.deepEqual(
+    items.map((item) => item.dataset["theme"]),
+    ["paper", "night", "eink", "moss", "custom"],
+  );
+  // 当前那套后面带一个点，不用另开一列图标。
+  assert.equal(items[1]?.textContent, "夜 ·");
+
+  items[0]?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal((store.data["viewer-settings"] as { theme: string }).theme, "paper");
+  assert.equal(doc.getElementById("lfv-theme-menu"), null);
+});
+
+test("切回原始时主题按钮收起来，切回美化又回来", async () => {
+  const { doc } = await themedPage();
+  assert.ok(doc.querySelector(".lfv-theme-toggle"));
+
+  (doc.querySelector(".lfv-toggle") as HTMLElement).click();
+  assert.equal(doc.querySelector(".lfv-theme-toggle"), null);
+
+  (doc.querySelector(".lfv-toggle") as HTMLElement).click();
+  assert.ok(doc.querySelector(".lfv-theme-toggle"));
 });

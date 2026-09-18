@@ -1,7 +1,14 @@
 /**
- * viewer 接管后的页面样式。只有深色一套，和常用编辑器观感一致。
+ * viewer 接管后的页面样式。
  *
- * 颜色 token 来自公共层 `browser-extension/shared/palette.css`，构建时复制到 dist 根目录。
+ * 颜色和排版都读 CSS 变量，值由 `themes.ts` 在运行时写到 `<html>` 的行内样式上
+ * （四种介质主题：纸 / 夜 / 墨水屏 / 苔，外加用户自己调的那套）。公共层
+ * `browser-extension/shared/palette.css` 仍然 @import 进来当兜底默认值——主题还没
+ * 应用上的那一瞬间页面也不会是没上色的样子，而且 `browse` 扩展照旧用它，不受影响。
+ *
+ * 排版变量（正文字体 / 字号 / 行距 / 每行字数）是主题的一部分：换主题连带换排版，
+ * 这是「按阅读介质分主题」的设计决定，不是只换配色。
+ *
  * 所有规则都挂在 `html.lfv-on` 下：切回「原始」时类名一摘，页面就回到浏览器自己的样子。
  */
 
@@ -84,22 +91,14 @@ html.lfv-on .hljs-quote {
 html.lfv-on .hljs-keyword,
 html.lfv-on .hljs-selector-tag,
 html.lfv-on .hljs-literal,
-html.lfv-on .hljs-doctag {
-  color: var(--primary);
-}
-
+html.lfv-on .hljs-doctag,
 html.lfv-on .hljs-string,
 html.lfv-on .hljs-regexp,
 html.lfv-on .hljs-addition {
   color: var(--accent);
 }
 
-html.lfv-on .hljs-number,
-html.lfv-on .hljs-symbol,
-html.lfv-on .hljs-bullet {
-  color: var(--ring);
-}
-
+/* 名字只加粗不换色：颜色档位多了像编辑器，少了才像书——这是「纸与墨」那一版定的调子。 */
 html.lfv-on .hljs-title,
 html.lfv-on .hljs-name,
 html.lfv-on .hljs-section,
@@ -150,7 +149,7 @@ html.lfv-on .lfv-toc a:hover {
 }
 
 html.lfv-on .lfv-toc a.lfv-active {
-  color: var(--primary);
+  color: var(--accent);
 }
 
 html.lfv-on .lfv-toc a[data-level="2"] {
@@ -193,8 +192,9 @@ html.lfv-on .lfv-md {
   display: block;
   margin: 0 auto;
   padding: 2rem 2.5rem;
-  max-width: 80ch;
-  font: 15px / 1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  max-width: var(--lfv-measure, 80ch);
+  font: var(--lfv-size, 15px) / var(--lfv-leading, 1.75)
+    var(--lfv-font, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
   word-break: break-word;
 }
 
@@ -228,7 +228,7 @@ html.lfv-on .lfv-anchor:focus {
 }
 
 html.lfv-on .lfv-md a {
-  color: var(--primary);
+  color: var(--accent);
 }
 
 html.lfv-on .lfv-md code {
@@ -296,7 +296,7 @@ html.lfv-on .lfv-note > :last-child {
 
 html.lfv-on .lfv-note-note,
 html.lfv-on .lfv-note-info {
-  border-left-color: var(--primary);
+  border-left-color: var(--accent);
 }
 
 html.lfv-on .lfv-note-tip {
@@ -305,7 +305,7 @@ html.lfv-on .lfv-note-tip {
 
 html.lfv-on .lfv-note-warning,
 html.lfv-on .lfv-note-caution {
-  border-left-color: var(--ring);
+  border-left-color: var(--warning);
 }
 
 html.lfv-on .lfv-note-danger {
@@ -419,12 +419,12 @@ html.lfv-on .lfv-str {
 }
 
 html.lfv-on .lfv-num {
-  color: var(--ring);
+  color: var(--warning);
 }
 
 html.lfv-on .lfv-bool,
 html.lfv-on .lfv-null {
-  color: var(--primary);
+  color: var(--accent);
   font-style: italic;
 }
 
@@ -576,7 +576,7 @@ html.lfv-on .lfv-log-filter.lfv-log-fatal {
 
 html.lfv-on .lfv-log-warn .lfv-log-level,
 html.lfv-on .lfv-log-filter.lfv-log-warn {
-  color: var(--ring);
+  color: var(--warning);
 }
 
 html.lfv-on .lfv-log-debug,
@@ -829,4 +829,128 @@ html.lfv-on .lfv-hit-current {
   gap: 0.5rem;
   align-items: center;
   cursor: pointer;
+}
+
+/* ── 设置页的主题那一节 ───────────────────────────────────────── */
+
+.lfv-themes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.6rem;
+  margin: 0.8rem 0 1.2rem;
+}
+
+/* 每套主题一张卡：左边一块该主题底色的小样，右边名字和一句话说明。 */
+.lfv-theme {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lfv-theme[aria-pressed="true"] {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+
+/* 小样：用该主题自己的底色和正文色写一个「文」字，不靠说明文字想象。 */
+.lfv-theme .lfv-chip {
+  display: grid;
+  place-items: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) / 1.5);
+  font-size: 0.95rem;
+  flex: none;
+}
+
+.lfv-theme .lfv-name {
+  display: block;
+  font-weight: 600;
+}
+
+.lfv-theme .lfv-hint {
+  display: block;
+  color: var(--muted-foreground);
+  font-size: 0.85em;
+}
+
+.lfv-custom {
+  margin: 0 0 1.2rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.lfv-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0.7rem 0;
+}
+
+.lfv-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  font-size: 0.9em;
+}
+
+.lfv-field input[type="color"] {
+  width: 2.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.lfv-field .lfv-value {
+  color: var(--muted-foreground);
+  font: 0.85em ui-monospace, Menlo, monospace;
+  min-width: 3.5rem;
+  text-align: right;
+}
+
+.lfv-reset {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+/*
+ * 设置页的效果预览块。类名不叫 `lfv-preview`——那个名字归目录列表的悬停预览
+ * （它带 max-height + overflow:hidden，撞上就会把这块裁掉一半）。
+ * 设置页本身已经应用了当前主题，所以这里是真实效果，不是另画一份模拟。
+ */
+.lfv-sample {
+  margin: 0.8rem 0 1.5rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  max-width: none;
+}
+
+.lfv-sample > :first-child {
+  margin-top: 0;
+}
+
+.lfv-sample > :last-child {
+  margin-bottom: 0;
 }

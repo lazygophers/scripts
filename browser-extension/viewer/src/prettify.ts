@@ -7,6 +7,8 @@
 // 只借类型，编译后这行就没了——data 包仍然是打开 json / yaml 时才加载的那一份。
 import type { DataError, Parsed } from "./data.ts";
 import type { Entry } from "./listing.ts";
+import { onSettingsChange, readSettings, writeSettings } from "./settings.ts";
+import { THEMES, applyTheme, type Selection } from "./themes.ts";
 
 /** 纯文本类的 contentType。json / yaml / xml 的各种变体都算文本，所以单列。 */
 export const TEXT_TYPE = /^text\/|\/(json|[a-z-]*yaml|[a-z-]*xml)$/;
@@ -140,9 +142,88 @@ function offer(doc: Document, pre: HTMLElement, label: string): void {
 function swap(doc: Document, plain: HTMLElement[], pretty: () => HTMLElement[], on: boolean): void {
   ensureStylesheet(doc);
   wireSearch(doc);
-  const button = makeButton(doc, on ? "原始" : "美化", () => swap(doc, plain, pretty, !on));
+  wireTheme(doc);
+  const button = makeButton(doc, on ? "原始" : "美化", () => swap(doc, plain, pretty, !on), "8px");
+  // 主题按钮只在美化档出现：切回「原始」是要看浏览器原来的样子，那时页面上不该有主题。
+  const nodes = on ? [...pretty(), makeThemeButton(doc), button] : [...plain, button];
   doc.documentElement.classList.toggle("lfv-on", on);
-  doc.body.replaceChildren(...(on ? pretty() : plain), button);
+  doc.body.replaceChildren(...nodes);
+}
+
+/** 已经接上主题的页面。读一次存储、挂一次监听就够。 */
+const themed = new WeakSet<Document>();
+
+/**
+ * 把存着的主题应用到这一页，并且盯着变更。
+ *
+ * 读存储是异步的，这期间页面用的是 `palette.css` 的默认深色——和「夜」接近，
+ * 所以看不出闪烁。
+ */
+function wireTheme(doc: Document): void {
+  if (themed.has(doc)) return;
+  themed.add(doc);
+  void readSettings().then((settings) => applyTheme(doc, settings.theme, settings.custom));
+  onSettingsChange((settings) => applyTheme(doc, settings.theme, settings.custom));
+}
+
+/** 主题按钮：点开浮出主题列表，挨着「原始 / 美化」那个开关。 */
+function makeThemeButton(doc: Document): HTMLElement {
+  const button = makeButton(doc, "主题", () => toggleThemeMenu(doc, button), "64px");
+  // 和「原始 / 美化」用不同的类名：那个类名是「切换渲染」的唯一标识，测试和用户脚本
+  // 都按它找按钮，两个按钮共用一个类名会让 `querySelector` 抓错人。
+  button.className = "lfv-theme-toggle";
+  return button;
+}
+
+const MENU_ID = "lfv-theme-menu";
+
+function toggleThemeMenu(doc: Document, anchor: HTMLElement): void {
+  const open = doc.getElementById(MENU_ID);
+  if (open !== null) {
+    open.remove();
+    return;
+  }
+  const menu = doc.createElement("div");
+  menu.id = MENU_ID;
+  menu.setAttribute(
+    "style",
+    "position:fixed;top:36px;right:8px;z-index:2147483647;min-width:200px;" +
+      "padding:4px;border:1px solid var(--border);border-radius:8px;" +
+      "background:var(--card);color:var(--foreground);" +
+      "box-shadow:0 10px 30px rgb(0 0 0 / 0.25);font:13px/1.5 system-ui,sans-serif",
+  );
+
+  void readSettings().then((settings) => {
+    const rows: [Selection, string, string][] = [
+      ...THEMES.map((theme) => [theme.id, theme.name, theme.hint] as [Selection, string, string]),
+      ["custom", "自定义", "在设置页里调颜色和排版"],
+    ];
+    for (const [id, name, hint] of rows) {
+      const row = doc.createElement("button");
+      row.type = "button";
+      row.dataset["theme"] = id;
+      row.setAttribute(
+        "style",
+        "display:block;width:100%;padding:7px 9px;border:0;border-radius:6px;cursor:pointer;" +
+          "text-align:left;font:inherit;background:none;color:inherit",
+      );
+      row.textContent = id === settings.theme ? `${name} ·` : name;
+      row.title = hint;
+      row.addEventListener("click", () => {
+        void writeSettings({ theme: id });
+        menu.remove();
+      });
+      menu.append(row);
+    }
+  });
+
+  anchor.after(menu);
+  // 点别处就收起来。`once` 让这个监听自己退场，不用手动摘。
+  doc.defaultView?.setTimeout(() => {
+    doc.addEventListener("click", (event) => {
+      if (!(event.target as Element | null)?.closest?.(`#${MENU_ID}`)) menu.remove();
+    }, { once: true });
+  }, 0);
 }
 
 /** 文件页：美化档每次都按原文重新渲染一遍，所以来回切不会留下上一次的状态。 */
@@ -457,14 +538,19 @@ function makeCopyButton(doc: Document, text: string): HTMLElement {
   return button;
 }
 
-function makeButton(doc: Document, label: string, onClick: () => void): HTMLElement {
+function makeButton(
+  doc: Document,
+  label: string,
+  onClick: () => void,
+  right = "8px",
+): HTMLElement {
   const button = doc.createElement("button");
   button.className = "lfv-toggle";
   button.textContent = label;
   // 内联样式而不是靠样式表：不接管的页面上这个按钮是唯一的改动，不该顺带拖进一张 CSS。
   button.setAttribute(
     "style",
-    "position:fixed;top:8px;right:8px;z-index:2147483647;opacity:0.45;" +
+    `position:fixed;top:8px;right:${right};z-index:2147483647;opacity:0.45;` +
       "padding:4px 10px;border-radius:6px;border:1px solid #666;" +
       "background:#1c1c1f;color:#eee;font:12px/1.4 system-ui,sans-serif;cursor:pointer",
   );

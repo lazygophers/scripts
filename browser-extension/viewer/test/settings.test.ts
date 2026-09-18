@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, test } from "node:test";
 
 import { clearChrome, installChrome, page, storageMock } from "./mock.ts";
@@ -65,7 +66,14 @@ function settingsPage(url = "chrome-extension://viewer/settings.html") {
      <p id="lfv-access">读取中…</p>
      <ol id="lfv-steps" hidden></ol>
      <p id="lfv-firefox" hidden></p>
-     <label><input id="lfv-force" type="checkbox" /></label>`,
+     <label><input id="lfv-force" type="checkbox" /></label>
+     <div id="lfv-themes"></div>
+     <div id="lfv-custom" hidden>
+       <select id="lfv-base"></select>
+       <div id="lfv-colors"></div>
+       <div id="lfv-type"></div>
+       <button id="lfv-reset"></button>
+     </div>`,
     { url },
   );
 }
@@ -73,13 +81,14 @@ function settingsPage(url = "chrome-extension://viewer/settings.html") {
 test("设置默认是关的，改了之后存得住", async () => {
   const store = setup();
 
-  assert.deepEqual(await readSettings(), { force: false });
+  const base = { force: false, theme: "night", custom: { base: "night", patch: {} } };
+  assert.deepEqual(await readSettings(), base);
 
   await writeSettings({ force: true });
 
   // 存的是扩展自己的存储，浏览器重启照样在——这里用「换一个新进程再读一次」模拟。
-  assert.deepEqual(await readSettings(), { force: true });
-  assert.deepEqual(store.data["viewer-settings"], { force: true });
+  assert.deepEqual(await readSettings(), { ...base, force: true });
+  assert.deepEqual(store.data["viewer-settings"], { ...base, force: true });
 });
 
 test("设置页显示文件访问权限的真实状态", async () => {
@@ -132,7 +141,7 @@ test("设置页上的强制拦截开关读存储、也写存储", async () => {
   box.dispatchEvent(new dom.window.Event("change"));
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.deepEqual(store.data["viewer-settings"], { force: false });
+  assert.equal((store.data["viewer-settings"] as { force: boolean }).force, false);
 });
 
 test("装好扩展时权限没开就弹欢迎页", async () => {
@@ -166,7 +175,7 @@ test("开关打开后写进拦截规则，关掉后又撤干净", async () => {
   // 关掉就是把同一批 id 删掉，规则存在浏览器里，不删干净就不算恢复。
   assert.deepEqual(off.addRules, []);
   assert.deepEqual(off.removeRuleIds, on.removeRuleIds);
-  assert.deepEqual(store.data["viewer-settings"], { force: false });
+  assert.equal((store.data["viewer-settings"] as { force: boolean }).force, false);
 });
 
 test("规则把整页导航改跳到展示页，地址里带上原来那个文件", () => {
@@ -258,4 +267,106 @@ test("不是本地文件、不是这条消息、没有标签页，后台一律�
   assert.equal(openLocal({ type: "别的消息", url: "file:///tmp/a.md" }, 7), false);
   assert.equal(openLocal({ type: "lfv-open", url: "file:///tmp/a.md" }, undefined), false);
   assert.equal(openLocal(null, 7), false);
+});
+
+test("主题卡片列出四种介质加自定义，点一下就存下来", async () => {
+  const store = setup();
+  const doc = settingsPage().window.document;
+  await renderSettings(doc);
+
+  const cards = [...doc.querySelectorAll("#lfv-themes .lfv-theme")] as HTMLElement[];
+  assert.deepEqual(
+    cards.map((card) => card.dataset["theme"]),
+    ["paper", "night", "eink", "moss", "custom"],
+  );
+  // 默认那一张是按下去的状态。
+  assert.equal(cards[1]?.getAttribute("aria-pressed"), "true");
+  // 小样按各自主题的颜色画，不是清一色。
+  const chips = cards.map((card) => card.querySelector(".lfv-chip")?.getAttribute("style") ?? "");
+  assert.equal(new Set(chips.slice(0, 4)).size, 4);
+
+  cards[0]?.click();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal((store.data["viewer-settings"] as { theme: string }).theme, "paper");
+});
+
+test("选中的主题把颜色和排版写到页面上", async () => {
+  setup({ stored: { "viewer-settings": { theme: "paper" } } });
+  const doc = settingsPage().window.document;
+  await renderSettings(doc);
+
+  const style = doc.documentElement.style;
+  assert.equal(style.getPropertyValue("--background"), "#faf8f4");
+  assert.equal(style.getPropertyValue("--lfv-size"), "16.5px");
+  assert.equal(style.colorScheme, "light");
+  assert.equal(doc.documentElement.dataset["lfvTheme"], "paper");
+});
+
+test("自定义那一块只在选了自定义时出现，改一个颜色只存改过的那个", async () => {
+  const store = setup({ stored: { "viewer-settings": { theme: "custom" } } });
+  const doc = settingsPage().window.document;
+  await renderSettings(doc);
+
+  const box = doc.getElementById("lfv-custom") as HTMLElement;
+  assert.equal(box.hidden, false);
+
+  const inputs = [...doc.querySelectorAll("#lfv-colors input")] as HTMLInputElement[];
+  assert.equal(inputs.length, 8);
+  // 默认值来自底子那套（夜的页面底色）。
+  assert.equal(inputs[0]?.value, "#16171a");
+
+  inputs[0]!.value = "#101010";
+  inputs[0]!.dispatchEvent(new (doc.defaultView as unknown as { Event: typeof Event }).Event("input"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  // 只存改过的那一个，其余跟着底子走——底子以后调了色，自定义不会停在旧值上。
+  const saved = store.data["viewer-settings"] as { custom: { base: string; patch: object } };
+  assert.deepEqual(saved.custom, { base: "night", patch: { background: "#101010" } });
+  assert.equal(doc.documentElement.style.getPropertyValue("--background"), "#101010");
+});
+
+test("排版滑块把字号写成带单位的值", async () => {
+  const store = setup({ stored: { "viewer-settings": { theme: "custom" } } });
+  const doc = settingsPage().window.document;
+  await renderSettings(doc);
+
+  const sliders = [...doc.querySelectorAll("#lfv-type input")] as HTMLInputElement[];
+  assert.deepEqual(sliders.map((s) => s.type), ["range", "range", "range"]);
+  assert.equal(sliders[0]?.value, "15.5");
+
+  sliders[0]!.value = "19";
+  sliders[0]!.dispatchEvent(new (doc.defaultView as unknown as { Event: typeof Event }).Event("input"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const saved = store.data["viewer-settings"] as { custom: { patch: Record<string, string> } };
+  assert.equal(saved.custom.patch["lfv-size"], "19px");
+});
+
+test("恢复按钮把改动全清掉，底子留着", async () => {
+  const store = setup({
+    stored: {
+      "viewer-settings": {
+        theme: "custom",
+        custom: { base: "paper", patch: { background: "#000000" } },
+      },
+    },
+  });
+  const doc = settingsPage().window.document;
+  await renderSettings(doc);
+
+  (doc.getElementById("lfv-reset") as HTMLElement).click();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const saved = store.data["viewer-settings"] as { custom: { base: string; patch: object } };
+  assert.deepEqual(saved.custom, { base: "paper", patch: {} });
+});
+
+test("设置页的预览块不叫 lfv-preview——那个类名归目录列表的悬停预览", () => {
+  const html = readFileSync(new URL("../src/settings.html", import.meta.url), "utf8");
+
+  // `.lfv-preview` 带 max-height + overflow:hidden（目录列表里悬停浮出的那几行），
+  // 设置页的效果预览撞上它会被裁掉一半——2026-09-18 截图时抓到过一次。
+  assert.equal(html.includes("lfv-preview"), false);
+  assert.equal(html.includes('class="lfv-sample lfv-md"'), true);
 });
