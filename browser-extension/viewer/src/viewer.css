@@ -1,18 +1,126 @@
 /**
  * viewer 接管后的页面样式。
  *
- * 颜色和排版都读 CSS 变量，值由 `themes.ts` 在运行时写到 `<html>` 的行内样式上
- * （四种介质主题：纸 / 夜 / 墨水屏 / 苔，外加用户自己调的那套）。公共层
- * `browser-extension/shared/palette.css` 仍然 @import 进来当兜底默认值——主题还没
- * 应用上的那一瞬间页面也不会是没上色的样子，而且 `browse` 扩展照旧用它，不受影响。
+ * 主题是**配色 × 风格**两层（设计与出处见 `themes.ts` 的文件头）：
  *
- * 排版变量（正文字体 / 字号 / 行距 / 每行字数）是主题的一部分：换主题连带换排版，
- * 这是「按阅读介质分主题」的设计决定，不是只换配色。
+ * - 配色：`themes.ts` 只写两个数到 `<html>` 上——色相角 `--lfv-h` 和彩度系数 `--lfv-c`，
+ *   十几个颜色由下面「明度阶梯」那两段的 `oklch()` 公式算出来。明度档位八套锁死，
+ *   只让色相转，所以换配色不会把对比度换没了。
+ * - 风格：下面「四种风格」那几段，换的是版面本身（字体、字号、行距、行宽、圆角、
+ *   规则线、章节编号），不碰颜色。
+ *
+ * 公共层 `browser-extension/shared/palette.css` 仍然 @import 当兜底：主题还没应用上的
+ * 那一瞬间页面也不会没上色，而且 `browse` 扩展照旧用它，不受影响。
  *
  * 所有规则都挂在 `html.lfv-on` 下：切回「原始」时类名一摘，页面就回到浏览器自己的样子。
  */
 
 @import "palette.css";
+
+/* ── 明度阶梯 · 亮面 ─────────────────────────────────────────────
+ * 八套配色共用这一条阶梯，一个明度都不许改；变的只有色相 `--lfv-h` 和彩度 `--lfv-c`。
+ * 代码六档的色相是固定的语义位（抄 Solarized 的语义分配：关键字绿、字符串青、数字品红、
+ * 函数蓝、类型黄），只有注释跟着底色的色相走，好让它沉进背景里。
+ */
+html.lfv-on[data-lfv-polarity="light"] {
+  --background: oklch(97.5% calc(var(--lfv-c) * 0.018) var(--lfv-h));
+  --card: oklch(94.5% calc(var(--lfv-c) * 0.022) var(--lfv-h));
+  --muted: oklch(92% calc(var(--lfv-c) * 0.026) var(--lfv-h));
+  --border: oklch(86% calc(var(--lfv-c) * 0.03) var(--lfv-h));
+  --muted-foreground: oklch(50% calc(var(--lfv-c) * 0.028) var(--lfv-h));
+  --foreground: oklch(27% calc(var(--lfv-c) * 0.022) var(--lfv-h));
+  --accent: oklch(45% calc(var(--lfv-c) * 0.14) 255);
+  --warning: oklch(50% calc(var(--lfv-c) * 0.15) 70);
+  --destructive: oklch(48% calc(var(--lfv-c) * 0.16) 25);
+  --syn-comment: oklch(52% calc(var(--lfv-c) * 0.035) var(--lfv-h));
+  --syn-keyword: oklch(44% calc(var(--lfv-c) * 0.135) 145);
+  --syn-string: oklch(45% calc(var(--lfv-c) * 0.11) 195);
+  --syn-number: oklch(44% calc(var(--lfv-c) * 0.16) 350);
+  --syn-function: oklch(44% calc(var(--lfv-c) * 0.14) 255);
+  --syn-type: oklch(46% calc(var(--lfv-c) * 0.115) 75);
+}
+
+/* ── 明度阶梯 · 暗面 ───────────────────────────────────────────── */
+html.lfv-on[data-lfv-polarity="dark"] {
+  --background: oklch(21% calc(var(--lfv-c) * 0.026) var(--lfv-h));
+  --card: oklch(25% calc(var(--lfv-c) * 0.028) var(--lfv-h));
+  --muted: oklch(27.5% calc(var(--lfv-c) * 0.03) var(--lfv-h));
+  --border: oklch(33% calc(var(--lfv-c) * 0.032) var(--lfv-h));
+  --muted-foreground: oklch(64% calc(var(--lfv-c) * 0.022) var(--lfv-h));
+  --foreground: oklch(89% calc(var(--lfv-c) * 0.016) var(--lfv-h));
+  --accent: oklch(74% calc(var(--lfv-c) * 0.12) 235);
+  --warning: oklch(75% calc(var(--lfv-c) * 0.13) 75);
+  --destructive: oklch(70% calc(var(--lfv-c) * 0.15) 25);
+  --syn-comment: oklch(63% calc(var(--lfv-c) * 0.03) var(--lfv-h));
+  --syn-keyword: oklch(74% calc(var(--lfv-c) * 0.14) 145);
+  --syn-string: oklch(78% calc(var(--lfv-c) * 0.11) 195);
+  --syn-number: oklch(73% calc(var(--lfv-c) * 0.14) 350);
+  --syn-function: oklch(73% calc(var(--lfv-c) * 0.13) 255);
+  --syn-type: oklch(81% calc(var(--lfv-c) * 0.13) 90);
+}
+
+/* 墨水屏：彩度是 0，六档没有颜色可用，改用明度 + 字形分开。这是诚实降级，不是假装有色。 */
+html.lfv-on[data-lfv-palette="eink"] {
+  --syn-comment: #767676; --syn-keyword: #000; --syn-string: #3d3d3d;
+  --syn-number: #1f1f1f; --syn-function: #000; --syn-type: #4f4f4f;
+}
+
+html.lfv-on[data-lfv-palette="einkd"] {
+  --syn-comment: #8a8a8a; --syn-keyword: #fff; --syn-string: #c9c9c9;
+  --syn-number: #e6e6e6; --syn-function: #fff; --syn-type: #b0b0b0;
+}
+
+html.lfv-on[data-lfv-palette="eink"] .hljs-keyword,
+html.lfv-on[data-lfv-palette="einkd"] .hljs-keyword {
+  font-weight: 700;
+}
+
+html.lfv-on[data-lfv-palette="eink"] .hljs-title,
+html.lfv-on[data-lfv-palette="einkd"] .hljs-title {
+  text-decoration: underline;
+  text-underline-offset: 0.22em;
+}
+
+html.lfv-on[data-lfv-palette="eink"] .hljs-type,
+html.lfv-on[data-lfv-palette="einkd"] .hljs-type {
+  font-style: italic;
+}
+
+/* ── 四种风格 ───────────────────────────────────────────────────
+ * 风格换的是版面不是颜色。四套的字体、字号、行距、行宽都不同，另外各有几条结构规则
+ * （圆角、规则线、章节编号）写在文件后面对应的小节里。
+ */
+html.lfv-on[data-lfv-style="manuscript"] {
+  --lfv-font: "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", Georgia, serif;
+  --lfv-size: 17px;
+  --lfv-leading: 1.95;
+  --lfv-measure: 34em;
+  --lfv-radius: var(--radius);
+}
+
+html.lfv-on[data-lfv-style="press"] {
+  --lfv-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+  --lfv-size: 16px;
+  --lfv-leading: 1.68;
+  --lfv-measure: 44em;
+  --lfv-radius: 0;
+}
+
+html.lfv-on[data-lfv-style="console"] {
+  --lfv-font: ui-monospace, SFMono-Regular, Menlo, "PingFang SC", monospace;
+  --lfv-size: 15px;
+  --lfv-leading: 1.6;
+  --lfv-measure: 52em;
+  --lfv-radius: 0;
+}
+
+html.lfv-on[data-lfv-style="brief"] {
+  --lfv-font: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  --lfv-size: 15px;
+  --lfv-leading: 1.55;
+  --lfv-measure: 52em;
+  --lfv-radius: calc(var(--radius) / 2);
+}
 
 html.lfv-on,
 html.lfv-on body {
@@ -84,28 +192,42 @@ html.lfv-on .lfv-copy {
  */
 html.lfv-on .hljs-comment,
 html.lfv-on .hljs-quote {
-  color: var(--muted-foreground);
+  color: var(--syn-comment);
   font-style: italic;
 }
 
 html.lfv-on .hljs-keyword,
 html.lfv-on .hljs-selector-tag,
 html.lfv-on .hljs-literal,
-html.lfv-on .hljs-doctag,
+html.lfv-on .hljs-doctag {
+  color: var(--syn-keyword);
+}
+
 html.lfv-on .hljs-string,
 html.lfv-on .hljs-regexp,
 html.lfv-on .hljs-addition {
-  color: var(--accent);
+  color: var(--syn-string);
 }
 
-/* 名字只加粗不换色：颜色档位多了像编辑器，少了才像书——这是「纸与墨」那一版定的调子。 */
+html.lfv-on .hljs-number,
+html.lfv-on .hljs-symbol,
+html.lfv-on .hljs-bullet {
+  color: var(--syn-number);
+}
+
 html.lfv-on .hljs-title,
 html.lfv-on .hljs-name,
-html.lfv-on .hljs-section,
-html.lfv-on .hljs-attr,
-html.lfv-on .hljs-attribute {
-  color: var(--foreground);
+html.lfv-on .hljs-section {
+  color: var(--syn-function);
   font-weight: 600;
+}
+
+html.lfv-on .hljs-type,
+html.lfv-on .hljs-class .hljs-title,
+html.lfv-on .hljs-attr,
+html.lfv-on .hljs-attribute,
+html.lfv-on .hljs-built_in {
+  color: var(--syn-type);
 }
 
 html.lfv-on .hljs-deletion,
@@ -953,4 +1075,135 @@ html.lfv-on .lfv-hit-current {
 
 .lfv-sample > :last-child {
   margin-bottom: 0;
+}
+
+/* ══ 风格的结构规则 ══════════════════════════════════════════════
+ * 上面那四段只给了字体和尺寸；一个风格之所以看着是另一回事，靠的是下面这些结构差别。
+ */
+
+/* 圆角跟着风格走：印刷和终端是直角，文稿和简报留圆角。 */
+html.lfv-on[data-lfv-style] .lfv-md pre,
+html.lfv-on[data-lfv-style] .lfv-md code,
+html.lfv-on[data-lfv-style] .lfv-note,
+html.lfv-on[data-lfv-style] .lfv-mdx {
+  border-radius: var(--lfv-radius);
+}
+
+/* 文稿：标题大、段距宽，正文居中收在一条窄栏里——像一本书的版心。 */
+html.lfv-on[data-lfv-style="manuscript"] .lfv-md h1 {
+  font-size: 2.1em;
+  letter-spacing: -0.01em;
+}
+
+html.lfv-on[data-lfv-style="manuscript"] .lfv-md h2 {
+  font-size: 1.45em;
+}
+
+html.lfv-on[data-lfv-style="manuscript"] .lfv-md p {
+  margin: 0 0 1.25em;
+}
+
+/* 印刷：章节自动编号、标题全部压紧、分隔线换成两道规则线的质感。 */
+html.lfv-on[data-lfv-style="press"] .lfv-md {
+  counter-reset: lfv-section;
+}
+
+html.lfv-on[data-lfv-style="press"] .lfv-md h2 {
+  counter-increment: lfv-section;
+  font-size: 1.3em;
+  letter-spacing: 0.01em;
+  border-bottom-width: 2px;
+}
+
+html.lfv-on[data-lfv-style="press"] .lfv-md h2::before {
+  content: counter(lfv-section, decimal-leading-zero) " ";
+  margin-right: 0.5em;
+  color: var(--muted-foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72em;
+  letter-spacing: 0.12em;
+}
+
+html.lfv-on[data-lfv-style="press"] .lfv-md h1 {
+  font-size: 2.4em;
+  letter-spacing: -0.02em;
+  border-bottom: 2px solid var(--foreground);
+}
+
+html.lfv-on[data-lfv-style="press"] .lfv-md th {
+  text-transform: uppercase;
+  font-size: 0.78em;
+  letter-spacing: 0.08em;
+}
+
+/* 终端：正文和代码同一种等宽字体，标题靠 `#` 提示层级而不是靠字号。 */
+html.lfv-on[data-lfv-style="console"] .lfv-md h1,
+html.lfv-on[data-lfv-style="console"] .lfv-md h2,
+html.lfv-on[data-lfv-style="console"] .lfv-md h3 {
+  font-weight: 600;
+  letter-spacing: 0;
+  border-bottom: 0;
+}
+
+html.lfv-on[data-lfv-style="console"] .lfv-md h1 { font-size: 1.5em }
+html.lfv-on[data-lfv-style="console"] .lfv-md h2 { font-size: 1.22em }
+
+html.lfv-on[data-lfv-style="console"] .lfv-md h1::before { content: "# " }
+html.lfv-on[data-lfv-style="console"] .lfv-md h2::before { content: "## " }
+html.lfv-on[data-lfv-style="console"] .lfv-md h3::before { content: "### " }
+
+html.lfv-on[data-lfv-style="console"] .lfv-md h1::before,
+html.lfv-on[data-lfv-style="console"] .lfv-md h2::before,
+html.lfv-on[data-lfv-style="console"] .lfv-md h3::before {
+  color: var(--muted-foreground);
+}
+
+/* 代码块在终端风格里不再是「插进来的一块」，去掉底色只留左边一道线。 */
+html.lfv-on[data-lfv-style="console"] .lfv-md pre {
+  background: none;
+  border-left: 2px solid var(--border);
+  padding-left: 1rem;
+}
+
+/* 简报：所有间距压掉三成，标题和正文只差一点——为一屏塞下更多而设计。 */
+html.lfv-on[data-lfv-style="brief"] .lfv-md h1 { font-size: 1.55em; margin-bottom: 0.6em }
+html.lfv-on[data-lfv-style="brief"] .lfv-md h2 { font-size: 1.2em; margin: 1.5em 0 0.5em }
+html.lfv-on[data-lfv-style="brief"] .lfv-md p { margin: 0 0 0.7em }
+html.lfv-on[data-lfv-style="brief"] .lfv-md pre { padding: 0.65rem 0.85rem }
+html.lfv-on[data-lfv-style="brief"] .lfv-md blockquote { margin: 0.7rem 0 }
+html.lfv-on[data-lfv-style="brief"] .lfv-note { padding: 0.5rem 0.75rem }
+
+/* 设置页里那几段小字说明：跟在小标题后面，比正文淡一档。 */
+.lfv-sub {
+  margin: 0.2rem 0 0.7rem;
+  color: var(--muted-foreground);
+  font-size: 0.88em;
+}
+
+/* 规格栏：一行一档语法色，右边是可以直接抄进代码的十六进制值。 */
+.lfv-spec {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.6rem 0 0.8rem;
+  font-size: 0.88em;
+}
+
+.lfv-spec div {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.lfv-spec i {
+  display: block;
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.lfv-spec code {
+  color: var(--muted-foreground);
+  font: 0.85em ui-monospace, Menlo, monospace;
 }

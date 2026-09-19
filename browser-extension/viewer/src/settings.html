@@ -26,29 +26,46 @@
       </p>
 
       <h2>主题</h2>
-      <p>换主题连排版一起换：字体、字号、行距、每行多少字。选了立刻生效，已经开着的文件页也会跟着变。</p>
-      <div id="lfv-themes" class="lfv-themes"></div>
+      <p>
+        主题分两层，可以任意搭：<b>配色</b>决定颜色，<b>风格</b>决定版面（字体、字号、行距、
+        每行多少字、有没有圆角和章节编号）。选了立刻生效，已经开着的文件页也会跟着变。
+      </p>
+
+      <h3>配色</h3>
+      <p class="lfv-sub">
+        底色不是灰，是朝某个色相偏一点点的中性。八套的明度档位完全一样，只有色相不同——
+        换配色换心情，不换可读性。
+      </p>
+      <div id="lfv-palettes" class="lfv-themes"></div>
+
+      <h3>风格</h3>
+      <p class="lfv-sub">换的是版面本身，和颜色无关。</p>
+      <div id="lfv-styles" class="lfv-themes"></div>
 
       <div id="lfv-custom" class="lfv-custom" hidden>
         <h3>自定义</h3>
-        <p>以现成的一套为底子，只改你想改的。没改过的项跟着底子走。</p>
+        <p class="lfv-sub">以某套配色为底子，只改你想改的。没改过的项跟着底子走。</p>
         <label class="lfv-field">
           以哪套为底子
           <select id="lfv-base"></select>
         </label>
         <div id="lfv-colors" class="lfv-fields"></div>
-        <div id="lfv-type" class="lfv-fields"></div>
         <button id="lfv-reset" type="button" class="lfv-reset">全部恢复成底子的样子</button>
       </div>
+
+      <h3>规格</h3>
+      <p class="lfv-sub">当前主题的六档代码配色和真实色号，改自定义时可以照着核对。</p>
+      <div id="lfv-spec-rows" class="lfv-spec"></div>
+      <p id="lfv-spec-contrast" class="lfv-state">读取中…</p>
 
       <h3>效果预览</h3>
       <div class="lfv-sample lfv-md">
         <h2>安装说明</h2>
-        <p>把本地的纯文本文件就地渲染成好看的样子。这段文字用的就是当前主题的字体、字号和行距。</p>
+        <p>把本地的纯文本文件就地渲染成好看的样子。这段文字用的就是当前风格的字体、字号和行距。</p>
         <blockquote>引用看起来是这样，左边那道线用的是强调色。</blockquote>
-        <pre><code class="hljs"><span class="hljs-comment">// 注释是次要文字的颜色</span>
-<span class="hljs-keyword">export function</span> <span class="hljs-title">isPlainTextPage</span>(doc) {
-  <span class="hljs-keyword">return</span> doc.title === <span class="hljs-string">""</span>;
+        <pre><code class="hljs"><span class="hljs-comment">// 注释</span>
+<span class="hljs-keyword">export function</span> <span class="hljs-title">isPlainTextPage</span>(doc: <span class="hljs-type">Document</span>) {
+  <span class="hljs-keyword">return</span> doc.title === <span class="hljs-string">""</span> &amp;&amp; doc.body.children.length === <span class="hljs-number">1</span>;
 }</code></pre>
         <div class="lfv-note lfv-note-warning"><p>提示框的色条用的是提示色。</p></div>
       </div>

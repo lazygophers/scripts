@@ -67,13 +67,15 @@ function settingsPage(url = "chrome-extension://viewer/settings.html") {
      <ol id="lfv-steps" hidden></ol>
      <p id="lfv-firefox" hidden></p>
      <label><input id="lfv-force" type="checkbox" /></label>
-     <div id="lfv-themes"></div>
+     <div id="lfv-palettes"></div>
+     <div id="lfv-styles"></div>
      <div id="lfv-custom" hidden>
        <select id="lfv-base"></select>
        <div id="lfv-colors"></div>
-       <div id="lfv-type"></div>
        <button id="lfv-reset"></button>
-     </div>`,
+     </div>
+     <div id="lfv-spec-rows"></div>
+     <p id="lfv-spec-contrast"></p>`,
     { url },
   );
 }
@@ -81,7 +83,12 @@ function settingsPage(url = "chrome-extension://viewer/settings.html") {
 test("设置默认是关的，改了之后存得住", async () => {
   const store = setup();
 
-  const base = { force: false, theme: "night", custom: { base: "night", patch: {} } };
+  const base = {
+    force: false,
+    theme: "pool",
+    style: "manuscript",
+    custom: { base: "pool", patch: {} },
+  };
   assert.deepEqual(await readSettings(), base);
 
   await writeSettings({ force: true });
@@ -269,38 +276,50 @@ test("不是本地文件、不是这条消息、没有标签页，后台一律�
   assert.equal(openLocal(null, 7), false);
 });
 
-test("主题卡片列出四种介质加自定义，点一下就存下来", async () => {
+test("配色八张卡加自定义、风格四张卡，点一下就存下来", async () => {
   const store = setup();
   const doc = settingsPage().window.document;
   await renderSettings(doc);
 
-  const cards = [...doc.querySelectorAll("#lfv-themes .lfv-theme")] as HTMLElement[];
+  const palettes = [...doc.querySelectorAll("#lfv-palettes .lfv-theme")] as HTMLElement[];
+  const styles = [...doc.querySelectorAll("#lfv-styles .lfv-theme")] as HTMLElement[];
   assert.deepEqual(
-    cards.map((card) => card.dataset["theme"]),
-    ["paper", "night", "eink", "moss", "custom"],
+    palettes.map((card) => card.dataset["theme"]),
+    ["brass", "ochre", "mauve", "eink", "pool", "soot", "night", "einkd", "custom"],
   );
-  // 默认那一张是按下去的状态。
-  assert.equal(cards[1]?.getAttribute("aria-pressed"), "true");
-  // 小样按各自主题的颜色画，不是清一色。
-  const chips = cards.map((card) => card.querySelector(".lfv-chip")?.getAttribute("style") ?? "");
-  assert.equal(new Set(chips.slice(0, 4)).size, 4);
+  assert.deepEqual(
+    styles.map((card) => card.dataset["theme"]),
+    ["manuscript", "press", "console", "brief"],
+  );
+  // 默认那两张是按下去的状态：配色「深潭」、风格「文稿」。
+  assert.equal(palettes[4]?.getAttribute("aria-pressed"), "true");
+  assert.equal(styles[0]?.getAttribute("aria-pressed"), "true");
 
-  cards[0]?.click();
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  // 配色小样按各自的公式画，不是清一色。
+  const chips = palettes.slice(0, 8).map((card) => card.querySelector(".lfv-chip")?.getAttribute("style") ?? "");
+  assert.equal(new Set(chips).size, 8);
 
-  assert.equal((store.data["viewer-settings"] as { theme: string }).theme, "paper");
+  palettes[0]?.click();
+  styles[2]?.click();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const saved = store.data["viewer-settings"] as { theme: string; style: string };
+  assert.equal(saved.theme, "brass");
+  assert.equal(saved.style, "console");
 });
 
-test("选中的主题把颜色和排版写到页面上", async () => {
-  setup({ stored: { "viewer-settings": { theme: "paper" } } });
+test("选中的配色和风格写到页面上，颜色交给 CSS 公式算", async () => {
+  setup({ stored: { "viewer-settings": { theme: "brass", style: "press" } } });
   const doc = settingsPage().window.document;
   await renderSettings(doc);
 
-  const style = doc.documentElement.style;
-  assert.equal(style.getPropertyValue("--background"), "#faf8f4");
-  assert.equal(style.getPropertyValue("--lfv-size"), "16.5px");
-  assert.equal(style.colorScheme, "light");
-  assert.equal(doc.documentElement.dataset["lfvTheme"], "paper");
+  const root = doc.documentElement;
+  assert.equal(root.style.getPropertyValue("--lfv-h"), "85");
+  assert.equal(root.style.getPropertyValue("--lfv-c"), "1");
+  assert.equal(root.dataset["lfvPalette"], "brass");
+  assert.equal(root.dataset["lfvPolarity"], "light");
+  assert.equal(root.dataset["lfvStyle"], "press");
+  assert.equal(root.style.colorScheme, "light");
 });
 
 test("自定义那一块只在选了自定义时出现，改一个颜色只存改过的那个", async () => {
@@ -311,36 +330,33 @@ test("自定义那一块只在选了自定义时出现，改一个颜色只存�
   const box = doc.getElementById("lfv-custom") as HTMLElement;
   assert.equal(box.hidden, false);
 
+  // 十四项：八个界面颜色 + 六档代码颜色。
   const inputs = [...doc.querySelectorAll("#lfv-colors input")] as HTMLInputElement[];
-  assert.equal(inputs.length, 8);
-  // 默认值来自底子那套（夜的页面底色）。
-  assert.equal(inputs[0]?.value, "#16171a");
+  assert.equal(inputs.length, 14);
 
   inputs[0]!.value = "#101010";
   inputs[0]!.dispatchEvent(new (doc.defaultView as unknown as { Event: typeof Event }).Event("input"));
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, 20));
 
   // 只存改过的那一个，其余跟着底子走——底子以后调了色，自定义不会停在旧值上。
   const saved = store.data["viewer-settings"] as { custom: { base: string; patch: object } };
-  assert.deepEqual(saved.custom, { base: "night", patch: { background: "#101010" } });
+  assert.deepEqual(saved.custom, { base: "pool", patch: { background: "#101010" } });
   assert.equal(doc.documentElement.style.getPropertyValue("--background"), "#101010");
 });
 
-test("排版滑块把字号写成带单位的值", async () => {
-  const store = setup({ stored: { "viewer-settings": { theme: "custom" } } });
+test("规格栏列出六档代码颜色和正文对比度", async () => {
+  setup();
   const doc = settingsPage().window.document;
   await renderSettings(doc);
 
-  const sliders = [...doc.querySelectorAll("#lfv-type input")] as HTMLInputElement[];
-  assert.deepEqual(sliders.map((s) => s.type), ["range", "range", "range"]);
-  assert.equal(sliders[0]?.value, "15.5");
+  const rows = [...doc.querySelectorAll("#lfv-spec-rows div")] as HTMLElement[];
+  assert.equal(rows.length, 6);
+  assert.equal(rows[0]?.textContent?.includes("注释"), true);
+  // jsdom 没有 canvas，色号读不回来时不假装算得出——但那一行仍要在。
+  assert.equal(rows.every((row) => row.querySelector("code") !== null), true);
 
-  sliders[0]!.value = "19";
-  sliders[0]!.dispatchEvent(new (doc.defaultView as unknown as { Event: typeof Event }).Event("input"));
-  await new Promise((resolve) => setTimeout(resolve, 10));
-
-  const saved = store.data["viewer-settings"] as { custom: { patch: Record<string, string> } };
-  assert.equal(saved.custom.patch["lfv-size"], "19px");
+  const meter = doc.getElementById("lfv-spec-contrast") as HTMLElement;
+  assert.match(meter.textContent ?? "", /正文 \/ 底色 .+:1/);
 });
 
 test("恢复按钮把改动全清掉，底子留着", async () => {
@@ -348,7 +364,7 @@ test("恢复按钮把改动全清掉，底子留着", async () => {
     stored: {
       "viewer-settings": {
         theme: "custom",
-        custom: { base: "paper", patch: { background: "#000000" } },
+        custom: { base: "brass", patch: { background: "#000000" } },
       },
     },
   });
@@ -356,10 +372,10 @@ test("恢复按钮把改动全清掉，底子留着", async () => {
   await renderSettings(doc);
 
   (doc.getElementById("lfv-reset") as HTMLElement).click();
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, 20));
 
   const saved = store.data["viewer-settings"] as { custom: { base: string; patch: object } };
-  assert.deepEqual(saved.custom, { base: "paper", patch: {} });
+  assert.deepEqual(saved.custom, { base: "brass", patch: {} });
 });
 
 test("设置页的预览块不叫 lfv-preview——那个类名归目录列表的悬停预览", () => {

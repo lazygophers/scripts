@@ -8,7 +8,7 @@
 import type { DataError, Parsed } from "./data.ts";
 import type { Entry } from "./listing.ts";
 import { onSettingsChange, readSettings, writeSettings } from "./settings.ts";
-import { THEMES, applyTheme, type Selection } from "./themes.ts";
+import { PALETTES, STYLES, applyTheme } from "./themes.ts";
 
 /** 纯文本类的 contentType。json / yaml / xml 的各种变体都算文本，所以单列。 */
 export const TEXT_TYPE = /^text\/|\/(json|[a-z-]*yaml|[a-z-]*xml)$/;
@@ -162,8 +162,10 @@ const themed = new WeakSet<Document>();
 function wireTheme(doc: Document): void {
   if (themed.has(doc)) return;
   themed.add(doc);
-  void readSettings().then((settings) => applyTheme(doc, settings.theme, settings.custom));
-  onSettingsChange((settings) => applyTheme(doc, settings.theme, settings.custom));
+  const paint = (settings: { theme: string; style: string; custom: Parameters<typeof applyTheme>[3] }) =>
+    applyTheme(doc, settings.theme, settings.style, settings.custom);
+  void readSettings().then(paint);
+  onSettingsChange(paint);
 }
 
 /** 主题按钮：点开浮出主题列表，挨着「原始 / 美化」那个开关。 */
@@ -176,6 +178,43 @@ function makeThemeButton(doc: Document): HTMLElement {
 }
 
 const MENU_ID = "lfv-theme-menu";
+
+/** 菜单里的一段：一行小标题 + 若干可点的行。点完收起菜单，页面靠存储变更自己跟上。 */
+function section(
+  doc: Document,
+  menu: HTMLElement,
+  title: string,
+  rows: readonly (readonly [string, string, string])[],
+  current: string,
+  pick: (id: string) => void,
+): void {
+  const head = doc.createElement("div");
+  head.setAttribute(
+    "style",
+    "padding:6px 9px 3px;color:var(--muted-foreground);font-size:11px;letter-spacing:.08em",
+  );
+  head.textContent = title;
+  menu.append(head);
+
+  for (const [id, name, hint] of rows) {
+    const row = doc.createElement("button");
+    row.type = "button";
+    row.dataset[title === "配色" ? "palette" : "style"] = id;
+    row.dataset["theme"] = id;
+    row.setAttribute(
+      "style",
+      "display:block;width:100%;padding:6px 9px;border:0;border-radius:6px;cursor:pointer;" +
+        "text-align:left;font:inherit;background:none;color:inherit",
+    );
+    row.textContent = id === current ? `${name} ·` : name;
+    row.title = hint;
+    row.addEventListener("click", () => {
+      pick(id);
+      menu.remove();
+    });
+    menu.append(row);
+  }
+}
 
 function toggleThemeMenu(doc: Document, anchor: HTMLElement): void {
   const open = doc.getElementById(MENU_ID);
@@ -194,27 +233,13 @@ function toggleThemeMenu(doc: Document, anchor: HTMLElement): void {
   );
 
   void readSettings().then((settings) => {
-    const rows: [Selection, string, string][] = [
-      ...THEMES.map((theme) => [theme.id, theme.name, theme.hint] as [Selection, string, string]),
-      ["custom", "自定义", "在设置页里调颜色和排版"],
-    ];
-    for (const [id, name, hint] of rows) {
-      const row = doc.createElement("button");
-      row.type = "button";
-      row.dataset["theme"] = id;
-      row.setAttribute(
-        "style",
-        "display:block;width:100%;padding:7px 9px;border:0;border-radius:6px;cursor:pointer;" +
-          "text-align:left;font:inherit;background:none;color:inherit",
-      );
-      row.textContent = id === settings.theme ? `${name} ·` : name;
-      row.title = hint;
-      row.addEventListener("click", () => {
-        void writeSettings({ theme: id });
-        menu.remove();
-      });
-      menu.append(row);
-    }
+    // 两段：上面挑配色，下面挑版面。它们互相独立，所以分开列而不是列出 32 种组合。
+    section(doc, menu, "配色", [
+      ...PALETTES.map((p) => [p.id, p.name, p.hint] as const),
+      ["custom", "自定义", "在设置页里自己调"] as const,
+    ], settings.theme, (id) => void writeSettings({ theme: id }));
+    section(doc, menu, "风格", STYLES.map((s) => [s.id, s.name, s.hint] as const),
+      settings.style, (id) => void writeSettings({ style: id }));
   });
 
   anchor.after(menu);

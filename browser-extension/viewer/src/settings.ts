@@ -13,17 +13,19 @@
 
 import { applyRules } from "./rules.ts";
 import {
-  COLOR_FIELDS,
   DEFAULT_CUSTOM,
-  DEFAULT_THEME,
-  THEMES,
-  TYPE_FIELDS,
+  DEFAULT_PALETTE,
+  DEFAULT_STYLE,
+  FIELDS,
+  PALETTES,
+  STYLES,
   applyTheme,
-  numberOf,
-  resolve,
+  contrast,
+  hexOf,
   type Custom,
+  type Palette,
   type Selection,
-  type Tokens,
+  type TokenName,
 } from "./themes.ts";
 
 /** 设置存在扩展自己的存储里，浏览器重启照样在。 */
@@ -32,20 +34,42 @@ const KEY = "viewer-settings";
 export type Settings = {
   /** 会被浏览器下载的本地文本文件，改为在扩展自己的展示页里打开。默认关。 */
   force: boolean;
-  /** 选中的主题。`"custom"` 表示用下面那套自己调的。 */
+  /** 选中的配色。`"custom"` 表示用下面那套自己调的。 */
   theme: Selection;
-  /** 自己调的那套：以哪套为底子 + 改了哪几个值。 */
+  /** 选中的风格（版面）。配色和风格互相独立，可以任意搭。 */
+  style: string;
+  /** 自己调的那套：以哪套配色为底子 + 改了哪几个值。 */
   custom: Custom;
 };
 
-const DEFAULTS: Settings = { force: false, theme: DEFAULT_THEME, custom: DEFAULT_CUSTOM };
+const DEFAULTS: Settings = {
+  force: false,
+  theme: DEFAULT_PALETTE,
+  style: DEFAULT_STYLE,
+  custom: DEFAULT_CUSTOM,
+};
 
 export async function readSettings(): Promise<Settings> {
   const stored = await chrome.storage.local.get(KEY);
   return { ...DEFAULTS, ...((stored[KEY] as Partial<Settings> | undefined) ?? {}) };
 }
 
-export async function writeSettings(patch: Partial<Settings>): Promise<Settings> {
+/**
+ * 写操作排队。
+ *
+ * 每次写都是「先读回整份设置、合并、再写回」，两次写挨太近时第二次会读到第一次落盘前的
+ * 旧值，把前一次的改动覆盖掉（连着点「配色」再点「风格」就能复现）。串成一条链之后，
+ * 后一次一定读到前一次的结果。
+ */
+let queue: Promise<unknown> = Promise.resolve();
+
+export function writeSettings(patch: Partial<Settings>): Promise<Settings> {
+  const next = queue.then(() => writeNow(patch));
+  queue = next.catch(() => undefined);
+  return next;
+}
+
+async function writeNow(patch: Partial<Settings>): Promise<Settings> {
   const next = { ...(await readSettings()), ...patch };
   await chrome.storage.local.set({ [KEY]: next });
   // 拦截规则跟着开关走，改完立刻生效，不用重装扩展。
@@ -109,117 +133,166 @@ export async function renderSettings(doc: Document): Promise<void> {
 }
 
 /**
- * 主题那一节：四张卡 + 自定义 + 预览。
+ * 主题那一节：配色八张卡 + 风格四张卡 + 自定义 + 规格栏。
  *
- * 设置页自己也应用当前主题，所以下面那块预览就是真实效果，不是另画一份模拟。
+ * 设置页自己也应用当前主题，所以页面上那块预览就是真实效果，不是另画一份模拟。
  */
 export async function renderThemes(doc: Document): Promise<void> {
   const settings = await readSettings();
-  applyTheme(doc, settings.theme, settings.custom);
+  applyTheme(doc, settings.theme, settings.style, settings.custom);
 
-  const cards = doc.getElementById("lfv-themes") as HTMLElement;
-  const rows: { id: Selection; name: string; hint: string }[] = [
-    ...THEMES.map((theme) => ({ id: theme.id as Selection, name: theme.name, hint: theme.hint })),
-    { id: "custom", name: "自定义", hint: "以现成的一套为底子，自己改颜色和排版" },
-  ];
-  cards.replaceChildren(
-    ...rows.map(({ id, name, hint }) => {
-      const card = doc.createElement("button");
-      card.type = "button";
-      card.className = "lfv-theme";
-      card.dataset["theme"] = id;
-      card.setAttribute("aria-pressed", String(id === settings.theme));
+  fillCards(
+    doc,
+    "lfv-palettes",
+    [
+      ...PALETTES.map((p) => ({ id: p.id, name: p.name, hint: p.hint, palette: p })),
+      {
+        id: "custom",
+        name: "自定义",
+        hint: "以某套配色为底子，自己改颜色",
+        palette: PALETTES.find((p) => p.id === settings.custom.base) ?? PALETTES[0]!,
+      },
+    ],
+    settings.theme,
+    (id) => void writeSettings({ theme: id }).then(() => renderThemes(doc)),
+  );
 
-      // 小样按那套主题自己的颜色画，不受当前主题影响——否则四张卡长得一模一样。
-      const preview = resolve(id, settings.custom);
-      const chip = doc.createElement("span");
-      chip.className = "lfv-chip";
-      chip.textContent = "文";
-      chip.setAttribute(
-        "style",
-        `background:${preview.tokens.background};color:${preview.tokens.foreground};` +
-          `font-family:${preview.tokens["lfv-font"]}`,
-      );
-
-      const text = doc.createElement("span");
-      const title = doc.createElement("span");
-      title.className = "lfv-name";
-      title.textContent = name;
-      const note = doc.createElement("span");
-      note.className = "lfv-hint";
-      note.textContent = hint;
-      text.append(title, note);
-
-      card.append(chip, text);
-      card.addEventListener("click", () => {
-        void writeSettings({ theme: id }).then(() => renderThemes(doc));
-      });
-      return card;
-    }),
+  fillCards(
+    doc,
+    "lfv-styles",
+    STYLES.map((s) => ({ id: s.id, name: s.name, hint: s.hint })),
+    settings.style,
+    (id) => void writeSettings({ style: id }).then(() => renderThemes(doc)),
   );
 
   (doc.getElementById("lfv-custom") as HTMLElement).hidden = settings.theme !== "custom";
   if (settings.theme === "custom") renderCustom(doc, settings.custom);
+  renderSpec(doc);
 }
 
-/** 自定义那一块：底子选择 + 颜色输入 + 排版滑块，改一下立刻生效。 */
+type Card = { id: string; name: string; hint: string; palette?: Palette };
+
+/** 一组卡片：左边一块小样、右边名字和一句说明。配色的小样用它自己的颜色画。 */
+function fillCards(
+  doc: Document,
+  hostId: string,
+  cards: Card[],
+  current: string,
+  pick: (id: string) => void,
+): void {
+  const host = doc.getElementById(hostId) as HTMLElement;
+  host.replaceChildren(
+    ...cards.map((card) => {
+      const node = doc.createElement("button");
+      node.type = "button";
+      node.className = "lfv-theme";
+      node.dataset["theme"] = card.id;
+      node.setAttribute("aria-pressed", String(card.id === current));
+
+      const chip = doc.createElement("span");
+      chip.className = "lfv-chip";
+      chip.textContent = "文";
+      if (card.palette) {
+        // 小样按那套配色自己的公式画，不受当前主题影响——否则八张卡长得一模一样。
+        const { h, c, polarity } = card.palette;
+        const [bg, fg] = polarity === "light" ? [97.5, 27] : [21, 89];
+        chip.setAttribute(
+          "style",
+          `background: oklch(${bg}% ${0.018 * c} ${h}); color: oklch(${fg}% ${0.022 * c} ${h})`,
+        );
+      }
+
+      const text = doc.createElement("span");
+      const title = doc.createElement("span");
+      title.className = "lfv-name";
+      title.textContent = card.name;
+      const note = doc.createElement("span");
+      note.className = "lfv-hint";
+      note.textContent = card.hint;
+      text.append(title, note);
+
+      node.append(chip, text);
+      node.addEventListener("click", () => pick(card.id));
+      return node;
+    }),
+  );
+}
+
+/**
+ * 规格栏：当前主题的六档语法色、真实十六进制值、正文对比度。
+ *
+ * 只在设置页出现，文件页上不显示（用户 2026-09-19 选定：一天开几十次文件页，
+ * 色号一个月看一次，不值得每天为它付一条宽度）。
+ */
+function renderSpec(doc: Document): void {
+  const style = doc.defaultView?.getComputedStyle(doc.documentElement);
+  if (!style) return;
+  const read = (name: string) => hexOf(doc, style.getPropertyValue(`--${name}`).trim());
+
+  const rows = SPEC_ROWS.map(([token, label]) => {
+    const hex = read(token);
+    const swatch = doc.createElement("i");
+    swatch.setAttribute("style", `background:${hex}`);
+    const row = doc.createElement("div");
+    const name = doc.createElement("span");
+    name.textContent = label;
+    const code = doc.createElement("code");
+    code.textContent = hex.toUpperCase();
+    row.append(swatch, name, code);
+    return row;
+  });
+  (doc.getElementById("lfv-spec-rows") as HTMLElement).replaceChildren(...rows);
+
+  const ratio = contrast(read("foreground"), read("background"));
+  const meter = doc.getElementById("lfv-spec-contrast") as HTMLElement;
+  meter.textContent = `正文 / 底色 ${ratio.toFixed(2)}:1（可读的下限是 4.5:1）`;
+  meter.dataset["state"] = ratio >= 4.5 ? "on" : "off";
+}
+
+const SPEC_ROWS: readonly [string, string][] = [
+  ["syn-comment", "注释 comment"],
+  ["syn-keyword", "关键字 keyword"],
+  ["syn-string", "字符串 string"],
+  ["syn-number", "数字 number"],
+  ["syn-function", "函数名 function"],
+  ["syn-type", "类型名 type"],
+];
+
+/** 自定义那一块：底子选择 + 十四个颜色输入，改一下立刻生效。 */
 function renderCustom(doc: Document, custom: Custom): void {
-  const base = resolve(custom.base).tokens;
-  const value = (key: keyof Tokens): string => custom.patch[key] ?? base[key];
-  const patch = (key: keyof Tokens, next: string) =>
+  const patch = (key: TokenName, next: string) =>
     void writeSettings({ custom: { ...custom, patch: { ...custom.patch, [key]: next } } }).then(
       () => renderThemes(doc),
     );
 
   const select = doc.getElementById("lfv-base") as HTMLSelectElement;
   select.replaceChildren(
-    ...THEMES.map((theme) => {
+    ...PALETTES.map((palette) => {
       const option = doc.createElement("option");
-      option.value = theme.id;
-      option.textContent = theme.name;
-      option.selected = theme.id === custom.base;
+      option.value = palette.id;
+      option.textContent = palette.name;
+      option.selected = palette.id === custom.base;
       return option;
     }),
   );
   select.onchange = () =>
-    void writeSettings({ custom: { ...custom, base: select.value as Custom["base"] } }).then(() =>
-      renderThemes(doc),
-    );
+    void writeSettings({ custom: { ...custom, base: select.value } }).then(() => renderThemes(doc));
 
+  const style = doc.defaultView?.getComputedStyle(doc.documentElement);
   const colors = doc.getElementById("lfv-colors") as HTMLElement;
   colors.replaceChildren(
-    ...COLOR_FIELDS.map(({ key, label }) => {
+    ...FIELDS.map(({ key, label }) => {
       const field = doc.createElement("label");
       field.className = "lfv-field";
       field.append(label);
       const input = doc.createElement("input");
       input.type = "color";
-      input.value = value(key);
-      // `input` 而不是 `change`：拖着取色盘时就能看到页面跟着变。
+      // 没改过的项显示底子算出来的那个色，而不是空白——你看到什么就是在改什么。
+      input.value =
+        custom.patch[key] ?? (style ? hexOf(doc, style.getPropertyValue(`--${key}`).trim()) : "#000000");
+      // `input` 而不是 `change`：拖着取色盘时页面就跟着变。
       input.addEventListener("input", () => patch(key, input.value));
       field.append(input);
-      return field;
-    }),
-  );
-
-  const type = doc.getElementById("lfv-type") as HTMLElement;
-  type.replaceChildren(
-    ...TYPE_FIELDS.map(({ key, label, min, max, step, unit }) => {
-      const field = doc.createElement("label");
-      field.className = "lfv-field";
-      field.append(label);
-      const input = doc.createElement("input");
-      input.type = "range";
-      input.min = String(min);
-      input.max = String(max);
-      input.step = String(step);
-      const now = numberOf(value(key), min);
-      input.value = String(now);
-      const shown = doc.createElement("span");
-      shown.className = "lfv-value";
-      shown.textContent = `${now}${unit}`;
-      input.addEventListener("input", () => patch(key, `${input.value}${unit}`));
-      field.append(input, shown);
       return field;
     }),
   );

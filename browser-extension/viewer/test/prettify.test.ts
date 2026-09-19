@@ -1543,65 +1543,93 @@ async function themedPage(stored: Record<string, unknown> = {}) {
   return { dom, doc, store };
 }
 
-test("没设置过时用默认主题「夜」，颜色和排版一起写到页面上", async () => {
+test("没设置过时用默认配色「深潭」和默认风格「文稿」", async () => {
   const { doc } = await themedPage();
 
-  const style = doc.documentElement.style;
-  assert.equal(style.getPropertyValue("--background"), "#16171a");
-  assert.equal(style.getPropertyValue("--lfv-measure"), "74ch");
-  assert.equal(style.colorScheme, "dark");
-  assert.equal(doc.documentElement.dataset["lfvTheme"], "night");
+  const root = doc.documentElement;
+  // 颜色不在 JS 里算：只写色相角和彩度系数两个数，其余十几个颜色由 CSS 的 oklch 公式推。
+  assert.equal(root.style.getPropertyValue("--lfv-h"), "200");
+  assert.equal(root.style.getPropertyValue("--lfv-c"), "1");
+  assert.equal(root.dataset["lfvPalette"], "pool");
+  assert.equal(root.dataset["lfvPolarity"], "dark");
+  assert.equal(root.dataset["lfvStyle"], "manuscript");
+  assert.equal(root.style.colorScheme, "dark");
 });
 
-test("存过的主题连字体一起换掉", async () => {
-  const { doc } = await themedPage({ theme: "paper" });
+test("配色和风格互相独立，换一个不动另一个", async () => {
+  const { doc } = await themedPage({ theme: "ochre", style: "console" });
 
-  const style = doc.documentElement.style;
-  assert.equal(style.getPropertyValue("--background"), "#faf8f4");
-  // 「纸」换的不只是颜色：正文字体变成宋体、每行字数收到 68。
-  assert.match(style.getPropertyValue("--lfv-font"), /Songti SC/);
-  assert.equal(style.getPropertyValue("--lfv-measure"), "68ch");
-  assert.equal(style.colorScheme, "light");
+  const root = doc.documentElement;
+  assert.equal(root.style.getPropertyValue("--lfv-h"), "40");
+  assert.equal(root.style.getPropertyValue("--lfv-c"), "1.15");
+  assert.equal(root.dataset["lfvPolarity"], "light");
+  assert.equal(root.dataset["lfvStyle"], "console");
+});
+
+test("墨水屏的彩度是 0——纯灰阶是同一条公式的边界值，不是另一张表", async () => {
+  const { doc } = await themedPage({ theme: "eink" });
+
+  assert.equal(doc.documentElement.style.getPropertyValue("--lfv-c"), "0");
+  assert.equal(doc.documentElement.dataset["lfvPalette"], "eink");
+});
+
+test("自定义只盖住改过的那几个值，没改的仍由公式算", async () => {
+  const { doc } = await themedPage({
+    theme: "custom",
+    custom: { base: "brass", patch: { background: "#101010", "syn-keyword": "#ff0000" } },
+  });
+
+  const root = doc.documentElement;
+  // 底子仍然是黄铜，所以色相还是 85；只有改过的两个值被行内变量盖掉。
+  assert.equal(root.style.getPropertyValue("--lfv-h"), "85");
+  assert.equal(root.style.getPropertyValue("--background"), "#101010");
+  assert.equal(root.style.getPropertyValue("--syn-keyword"), "#ff0000");
+  // 没改过的不写行内值，留给 CSS 公式。
+  assert.equal(root.style.getPropertyValue("--foreground"), "");
 });
 
 test("别处改了主题，这一页跟着换——不用刷新", async () => {
-  const { doc, store } = await themedPage();
-  assert.equal(doc.documentElement.style.getPropertyValue("--background"), "#16171a");
+  const { doc } = await themedPage();
+  assert.equal(doc.documentElement.dataset["lfvPalette"], "pool");
 
   // 模拟另一个标签页把设置改了：`chrome.storage` 的变更事件是跨标签页广播的。
   await (chrome.storage.local as unknown as { set: (items: object) => Promise<void> }).set({
-    "viewer-settings": { theme: "eink" },
+    "viewer-settings": { theme: "einkd", style: "brief" },
   });
   await new Promise((resolve) => setTimeout(resolve, 10));
 
-  assert.equal(doc.documentElement.style.getPropertyValue("--background"), "#ffffff");
-  assert.equal(store.data["viewer-settings"], store.data["viewer-settings"]);
+  assert.equal(doc.documentElement.dataset["lfvPalette"], "einkd");
+  assert.equal(doc.documentElement.dataset["lfvStyle"], "brief");
 });
 
-test("主题按钮点开是四种介质加自定义，点一个就存下来", async () => {
+test("主题按钮点开是两段：八套配色加自定义、四种风格", async () => {
   const { dom, doc, store } = await themedPage();
 
   const button = doc.querySelector(".lfv-theme-toggle") as HTMLElement;
   assert.equal(button.textContent, "主题");
-  // 和「原始 / 美化」不是同一个按钮，类名也不同，免得互相抓错。
   assert.equal(button.classList.contains("lfv-toggle"), false);
 
   button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   await new Promise((resolve) => setTimeout(resolve, 10));
 
   const menu = doc.getElementById("lfv-theme-menu") as HTMLElement;
-  const items = [...menu.querySelectorAll("button")] as HTMLElement[];
+  const palettes = [...menu.querySelectorAll("button[data-palette]")] as HTMLElement[];
+  const styles = [...menu.querySelectorAll("button[data-style]")] as HTMLElement[];
   assert.deepEqual(
-    items.map((item) => item.dataset["theme"]),
-    ["paper", "night", "eink", "moss", "custom"],
+    palettes.map((item) => item.dataset["palette"]),
+    ["brass", "ochre", "mauve", "eink", "pool", "soot", "night", "einkd", "custom"],
+  );
+  assert.deepEqual(
+    styles.map((item) => item.dataset["style"]),
+    ["manuscript", "press", "console", "brief"],
   );
   // 当前那套后面带一个点，不用另开一列图标。
-  assert.equal(items[1]?.textContent, "夜 ·");
+  assert.equal(palettes[4]?.textContent, "深潭 ·");
 
-  items[0]?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  styles[1]?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   await new Promise((resolve) => setTimeout(resolve, 10));
 
-  assert.equal((store.data["viewer-settings"] as { theme: string }).theme, "paper");
+  assert.equal((store.data["viewer-settings"] as { style: string }).style, "press");
   assert.equal(doc.getElementById("lfv-theme-menu"), null);
 });
 
