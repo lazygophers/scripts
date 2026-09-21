@@ -431,6 +431,41 @@ class TestRunDaemon(GraphwatchCase):
         self.assertIsNotNone(lock)
         graphwatch.release_singleton_lock(lock)
 
+    def test_stop_waits_for_inflight_rebuild(self):
+        # 2026-09-21 日志体检：daemon 退出不 join worker，在跑的重建被
+        # interpreter shutdown 杀掉，还发一条假「重建失败」通知。
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        stop = threading.Event()
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+
+        class BlockingRunner:
+            def __call__(self, folder):
+                entered.set()
+                release.wait(timeout=10)
+                finished.set()
+                return 0
+
+        fac = FakeListenerFactory()
+        thread = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
+            stop_event=stop, ensure=lambda: None, listener_factory=fac,
+            rebuild_runner=BlockingRunner(), poll_interval=0.05), daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 5
+        while not fac.listeners and time.monotonic() < deadline:
+            time.sleep(0.02)
+        fac.listeners[str(repo.resolve())].fire_change()
+        self.assertTrue(entered.wait(timeout=5), "重建应已进入执行")
+        stop.set()
+        time.sleep(0.3)
+        self.assertTrue(thread.is_alive(), "在跑的重建没结束，daemon 不许先退")
+        release.set()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive(), "重建结束后 daemon 应随即退出")
+        self.assertTrue(finished.is_set(), "在跑的重建必须被跑完而不是被杀")
+
     def test_run_starts_listener_per_folder(self):
         import threading
         repo = self.mkdir()

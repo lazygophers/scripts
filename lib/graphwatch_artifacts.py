@@ -157,14 +157,27 @@ def _llm_labels(G, communities: dict, root: Path) -> dict[int, str]:
     )
     model = str(cfg.get("model") or "") or None
     try:
+        # 推理模型的 <think> 段也在输出预算里烧 token：下限 4096 保证小批次
+        # 也能思考完再吐 JSON（旧公式 256+48n 对推理模型必截断，见 2026-09-21 日志体检）
+        budget = min(4096 + 48 * len(cids), 16384)
         with backend_env(cfg) as backend:
             text = _call_llm(
                 prompt,
                 backend=backend,
                 model=model,
-                max_tokens=min(256 + 48 * len(cids), 8192),
+                max_tokens=budget,
             )
         payload = json_payload(text)
+        if not payload:
+            # think 未闭合 = 预算烧光，JSON 没生成：翻倍重试一次，仍空才放弃
+            with backend_env(cfg) as backend:
+                text = _call_llm(
+                    prompt,
+                    backend=backend,
+                    model=model,
+                    max_tokens=min(budget * 2, 32768),
+                )
+            payload = json_payload(text)
         if not payload:
             print("[graphwatch] 社区命名跳过：模型回复整段都是推理内容（<think> 未闭合），"
                   "没有 JSON。换一个非推理模型再试，沿用 hub 名", file=sys.stderr)

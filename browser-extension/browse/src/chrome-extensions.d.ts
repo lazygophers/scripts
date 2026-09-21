@@ -1,7 +1,7 @@
 /**
- * `@types/chrome` 0.0.287 缺的一批命名空间/成员（dns、processes、readingList、
- * webAuthenticationProxy 等，都是 2026-09-16 扩容用到的）。npm registry 在本机
- * 不可达，升级类型包这条路走不通，就地把缺的形状补在这里。真升级类型包后
+ * `@types/chrome` 0.3.0 仍缺的一批命名空间/成员（dns、processes、readingList、
+ * webAuthenticationProxy 等，都是 2026-09-16 扩容用到的；2026-09-21 复核 0.3.0
+ * 依旧缺，typecheck 全靠本文件）。就地把缺的形状补在这里；类型包追上后
  * 本文件应随冲突一起清掉。
  */
 declare namespace chrome {

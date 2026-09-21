@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+import traceback
 from pathlib import Path
 
 from lib.graphwatch_config import GraphwatchError, config_home, load_config
@@ -348,7 +349,8 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
             try:
                 rc = rebuild_runner(folder)
             except Exception as e:  # noqa: BLE001
-                _dlog(f"重建异常: {folder}: {type(e).__name__}: {e}")
+                # 带堆栈：上游 graphify 抛的 KeyError 之类只有类型+消息定位不到行
+                _dlog(f"重建异常: {folder}: {type(e).__name__}: {e}\n{traceback.format_exc()}")
                 rc = 1
             with work_cv:
                 in_flight.discard(folder)
@@ -459,10 +461,19 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
         _unexpected(e)
         raise
     finally:
+        stop_event.set()  # worker 靠它退出循环；异常路径没人设过它，不设 join 就死等
         if listeners:
             _dlog(f"daemon 退出：停止 {len(listeners)} 个监听")
         for obs in listeners.values():
             _stop_listener(obs)
+        # 先 join 再放锁：worker 是 daemon 线程，不 join 的话主线程一退
+        # interpreter 就关停，在跑的重建在 graphify 线程池里再提交任务就抛
+        # "cannot schedule new futures after interpreter shutdown"（假失败通知，
+        # 见 2026-09-21 日志体检）。重建中 stop/restart 会多等当前这一轮。
+        if any(t.is_alive() for t in workers):
+            _dlog("daemon 退出：等待在跑的重建结束（跑完即退出）")
+        for t in workers:
+            t.join()
         release_singleton_lock(lock)
         _dlog("graphwatch daemon：已退出，监听已停，锁已释放")
 

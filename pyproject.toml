@@ -65,11 +65,11 @@ websearch = "lib.cli.websearch:main"
 
 [project.optional-dependencies]
 # graphwatch 监听需要 graphify（PyPI 包名 graphifyy）+ 其硬依赖 watchdog，默认不装
-graphify = ["graphifyy[all]>=0.9.62", "watchdog>=6"]
+graphify = ["graphifyy[all]>=0.9.65", "watchdog>=6"]
 # webgrab / websearch 抓网页要的四件套，默认不装；playwright 装完还要 `playwright install chromium`
 web = ["curl-cffi>=0.16.3", "beautifulsoup4>=4.15.0", "markdownify>=1.2.3", "playwright>=1.63"]
 all = [
-    "graphifyy[all]>=0.9.62", "watchdog>=6",
+    "graphifyy[all]>=0.9.65", "watchdog>=6",
     "curl-cffi>=0.16.3", "beautifulsoup4>=4.15.0", "markdownify>=1.2.3", "playwright>=1.63",
 ]
 dev = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.32"]

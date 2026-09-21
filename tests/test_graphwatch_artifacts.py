@@ -238,6 +238,29 @@ class TestLlmLabels(unittest.TestCase):
         self.assertEqual(art._llm_labels(self.G, self.communities, self.root), {},
                          "推理占满 max_tokens 时不许抛，沿用 hub 名")
 
+    def test_truncated_reasoning_retries_with_bigger_budget(self):
+        calls = []
+
+        def fake_call(prompt, **kw):
+            calls.append(kw.get("max_tokens"))
+            if len(calls) == 1:
+                return "<think>推理烧光预算，JSON 没生成"  # 截断：没有闭合也没有 JSON
+            return f'<think>想完了</think>{json.dumps({"0": "支付流"})}'
+
+        self.gllm._call_llm = fake_call
+        self.assertEqual(art._llm_labels(self.G, self.communities, self.root).get(0), "支付流",
+                         "第一次预算不够时翻倍重试，第二次的 JSON 要能用")
+        self.assertEqual(len(calls), 2)
+        self.assertGreater(calls[1], calls[0], "重试必须加预算，不是原样再调一次")
+
+    def test_retry_budget_never_exceeds_cap(self):
+        calls = []
+        self.gllm._call_llm = lambda p, **kw: calls.append(kw.get("max_tokens")) or "<think>x"
+
+        self.assertEqual(art._llm_labels(self.G, self.communities, self.root), {})
+        self.assertEqual(len(calls), 2)
+        self.assertLessEqual(max(calls), 32768, "重试上限 32768，别把上下文窗口撑爆")
+
     def test_empty_communities_skip_call(self):
         def boom(*a, **k):
             raise AssertionError("没有可命名的社区不该调 LLM")
