@@ -2,13 +2,12 @@
 name = "scripts"
 version = "0.1.0"
 description = "脚本工具集：版本控制、构建检查、进程管理、系统通知"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 # fire=CLI 框架(fire_base 顶层 import), rich=强制输出(ui.py 缺席即报错),
 # pyyaml=配置读写(archery/graphwatch), requests=HTTP(archery/grafana)
-# 下界跟到 2026-09-16 的最新版, 但保持 requires-python >=3.9 装得上:
-# requests 2.33 起要求 3.10, 所以核心依赖停在 2.32 这一档。
-# 只在 extras 里出现的包(graphifyy/playwright)本来就要 3.10+, 直接跟最新。
-dependencies = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.32"]
+# 下界跟到 2026-09-21 的最新版。3.9 底线 2026-09-21 抬到 3.10: extras 的
+# curl-cffi>=0.16.3 只要 3.10+, 3.9 底线下 uv lock 永远解析失败, 锁文件刷不动。
+dependencies = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.34.2"]
 
 # 每个命令一个 console_scripts 入口, 指向 lib/cli/<name>.py 里的函数。
 # bin/<name> 只是同一个函数的薄壳(clone 后可直接跑), 实现只有 lib/ 一份。
@@ -72,7 +71,7 @@ all = [
     "graphifyy[all]>=0.9.65", "watchdog>=6",
     "curl-cffi>=0.16.3", "beautifulsoup4>=4.15.0", "markdownify>=1.2.3", "playwright>=1.63",
 ]
-dev = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.32"]
+dev = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.34.2"]
 
 [build-system]
 requires = ["setuptools>=68"]
