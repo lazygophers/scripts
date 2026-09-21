@@ -1,5 +1,5 @@
 import { CommandError, optionalString } from "../protocol.ts";
-import { requireApi, resolveContext, type Target } from "./context.ts";
+import { requireApi, resolveContextOnce, type Target } from "./context.ts";
 
 /** `chrome.tabGroups` 接受的颜色是固定的一套，不是任意 CSS 色。 */
 const COLORS = new Set(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]);
@@ -136,7 +136,7 @@ export async function tabsUpdateGroup(
 
 /** group works on a tab; a frame id is rejected, same rule as close/activate. */
 async function requireTabOnly(params: Record<string, unknown>): Promise<Target> {
-  const target = await resolveContext(params);
+  const target = await resolveContextOnce(params);
   if (target.frameId !== undefined) {
     throw new CommandError(
       "unsupported operation",

@@ -1,6 +1,6 @@
 import { CommandError, optionalString, requireString } from "../protocol.ts";
 import { emitEvent } from "../events.ts";
-import { resolveContext, requireApi } from "./context.ts";
+import { resolveContextOnce, requireApi } from "./context.ts";
 
 /**
  * 扩展自己的三个交互面：commands（快捷键）、sidePanel（侧边栏）、omnibox
@@ -18,7 +18,7 @@ export async function sidePanelOpen(params: Record<string, unknown>): Promise<{ 
   // 旧版 @types 的 OpenOptions 要求 tabId；运行时（Chrome 116+）可省
   const open = chrome.sidePanel.open as (options?: { tabId?: number }) => Promise<void>;
   if (params.context !== undefined || params.matchUrl !== undefined) {
-    const target = await resolveContext(params);
+    const target = await resolveContextOnce(params);
     await open({ tabId: target.tabId });
   } else {
     await open({});
@@ -29,7 +29,7 @@ export async function sidePanelOpen(params: Record<string, unknown>): Promise<{ 
 export async function sidePanelClose(params: Record<string, unknown>): Promise<{ closed: true }> {
   requireApi("sidePanel.close", "closing the side panel");
   if (params.context !== undefined || params.matchUrl !== undefined) {
-    const target = await resolveContext(params);
+    const target = await resolveContextOnce(params);
     await chrome.sidePanel.close({ tabId: target.tabId });
   } else {
     await chrome.sidePanel.close({});

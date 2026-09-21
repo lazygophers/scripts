@@ -28,6 +28,9 @@ import {
 /** bridge 的 WS 地址。端口是双方约定死的常量（`lib/browse_bridge.py: DEFAULT_WS_PORT）。 */
 export const BRIDGE_URL = "ws://127.0.0.1:9330";
 
+/** 停止状态（用户刹车）的持久化 key，跨 service worker 重启保持。 */
+const STOPPED_KEY = "browse:stopped";
+
 const PING_INTERVAL_MS = 20_000;
 
 /** How many commands the panel's live log keeps (spec 4.5). */
@@ -117,7 +120,16 @@ export class NativeConnection {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private inFlight = 0;
+  /**
+   * 单一「停止」状态（CONTEXT.md：停止）：用户刹车后跨 service worker 重启保持，
+   * 持久化在 chrome.storage；浏览器完整启动（onStartup）才清除。alarm 兜底重连、
+   * 退避重连、面板显示读的都是这一份 —— 以前 background.ts 还有一个并行的
+   * `braked`，service worker 一被杀两者同时失忆，刹车失效，已删。
+   */
   private stopped = false;
+  /** connect/disconnect/resume 已经拍板过停止状态后，迟到的 storage 读不再覆盖它。 */
+  private settledStopped = false;
+  private readonly initDone: Promise<void>;
   // Our own outbound commands (`lg:approvals.*` for the panel). Ids are ours;
   // they never collide with the daemon's because each side only ever matches
   // replies against the ids *it* issued.
@@ -143,10 +155,56 @@ export class NativeConnection {
   ) {
     this.onState = onState;
     this.onInFlight = onInFlight;
+    // SW 一醒就要答「该不该连」，所以先把持久化的停止状态读进内存。
+    this.initDone = this.loadStopped();
   }
 
+  private async loadStopped(): Promise<void> {
+    let stored = false;
+    try {
+      const got = await chrome.storage.local.get(STOPPED_KEY);
+      stored = got[STOPPED_KEY] === true;
+    } catch {
+      stored = false; // 测试环境没有 chrome.storage：当作没刹过车
+    }
+    if (!this.settledStopped) {
+      this.stopped = stored;
+    }
+  }
+
+  private persistStopped(): void {
+    try {
+      void chrome.storage.local.set({ [STOPPED_KEY]: this.stopped });
+    } catch {
+      // 测试环境没有 chrome.storage：内存态仍然正确，只是不跨重启
+    }
+  }
+
+  /**
+   * 连接（或什么都不做）。刹车中调用是 no-op —— alarm 兜底每 30 秒叫一次，全靠
+   * 这个守卫尊重用户的停止状态。首次调用等持久化状态读完再动手。
+   */
   connect(): void {
+    void this.initDone.then(() => {
+      if (this.stopped) {
+        return;
+      }
+      this.connectNow();
+    });
+  }
+
+  /** 浏览器完整启动：清除停止状态并恢复连接（CONTEXT.md：停止的解除条件）。 */
+  resume(): void {
     this.stopped = false;
+    this.settledStopped = true;
+    this.persistStopped();
+    this.connect();
+  }
+
+  private connectNow(): void {
+    this.stopped = false;
+    this.settledStopped = true;
+    this.persistStopped();
     this.clearReconnect();
     if (this.socket) {
       return;
@@ -204,6 +262,8 @@ export class NativeConnection {
   /** Panel / CLI brake: drop the socket and stop reconnecting (spec 4.5). */
   disconnect(): void {
     this.stopped = true;
+    this.settledStopped = true;
+    this.persistStopped();
     this.clearReconnect();
     this.stopPing();
     this.socket?.close();

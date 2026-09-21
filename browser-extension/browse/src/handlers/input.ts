@@ -1,7 +1,7 @@
 import { parseLocator, type LocateOptions, type Scheme } from "../locator.ts";
 import { CommandError, asString, optionalString, requireString } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
-import { resolveContext, targetUrl } from "./context.ts";
+import { resolveContextOnce, targetUrl } from "./context.ts";
 import { runInPage, type PageLocate, type PageResult } from "./inject.ts";
 
 /**
@@ -70,7 +70,7 @@ async function performInput(
     ...(typeof params.timeout === "number" ? { timeout: params.timeout } : {}),
     ...(params.wait === false ? { wait: false } : {}),
   };
-  const target = await resolveContext(params);
+  const target = await resolveContextOnce(params);
   // `js=` evaluates page expressions, so it needs the page realm (spec 6.4) —
   // which makes it arbitrary JS in the page, exactly what `script.evaluate`
   // does, just wearing a locator's clothes. Spec 4.4 lists it as high-risk for

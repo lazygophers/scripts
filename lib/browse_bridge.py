@@ -90,6 +90,8 @@ class Bridge(Daemon):
     """daemon（CLI 侧 unix socket）+ 扩展侧 WebSocket 监听。"""
 
     ws_port: int = field(default_factory=ws_port)
+    # 静默超时可注入：测试用短超时，不真等 30 秒。
+    ws_silence: float = field(default=WS_SILENCE_TIMEOUT)
     # bridge 起来的时刻（墙钟）。`lg:bridge.info` 用它算已经跑了多久。
     _started: float = field(default=0.0, init=False)
     _ws_server: asyncio.AbstractServer | None = field(default=None, init=False)
@@ -145,7 +147,7 @@ class Bridge(Daemon):
 
         adapter = _Adapter(ws_reader=ws_reader, ws_writer=ws_writer,
                            sock_reader=pump_reader, sock_writer=pump_writer,
-                           meta=self._ws_meta)
+                           meta=self._ws_meta, silence=self.ws_silence)
         daemon_task = asyncio.create_task(super()._handle(daemon_reader, daemon_writer))
         try:
             await adapter.pump()
@@ -235,6 +237,8 @@ class _Adapter:
     sock_reader: asyncio.StreamReader
     sock_writer: asyncio.StreamWriter
     meta: dict[int, dict]
+    # 静默超时可注入（测试用短值）；生产走模块常量。
+    silence: float = WS_SILENCE_TIMEOUT
 
     conn_id: int | None = field(default=None, init=False)
 
@@ -253,7 +257,7 @@ class _Adapter:
         while True:
             text = await asyncio.wait_for(
                 browse_ws.read_message(self.ws_reader, self.ws_writer, MAX_INCOMING_FRAME_BYTES),
-                timeout=WS_SILENCE_TIMEOUT)
+                timeout=self.silence)
             message = json.loads(text)
             if first and message.get("role") == ROLE_EXTENSION:
                 message["role"] = ROLE_NATIVE_HOST

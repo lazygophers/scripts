@@ -3,7 +3,7 @@ import type { JSDOM } from "jsdom";
 import { afterEach, beforeEach, test } from "node:test";
 
 import { colorize } from "../src/highlight.ts";
-import { classify, isDirectoryIndex, isPlainTextPage, prettify, show } from "../src/prettify.ts";
+import { LAZY, classify, isDirectoryIndex, isPlainTextPage, prettify, show } from "../src/prettify.ts";
 import { clearChrome, installChrome, page, storageMock } from "./mock.ts";
 
 /** 本轮 `getURL` 被问过的路径。用来证明非代码页从没去取过高亮包。 */
@@ -1642,4 +1642,21 @@ test("切回原始时主题按钮收起来，切回美化又回来", async () =>
 
   (doc.querySelector(".lfv-toggle") as HTMLElement).click();
   assert.ok(doc.querySelector(".lfv-theme-toggle"));
+});
+
+// ------------------------------------------------ 懒加载面与构建入口一致性
+
+test("LAZY 的每个包都有对应的构建入口，忘了加 entry 就过不了测试", async () => {
+  // @ts-expect-error build.mjs 是构建脚本，没有类型声明；这里只借它的 entryPoints 清单
+  const { options } = await import("../build.mjs");
+  const built = options.entryPoints.map((entry: string) => entry.replace(/^src\/|.ts$/g, ""));
+  for (const key of Object.keys(LAZY)) {
+    assert.ok(built.includes(key), `LAZY.${key} 想要 ${key}.js，但构建入口里没有 src/${key}.ts`);
+  }
+  // 反向：构建出的懒加载包要是没人加载，多半是改漏了 LAZY
+  const lazyBuilt = built.filter((name: string) =>
+    !["background", "settings-page", "viewer-page"].includes(name));
+  for (const name of lazyBuilt) {
+    assert.ok(name in LAZY, `src/${name}.ts 构建成了独立包，但 LAZY 里没有它的加载点`);
+  }
 });

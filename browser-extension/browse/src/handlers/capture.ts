@@ -1,6 +1,6 @@
 import { CommandError, optionalString, requireString } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
-import { requireApi, resolveContext, targetUrl } from "./context.ts";
+import { requireApi, resolveContextOnce, targetUrl } from "./context.ts";
 
 /**
  * 页面/屏幕捕获：MHTML 存档（pageCapture）、标签页录屏（tabCapture + offscreen
@@ -56,7 +56,7 @@ export async function pageCaptureSaveMhtml(
   params: Record<string, unknown>,
 ): Promise<unknown> {
   requireApi("pageCapture", "saving a page as MHTML");
-  const target = await resolveContext(params);
+  const target = await resolveContextOnce(params);
   const url = await targetUrl(target);
   await confirm({ action: "readPage", method: "lg:pageCapture.saveMhtml", url });
   const blob = await chrome.pageCapture.saveAsMHTML({ tabId: target.tabId });
@@ -119,7 +119,7 @@ export async function captureRecordTab(
   params: Record<string, unknown>,
 ): Promise<{ recording: string; tab: number }> {
   requireApi("tabCapture", "recording a tab");
-  const target = await resolveContext(params);
+  const target = await resolveContextOnce(params);
   const url = await targetUrl(target);
   await confirm({ action: "captureMedia", method: "lg:capture.recordTab", url });
   // 旧版 @types 里 getMediaStreamId 只有回调形态；运行时（Chrome 116+）返回 Promise

@@ -16,6 +16,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -432,6 +433,15 @@ class TestManagementClient(unittest.TestCase):
         with self.assertRaises(socket.timeout):
             self.conn.recv(64)
 
+    def test_authenticate_waits_for_a_prompt_split_across_packets(self) -> None:
+        # TCP 可以把提示拆成两段；只读一次就会漏掉口令，openvpn 从此忽略
+        # 所有命令（含 hold release），整个连接闷死在 hold 里
+        c = self._client(greeting=b"ENTER ")
+        self.conn.sendall(b"PASSWORD:")
+        c.authenticate()
+        self.conn.settimeout(2)
+        self.assertEqual(self.conn.recv(64), b"pw\n")
+
     def test_authenticate_tolerates_a_silent_server(self) -> None:
         c = self._client()
         c.sock = SimpleNamespace(settimeout=lambda _t: None,
@@ -579,7 +589,7 @@ class TestDrive(unittest.TestCase):
         ]
         with mock.patch.object(ovpn, "RECONNECT_DEADLINE_SECS", 0), \
              mock.patch.object(ovpn, "_hard_reset",
-                               side_effect=lambda p, r, c, lc: (10, c, lc)) as hr:
+                               side_effect=lambda p, r, c, lc, **kw: (10, c, lc)) as hr:
             mgmt, _, _, rc, connected, _ = self._drive_raw(lines)
         self.assertEqual(rc, 10)
         self.assertTrue(connected)
@@ -594,19 +604,43 @@ class TestDrive(unittest.TestCase):
         ]
         with mock.patch.object(ovpn, "RECONNECT_DEADLINE_SECS", 0), \
              mock.patch.object(ovpn, "_hard_reset",
-                               side_effect=lambda p, r, c, lc: (10, c, lc)) as hr:
+                               side_effect=lambda p, r, c, lc, **kw: (10, c, lc)) as hr:
             _, _, _, rc, connected, _ = self._drive_raw(lines)
         self.assertEqual(rc, 10)
         self.assertTrue(connected)
         hr.assert_called_once()
 
-    def test_no_hard_reset_when_never_connected(self) -> None:
-        # 首次连接卡住不触发强杀（openvpn 自己 connect-retry 会一直试）
-        lines = [">STATE:1,WAIT,", socket.timeout()]
-        with mock.patch.object(ovpn, "RECONNECT_DEADLINE_SECS", 0), \
+    def test_first_connect_stuck_triggers_hard_reset(self) -> None:
+        # 首次连接超时也要强杀重拉：openvpn 卡在认证前时 management 一声不吭，
+        # 没有这一层就是无限干等且不打印任何东西
+        lines = [">STATE:1,WAIT,", socket.timeout(), socket.timeout()]
+        with mock.patch.object(ovpn, "FIRST_CONNECT_DEADLINE_SECS", 0), \
+             mock.patch.object(ovpn, "_hard_reset",
+                               side_effect=lambda p, r, c, lc, **kw: (10, c, lc)) as hr:
+            _, _, _, rc, connected, _ = self._drive_raw(lines)
+        self.assertEqual(rc, 10)
+        self.assertFalse(connected)
+        self.assertIn("首次连接", hr.call_args.kwargs["why"])
+
+    def test_first_connect_deadline_cleared_after_connected(self) -> None:
+        # 连上之后首次连接的计时作废：即使早就过了时限也不该误杀
+        lines = [">STATE:1,CONNECTED,SUCCESS,10.8.0.6,203.0.113.1", None]
+
+        mgmt = FakeMgmt(lines)
+        real_readline = mgmt.readline
+
+        def readline(timeout=1.0):
+            line = real_readline(timeout)
+            time.sleep(0.06)  # 跨过 0.05s 的首次连接时限
+            return line
+        mgmt.readline = readline
+        with mock.patch.object(ovpn, "FIRST_CONNECT_DEADLINE_SECS", 0.05), \
              mock.patch.object(ovpn, "_hard_reset") as hr:
-            _, _, _, rc, _, _ = self._drive_raw(lines + [None])
+            rc, connected, _ = ovpn._drive(
+                mgmt, FakeProc(returncode=0), _r(), username="u", password="p",
+                secret="", verbose=False, last_otp_counter=None, split=None)
         self.assertEqual(rc, 0)
+        self.assertTrue(connected)
         hr.assert_not_called()
 
     def test_hard_reset_kills_process_group(self) -> None:

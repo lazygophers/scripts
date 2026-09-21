@@ -64,12 +64,12 @@ class FakeSocket {
   }
 }
 
-function port(): {
+async function port(): Promise<{
   connection: NativeConnection;
   sent: Any[];
   reply: (message: Any) => void;
   drop: () => void;
-} {
+}> {
   previousWebSocket = (globalThis as Any).WebSocket;
   (globalThis as Any).WebSocket = FakeSocket;
   installChrome({
@@ -85,6 +85,7 @@ function port(): {
   );
   open.push(connection);
   connection.connect();
+  await new Promise((resolve) => setTimeout(resolve, 0)); // connect() 等持久化停止状态读完才动手
   const socket = sockets.at(-1)!;
   socket.open();
   return {
@@ -108,7 +109,7 @@ afterEach(() => {
 });
 
 test("request sends a Command and resolves with the daemon's result", async () => {
-  const p = port();
+  const p = await port();
   const answer = p.connection.request("lg:approvals.list");
   assert.deepEqual(p.sent.at(-1), {
     id: 1,
@@ -120,7 +121,7 @@ test("request sends a Command and resolves with the daemon's result", async () =
 });
 
 test("two requests in flight come back to the right caller", async () => {
-  const p = port();
+  const p = await port();
   const first = p.connection.request("lg:approvals.approve", { domain: "a.test" });
   const second = p.connection.request("lg:approvals.revoke", { domain: "b.test" });
   // Answered out of order on purpose: matching is by id, not arrival.
@@ -131,7 +132,7 @@ test("two requests in flight come back to the right caller", async () => {
 });
 
 test("an error reply rejects with the daemon's code", async () => {
-  const p = port();
+  const p = await port();
   const answer = p.connection.request("lg:approvals.approve", {});
   p.reply({ type: "error", id: 1, error: "invalid argument", message: "要给一个 domain" });
   await assert.rejects(answer, (err: Error & { code?: string }) => {
@@ -142,7 +143,7 @@ test("an error reply rejects with the daemon's code", async () => {
 });
 
 test("a dropped port rejects everything in flight instead of hanging the panel", async () => {
-  const p = port();
+  const p = await port();
   const answer = p.connection.request("lg:approvals.list");
   p.drop();
   await assert.rejects(answer, (err: Error & { code?: string }) => {
@@ -158,12 +159,13 @@ test("requesting with no bridge at all rejects rather than silently dropping", a
   const connection = new NativeConnection(() => {}, () => {});
   open.push(connection);
   connection.connect();
+  await new Promise((resolve) => setTimeout(resolve, 0)); // connect() 等停止状态读完才动手
   connection.disconnect(); // 刹车收掉退避重连的定时器
   await assert.rejects(connection.request("lg:approvals.list"), /not connected/);
 });
 
 test("a daemon Command is still dispatched, not mistaken for a reply", async () => {
-  const p = port();
+  const p = await port();
   p.reply({ id: 7, method: "lg:nonsense.do", params: {} });
   await new Promise((resolve) => setTimeout(resolve, 0));
   const out = p.sent.at(-1) as Any;

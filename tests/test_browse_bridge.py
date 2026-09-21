@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import pathlib
+import socket
 import sys
 import tempfile
 import unittest
@@ -55,9 +56,10 @@ class BridgeCase(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.sock_path = pathlib.Path(self._tmp.name) / "bridge.sock"
 
-    def run_bridge(self, body) -> object:
+    def run_bridge(self, body, silence: float | None = None) -> object:
         async def scenario():
-            bridge = browse_bridge.Bridge(path=self.sock_path, ws_port=0)
+            kwargs = {} if silence is None else {"ws_silence": silence}
+            bridge = browse_bridge.Bridge(path=self.sock_path, ws_port=0, **kwargs)
             self.assertTrue(await bridge.start())
             try:
                 port = bridge._ws_server.sockets[0].getsockname()[1]
@@ -351,3 +353,257 @@ class BridgeIntrospectionCase(BridgeCase):
         self.assertIn("ws.open", events)
         self.assertIn("ws.close", events)
         self.assertEqual(events[-1], "bridge.stop")
+
+
+class TransportCase(BridgeCase):
+    """传输层异常路径（静默超时 / 畸形 JSON / close 帧 / 握手前断开），端到端。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.log_path = pathlib.Path(self._tmp.name) / "bridge.log"
+        patch = unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": str(self.log_path)})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def _events(self) -> list[dict]:
+        return browse_log.tail(100, path=self.log_path)
+
+    def test_silence_timeout_drops_connection(self) -> None:
+        """30 秒（测试注入 0.4 秒）收不到扩展任何消息就断开，连接表不残留。"""
+
+        async def body(port: int) -> dict:
+            er, ew, _ = await _ext_connect(port, "chrome")
+            ew.write(browse_ws.encode_frame(  # 骗 lastSeen 之后立刻装死
+                browse_ws.OP_PONG, b"", mask=True))
+            await ew.drain()
+            await asyncio.sleep(1.0)  # > 注入的 0.4s 静默超时
+            cr, cw, _ = await cli_connect("cli", self.sock_path)
+            cw.write(pack(command(1, browse_bridge.CONNECTIONS_METHOD, {})))
+            await cw.drain()
+            reply = await read_frame(cr, 1 << 20)
+            ew.close(); cw.close()
+            return reply["result"]
+        result = self.run_bridge(body, silence=0.4)
+        self.assertEqual(result["connections"], [], "静默连接没有断开")
+        dropped = [e for e in self._events() if e["event"] == "ws.dropped"]
+        self.assertTrue(dropped, "静默断开没有记日志")
+        self.assertEqual(dropped[0]["reason"], "TimeoutError")
+
+    def test_malformed_json_drops_and_fails_pending(self) -> None:
+        """非法 JSON 文本帧：连接断开、记一笔、在途指令当场失败不挂起。"""
+
+        async def body(port: int) -> dict:
+            er, ew, _ = await _ext_connect(port, "chrome")
+            cr, cw, _ = await cli_connect("cli", self.sock_path)
+            cw.write(pack(command(1, "script.evaluate", {"expression": "x"})))
+            await cw.drain()
+            got = json.loads(await browse_ws.read_message(er, ew, 1 << 20))
+            assert got.get("id"), got  # 指令已到扩展
+            ew.write(browse_ws.encode_frame(browse_ws.OP_TEXT, b"not-json{", mask=True))
+            await ew.drain()
+            reply = await read_frame(cr, 1 << 20)
+            ew.close(); cw.close()
+            return reply
+        reply = self.run_bridge(body)
+        self.assertEqual(reply["type"], "error")
+        dropped = [e for e in self._events() if e["event"] == "ws.dropped"]
+        self.assertEqual(dropped[0]["reason"], "JSONDecodeError")
+
+    def test_close_frame_terminates_both_pumps(self) -> None:
+        """扩展发 close 帧：双向泵都终止，在途指令收到错误回包。"""
+
+        async def body(port: int) -> dict:
+            er, ew, _ = await _ext_connect(port, "chrome")
+            cr, cw, _ = await cli_connect("cli", self.sock_path)
+            cw.write(pack(command(1, "script.evaluate", {"expression": "x"})))
+            await cw.drain()
+            await browse_ws.read_message(er, ew, 1 << 20)  # 指令已到扩展
+            ew.write(browse_ws.encode_frame(browse_ws.OP_CLOSE, b"", mask=True))
+            await ew.drain()
+            reply = await read_frame(cr, 1 << 20)
+            ew.close(); cw.close()
+            return reply
+        reply = self.run_bridge(body)
+        self.assertEqual(reply["type"], "error")
+        dropped = [e for e in self._events() if e["event"] == "ws.dropped"]
+        self.assertEqual(dropped[0]["reason"], "WsClosed")
+
+    def test_disconnect_without_or_after_hello_leaks_no_meta(self) -> None:
+        """断开路径（握手后不发 hello / hello 完成后撒手）都不在连接表留尸体。"""
+
+        async def body(port: int) -> list[int]:
+            # 路径一：握手完成、hello 没发就断
+            r, w = await browse_ws.client_connect("127.0.0.1", port)
+            w.close()
+            await asyncio.sleep(0.1)
+            # 路径二：hello 完成后撒手
+            er, ew, _ = await _ext_connect(port, "chrome")
+            ew.close()
+            await asyncio.sleep(0.1)  # 让适配泵的 finally 跑完
+            cr, cw, _ = await cli_connect("cli", self.sock_path)
+            cw.write(pack(command(1, browse_bridge.CONNECTIONS_METHOD, {})))
+            await cw.drain()
+            reply = await read_frame(cr, 1 << 20)
+            cw.close()
+            return [row["connectionId"] for row in reply["result"]["connections"]]
+        self.assertEqual(self.run_bridge(body), [])
+
+
+async def _pair_streams() -> tuple[tuple, tuple]:
+    """一对真实 asyncio 流（socketpair 两端），测试扮演对端。"""
+    a, b = socket.socketpair()
+    for s in (a, b):
+        s.setblocking(False)
+    end_a = await asyncio.open_connection(sock=a, limit=browse_ws.MAX_HANDSHAKE_BYTES)
+    end_b = await asyncio.open_connection(sock=b, limit=browse_ws.MAX_HANDSHAKE_BYTES)
+    return end_a, end_b
+
+
+class _ExplodingDrain:
+    """sock_writer 替身：write 正常，drain 抛错（backpressure 场景）。"""
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+
+    def write(self, data: bytes) -> None:
+        self._inner.write(data)
+
+    async def drain(self) -> None:
+        raise ConnectionError("simulated backpressure")
+
+
+class AdapterCase(unittest.TestCase):
+    """_Adapter 单元面：e2e 够不着的分支（帧边界、单向泵失败、重复 hello、drain 抛错）。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        log_path = pathlib.Path(self._tmp.name) / "bridge.log"
+        patch = unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": str(log_path)})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def run_adapter(self, body, **adapter_kwargs) -> object:
+        """搭 _Adapter + 两对 socketpair（ws 侧 / daemon 侧），测试各扮一端。"""
+
+        async def scenario():
+            ws_peer, ws_ad = await _pair_streams()
+            sock_peer, sock_ad = await _pair_streams()
+            meta: dict[int, dict] = {}
+            adapter = browse_bridge._Adapter(
+                ws_reader=ws_ad[0], ws_writer=ws_ad[1],
+                sock_reader=sock_ad[0], sock_writer=sock_ad[1],
+                meta=meta, **adapter_kwargs)
+            task = asyncio.create_task(adapter.pump())
+            try:
+                return await body(meta, task, ws_peer, sock_peer)
+            finally:
+                for writer in (ws_peer[1], ws_ad[1], sock_peer[1], sock_ad[1]):
+                    writer.close()
+                if not task.done():
+                    task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        return asyncio.run(scenario())
+
+    @staticmethod
+    def _hello() -> str:
+        return json.dumps({"type": "hello", "role": "extension", "browser": "chrome"})
+
+    def test_frame_exactly_at_limit_passes_and_one_over_is_rejected(self) -> None:
+        """上限边界：恰好等于上限的帧通过，多 1 字节被拒（off-by-one 就在这里现形）。"""
+        exact = ('{"x":"' + "a" * 56 + '"}').encode()  # 恰 64 字节
+        over = ('{"x":"' + "a" * 57 + '"}').encode()   # 65 字节
+        self.assertEqual(len(exact), 64)
+        self.assertEqual(len(over), 65)
+
+        async def body(meta, task, ws_peer, sock_peer):
+            pr, pw = ws_peer
+            dr, dw = sock_peer
+            with unittest.mock.patch.object(browse_bridge, "MAX_INCOMING_FRAME_BYTES", 64):
+                await browse_ws.client_send(pw, exact.decode())
+                got = await read_frame(dr, 1 << 20)
+                await browse_ws.client_send(pw, over.decode())
+                try:
+                    await asyncio.wait_for(task, 2.0)
+                    exc: BaseException | None = None
+                except Exception as e:  # pump 应带着 ConnectionError 结束
+                    exc = e
+            dw.close()
+            return got, exc
+        got, exc = self.run_adapter(body)
+        self.assertEqual(got["x"], "a" * 56)
+        self.assertIsInstance(exc, ConnectionError)
+
+    def test_sock_side_failure_terminates_both_pumps_and_cleans_meta(self) -> None:
+        """daemon 侧断流：单向泵失败要把整条适配泵带走，meta 不残留。"""
+
+        async def body(meta, task, ws_peer, sock_peer):
+            pr, pw = ws_peer
+            dr, dw = sock_peer
+            await browse_ws.client_send(pw, self._hello())
+            await read_frame(dr, 1 << 20)  # hello 已到 daemon 侧
+            dw.write(pack({"type": "hello-ack", "connectionId": 7, "browser": "chrome"}))
+            await dw.drain()
+            ack = json.loads(await browse_ws.read_message(pr, pw, 1 << 20))
+            assert ack["type"] == "hello-ack", ack
+            self.assertIn(7, meta)
+            dw.close()  # daemon 侧异常断流 → read_frame 抛 IncompleteReadError
+            try:
+                await asyncio.wait_for(task, 2.0)
+                exc: BaseException | None = None
+            except Exception as e:
+                exc = e
+            # 在途消息必丢：泵已死，daemon 侧读到 EOF
+            await browse_ws.client_send(pw, '{"id": 9}')
+            eof = await dr.read()
+            return exc, len(meta), eof
+        exc, meta_len, eof = self.run_adapter(body)
+        self.assertIsNotNone(exc, "daemon 侧断流没有终止泵")
+        self.assertEqual(meta_len, 0, "连接表残留了已断开的连接")
+        self.assertEqual(eof, b"", "daemon 侧没有看到 EOF")
+
+    def test_second_hello_is_not_role_translated_again(self) -> None:
+        """role 翻译只发生在第一条 hello：第二条原样放行。"""
+
+        async def body(meta, task, ws_peer, sock_peer):
+            pr, pw = ws_peer
+            dr, dw = sock_peer
+            await browse_ws.client_send(pw, self._hello())
+            first = await read_frame(dr, 1 << 20)
+            await browse_ws.client_send(pw, self._hello())
+            second = await read_frame(dr, 1 << 20)
+            pw.close(); dw.close()
+            return first["role"], second["role"]
+        first, second = self.run_adapter(body)
+        self.assertEqual(first, "native-host")
+        self.assertEqual(second, "extension")
+
+    def test_drain_failure_terminates_the_adapter(self) -> None:
+        """backpressure（drain 抛 ConnectionError）：异常要冒出泵，不能被吞。"""
+
+        async def scenario():
+            ws_peer, ws_ad = await _pair_streams()
+            sock_peer, sock_ad = await _pair_streams()
+            meta: dict[int, dict] = {}
+            adapter = browse_bridge._Adapter(
+                ws_reader=ws_ad[0], ws_writer=ws_ad[1],
+                sock_reader=sock_ad[0], sock_writer=_ExplodingDrain(sock_ad[1]),
+                meta=meta)
+            task = asyncio.create_task(adapter.pump())
+            pr, pw = ws_peer
+            await browse_ws.client_send(pw, '{"type": "hello", "role": "extension", "browser": "chrome"}')
+            try:
+                await asyncio.wait_for(task, 2.0)
+                exc: BaseException | None = None
+            except Exception as e:
+                exc = e
+            for writer in (pw, ws_ad[1], sock_peer[1], sock_ad[1]):
+                writer.close()
+            return exc, len(meta)
+        exc, meta_len = asyncio.run(scenario())
+        self.assertIsInstance(exc, ConnectionError)
+        self.assertIn("backpressure", str(exc))
+        self.assertEqual(meta_len, 0)

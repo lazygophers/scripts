@@ -104,6 +104,84 @@ export async function targetUrl(target: Target): Promise<string | null> {
 }
 
 /**
+ * BiDi 把 context 嵌在 `target` 里（`script.*`），CLI 拍平了传。两种都认，拍平成
+ * 同一个形状 —— dispatch 和 handler 才会解析出同一个目标（策略目标，CONTEXT.md）。
+ */
+export function flattenTarget(params: Record<string, unknown>): Record<string, unknown> {
+  const nested = params.target;
+  if (nested !== undefined && typeof nested === "object" && nested !== null) {
+    return { ...params, ...(nested as Record<string, unknown>) };
+  }
+  return params;
+}
+
+const contextCache = new Map<string, Promise<Target>>();
+
+function contextCacheKey(params: Record<string, unknown>): string {
+  const flat = flattenTarget(params);
+  const c = typeof flat.context === "string" ? flat.context : "";
+  const m = typeof flat.matchUrl === "string" ? flat.matchUrl : "";
+  return `${c}\u0000${m}`;
+}
+
+/**
+ * 一条指令只解析一次 context：dispatch 先解析（做 deny/feature 的域名裁决），
+ * handler 再调用拿到的是**同一份缓存** —— 回调式共享，handler 签名不变。
+ *
+ * 缓存键是 context/matchUrl 的取值，空键代表「当前活动标签页」，指令结束
+ * （`dropContextCache`）就删，绝不跨指令复用。
+ */
+export function resolveContextOnce(params: Record<string, unknown>): Promise<Target> {
+  const key = contextCacheKey(params);
+  let hit = contextCache.get(key);
+  if (hit === undefined) {
+    hit = resolveContext(flattenTarget(params));
+    contextCache.set(key, hit);
+    void hit.catch(() => contextCache.delete(key)); // 失败不缓存，下次重跑拿真错误
+  }
+  return hit;
+}
+
+/** 指令收尾（dispatch 的 finally）：context 缓存不活得比一条指令长。 */
+export function dropContextCache(params: Record<string, unknown>): void {
+  contextCache.delete(contextCacheKey(params));
+}
+
+/**
+ * Chrome 渠道门错误的翻译。`chrome.dns` / `chrome.processes` 这类 Dev 渠道限定
+ * API 在 stable 上命名空间存在、调用那一刻才抛
+ * `'x' requires dev channel or newer, but this is the stable channel.` ——
+ * `requireApi` 的存在性检查拦不住这一种。是渠道门就返回显式拒绝（spec 5.5），
+ * 不是渠道门返回 null，原样抛还。
+ */
+export function channelGateError(
+  err: unknown,
+  api: string,
+  cannot: string,
+): CommandError | null {
+  if (err instanceof Error && /requires \S+ channel or newer/.test(err.message)) {
+    return new CommandError(
+      "unsupported operation",
+      `chrome.${api} 只有 Dev 及以上渠道的 Chrome 才提供，当前渠道${cannot}`,
+    );
+  }
+  return null;
+}
+
+/** 渠道门版 requireApi 的调用面：跑一个 Dev 渠道限定 API 调用，渠道门错误就地翻译。 */
+export async function channelGuarded<T>(
+  call: () => Promise<T>,
+  api: string,
+  cannot: string,
+): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    throw channelGateError(err, api, cannot) ?? err;
+  }
+}
+
+/**
  * Cross-browser capability check, spec 5.5: explicit refusal, never a silent
  * substitute implementation. `path` is dotted under `chrome`, e.g. `downloads`
  * or `tabs.captureVisibleTab`.

@@ -1,6 +1,6 @@
 import { CommandError, asString } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
-import { formatContext, parseContext, resolveContext, targetUrl, type Target } from "./context.ts";
+import { formatContext, parseContext, resolveContextOnce, targetUrl, type Target } from "./context.ts";
 import { execInPage, type PageResult } from "./inject.ts";
 
 export { parseContext };
@@ -110,5 +110,5 @@ async function resolveTarget(params: Record<string, unknown>): Promise<Target> {
   if (target !== undefined && (typeof target !== "object" || target === null)) {
     throw new CommandError("invalid argument", "target must be an object");
   }
-  return resolveContext({ ...params, ...(target as Record<string, unknown> | undefined) });
+  return resolveContextOnce(params); // 拍平嵌套 target 在 resolveContextOnce 里做
 }

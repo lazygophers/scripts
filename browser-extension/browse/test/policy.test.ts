@@ -121,10 +121,9 @@ test("目标 URL 从 url 或 domain 里取，两个都没有就是浏览器全�
 
 test("命中拒绝名单就抛，子域也算", async () => {
   storageMock({ [CONFIG_KEY]: { ...DEFAULTS, deny_domains: ["bank.test"] } });
-  for (const params of [{ url: "https://bank.test/x" }, { url: "https://a.bank.test/" },
-                        { domain: "bank.test" }]) {
+  for (const url of ["https://bank.test/x", "https://a.bank.test/", "bank.test"]) {
     await rejectsWith(
-      () => enforceDenyList("browsingContext.navigate", params),
+      () => enforceDenyList("browsingContext.navigate", url),
       "lg:user rejected",
     );
   }
@@ -134,16 +133,16 @@ test("拒绝名单管全部方法，不只高危的那些", async () => {
   // 拉黑一个域名之后连导航过去都不该允许
   storageMock({ [CONFIG_KEY]: { ...DEFAULTS, deny_domains: ["bank.test"] } });
   await rejectsWith(
-    () => enforceDenyList("browsingContext.navigate", { url: "https://bank.test/" }),
+    () => enforceDenyList("browsingContext.navigate", "https://bank.test/"),
     "lg:user rejected",
   );
 });
 
 test("没命中就放行，名单空着更是直接放行", async () => {
   storageMock({ [CONFIG_KEY]: { ...DEFAULTS, deny_domains: ["bank.test"] } });
-  await enforceDenyList("browsingContext.navigate", { url: "https://ok.test/" });
+  await enforceDenyList("browsingContext.navigate", "https://ok.test/");
   storageMock({ [CONFIG_KEY]: DEFAULTS });
-  await enforceDenyList("browsingContext.navigate", { url: "https://bank.test/" });
+  await enforceDenyList("browsingContext.navigate", "https://bank.test/");
 });
 
 // ------------------------------------------------------------------ 功能开关
@@ -159,14 +158,14 @@ test("功能目录盖住每个功能的方法，一个方法只属于一个功�
 test("全局禁用：这个功能全拒，别的功能照放", async () => {
   storageMock({ [CONFIG_KEY]: { ...DEFAULTS, disabled_features: ["script"] } });
   await rejectsWith(
-    () => enforceFeatureToggles("script.evaluate", { url: "https://a.test/" }),
+    () => enforceFeatureToggles("script.evaluate", "https://a.test/"),
     "lg:feature disabled",
   );
   await rejectsWith(
-    () => enforceFeatureToggles("script.callFunction", {}),
+    () => enforceFeatureToggles("script.callFunction", null),
     "lg:feature disabled",
   );
-  await enforceFeatureToggles("browsingContext.navigate", { url: "https://a.test/" });
+  await enforceFeatureToggles("browsingContext.navigate", "https://a.test/");
 });
 
 test("按域名禁用：子域一起算，别的域名照放", async () => {
@@ -174,16 +173,16 @@ test("按域名禁用：子域一起算，别的域名照放", async () => {
     [CONFIG_KEY]: { ...DEFAULTS, domain_disabled_features: { "a.test": ["storage"] } },
   });
   await rejectsWith(
-    () => enforceFeatureToggles("storage.getCookies", { domain: "a.test" }),
+    () => enforceFeatureToggles("storage.getCookies", "a.test"),
     "lg:feature disabled",
   );
   await rejectsWith(
-    () => enforceFeatureToggles("storage.setCookie", { url: "https://sub.a.test/x" }),
+    () => enforceFeatureToggles("storage.setCookie", "https://sub.a.test/x"),
     "lg:feature disabled",
   );
-  await enforceFeatureToggles("storage.getCookies", { domain: "b.test" });
+  await enforceFeatureToggles("storage.getCookies", "b.test");
   // 按域名禁用管不到不知道域名的指令 —— 和拒绝名单同一条边界
-  await enforceFeatureToggles("storage.getCookies", {});
+  await enforceFeatureToggles("storage.getCookies", null);
 });
 
 test("审计的出口没有开关，永远放行", async () => {
@@ -194,8 +193,8 @@ test("审计的出口没有开关，永远放行", async () => {
       domain_disabled_features: { a: ["tabs"], b: ["tabs"] },
     },
   });
-  await enforceFeatureToggles("lg:audit.read", {});
-  await enforceFeatureToggles("lg:audit.clear", {});
+  await enforceFeatureToggles("lg:audit.read", null);
+  await enforceFeatureToggles("lg:audit.clear", null);
 });
 
 test("不认识的功能 id 写不进去，存进来的垃圾被清掉", async () => {

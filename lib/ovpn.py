@@ -408,6 +408,11 @@ def parse_pushed_dns(line: str) -> list[str]:
 # 必须全新进程：新 management、resolver 重建、TOTP 换新码。
 RECONNECT_DEADLINE_SECS = 120
 
+# 首次连接的 watchdog：management 口一直安静（openvpn 卡在 hold、认证提示没来、
+# 服务器不回包）时没有任何一层会喊停 —— 老代码只在「连上过之后」才计时，
+# 于是第一次连不上就是无限干等且一个字不打印。
+FIRST_CONNECT_DEADLINE_SECS = 90
+
 # _drive watchdog 强杀后的返回码；不能落在 connect() 的保留集 (0, 2, 127, 130)
 # 里，否则外层不重连直接退出
 _HARD_RESET_RC = 10
@@ -421,10 +426,11 @@ DNS_PROBE_FAILS = 3
 
 
 def _hard_reset(proc, reporter, connected_ever: bool,
-                last_otp_counter: int | None) -> tuple[int, bool, int | None]:
+                last_otp_counter: int | None, *, why: str | None = None
+                ) -> tuple[int, bool, int | None]:
     """watchdog 超时：杀掉 sudo+openvpn 整个进程组，让外层重新拉起。"""
-    reporter.warn(f"VPN 断线后 {RECONNECT_DEADLINE_SECS} 秒没有恢复（认证或状态机卡死），"
-                  "kill 掉 openvpn 整组进程重新拉起")
+    reporter.warn(why or (f"VPN 断线后 {RECONNECT_DEADLINE_SECS} 秒没有恢复（认证或状态机卡死），"
+                          "kill 掉 openvpn 整组进程重新拉起"))
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
     except (ProcessLookupError, PermissionError, OSError):
@@ -466,14 +472,27 @@ class ManagementClient:
         line, self._buf = self._buf.split(b"\n", 1)
         return line.decode("utf-8", "replace").rstrip("\r")
 
-    def authenticate(self) -> None:
-        """management 口令认证：收到 `ENTER PASSWORD:` 后发口令。"""
-        self.sock.settimeout(5)
-        try:
-            data = self.sock.recv(4096)
-        except socket.timeout:
-            return
-        self._buf += data
+    def authenticate(self, timeout: float = 5.0) -> None:
+        """management 口令认证：收到 `ENTER PASSWORD:` 后发口令。
+
+        一次 recv 不保证拿到提示（TCP 可以把它拆开，或先到别的行），
+        拿不到就不发口令 —— openvpn 会忽略后面所有命令（包括 hold release），
+        于是整个连接闷在 hold 里。所以读到提示或 `>INFO`（这台不要口令）
+        为止，最多等 timeout 秒。
+        """
+        end = time.time() + timeout
+        while b"ENTER PASSWORD" not in self._buf and b">INFO" not in self._buf:
+            left = end - time.time()
+            if left <= 0:
+                return
+            self.sock.settimeout(left)
+            try:
+                data = self.sock.recv(4096)
+            except socket.timeout:
+                return
+            if not data:
+                return
+            self._buf += data
         if b"ENTER PASSWORD" in self._buf:
             self._buf = b""
             self.send(self._password)
@@ -703,13 +722,22 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
     crv_state: str | None = None
     connected_ever = False
     reconnecting = False
-    deadline: float | None = None
+    # 首次连接也上计时：CONNECTED 之前一直有效，超时就整组重拉并说明原因
+    deadline: float | None = time.time() + FIRST_CONNECT_DEADLINE_SECS
     probe_next: float | None = None  # 连上后才开始计时
     probe_fails = 0
 
     while True:
         if proc.poll() is not None:
             return proc.returncode or 1, connected_ever, last_otp_counter
+        if deadline is not None and time.time() > deadline:
+            # 这里检查而不是只在 readline 超时分支里检查：openvpn 可能一直在刷
+            # STATE 行（比如 RECONNECTING 打转），那条分支永远轮不到
+            why = None if connected_ever else (
+                f"VPN 首次连接 {FIRST_CONNECT_DEADLINE_SECS} 秒还没成功"
+                "（连不上服务器，或 OpenVPN 卡在认证前没有反应），"
+                "kill 掉 openvpn 整组进程重新拉起")
+            return _hard_reset(proc, reporter, connected_ever, last_otp_counter, why=why)
         if probe_next is not None and split is not None and time.time() >= probe_next:
             probe_next = time.time() + DNS_PROBE_INTERVAL
             if split.health_check() is False:
@@ -723,9 +751,7 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
         try:
             line = mgmt.readline(timeout=1.0)
         except socket.timeout:
-            if reconnecting and deadline is not None and time.time() > deadline:
-                return _hard_reset(proc, reporter, connected_ever, last_otp_counter)
-            continue
+            continue  # 超时判定统一在循环开头做
         except OSError:
             return (1 if reconnecting else 0), connected_ever, last_otp_counter
         if line is None:

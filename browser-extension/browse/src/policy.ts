@@ -352,16 +352,18 @@ export function targetUrl(params: Record<string, unknown> | undefined): string |
  * 拒绝名单这一关。命中就抛，**一条指令都不往下走**。
  *
  * 它管的是**全部**方法，不只高危的那些：拉黑一个域名之后连导航过去都不该允许。
+ * `url` 是 dispatch 解析好的**策略目标**（CONTEXT.md）——显式 `url`/`domain`，或
+ * 页面方法解析出的真实 tab URL；不是 handler 才知道的那种事后真相。
  */
 export async function enforceDenyList(
   method: string,
-  params: Record<string, unknown>,
+  url: string | null,
 ): Promise<void> {
   const { deny_domains: deny } = await getConfig();
   if (deny.length === 0) {
     return;
   }
-  const domain = domainOf(targetUrl(params));
+  const domain = domainOf(url);
   for (const pattern of deny) {
     if (domainMatches(domain, pattern)) {
       throw new CommandError(
@@ -373,20 +375,20 @@ export async function enforceDenyList(
 }
 
 /**
- * 功能开关这一关。全局禁用对一切域名生效；按域名禁用和拒绝名单用同一套取域名的规则 ——
- * 从参数的 `url` / `domain` 里取，取不出来（比如只给了 tab context）就只有全局禁用管得
- * 到它。这是拒绝名单已有的边界，不是新开的口子。
+ * 功能开关这一关。全局禁用对一切域名生效；按域名禁用和拒绝名单用同一个策略目标
+ * （dispatch 解析好的 url）。没有页面目标的全局动作（列书签、搜历史）只有全局
+ * 禁用管得到 —— 它们本来就没有目标域。
  */
 export async function enforceFeatureToggles(
   method: string,
-  params: Record<string, unknown>,
+  url: string | null,
 ): Promise<void> {
   const feature = FEATURE_OF.get(method);
   if (!feature) {
     return;
   }
   const { disabled_features, domain_disabled_features } = await getConfig();
-  const domain = domainOf(targetUrl(params));
+  const domain = domainOf(url);
   const off = disabled_features.includes(feature.id)
     || (domain !== null && Object.entries(domain_disabled_features).some(
       ([pattern, ids]) => ids.includes(feature.id) && domainMatches(domain, pattern),
@@ -431,8 +433,9 @@ export const RISKY_METHODS: Record<string, string> = {
 /**
  * 这条指令算高危动作吗，算就返回动作名。
  *
- * `js=` 定位器在 MAIN world 求值（`handlers/input.ts`），spec 4.4 点名它也是高危，所以
- * 带 `js=` 的 `input.*` 一样算 —— 光看方法名会漏。
+ * `js=` 定位器在 MAIN world 求值（`handlers/input.ts`），spec 4.4 点名它也是高危。
+ * 只有 `input.*` 会这么干 —— 别的方法带 `js=` selector 也不会进 MAIN world，
+ * 照搬旧口径会把审计动作标错。
  */
 export function riskyAction(
   method: string,
@@ -442,9 +445,11 @@ export function riskyAction(
   if (known) {
     return known;
   }
-  const selector = params?.selector;
-  if (typeof selector === "string" && selector.startsWith("js=")) {
-    return "evalMainWorld";
+  if (method.startsWith("input.")) {
+    const selector = params?.selector;
+    if (typeof selector === "string" && selector.startsWith("js=")) {
+      return "evalMainWorld";
+    }
   }
   return null;
 }

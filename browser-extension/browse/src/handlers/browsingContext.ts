@@ -1,5 +1,5 @@
 import { CommandError, optionalString, requireString } from "../protocol.ts";
-import { formatContext, requireApi, resolveContext, type Target } from "./context.ts";
+import { formatContext, requireApi, resolveContextOnce, type Target } from "./context.ts";
 
 interface ContextInfo {
   context: string;
@@ -213,7 +213,7 @@ async function requireTabOnly(
   params: Record<string, unknown>,
   what: string,
 ): Promise<Target> {
-  const target = await resolveContext(params);
+  const target = await resolveContextOnce(params);
   if (target.frameId !== undefined) {
     throw new CommandError(
       "unsupported operation",

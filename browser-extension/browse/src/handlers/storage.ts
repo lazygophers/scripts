@@ -1,6 +1,6 @@
 import { CommandError, optionalString, requireString } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
-import { requireApi, resolveContext, targetUrl } from "./context.ts";
+import { requireApi, resolveContextOnce, targetUrl } from "./context.ts";
 import { runInPage, type PageResult } from "./inject.ts";
 
 /**
@@ -78,7 +78,7 @@ export async function storageDeleteCookies(
 export async function storageGetLocalStorage(
   params: Record<string, unknown>,
 ): Promise<{ entries: Record<string, string> }> {
-  const target = await resolveContext(params);
+  const target = await resolveContextOnce(params);
   await confirm({
     action: "readLocalStorage",
     method: "storage.getLocalStorage",
@@ -93,7 +93,7 @@ export async function storageSetLocalStorage(
   params: Record<string, unknown>,
 ): Promise<{ written: number }> {
   const entries = normalizeEntries(params);
-  const target = await resolveContext(params);
+  const target = await resolveContextOnce(params);
   await confirm({
     action: "writeLocalStorage",
     method: "storage.setLocalStorage",

@@ -1,4 +1,4 @@
-import { resolveContext } from "./context.ts";
+import { resolveContextOnce } from "./context.ts";
 import { runInPage, type PageResult } from "./inject.ts";
 
 /**
@@ -21,7 +21,7 @@ export async function pageSnapshot(
   const limit = typeof params.limit === "number" && params.limit > 0
     ? Math.floor(params.limit)
     : DEFAULT_LIMIT;
-  const target = await resolveContext(params);
+  const target = await resolveContextOnce(params);
   return runInPage(target, "ISOLATED", pageCollect, [limit]);
 }
 

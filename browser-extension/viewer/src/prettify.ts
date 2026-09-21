@@ -4,9 +4,6 @@
  * 这一版只有「原样文本」一种渲染结果（排版好的纯文本），按类型分流的渲染器是后面的票。
  */
 
-// 只借类型，编译后这行就没了——data 包仍然是打开 json / yaml 时才加载的那一份。
-import type { DataError, Parsed } from "./data.ts";
-import type { Entry } from "./listing.ts";
 import { onSettingsChange, readSettings, writeSettings } from "./settings.ts";
 import { PALETTES, STYLES, applyTheme } from "./themes.ts";
 
@@ -270,22 +267,32 @@ function mountListing(doc: Document): void {
 }
 
 async function fillListing(doc: Document, host: HTMLElement, tbody: HTMLElement): Promise<void> {
-  const module = await load("listing.js");
-  const parse = module.parseListing as (t: HTMLElement) => Entry[];
-  const render = module.renderListing as (d: Document, e: Entry[], p: string) => HTMLElement;
+  const module = await LAZY.listing();
   // 这时表已经从页面上摘下来了，但节点还在手里，照样读得出来。
-  host.replaceChildren(render(doc, parse(tbody), new URL(doc.URL).pathname));
+  host.replaceChildren(module.renderListing(doc, module.parseListing(tbody), new URL(doc.URL).pathname));
   host.classList.add("lfv-rendered");
 }
 
 /**
- * 按需加载一个懒加载包。这些包在浏览器里是 dist 里的独立文件，地址得问扩展自己要。
+ * 类型化懒加载：每个包的导出面以 `typeof import("./x.ts")` 的形状声明一次，加载点
+ * 拿到的直接是有类型的 module —— 包里改名/换形，typecheck 当场炸，不用等运行时。
+ * 2026-09-21 之前每个加载点都自己 `as` 一遍，签名漂移没有任何东西拦。
  *
- * 动态 `import()` 本身带缓存，同一个包加载第二次不会再下载一遍。
+ * 浏览器里加载的是 dist 里的独立文件（源文件只是类型的出处），地址要问扩展自己要；
+ * 动态 `import()` 自带缓存，同一个包加载第二次不会再下载一遍。
  */
-function load(name: string): Promise<Record<string, unknown>> {
-  return import(chrome.runtime.getURL(name));
-}
+/** 导出给测试：懒加载面和构建入口的一致性由 `test/prettify.test.ts` 钉住。 */
+export const LAZY = {
+  listing: () => import(chrome.runtime.getURL("listing.js")) as Promise<typeof import("./listing.ts")>,
+  data: () => import(chrome.runtime.getURL("data.js")) as Promise<typeof import("./data.ts")>,
+  csv: () => import(chrome.runtime.getURL("csv.js")) as Promise<typeof import("./csv.ts")>,
+  log: () => import(chrome.runtime.getURL("log.js")) as Promise<typeof import("./log.ts")>,
+  markdown: () => import(chrome.runtime.getURL("markdown.js")) as Promise<typeof import("./markdown.ts")>,
+  mermaid: () => import(chrome.runtime.getURL("mermaid.js")) as Promise<typeof import("./mermaid.ts")>,
+  katex: () => import(chrome.runtime.getURL("katex.js")) as Promise<typeof import("./katex.ts")>,
+  highlight: () => import(chrome.runtime.getURL("highlight.js")) as Promise<typeof import("./highlight.ts")>,
+  search: () => import(chrome.runtime.getURL("search.js")) as Promise<typeof import("./search.ts")>,
+};
 
 /** markdown 类的扩展名。`mdx` 也走文档视图，只是组件位置换成占位块。 */
 const MARKDOWN_EXTS = new Set(["md", "markdown", "mdx"]);
@@ -328,19 +335,16 @@ async function fillData(
   text: string,
   yaml: boolean,
 ): Promise<void> {
-  const module = await load("data.js");
-  const parse = module.parseData as (t: string, y: boolean) => Parsed;
-  const parsed = parse(text, yaml);
+  const module = await LAZY.data();
+  const parsed = module.parseData(text, yaml);
 
   if (parsed.ok) {
-    const tree = (module.renderTree as (d: Document, v: unknown) => HTMLElement)(doc, parsed.value);
-    host.replaceChildren(makeCopyButton(doc, text), tree);
+    host.replaceChildren(makeCopyButton(doc, text), module.renderTree(doc, parsed.value));
   } else {
-    const note = (module.renderError as (d: Document, e: DataError) => HTMLElement)(
-      doc,
-      parsed.error,
+    host.replaceChildren(
+      module.renderError(doc, parsed.error),
+      renderCode(doc, text, yaml ? "yaml" : "json"),
     );
-    host.replaceChildren(note, renderCode(doc, text, yaml ? "yaml" : "json"));
   }
   host.classList.add("lfv-rendered");
 }
@@ -354,10 +358,11 @@ function renderCsv(doc: Document, text: string): HTMLElement {
 }
 
 async function fillCsv(doc: Document, host: HTMLElement, text: string): Promise<void> {
-  const module = await load("csv.js");
-  const rows = (module.parseCsv as (t: string) => string[][])(text);
-  const table = (module.renderTable as (d: Document, r: string[][]) => HTMLElement)(doc, rows);
-  host.replaceChildren(makeCopyButton(doc, text), table);
+  const module = await LAZY.csv();
+  host.replaceChildren(
+    makeCopyButton(doc, text),
+    module.renderTable(doc, module.parseCsv(text)),
+  );
   host.classList.add("lfv-rendered");
 }
 
@@ -370,9 +375,8 @@ function renderLog(doc: Document, text: string): HTMLElement {
 }
 
 async function fillLog(doc: Document, host: HTMLElement, text: string): Promise<void> {
-  const module = await load("log.js");
-  const render = module.renderLog as (d: Document, t: string) => Promise<HTMLElement>;
-  host.replaceChildren(makeCopyButton(doc, text), await render(doc, text));
+  const module = await LAZY.log();
+  host.replaceChildren(makeCopyButton(doc, text), await module.renderLog(doc, text));
   host.classList.add("lfv-rendered");
 }
 
@@ -416,10 +420,9 @@ function renderDocument(doc: Document, text: string): HTMLElement {
 }
 
 async function fillDocument(doc: Document, host: HTMLElement, text: string): Promise<void> {
-  const module = await load("markdown.js");
-  const render = module.renderMarkdown as (d: Document, t: string, mdx: boolean) => HTMLElement;
-  const article = render(doc, text, extOf(sourceUrl(doc)) === "mdx");
-  const toc = (module.renderToc as (d: Document, a: HTMLElement) => HTMLElement | null)(doc, article);
+  const module = await LAZY.markdown();
+  const article = module.renderMarkdown(doc, text, extOf(sourceUrl(doc)) === "mdx");
+  const toc = module.renderToc(doc, article);
   host.replaceChildren(...(toc === null ? [article] : [toc, article]));
 
   // 围栏代码块上 marked 已经写好了 `language-xx`，复用同一个高亮包着色。
@@ -494,8 +497,8 @@ async function drawDiagrams(doc: Document, article: HTMLElement): Promise<void> 
   const blocks = article.querySelectorAll<HTMLElement>("pre > code.language-mermaid");
   if (blocks.length === 0) return;
 
-  const module = await load("mermaid.js");
-  const draw = module.renderDiagram as (code: string, id: string) => Promise<string>;
+  const module = await LAZY.mermaid();
+  const draw = module.renderDiagram;
 
   await Promise.all(
     Array.from(blocks, async (code, i) => {
@@ -522,10 +525,9 @@ async function typesetMath(doc: Document, article: HTMLElement): Promise<void> {
   if (nodes.length === 0) return;
 
   ensureStylesheet(doc, "katex.css", "lfv-katex-style");
-  const module = await load("katex.js");
-  const render = module.renderMath as (n: HTMLElement, tex: string, display: boolean) => void;
+  const module = await LAZY.katex();
   for (const node of nodes) {
-    render(node, node.dataset["tex"] ?? "", node.classList.contains("lfv-math-block"));
+    module.renderMath(node, node.dataset["tex"] ?? "", node.classList.contains("lfv-math-block"));
   }
 }
 
@@ -542,11 +544,8 @@ function scrollToHash(doc: Document): void {
  * 结束时打一个 `lfv-colored` 标记——不着色的情况也打，这样等它的人有确定的信号。
  */
 async function colorize(code: HTMLElement, language: string): Promise<void> {
-  const module = await load("highlight.js");
-  const html = (module.colorize as (c: string, l: string) => string | null)(
-    code.textContent ?? "",
-    language,
-  );
+  const module = await LAZY.highlight();
+  const html = module.colorize(code.textContent ?? "", language);
   if (html !== null) code.innerHTML = html;
   code.classList.add("lfv-colored");
 }
@@ -600,8 +599,8 @@ function wireSearch(doc: Document): void {
     if (key.key !== "f" || !(key.metaKey || key.ctrlKey)) return;
     if (!doc.documentElement.classList.contains("lfv-on")) return;
     key.preventDefault();
-    void load("search.js").then((module) => {
-      (module.openSearch as (d: Document) => void)(doc);
+    void LAZY.search().then((module) => {
+      module.openSearch(doc);
     });
   });
 }

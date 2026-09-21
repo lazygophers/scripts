@@ -2,6 +2,7 @@ import { record } from "../audit.ts";
 import { domainOf, enforceDenyList, enforceFeatureToggles, riskyAction, targetUrl } from "../policy.ts";
 import { CommandError } from "../protocol.ts";
 import { auditClear, auditRead } from "./audit.ts";
+import { dropContextCache, resolveContextOnce, targetUrl as tabUrl } from "./context.ts";
 import { bookmarksCreate, bookmarksRemove, bookmarksSearch } from "./bookmarks.ts";
 import {
   browsingContextActivate,
@@ -215,13 +216,77 @@ export const HANDLERS: Record<string, Handler> = {
 const NOT_AUDITED = new Set(["lg:audit.read", "lg:audit.clear"]);
 
 /**
- * 一条指令的完整一生：拒绝名单 → 执行 → 记账。
+ * 作用对象是一个页面 context 的方法：域名策略（deny / feature）要跟着解析出来的
+ * 真实页面走，不只看 params 里有没有 `url` / `domain`。表外的全局方法（列书签、
+ * 搜历史、设代理）没有目标域，策略里的域名维度对它们不适用 —— 全局禁用照管。
+ *
+ * 与 `resolveContextOnce` 的调用方对齐：handler 会解析 context 的方法都在这里。
+ */
+const PAGE_METHODS = new Set([
+  "browsingContext.close",
+  "browsingContext.activate",
+  "browsingContext.navigate",
+  "browsingContext.reload",
+  "browsingContext.captureScreenshot",
+  "script.evaluate",
+  "script.callFunction",
+  "input.click",
+  "input.type",
+  "input.scroll",
+  "input.key",
+  "storage.getLocalStorage",
+  "storage.setLocalStorage",
+  "lg:page.snapshot",
+  "lg:tabs.group",
+  "lg:tabs.ungroup",
+  "lg:pageCapture.saveMhtml",
+  "lg:capture.recordTab",
+]);
+
+/** 这条指令的域名策略要不要跟解析出的页面目标走：页面方法，或显式给了 context / matchUrl。 */
+function wantsContext(method: string, params: Record<string, unknown>): boolean {
+  return PAGE_METHODS.has(method)
+    || params.context !== undefined
+    || params.matchUrl !== undefined;
+}
+
+/**
+ * 策略目标（CONTEXT.md）：这条指令真正作用到的页面地址。显式 `url` / `domain`
+ * 直接用；页面方法解析 context 拿真实 tab URL —— deny / feature / 确认 / 审计
+ * 共用这一份。读不到（标签页没了）就 fail closed 拒绝，绝不带着 null 放行。
+ */
+async function resolvePolicyTarget(
+  method: string,
+  params: Record<string, unknown>,
+): Promise<string | null> {
+  const explicit = targetUrl(params);
+  if (explicit) {
+    return explicit;
+  }
+  if (!wantsContext(method, params)) {
+    return null; // 全局动作：没有目标域，只有全局禁用管得到
+  }
+  const target = await resolveContextOnce(params); // 解析失败本身就是拒绝（fail closed）
+  const url = await tabUrl(target);
+  if (url === null) {
+    throw new CommandError(
+      "no such frame",
+      `读不到目标页面的 URL，${method} 拒绝执行（fail closed）`,
+    );
+  }
+  return url;
+}
+
+/**
+ * 一条指令的完整一生：解析策略目标 → 拒绝名单 → 功能开关 → 执行 → 记账。
  *
  * 2026-09-14 之前这三件事在 daemon 里（`_gate` + `_audit`）。搬过来之后这里是唯一的
  * 收口 —— 每条指令都从这儿过，漏不掉。
  *
  * 拒绝名单管**全部**方法，不只高危的那些：拉黑一个域名之后连导航过去都不该允许，所以
- * 它在 handler 之前、`confirm()` 之外单独走一道。
+ * 它在 handler 之前、`confirm()` 之外单独走一道。域名取自策略目标：隐式 context
+ * （context / matchUrl / 当前标签页）解析出的真实页面 URL 也算数 —— 2026-09-21 之前
+ * 只看 params.url/domain，页面动作可以绕过域名规则。
  */
 export async function dispatch(
   method: string,
@@ -239,45 +304,51 @@ export async function dispatch(
   }
 
   const started = Date.now();
-  const domain = domainOf(targetUrl(params));
+  let domain: string | null = null;
   try {
-    await enforceDenyList(method, params);
-    await enforceFeatureToggles(method, params);
-  } catch (err) {
-    await record({
-      ts: new Date().toISOString(),
-      method,
-      domain,
-      action: riskyAction(method, params),
-      result: "denied",
-      ms: Date.now() - started,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    throw err;
-  }
+    try {
+      const url = await resolvePolicyTarget(method, params);
+      domain = domainOf(url);
+      await enforceDenyList(method, url);
+      await enforceFeatureToggles(method, url);
+    } catch (err) {
+      await record({
+        ts: new Date().toISOString(),
+        method,
+        domain,
+        action: riskyAction(method, params),
+        result: "denied",
+        ms: Date.now() - started,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
 
-  try {
-    const result = await handler(params);
-    await record({
-      ts: new Date().toISOString(),
-      method,
-      domain,
-      action: riskyAction(method, params),
-      result: "success",
-      ms: Date.now() - started,
-    });
-    return result;
-  } catch (err) {
-    const rejected = err instanceof CommandError && err.code === "lg:user rejected";
-    await record({
-      ts: new Date().toISOString(),
-      method,
-      domain,
-      action: riskyAction(method, params),
-      result: rejected ? "denied" : "error",
-      ms: Date.now() - started,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    throw err;
+    try {
+      const result = await handler(params);
+      await record({
+        ts: new Date().toISOString(),
+        method,
+        domain,
+        action: riskyAction(method, params),
+        result: "success",
+        ms: Date.now() - started,
+      });
+      return result;
+    } catch (err) {
+      const rejected = err instanceof CommandError && err.code === "lg:user rejected";
+      await record({
+        ts: new Date().toISOString(),
+        method,
+        domain,
+        action: riskyAction(method, params),
+        result: rejected ? "denied" : "error",
+        ms: Date.now() - started,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  } finally {
+    dropContextCache(params);
   }
 }

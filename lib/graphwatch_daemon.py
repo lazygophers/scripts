@@ -11,7 +11,7 @@ import time
 import traceback
 from pathlib import Path
 
-from lib.graphwatch_config import GraphwatchError, config_home, load_config
+from lib.graphwatch_config import GraphwatchError, config_home, load_config, log_path
 
 # 整目录排除（watch 事件过滤 + 新鲜度比对共用）：构建产物/依赖/缓存/临时
 # 目录不是「源码改动」，不排除的话 IDE/构建器一碰 build/ 就永远显示过期
@@ -112,10 +112,6 @@ def release_singleton_lock(fd) -> None:
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUPS = 3
 NOTIFY_THROTTLE_SECS = 300
-
-
-def log_path() -> Path:
-    return config_home() / "logs" / "graphwatch.log"
 
 
 def rotate_log() -> None:

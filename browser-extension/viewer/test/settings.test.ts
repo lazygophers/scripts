@@ -4,8 +4,8 @@ import { afterEach, beforeEach, test } from "node:test";
 
 import { clearChrome, installChrome, page, storageMock } from "./mock.ts";
 import { fileAccess, readSettings, renderSettings, writeSettings } from "../src/settings.ts";
-import { fileOf, load } from "../src/page.ts";
-import { rules } from "../src/rules.ts";
+import { fileOf, rules } from "../src/intercept.ts";
+import { load } from "../src/page.ts";
 
 /** 本轮开的标签页。欢迎页和展示页都是这么开出来的。 */
 let opened: string[] = [];

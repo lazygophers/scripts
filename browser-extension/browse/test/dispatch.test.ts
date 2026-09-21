@@ -3,8 +3,8 @@ import test from "node:test";
 import { read } from "../src/audit.ts";
 import { confirm, setConfirmHook } from "../src/handlers/confirm.ts";
 import { HANDLERS, dispatch } from "../src/handlers/index.ts";
-import { FEATURE_OF } from "../src/policy.ts";
-import { clearChrome, rejectsWith, storageMock } from "./mock.ts";
+import { FEATURE_OF, riskyAction } from "../src/policy.ts";
+import { clearChrome, installChrome, rejectsWith, storageMock } from "./mock.ts";
 
 /** Spec 5.1, verbatim. If this list and HANDLERS disagree, one of them is wrong. */
 const V1 = [
@@ -211,4 +211,55 @@ test("审计写不进去也不能把指令搞挂", async () => {
   assert.ok(err instanceof Error);
   assert.doesNotMatch(err.message, /QUOTA/, "失败原因不该是审计");
   clearChrome();
+});
+
+// ------------------------------------------------ 策略目标（CONTEXT.md）：隐式页面目标也算数
+
+test("deny_domains 拦得住隐式页面目标：context / matchUrl / 当前标签页", async () => {
+  installChrome({
+    tabs: {
+      query: async () => [{ id: 3, url: "https://bank.test/x" }],
+      get: async (id: number) => ({ id, url: "https://bank.test/x" }),
+    },
+  });
+  storageMock({ "browse:config": { deny_domains: ["bank.test"] } });
+  // input.click 的 params 没有 url/domain —— 2026-09-21 之前它绕得过拒绝名单
+  const err = await rejectsWith(
+    () => dispatch("input.click", { selector: "css=a" }),
+    "lg:user rejected",
+  );
+  assert.match(err.message, /拒绝名单/);
+  const [entry] = await read();
+  assert.equal(entry?.domain, "bank.test", "审计要记解析出的真实域名");
+  clearChrome();
+});
+
+test("页面方法读不到目标 URL 就 fail closed 拒绝，不带着 null 放行", async () => {
+  installChrome({
+    tabs: {
+      query: async () => [{ id: 3, url: "https://a.test/x" }],
+      get: async () => null, // 标签页在解析 context 和读 URL 之间消失
+    },
+  });
+  storageMock();
+  await rejectsWith(() => dispatch("input.click", { selector: "css=a" }), "no such frame");
+  const [entry] = await read();
+  assert.equal(entry?.result, "denied");
+  clearChrome();
+});
+
+test("全局动作没有策略目标：deny 的域名维度管不到，也不去解析 context", async () => {
+  storageMock({ "browse:config": { deny_domains: ["bank.test"] } });
+  // 故意不装 chrome.tabs：这条要是去解析 context 就会当场炸
+  installChrome({ topSites: { get: async () => [] } });
+  await dispatch("lg:topSites.list", {});
+  clearChrome();
+});
+
+test("riskyAction：只有 input.* 的 js= 定位器才标 evalMainWorld", async () => {
+  assert.equal(riskyAction("input.click", { selector: "js=document.title" }), "evalMainWorld");
+  assert.equal(riskyAction("input.type", { selector: "js=1" }), "evalMainWorld");
+  // 别的方法带 js= selector 也不进 MAIN world，旧口径会把审计动作标错
+  assert.equal(riskyAction("lg:page.snapshot", { selector: "js=1" }), null);
+  assert.equal(riskyAction("input.click", { selector: "css=a" }), null);
 });

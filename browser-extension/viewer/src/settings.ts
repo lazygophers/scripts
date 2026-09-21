@@ -8,10 +8,10 @@
  *    <https://developer.chrome.com/docs/extensions/reference/api/extension#method-isAllowedFileSchemeAccess>），
  *    所以页面上写的是实况，不是「大概没开吧」。
  * 2. 有几类文件浏览器会直接下载，viewer 根本没机会出手。默认不管这件事，
- *    用户自己打开「强制拦截」才拦，拦法见 `rules.ts`。
+ *    用户自己打开「强制拦截」才拦，拦法见 `intercept.ts`。
  */
 
-import { applyRules } from "./rules.ts";
+import { applyRules } from "./intercept.ts";
 import {
   DEFAULT_CUSTOM,
   DEFAULT_PALETTE,

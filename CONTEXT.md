@@ -20,6 +20,8 @@
 - **daemon（常驻中转）**：本机一个 Unix socket 服务端，站在 CLI 与浏览器之间。存在的理由：浏览器只会 fork native host，而用户敲命令的 CLI 是另一个进程，两者天生连不上。只做传输与路由，不懂指令语义。
 - **native host（本机宿主）**：浏览器按 native messaging 协议 fork 起来的那个进程，实为 `browse --native-host`。一头是浏览器给的 stdin/stdout 管道，一头是 daemon 的 socket，只搬运不解释。
 - **command（指令）**：一条 WebDriver BiDi 形状的请求信封 `{id, method, params}`，`method` 写成 `<module>.<action>`（私有能力带 `lg:` 前缀，如 `lg:history.search`）。回包只有 Success / Error 两种，错误码用 BiDi 标准枚举或带冒号的扩展码。
+- **策略目标（policy target）**：一条指令真正作用到的页面地址，由 context / match-url / 当前标签页解析而来。dispatch 在执行前解析一次，拒绝名单、功能开关、确认、执行、审计共用同一份；读不到地址即拒绝（fail closed）。没有页面目标的全局动作（如 history.search）没有策略目标。
+- **停止（stopped）**：连接生命周期的单一状态，表达「用户不要自动重连」。持久化，跨 Service Worker 重启保持；用户 connect 或浏览器完整启动才解除。
 
 ## viewer（本地文件展示）
 
@@ -30,6 +32,7 @@
 - **降级渲染（degraded render）**：某种语法做不到完整效果时，仍按普通 markdown 渲染正文，在做不到的那个位置留一个写明原因的占位块。信息不丢，是「这里本来有东西」的痕迹。
 - **下载（download）**：浏览器判定某文件类型不可内联，转而存盘。存盘的页面根本不存在，viewer 无从接管。默认不管已被下载的类型；**强制拦截（force intercept）**是一个用户自己开的开关，开了就在导航发生前把这类文件改跳到 viewer 自己的页面。
 - **file 权限开关**：`chrome://extensions` 里那个「允许访问文件网址」。扩展声明 `host_permissions` 不够，必须用户手动打开，运行时可用 `chrome.extension.isAllowedFileSchemeAccess()` 读到真实状态。
+- **拦截协议（intercept）**：强制拦截的 URL 约定——dNR 规则生成与 `file=` 参数编解码两端，同一个 module 拥有；协议两端不许各自手写编解码。
 
 ## git 工作流
 

@@ -1,5 +1,5 @@
 import { CommandError, optionalString, requireString } from "../protocol.ts";
-import { requireApi } from "./context.ts";
+import { channelGuarded, requireApi } from "./context.ts";
 
 /**
  * 只读信息类：topSites / search / dns / idle / processes / system。
@@ -39,7 +39,12 @@ export async function dnsResolve(
 ): Promise<{ address: string; isCached: boolean }> {
   requireApi("dns", "resolving hostnames");
   const hostname = requireString(params.hostname, "hostname");
-  const result = await chrome.dns.resolve(hostname);
+  // chrome.dns 是 Dev 渠道限定 API：渠道门错误由 channelGuarded 翻译成显式拒绝
+  const result = await channelGuarded(
+    () => chrome.dns.resolve(hostname),
+    "dns",
+    "做不了 DNS 解析",
+  );
   return { address: result.address, isCached: result.isCached };
 }
 
@@ -58,7 +63,11 @@ export async function idleState(
 
 export async function processesList(): Promise<{ processes: unknown[] }> {
   requireApi("processes", "listing browser processes");
-  const map = await chrome.processes.processes();
+  const map = await channelGuarded(
+    () => chrome.processes.processes(),
+    "processes",
+    "列不了浏览器进程",
+  );
   const processes = Object.values(map).sort(
     (a, b) => (b.cpu ?? 0) - (a.cpu ?? 0),
   );

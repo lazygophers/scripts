@@ -12,6 +12,8 @@ import sys
 import time
 from pathlib import Path
 
+from lib.graphwatch_config import GraphwatchError, log_path
+
 LAUNCHD_LABEL = "com.lazygophers.graphwatch"
 
 
@@ -26,8 +28,6 @@ def launchd_plist_path() -> Path:
 
 def launchd_plist() -> str:
     """LaunchAgent plist：KeepAlive 崩了自动拉起，RunAtLoad 登录自启。"""
-    from lib.graphwatch import log_path
-
     exe = script_path()
     log = log_path()
     label = LAUNCHD_LABEL
@@ -170,7 +170,7 @@ class LaunchdService:
         # start 可重新 bootstrap）
         return launchd_plist_path().is_file()
 
-    def state(self, runner, state: dict) -> dict:
+    def state(self, runner, state: dict, alive=None) -> dict:
         if not _launchd_gone(runner):
             import re
 
@@ -205,7 +205,7 @@ class SystemdService:
         r = runner(["systemctl", "--user", "is-enabled", "graphwatch.service"])
         return r.returncode == 0
 
-    def state(self, runner, state: dict) -> dict:
+    def state(self, runner, state: dict, alive=None) -> dict:
         r = runner(["systemctl", "--user", "show", "graphwatch.service",
                     "--property=MainPID,ActiveState,ExecMainStatus"])
         text = getattr(r, "stdout", b"").decode(errors="replace")
@@ -238,10 +238,11 @@ class SchtasksService:
         r = runner(["schtasks", "/Query", "/TN", "graphwatch"])
         return r.returncode == 0
 
-    def state(self, runner, state: dict) -> dict:
-        from lib.graphwatch import daemon_alive
-
-        state["running"] = daemon_alive()
+    def state(self, runner, state: dict, alive=None) -> dict:
+        # daemon_alive 是运行态查询，属主是 daemon；测试注入替身，生产惰性导入。
+        if alive is None:
+            from lib.graphwatch_daemon import daemon_alive as alive
+        state["running"] = alive()
         return state
 
 
@@ -266,13 +267,11 @@ def install_service(runner=None) -> None:
 
 def service_control(action: str, runner=None) -> None:
     """start / stop / restart 已注册的服务。stop 不动注册。"""
-    from lib.graphwatch import GraphwatchError
-
     if runner is None:
         runner = _checked_runner()
     if action not in ("start", "stop", "restart"):
         raise GraphwatchError(f"未知动作 {action!r}，可用: start / stop / restart")
-    if not service_registered():
+    if not service_registered(runner):
         raise GraphwatchError("服务未注册，先: graphwatch install")
     backend().control(action, runner)
 
@@ -294,7 +293,7 @@ def service_registered(runner=None) -> bool:
     return backend().registered(runner)
 
 
-def service_state(runner=None) -> dict:
+def service_state(runner=None, alive=None) -> dict:
     """服务执行态：注册 / 运行 / PID / 上次退出码 / 运行时长。"""
     import subprocess
 
@@ -306,4 +305,4 @@ def service_state(runner=None) -> dict:
         def runner(cmd, **kw):
             kw.setdefault("check", False)
             return subprocess.run(cmd, capture_output=True, **kw)
-    return backend().state(runner, state)
+    return backend().state(runner, state, alive)

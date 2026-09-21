@@ -697,7 +697,7 @@ class TestService(GraphwatchCase):
             cmds.append(cmd)
             rc = 1 if "print" in " ".join(cmd) else 0
             return type("R", (), {"returncode": rc})()
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"), \
+        with unittest.mock.patch.object(graphwatch_service.sys, "platform", "darwin"), \
              unittest.mock.patch.object(graphwatch_service, "launchd_plist_path", return_value=plist):
             graphwatch_service.install_service(runner=fake_run)
             boot = graphwatch_service._sh("launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist))
@@ -712,7 +712,7 @@ class TestService(GraphwatchCase):
         def fake_run(cmd, **kw):
             cmds.append(cmd)
             return type("R", (), {"returncode": 0})()
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"):
+        with unittest.mock.patch.object(graphwatch_service.sys, "platform", "linux"):
             graphwatch_service.install_service(runner=fake_run)
         self.assertIn(["systemctl", "--user", "enable", "--now", "graphwatch.service"], cmds)
         unit = Path.home() / ".config" / "systemd" / "user" / "graphwatch.service"
@@ -727,7 +727,7 @@ class TestService(GraphwatchCase):
             cmds.append(cmd)
             rc = 1 if "print" in " ".join(cmd) else 0
             return type("R", (), {"returncode": rc})()
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"), \
+        with unittest.mock.patch.object(graphwatch_service.sys, "platform", "darwin"), \
              unittest.mock.patch.object(graphwatch_service, "launchd_plist_path", return_value=p):
             graphwatch_service.uninstall_service(runner=fake_run)
         self.assertFalse(p.exists())
@@ -740,13 +740,13 @@ class TestService(GraphwatchCase):
         def fake_run(cmd, **kw):
             cmds.append(cmd)
             return type("R", (), {"returncode": 0})()
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "win32"):
+        with unittest.mock.patch.object(graphwatch_service.sys, "platform", "win32"):
             graphwatch_service.uninstall_service(runner=fake_run)
         self.assertEqual(cmds[0][:4], ["schtasks", "/Delete", "/F", "/TN"])
 
     def test_service_registered_is_plist_on_darwin(self):
         import unittest.mock
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"), \
+        with unittest.mock.patch.object(graphwatch_service.sys, "platform", "darwin"), \
              unittest.mock.patch.object(graphwatch_service, "launchd_plist_path", return_value=self.home / "x.plist"):
             self.assertFalse(graphwatch_service.service_registered())
             (self.home / "x.plist").write_text("x")
@@ -807,11 +807,25 @@ class TestServiceControl(GraphwatchCase):
                 graphwatch.service_control("start", runner=lambda cmd, **kw: None)
         self.assertIn("install", str(cm.exception))
 
+    def test_control_runner_reaches_registered_probe(self):
+        """runner 必须贯穿注册态探测：mock runner 要能拦下真实系统命令。"""
+        import unittest.mock
+        probed = {"runner": False}
+
+        def probe(runner=None):
+            probed["runner"] = runner is not None
+            return False
+
+        with unittest.mock.patch.object(graphwatch_service, "service_registered", side_effect=probe):
+            with self.assertRaises(GraphwatchError):
+                graphwatch.service_control("start", runner=lambda cmd, **kw: None)
+        self.assertTrue(probed["runner"], "service_registered 没拿到 runner")
+
     def test_macos_restart_unload_then_load(self):
         import unittest.mock
         cmds, fake = self._fake()
         with unittest.mock.patch.object(graphwatch_service, "service_registered", return_value=True), \
-             unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+             unittest.mock.patch.object(graphwatch_service.sys, "platform", "darwin"):
             graphwatch.service_control("restart", runner=fake)
         joined = [" ".join(c) for c in cmds]
         self.assertTrue(any("kill SIGTERM" in j for j in joined))
@@ -821,7 +835,7 @@ class TestServiceControl(GraphwatchCase):
         import unittest.mock
         cmds, fake = self._fake()
         with unittest.mock.patch.object(graphwatch_service, "service_registered", return_value=True), \
-             unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+             unittest.mock.patch.object(graphwatch_service.sys, "platform", "darwin"):
             graphwatch.service_control("stop", runner=fake)
         joined = [" ".join(c) for c in cmds]
         self.assertTrue(any("kill SIGTERM" in j for j in joined))
@@ -831,7 +845,7 @@ class TestServiceControl(GraphwatchCase):
         import unittest.mock
         cmds, fake = self._fake()
         with unittest.mock.patch.object(graphwatch_service, "service_registered", return_value=True), \
-             unittest.mock.patch.object(graphwatch.sys, "platform", "linux"):
+             unittest.mock.patch.object(graphwatch_service.sys, "platform", "linux"):
             graphwatch.service_control("restart", runner=fake)
         self.assertEqual(cmds[0], ["systemctl", "--user", "restart", "graphwatch.service"])
 
@@ -839,7 +853,7 @@ class TestServiceControl(GraphwatchCase):
         import unittest.mock
         cmds, fake = self._fake()
         with unittest.mock.patch.object(graphwatch_service, "service_registered", return_value=True), \
-             unittest.mock.patch.object(graphwatch.sys, "platform", "win32"):
+             unittest.mock.patch.object(graphwatch_service.sys, "platform", "win32"):
             graphwatch.service_control("start", runner=fake)
         self.assertEqual(cmds[0][:2], ["schtasks", "/Run"])
 
@@ -1124,7 +1138,7 @@ class TestServiceStateAndLog(GraphwatchCase):
         text = "state = running\npid = 12345\nlast exit code = (never exited)\n"
         with unittest.mock.patch.object(graphwatch_service, "service_registered", return_value=True), \
              unittest.mock.patch.object(graphwatch_service, "_launchd_gone", return_value=False), \
-             unittest.mock.patch.object(graphwatch.sys, "platform", "darwin"):
+             unittest.mock.patch.object(graphwatch_service.sys, "platform", "darwin"):
             st = graphwatch_service.service_state(runner=self._print_runner(text))
         self.assertTrue(st["running"])
         self.assertEqual(st["pid"], "12345")
@@ -1236,7 +1250,7 @@ class TestWizardPicker(GraphwatchCase):
     def test_picker_none_non_tty_falls_back(self):
         import io
         import unittest.mock
-        with unittest.mock.patch.object(graphwatch.sys, "stdin", io.StringIO("")):
+        with unittest.mock.patch.object(graphwatch_service.sys, "stdin", io.StringIO("")):
             cfg = graphwatch.run_wizard(input_fn=self._feed("1", "", "", "", "", ""))
         self.assertEqual(cfg["backend"], "claude")
 
@@ -1584,7 +1598,7 @@ class TestServicePlatformEdges(GraphwatchCase):
     def test_registered_linux_and_windows(self):
         import unittest.mock
         for plat in ("linux", "win32"):
-            with unittest.mock.patch.object(graphwatch.sys, "platform", plat):
+            with unittest.mock.patch.object(graphwatch_service.sys, "platform", plat):
                 self.assertTrue(graphwatch_service.service_registered(runner=lambda c, **k: self._R(0)))
                 self.assertFalse(graphwatch_service.service_registered(runner=lambda c, **k: self._R(1)))
 
@@ -1594,19 +1608,19 @@ class TestServicePlatformEdges(GraphwatchCase):
         def runner(cmd, **kw):
             return self._R(0, b"MainPID=42\nActiveState=active\nExecMainStatus=0\n")
 
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"), \
+        with unittest.mock.patch.object(graphwatch_service.sys, "platform", "linux"), \
              unittest.mock.patch.object(graphwatch_service, "service_registered", return_value=True):
             st = graphwatch_service.service_state(runner=runner)
         self.assertTrue(st["running"])
         self.assertEqual(st["pid"], "42")
         self.assertEqual(st["last_exit"], "0")
 
-    def test_state_windows_uses_daemon_alive(self):
+    def test_state_windows_uses_alive(self):
         import unittest.mock
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "win32"), \
-             unittest.mock.patch.object(graphwatch_service, "service_registered", return_value=True), \
-             unittest.mock.patch.object(graphwatch, "daemon_alive", return_value=True):
-            st = graphwatch_service.service_state(runner=lambda c, **k: self._R(0))
+        with unittest.mock.patch.object(graphwatch_service.sys, "platform", "win32"), \
+             unittest.mock.patch.object(graphwatch_service, "service_registered", return_value=True):
+            st = graphwatch_service.service_state(runner=lambda c, **k: self._R(0),
+                                                  alive=lambda: True)
         self.assertTrue(st["running"])
 
     def test_state_darwin_default_runner(self):
@@ -1630,7 +1644,7 @@ class TestServicePlatformEdges(GraphwatchCase):
             cmds.append(cmd)
             return self._R(0)
 
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "win32"):
+        with unittest.mock.patch.object(graphwatch_service.sys, "platform", "win32"):
             graphwatch_service.install_service(runner=runner)
         self.assertIn("/Create", cmds[0])
 
@@ -1638,9 +1652,9 @@ class TestServicePlatformEdges(GraphwatchCase):
         import unittest.mock
         cmds = []
         runner = lambda cmd, **kw: cmds.append(cmd) or self._R(0)  # noqa: E731
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"), \
+        with unittest.mock.patch.object(graphwatch_service.sys, "platform", "linux"), \
              unittest.mock.patch.object(graphwatch_service, "_checked_runner", return_value=runner), \
-             unittest.mock.patch.object(graphwatch.Path, "home", classmethod(lambda cls: self.home)):
+             unittest.mock.patch.object(graphwatch_service.Path, "home", classmethod(lambda cls: self.home)):
             graphwatch_service.install_service()
         unit = self.home / ".config" / "systemd" / "user" / "graphwatch.service"
         self.assertTrue(unit.exists())
@@ -1653,8 +1667,8 @@ class TestServicePlatformEdges(GraphwatchCase):
         unit_dir = self.home / ".config" / "systemd" / "user"
         unit_dir.mkdir(parents=True)
         (unit_dir / "graphwatch.service").write_text("x", encoding="utf-8")
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"), \
-             unittest.mock.patch.object(graphwatch.Path, "home", classmethod(lambda cls: self.home)):
+        with unittest.mock.patch.object(graphwatch_service.sys, "platform", "linux"), \
+             unittest.mock.patch.object(graphwatch_service.Path, "home", classmethod(lambda cls: self.home)):
             graphwatch_service.uninstall_service(runner=lambda cmd, **kw: cmds.append(cmd) or self._R(0))
         self.assertFalse((unit_dir / "graphwatch.service").exists())
 
@@ -1667,7 +1681,7 @@ class TestServicePlatformEdges(GraphwatchCase):
             return self._R(0)
 
         with unittest.mock.patch.object(graphwatch_service, "service_registered", return_value=True), \
-             unittest.mock.patch.object(graphwatch.sys, "platform", "win32"):
+             unittest.mock.patch.object(graphwatch_service.sys, "platform", "win32"):
             graphwatch.service_control("stop", runner=runner)
         self.assertEqual(cmds[0][:3], ["schtasks", "/End", "/TN"])
 
@@ -1679,7 +1693,7 @@ class TestServicePlatformEdges(GraphwatchCase):
             cmds.append(cmd)
             return self._R(0)  # print 永远 rc0：服务一直「活着」，逼出 bootout 兜底
 
-        with unittest.mock.patch.object(graphwatch.time, "sleep", lambda s: None):
+        with unittest.mock.patch.object(graphwatch_service.time, "sleep", lambda s: None):
             graphwatch_service._launchd_stop(runner)
         joined = [" ".join(c) for c in cmds]
         self.assertTrue(any("kill" in j for j in joined))
@@ -1695,7 +1709,7 @@ class TestServicePlatformEdges(GraphwatchCase):
                 raise RuntimeError("I/O error")
             return self._R(0)
 
-        with unittest.mock.patch.object(graphwatch.time, "sleep", lambda s: None):
+        with unittest.mock.patch.object(graphwatch_service.time, "sleep", lambda s: None):
             graphwatch_service._launchd_start(runner, "/tmp/x.plist")
         self.assertEqual(n["i"], 3)
 
@@ -1705,7 +1719,7 @@ class TestServicePlatformEdges(GraphwatchCase):
         def runner(cmd, **kw):
             raise RuntimeError("I/O error 5")
 
-        with unittest.mock.patch.object(graphwatch.time, "sleep", lambda s: None), \
+        with unittest.mock.patch.object(graphwatch_service.time, "sleep", lambda s: None), \
              self.assertRaises(RuntimeError):
             graphwatch_service._launchd_start(runner, "/tmp/x.plist")
 
@@ -1719,7 +1733,7 @@ class TestServicePlatformEdges(GraphwatchCase):
             return self._R(1 if gone else 0)
 
         seen = []
-        with unittest.mock.patch.object(graphwatch.time, "sleep", lambda s: None):
+        with unittest.mock.patch.object(graphwatch_service.time, "sleep", lambda s: None):
             graphwatch_service._launchd_stop(runner)
 
     def test_uninstall_linux_default_runner(self):
@@ -1727,10 +1741,10 @@ class TestServicePlatformEdges(GraphwatchCase):
         unit_dir = self.home / ".config" / "systemd" / "user"
         unit_dir.mkdir(parents=True)
         (unit_dir / "graphwatch.service").write_text("x", encoding="utf-8")
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"), \
+        with unittest.mock.patch.object(graphwatch_service.sys, "platform", "linux"), \
              unittest.mock.patch.object(graphwatch_service, "_checked_runner",
                                         return_value=lambda cmd, **k: self._R(0)), \
-             unittest.mock.patch.object(graphwatch.Path, "home", classmethod(lambda cls: self.home)):
+             unittest.mock.patch.object(graphwatch_service.Path, "home", classmethod(lambda cls: self.home)):
             graphwatch_service.uninstall_service()
         self.assertFalse((unit_dir / "graphwatch.service").exists())
 
@@ -1741,7 +1755,7 @@ class TestServicePlatformEdges(GraphwatchCase):
         def fake_run(cmd, **kw):
             return self._R(fake["rc"])
 
-        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"), \
+        with unittest.mock.patch.object(graphwatch_service.sys, "platform", "linux"), \
              unittest.mock.patch("subprocess.run", fake_run):
             self.assertTrue(graphwatch_service.service_registered())
             fake["rc"] = 1
