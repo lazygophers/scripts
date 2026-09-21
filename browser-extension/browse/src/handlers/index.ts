@@ -30,9 +30,7 @@ import {
 import { gcmDeleteToken, gcmId, gcmToken } from "./gcm.ts";
 import { historyDelete, historySearch } from "./history.ts";
 import {
-  dnsResolve,
   idleState,
-  processesList,
   searchQuery,
   systemInfo,
   topSitesList,
@@ -167,9 +165,7 @@ export const HANDLERS: Record<string, Handler> = {
 
   "lg:topSites.list": topSitesList,
   "lg:search.query": searchQuery,
-  "lg:dns.resolve": dnsResolve,
   "lg:idle.state": idleState,
-  "lg:processes.list": processesList,
   "lg:system.info": systemInfo,
 
   "lg:notifications.show": notificationsShow,

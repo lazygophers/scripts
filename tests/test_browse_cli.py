@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import pathlib
 import shutil
 import sys
@@ -703,6 +704,10 @@ class TestDaemonCommands(unittest.TestCase):
         tmp = pathlib.Path(tempfile.mkdtemp())
         sock = tmp / "browse.sock"
         stopped: list[int] = []
+        # 本机可能正跑着真 bridge（默认 9330）：这里只要随机端口，别撞车
+        env = mock.patch.dict(os.environ, {"BROWSE_BRIDGE_PORT": "0"})
+        env.start()
+        self.addCleanup(env.stop)
 
         def stop_later():
             for _ in range(100):

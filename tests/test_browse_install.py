@@ -35,7 +35,9 @@ class FakeRegistry:
 
 class TempHome(unittest.TestCase):
     def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
+        # ignore_cleanup_errors：macOS 上 rmtree 偶发 Directory not empty（竞态），
+        # 测试断言早就过了，别让清理噪声把全套件染红
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.home = pathlib.Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
 

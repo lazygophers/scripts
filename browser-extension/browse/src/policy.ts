@@ -138,7 +138,7 @@ export const FEATURES: Feature[] = [
   },
   {
     id: "diagnostics",
-    methods: ["lg:processes.list", "lg:system.info", "lg:dns.resolve", "lg:idle.state"],
+    methods: ["lg:system.info", "lg:idle.state"],
   },
   { id: "power", methods: ["lg:power.keepAwake", "lg:power.release"] },
   { id: "notifications", methods: ["lg:notifications.show", "lg:notifications.clear"] },

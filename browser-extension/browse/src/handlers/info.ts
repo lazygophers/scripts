@@ -1,8 +1,9 @@
 import { CommandError, optionalString, requireString } from "../protocol.ts";
-import { channelGuarded, requireApi } from "./context.ts";
+import { requireApi } from "./context.ts";
 
 /**
- * 只读信息类：topSites / search / dns / idle / processes / system。
+ * 只读信息类：topSites / search / idle / system。（dns / processes 是 Dev 渠道限定
+ * API，stable 上不可用，2026-09-21 随权限一起移除。）
  * 共同点：不写任何状态、不碰页面内容，出错就是 API 缺失或参数非法。
  */
 
@@ -34,20 +35,6 @@ export async function searchQuery(params: Record<string, unknown>): Promise<unkn
   return { searched: text };
 }
 
-export async function dnsResolve(
-  params: Record<string, unknown>,
-): Promise<{ address: string; isCached: boolean }> {
-  requireApi("dns", "resolving hostnames");
-  const hostname = requireString(params.hostname, "hostname");
-  // chrome.dns 是 Dev 渠道限定 API：渠道门错误由 channelGuarded 翻译成显式拒绝
-  const result = await channelGuarded(
-    () => chrome.dns.resolve(hostname),
-    "dns",
-    "做不了 DNS 解析",
-  );
-  return { address: result.address, isCached: result.isCached };
-}
-
 export async function idleState(
   params: Record<string, unknown>,
 ): Promise<{ state: `${chrome.idle.IdleState}` }> {
@@ -59,19 +46,6 @@ export async function idleState(
     throw new CommandError("invalid argument", "threshold must be an integer in [15, 3600] seconds");
   }
   return { state: await chrome.idle.queryState(seconds) };
-}
-
-export async function processesList(): Promise<{ processes: unknown[] }> {
-  requireApi("processes", "listing browser processes");
-  const map = await channelGuarded(
-    () => chrome.processes.processes(),
-    "processes",
-    "列不了浏览器进程",
-  );
-  const processes = Object.values(map).sort(
-    (a, b) => (b.cpu ?? 0) - (a.cpu ?? 0),
-  );
-  return { processes };
 }
 
 const SYSTEM_PARTS = ["cpu", "memory", "display", "storage"] as const;

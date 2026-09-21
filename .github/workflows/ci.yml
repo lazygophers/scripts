@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    env:
+      # 9330 可能撞上开发者本机的真 bridge；CI 里只要随机端口
+      BROWSE_BRIDGE_PORT: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -q
+
+  extension:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [browse, viewer, shared]
+    defaults:
+      run:
+        working-directory: browser-extension/${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: browser-extension/${{ matrix.package }}/package-lock.json
+      - run: npm ci
+      - run: npm test
+      # shared 没有 tsconfig / typecheck script
+      - run: npm run typecheck
+        if: matrix.package != 'shared'

@@ -1,30 +1,10 @@
 /**
- * `@types/chrome` 0.3.0 仍缺的一批命名空间/成员（dns、processes、readingList、
+ * `@types/chrome` 0.3.0 仍缺的一批命名空间/成员（readingList、
  * webAuthenticationProxy 等，都是 2026-09-16 扩容用到的；2026-09-21 复核 0.3.0
  * 依旧缺，typecheck 全靠本文件）。就地把缺的形状补在这里；类型包追上后
  * 本文件应随冲突一起清掉。
  */
 declare namespace chrome {
-  namespace dns {
-    interface ResolveResult {
-      address: string;
-      isCached: boolean;
-    }
-    function resolve(hostname: string): Promise<ResolveResult>;
-  }
-
-  namespace processes {
-    interface Process {
-      id: number;
-      cpu: number;
-      network: number;
-      privateMemory: number;
-      type: string;
-      tasks: { tabId?: number; title?: string }[];
-    }
-    function processes(): Promise<Record<number, Process>>;
-  }
-
   namespace readingList {
     interface ReadingListEntry {
       id: number;

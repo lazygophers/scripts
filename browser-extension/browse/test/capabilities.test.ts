@@ -11,7 +11,7 @@ import {
   pageCaptureSaveMhtml,
 } from "../src/handlers/capture.ts";
 import { clipboardRead, clipboardWrite } from "../src/handlers/clipboard.ts";
-import { dnsResolve, idleState, searchQuery, systemInfo } from "../src/handlers/info.ts";
+import { idleState, searchQuery, systemInfo } from "../src/handlers/info.ts";
 import { declContentSetRules } from "../src/handlers/scripts.ts";
 import { proxySet } from "../src/handlers/proxy.ts";
 import { wauthComplete } from "../src/handlers/wauth.ts";
@@ -104,9 +104,8 @@ test("search disposition 白名单", async () => {
   await rejectsWith(() => searchQuery({}), "invalid argument");
 });
 
-test("dns/processes/system 没有对应 API 时明确拒绝", async () => {
+test("system 没有对应 API 时明确拒绝", async () => {
   installChrome({});
-  await rejectsWith(() => dnsResolve({ hostname: "a.test" }), "unsupported operation");
   await rejectsWith(() => systemInfo({ parts: ["cpu"] }), "unsupported operation");
   await rejectsWith(() => systemInfo({ parts: ["nope"] }), "invalid argument");
 });

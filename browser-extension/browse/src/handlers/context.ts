@@ -148,40 +148,6 @@ export function dropContextCache(params: Record<string, unknown>): void {
 }
 
 /**
- * Chrome 渠道门错误的翻译。`chrome.dns` / `chrome.processes` 这类 Dev 渠道限定
- * API 在 stable 上命名空间存在、调用那一刻才抛
- * `'x' requires dev channel or newer, but this is the stable channel.` ——
- * `requireApi` 的存在性检查拦不住这一种。是渠道门就返回显式拒绝（spec 5.5），
- * 不是渠道门返回 null，原样抛还。
- */
-export function channelGateError(
-  err: unknown,
-  api: string,
-  cannot: string,
-): CommandError | null {
-  if (err instanceof Error && /requires \S+ channel or newer/.test(err.message)) {
-    return new CommandError(
-      "unsupported operation",
-      `chrome.${api} 只有 Dev 及以上渠道的 Chrome 才提供，当前渠道${cannot}`,
-    );
-  }
-  return null;
-}
-
-/** 渠道门版 requireApi 的调用面：跑一个 Dev 渠道限定 API 调用，渠道门错误就地翻译。 */
-export async function channelGuarded<T>(
-  call: () => Promise<T>,
-  api: string,
-  cannot: string,
-): Promise<T> {
-  try {
-    return await call();
-  } catch (err) {
-    throw channelGateError(err, api, cannot) ?? err;
-  }
-}
-
-/**
  * Cross-browser capability check, spec 5.5: explicit refusal, never a silent
  * substitute implementation. `path` is dotted under `chrome`, e.g. `downloads`
  * or `tabs.captureVisibleTab`.
