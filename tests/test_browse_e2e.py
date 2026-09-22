@@ -151,7 +151,7 @@ class BrowseE2E(unittest.TestCase):
         self.attach(lambda method, params: tree if method == "browsingContext.getTree"
                     else ("unknown command", method))
 
-        done = self.browse("browsingContext", "getTree")
+        done = self.browse("api", "browsingContext", "getTree")
 
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(json.loads(done.stdout), tree)
@@ -172,9 +172,9 @@ class BrowseE2E(unittest.TestCase):
         self.attach(handler)
 
         done = self.browse("run", "--concurrency", "1",
-                           "browsingContext.navigate https://a.com",
-                           "browsingContext.navigate https://b.com",
-                           "browsingContext.navigate https://c.com")
+                           "goto https://a.com",
+                           "goto https://b.com",
+                           "goto https://c.com")
 
         self.assertEqual(done.returncode, 1, done.stderr)
         report = json.loads(done.stdout)
@@ -187,7 +187,7 @@ class BrowseE2E(unittest.TestCase):
 
     def test_exit_code_3_when_browser_absent(self):
         """daemon 在跑但浏览器没连上 → 退出码 3，错误对象走 stderr（spec 6.7）。"""
-        done = self.browse("browsingContext", "getTree")
+        done = self.browse("api", "browsingContext", "getTree")
 
         self.assertEqual(done.returncode, 3)
         self.assertEqual(done.stdout, "")

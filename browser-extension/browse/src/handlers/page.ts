@@ -6,7 +6,7 @@ import { runInPage, type PageResult } from "./inject.ts";
  * clicked or typed into, and what locator reaches each one.
  *
  * Every entry carries both a `css` and an `xpath` that resolve to that exact
- * element, so the output pastes straight into `browse input click`. It does
+ * element, so the output pastes straight into `browse click`. It does
  * *not* go through the locator, so there is no waiting to switch off: it reads
  * the DOM as it stands right now.
  *
