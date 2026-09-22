@@ -46,11 +46,6 @@ def config_path() -> Path:
     return config_home() / CONFIG_NAME
 
 
-def log_path() -> Path:
-    """daemon 日志落点。service 生成 plist 时也要它，所以放在 config 这一层。"""
-    return config_home() / "logs" / "graphwatch.log"
-
-
 def load_config() -> dict:
     """读配置，缺文件或字段时回落 DEFAULTS（浅合并，够用）。"""
     import copy

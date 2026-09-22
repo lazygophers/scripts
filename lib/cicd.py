@@ -222,6 +222,9 @@ def _validate_config(config: PollConfig) -> str | None:
 
 
 def _print_final(status: CiStatus, *, attempts: int, elapsed: float) -> None:
+    from lib import log as slog
+    slog.record("cicd.done", state=status.state, attempts=attempts,
+                elapsed_ms=int(elapsed * 1000))
     r = reporter(stderr=True)
     style = "green" if status.state == "pass" else "red" if status.state in {"fail", "error"} else "yellow"
     title = "CI/CD 完成" if status.state in DONE_STATES else "CI/CD 未完成"

@@ -256,27 +256,31 @@ class LogCase(unittest.TestCase):
         self.assertEqual([entry["event"] for entry in browse_log.tail(10, path=self.path)],
                          ["ws.open", "ws.close"])
 
-    def test_rotation_keeps_one_generation(self) -> None:
-        big = "x" * (browse_log.MAX_BYTES // 4)
-        for _ in range(5):
-            browse_log.record("fat", path=self.path, pad=big)
-        self.assertTrue(self.path.with_suffix(".log.1").is_file(), "没有轮转出上一代")
-        # 轮转之后当前文件从头写，仍然读得出来
-        self.assertTrue(browse_log.tail(10, path=self.path))
+    def test_other_loggers_are_filtered_out_of_tail(self) -> None:
+        # 统一日志文件里还有别的工具在写，tail 只取 browse-daemon 的行
+        from lib import log as _log
+        _log.record("cli.start", logger="browse", target=self.path)
+        browse_log.record("ws.open", path=self.path)
+        self.assertEqual([entry["event"] for entry in browse_log.tail(10, path=self.path)],
+                         ["ws.open"])
 
     def test_a_write_failure_never_raises(self) -> None:
         # 落点是个目录：写文件必然失败，但 bridge 不能因为记日志而倒下
+        import logging
         blocked = pathlib.Path(self._tmp.name) / "as-a-dir"
         blocked.mkdir()
-        browse_log.record("ws.open", path=blocked)  # 不抛就算过
+        with unittest.mock.patch.object(logging, "raiseExceptions", False):  # 别往 stderr 倒噪声
+            browse_log.record("ws.open", path=blocked)  # 不抛就算过
 
     def test_log_path_follows_the_environment_override(self) -> None:
         with unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": "/tmp/x.log"}):
             self.assertEqual(browse_log.log_path(), pathlib.Path("/tmp/x.log"))
-        with unittest.mock.patch.dict(os.environ, {"XDG_STATE_HOME": "/tmp/state"}, clear=False):
+        import tempfile
+        with unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": ""}, clear=False), \
+             unittest.mock.patch.object(tempfile, "tempdir", None):  # gettempdir 有缓存
             os.environ.pop("BROWSE_BRIDGE_LOG", None)
             self.assertEqual(browse_log.log_path(),
-                             pathlib.Path("/tmp/state/lazygophers/scripts/browse-bridge.log"))
+                             pathlib.Path(tempfile.gettempdir()) / "lazygophers" / "scripts.log")
 
 
 class BridgeIntrospectionCase(BridgeCase):

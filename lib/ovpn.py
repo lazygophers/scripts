@@ -547,6 +547,8 @@ def connect(cfg: dict, reporter, *, verbose: bool = False,
     while True:
         rc, connected, last_counter = _connect_once(
             cfg, reporter, verbose=verbose, last_otp_counter=last_counter)
+        from lib import log as slog
+        slog.record("ovpn.session", rc=rc, connected=connected)
         if rc in (0, 2, 127, 130):
             # 0=正常退出 2=凭据/配置错 127=没有二进制 130=Ctrl-C：重连没有意义
             return rc

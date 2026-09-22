@@ -11,7 +11,8 @@ import time
 import traceback
 from pathlib import Path
 
-from lib.graphwatch_config import GraphwatchError, config_home, load_config, log_path
+from lib import log as _log
+from lib.graphwatch_config import GraphwatchError, config_home, load_config
 
 # 整目录排除（watch 事件过滤 + 新鲜度比对共用）：构建产物/依赖/缓存/临时
 # 目录不是「源码改动」，不排除的话 IDE/构建器一碰 build/ 就永远显示过期
@@ -109,26 +110,7 @@ def release_singleton_lock(fd) -> None:
         os.close(fd)
 
 
-LOG_MAX_BYTES = 5 * 1024 * 1024
-LOG_BACKUPS = 3
 NOTIFY_THROTTLE_SECS = 300
-
-
-def rotate_log() -> None:
-    """按大小轮转 daemon 日志：graphwatch.log → .1 → … → .3。
-
-    ponytail: 轮转后仍存活的监听子进程 fd 指向旧 inode，继续写进 .1，
-    直到该目录重启才切回新文件；watch 日志量小，可接受。
-    """
-    p = log_path()
-    if not p.is_file() or p.stat().st_size < LOG_MAX_BYTES:
-        return
-    for i in range(LOG_BACKUPS - 1, 0, -1):
-        src = p.with_suffix(f".log.{i}")
-        if src.exists():
-            src.replace(p.with_suffix(f".log.{i + 1}"))
-    p.replace(p.with_suffix(".log.1"))
-    p.touch()
 
 
 def notify(title: str, message: str, runner=None) -> bool:
@@ -140,15 +122,9 @@ def notify(title: str, message: str, runner=None) -> bool:
     import subprocess
 
     def _audit(ok: bool) -> None:
-        try:
-            log_path().parent.mkdir(parents=True, exist_ok=True)
-            import datetime
-
-            stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with log_path().open("a", encoding="utf-8") as f:
-                f.write(f"[{stamp}] 通知({'已发' if ok else '失败'}): {title} — {message.splitlines()[0]}\n")
-        except OSError:
-            pass  # 审计失败不影响通知本身
+        # 弹窗是给用户看的，日志是给排障看的，两者必须在同一处可对上
+        _log.record("notify", logger="graphwatch-daemon", ok=ok, title=title,
+                    msg=message.splitlines()[0])
 
     if runner is None:
         runner = subprocess.run
@@ -298,14 +274,15 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
     if notifier is None:
         notifier = Notifier()
 
-    log_path().parent.mkdir(parents=True, exist_ok=True)
+    _log.install_excepthook("graphwatch-daemon")
 
     def _dlog(msg: str) -> None:
-        # 只走 stderr：服务模式 launchd 的 StandardErrorPath 重定向进日志文件，
-        # 再写 log_file 会同一条记两遍；前台跑则直接给用户看
+        # 落盘走统一日志（lib/log.py）；前台跑时 stderr 照旧直接给用户看。
+        # 服务模式 plist 已不再重定向 stderr，文件里只有这一份。
         import datetime
 
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _log.record("daemon", logger="graphwatch-daemon", msg=msg)
         print(f"[{stamp}] {msg}", file=sys.stderr)
 
     listeners: dict[str, object] = {}
@@ -444,7 +421,6 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
         if on_started is not None:
             on_started()
         while not stop_event.wait(poll_interval):
-            rotate_log()
             try:
                 _reconcile()
             except GraphwatchError as e:
@@ -484,12 +460,11 @@ def daemon_alive() -> bool:
 
 
 def tail_log(n: int = 10) -> list[str]:
-    """daemon + watch 子进程日志的末尾 n 行。"""
-    p = log_path()
-    if not p.is_file():
+    """daemon 日志的末尾 n 条（统一日志里只取 graphwatch-daemon 写的行）。"""
+    if n <= 0:
         return []
-    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
-    return lines[-n:] if n > 0 else []
+    entries = _log.read_entries(logger="graphwatch-daemon", limit=n)
+    return [str(entry.get("msg") or entry.get("event") or entry) for entry in entries]
 
 
 def stale_trigger(folder: str) -> Path | None:

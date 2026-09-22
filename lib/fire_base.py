@@ -45,13 +45,23 @@ def timed_cli(method: Callable[..., Any]) -> Callable[..., Any]:
         from rich.console import Console
         from rich.text import Text
 
+        # 类名即命令名（GraphwatchCli → graphwatch）；统一日志与终端计时共用
+        name = type(self).__name__.removesuffix("Cli").lower() or type(self).__name__.lower()
+        from lib import log as slog
+        slog.set_context(name)
+        slog.record("cli.start", logger=name)
         t0 = time.monotonic()
         start_wall = time.time()
+        failed: BaseException | None = None
+        result = None
         try:
-            return method(self, *args, **kwargs)
+            result = method(self, *args, **kwargs)
+        except BaseException as exc:
+            failed = exc
         finally:
-            elapsed = time.monotonic() - t0
-            ms = int(elapsed * 1000)
+            elapsed = time.monotonic() - t0  # 只读一次时钟：测试用假时钟注入固定次数
+            elapsed_ms = int(elapsed * 1000)
+            ms = elapsed_ms
             if ms < 1000:
                 elapsed_s = f"{ms}ms"
             elif elapsed < 60:
@@ -67,6 +77,19 @@ def timed_cli(method: Callable[..., Any]) -> Callable[..., Any]:
             t.append(elapsed_s, style="dim bold")
             t.append(f" · {start_s}–{end_s}", style="dim")
             con.print(t)
+            if failed is not None:
+                # 失败只带退出码；错误详情由 Reporter.err 记，两边不重复
+                fields = {"rc": failed.code} if isinstance(failed, SystemExit) else {
+                    "exc_type": type(failed).__name__}
+                slog.record("cli.fail", logger=name, level="warning",
+                            elapsed_ms=elapsed_ms,
+                            exc_info=(type(failed), failed, failed.__traceback__), **fields)
+            else:
+                slog.record("cli.done", logger=name, elapsed_ms=elapsed_ms,
+                            **({"rc": result} if isinstance(result, int) else {}))
+        if failed is not None:
+            raise failed  # 异常对象自带原 traceback，raise 不丢栈
+        return result
 
     return wrapper
 

@@ -179,6 +179,10 @@ class Reporter:
 
     def err(self, msg: str) -> None:
         self._icon_msg(ICON_ERROR, msg, "red")
+        # 错误详情落盘的唯一出口：错误路径全部汇到 Reporter.err，timed() 只记
+        # 退出码——一次错误在日志文件里恰好一条（去重分工见票 03）
+        from lib import log as slog
+        slog.record("cli.error", msg=msg)
 
     def kv(self, title: str, rows: dict[str, str], *, style: str = "blue") -> None:
         table = Table(title=title, show_header=False, box=ROUNDED, border_style=style)
@@ -425,19 +429,44 @@ def timed(fn, *, label: str | None = None):
     用法（bin 入口）：
         raise SystemExit(timed(main, label="commit")(sys.argv))
     返回值/异常原样透传；异常路径也打印耗时（finally）。
+    同时把启动/成功/失败/耗时写进统一日志（lib/log.py）：失败只带退出码，
+    错误详情由 Reporter.err 记，两边不重复。
     """
     import time
     from functools import wraps
 
+    from lib import log as slog
+
+    name = label or fn.__name__
+
     @wraps(fn)
     def wrapper(*args, **kwargs):
+        slog.set_context(name)
+        slog.record("cli.start", logger=name)
         start = time.monotonic()
         start_wall = time.time()
+        failed: BaseException | None = None
+        result = None
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
+        except BaseException as exc:
+            failed = exc
         finally:
+            elapsed = time.monotonic() - start  # 只读一次时钟
             end_wall = time.time()
-            print_runtime(start_wall, end_wall, label=label,
-                          elapsed=time.monotonic() - start)
+            print_runtime(start_wall, end_wall, label=label, elapsed=elapsed)
+            if failed is not None:
+                # 失败只带退出码；错误详情由 Reporter.err 记，两边不重复
+                fields = {"rc": failed.code} if isinstance(failed, SystemExit) else {
+                    "exc_type": type(failed).__name__}
+                slog.record("cli.fail", logger=name, level="warning",
+                            elapsed_ms=int(elapsed * 1000),
+                            exc_info=(type(failed), failed, failed.__traceback__), **fields)
+            else:
+                slog.record("cli.done", logger=name, elapsed_ms=int(elapsed * 1000),
+                            **({"rc": result} if isinstance(result, int) else {}))
+        if failed is not None:
+            raise failed  # 异常对象自带原 traceback，raise 不丢栈
+        return result
 
     return wrapper

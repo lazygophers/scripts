@@ -40,7 +40,7 @@ def unit_path(home: pathlib.Path, plat: str) -> pathlib.Path:
     return home / ".config" / "systemd" / "user" / UNIT_NAME
 
 
-def unit_text(plat: str, exe: str, socket: str, log: str) -> str:
+def unit_text(plat: str, exe: str, socket: str) -> str:
     """服务描述文件的内容。`exe` 是 browse 可执行文件的绝对路径。"""
     if plat == "darwin":
         args = "".join(f"    <string>{part}</string>\n" for part in
@@ -56,8 +56,6 @@ def unit_text(plat: str, exe: str, socket: str, log: str) -> str:
             f"  <array>\n{args}  </array>\n"
             "  <key>RunAtLoad</key><true/>\n"
             "  <key>KeepAlive</key><true/>\n"
-            f"  <key>StandardOutPath</key><string>{log}</string>\n"
-            f"  <key>StandardErrorPath</key><string>{log}</string>\n"
             "</dict>\n"
             "</plist>\n"
         )
@@ -116,12 +114,12 @@ def _run(commands: list[list[str]], runner) -> list[tuple[list[str], int]]:
     return out
 
 
-def install(home: pathlib.Path, plat: str, exe: str, socket: str, log: str,
+def install(home: pathlib.Path, plat: str, exe: str, socket: str,
             runner=subprocess.run) -> tuple[pathlib.Path, list[tuple[list[str], int]]]:
     """写服务描述文件并启用。返回落点和每条命令的退出码。"""
     path = unit_path(home, plat)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(unit_text(plat, exe, socket, log), encoding="utf-8")
+    path.write_text(unit_text(plat, exe, socket), encoding="utf-8")
     if plat == "win32":
         return path, []
     return path, _run(_enable(plat, path), runner)

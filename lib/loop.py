@@ -50,8 +50,10 @@ def run_loop(
     def _run_once(label: str) -> bool:
         """执行单次。返回是否成功。"""
         nonlocal success_count, failure_count
+        from lib import log as slog
         r.step(label)
         result = run(cmd, check=False, capture_output=False)
+        slog.record("loop.iter", rc=result.returncode)  # 长跑关键阶段：每轮一条，只带退出码
         if result.returncode == 0:
             success_count += 1
             if not force:

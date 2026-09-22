@@ -21,7 +21,6 @@ from lib.graphwatch_config import (  # noqa: F401
     config_path,
     list_folders,
     load_config,
-    log_path,
     mask_secret,
     remove_folder,
     run_wizard,
@@ -30,8 +29,6 @@ from lib.graphwatch_config import (  # noqa: F401
 from lib.graphwatch_daemon import (  # noqa: F401
     FRESHNESS_COLOR,
     FRESHNESS_LABEL,
-    LOG_BACKUPS,
-    LOG_MAX_BYTES,
     NOTIFY_THROTTLE_SECS,
     STALE_EXCLUDED_DIRS,
     Notifier,
@@ -43,7 +40,6 @@ from lib.graphwatch_daemon import (  # noqa: F401
     lock_path,
     notify,
     release_singleton_lock,
-    rotate_log,
     run_daemon,
     stale_trigger,
     tail_log,
@@ -269,7 +265,8 @@ class GraphwatchCli(BaseCli):
         self._r.console.print(table)
         if log:
             lines = tail_log(log)
-            self._r.console.print(f"[bold blue]最近日志[/bold blue] [dim]({log_path()})[/dim]")
+            from lib import log as _log
+            self._r.console.print(f"[bold blue]最近日志[/bold blue] [dim]({_log.path()})[/dim]")
             if not lines:
                 self._r.console.print("  [dim]（暂无）[/dim]")
             for line in lines:

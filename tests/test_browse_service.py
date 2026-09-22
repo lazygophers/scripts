@@ -32,7 +32,7 @@ class FakeRunner:
 
 class UnitTextCase(unittest.TestCase):
     def test_macos_plist_runs_the_bridge_and_never_idles_out(self) -> None:
-        text = browse_service.unit_text("darwin", "/usr/local/bin/browse", "/tmp/b.sock", "/tmp/b.log")
+        text = browse_service.unit_text("darwin", "/usr/local/bin/browse", "/tmp/b.sock")
         self.assertIn("<string>/usr/local/bin/browse</string>", text)
         self.assertIn("<string>bridge</string>", text)
         # 常驻服务必须关掉空闲自退，否则 launchd 只会一遍遍把它拉起来
@@ -40,17 +40,19 @@ class UnitTextCase(unittest.TestCase):
         self.assertIn("<string>0</string>", text)
         self.assertIn("<key>RunAtLoad</key><true/>", text)
         self.assertIn("<key>KeepAlive</key><true/>", text)
-        self.assertIn("/tmp/b.log", text)
+        # 日志统一走 lib/log.py 的单一 JSONL，plist 不再重定向 stdout/stderr
+        self.assertNotIn("StandardOutPath", text)
+        self.assertNotIn("StandardErrorPath", text)
 
     def test_systemd_unit_restarts_and_never_idles_out(self) -> None:
-        text = browse_service.unit_text("linux", "/usr/bin/browse", "/run/b.sock", "/tmp/b.log")
+        text = browse_service.unit_text("linux", "/usr/bin/browse", "/run/b.sock")
         self.assertIn("ExecStart=/usr/bin/browse bridge run --socket /run/b.sock --idle-timeout 0",
                       text)
         self.assertIn("Restart=always", text)
         self.assertIn("WantedBy=default.target", text)
 
     def test_windows_startup_script_is_a_cmd_file(self) -> None:
-        text = browse_service.unit_text("win32", r"C:\\bin\\browse.exe", r"C:\\b.sock", r"C:\\b.log")
+        text = browse_service.unit_text("win32", r"C:\\bin\\browse.exe", r"C:\\b.sock")
         self.assertIn("--idle-timeout 0", text)
         self.assertTrue(text.startswith("@echo off"))
 
@@ -71,7 +73,7 @@ class InstallCase(unittest.TestCase):
 
     def install(self, plat: str, runner=None):
         return browse_service.install(self.home, plat, "/usr/bin/browse", "/tmp/b.sock",
-                                      "/tmp/b.log", runner=runner or FakeRunner())
+                                      runner=runner or FakeRunner())
 
     def test_linux_writes_the_unit_then_enables_it(self) -> None:
         runner = FakeRunner()
@@ -117,7 +119,7 @@ class UninstallCase(unittest.TestCase):
 
     def test_uninstall_disables_then_deletes(self) -> None:
         browse_service.install(self.home, "linux", "/usr/bin/browse", "/tmp/b.sock",
-                               "/tmp/b.log", runner=FakeRunner())
+                               runner=FakeRunner())
         runner = FakeRunner()
         path, results = browse_service.uninstall(self.home, "linux", runner=runner)
         self.assertIsNotNone(path)
@@ -135,7 +137,7 @@ class UninstallCase(unittest.TestCase):
     def test_status_reports_the_file_and_the_path(self) -> None:
         self.assertFalse(browse_service.status(self.home, "linux")["installed"])
         browse_service.install(self.home, "linux", "/usr/bin/browse", "/tmp/b.sock",
-                               "/tmp/b.log", runner=FakeRunner())
+                               runner=FakeRunner())
         state = browse_service.status(self.home, "linux")
         self.assertTrue(state["installed"])
         self.assertTrue(state["path"].endswith("browse-bridge.service"))

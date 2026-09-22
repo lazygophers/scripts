@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from lib.graphwatch_config import GraphwatchError, log_path
+from lib.graphwatch_config import GraphwatchError
 
 LAUNCHD_LABEL = "com.lazygophers.graphwatch"
 
@@ -27,9 +27,11 @@ def launchd_plist_path() -> Path:
 
 
 def launchd_plist() -> str:
-    """LaunchAgent plist：KeepAlive 崩了自动拉起，RunAtLoad 登录自启。"""
+    """LaunchAgent plist：KeepAlive 崩了自动拉起，RunAtLoad 登录自启。
+
+    stdout/stderr 不重定向：Python 日志统一写 lib/log.py 的单一 JSONL 文件。
+    """
     exe = script_path()
-    log = log_path()
     label = LAUNCHD_LABEL
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -47,8 +49,6 @@ def launchd_plist() -> str:
     <key>Crashed</key><true/>
   </dict>
   <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>{log}</string>
-  <key>StandardErrorPath</key><string>{log}</string>
 </dict>
 </plist>
 """

@@ -1152,23 +1152,38 @@ class TestServiceStateAndLog(GraphwatchCase):
         self.assertFalse(st["running"])
         self.assertEqual(st["pid"], "-")
 
+    def _log_target(self) -> Path:
+        p = self.home / "scripts.log"
+        self._set_env("SCRIPTS_LOG", str(p))
+        return p
+
+    def _set_env(self, key: str, value: str) -> None:
+        old_value = os.environ.get(key)
+        os.environ[key] = value
+        if old_value is None:
+            self.addCleanup(os.environ.pop, key, None)
+        else:
+            self.addCleanup(os.environ.__setitem__, key, old_value)
+
     def test_tail_log(self):
-        p = graphwatch.log_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("\n".join(f"line{i}" for i in range(20)), encoding="utf-8")
+        from lib import log as _log
+        self._log_target()
+        for i in range(20):
+            _log.record("daemon", logger="graphwatch-daemon", msg=f"line{i}")
         self.assertEqual(graphwatch.tail_log(3), ["line17", "line18", "line19"])
         self.assertEqual(graphwatch.tail_log(0), [])
 
     def test_tail_log_missing_file(self):
+        self._log_target()
         self.assertEqual(graphwatch.tail_log(5), [])
 
     def test_cli_status_prints_log(self):
         import io
         import unittest.mock
         from contextlib import redirect_stderr
-        p = graphwatch.log_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("[2026-09-06 20:00:00] 开始监听 /tmp/x\n", encoding="utf-8")
+        from lib import log as _log
+        self._log_target()
+        _log.record("daemon", logger="graphwatch-daemon", msg="开始监听 /tmp/x")
         st = {"registered": True, "running": True, "pid": "1", "last_exit": "0", "uptime": "-"}
         buf = io.StringIO()
         with redirect_stderr(buf), \
@@ -1296,32 +1311,6 @@ class TestCliConfig(GraphwatchCase):
             builtins.input = real_input
         self.assertEqual(rc, 0)
         self.assertEqual(graphwatch.load_config()["backend"], "kimi")
-
-
-class TestRotateLog(GraphwatchCase):
-    def test_rotate_creates_backup_and_fresh_file(self):
-        p = graphwatch.log_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("x" * (graphwatch.LOG_MAX_BYTES + 1), encoding="utf-8")
-        graphwatch.rotate_log()
-        self.assertTrue(p.with_suffix(".log.1").exists())
-        self.assertLess(p.stat().st_size, graphwatch.LOG_MAX_BYTES)
-
-    def test_no_rotate_under_threshold(self):
-        p = graphwatch.log_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("small", encoding="utf-8")
-        graphwatch.rotate_log()
-        self.assertFalse(p.with_suffix(".log.1").exists())
-
-    def test_rotation_shifts_backups(self):
-        p = graphwatch.log_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.with_suffix(".log.2").write_text("old2", encoding="utf-8")
-        p.write_text("x" * (graphwatch.LOG_MAX_BYTES + 1), encoding="utf-8")
-        graphwatch.rotate_log()
-        self.assertTrue(p.with_suffix(".log.3").exists())  # old2 → .3
-        self.assertTrue(p.with_suffix(".log.1").exists())
 
 
 class TestNotify(GraphwatchCase):
@@ -1576,8 +1565,9 @@ class TestNotifyEdges(GraphwatchCase):
         import unittest.mock
         blocker = self.home / "blocker"
         blocker.write_text("x", encoding="utf-8")
-        with unittest.mock.patch.object(graphwatch_daemon, "log_path", return_value=blocker / "logs" / "graphwatch.log"), \
-             unittest.mock.patch.object(graphwatch.sys, "platform", "linux"):
+        os.environ["SCRIPTS_LOG"] = str(blocker / "logs" / "scripts.log")
+        self.addCleanup(os.environ.pop, "SCRIPTS_LOG", None)
+        with unittest.mock.patch.object(graphwatch.sys, "platform", "linux"):
             self.assertTrue(graphwatch.notify("t", "m", runner=lambda c, **k: type("R", (), {"returncode": 0})()))
 
     def test_notify_default_runner(self):

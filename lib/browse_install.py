@@ -388,15 +388,13 @@ def wait_for_extension(timeout: float) -> bool:
 def install_service(out, home: pathlib.Path, plat: str) -> bool:
     """把 bridge 装成开机自启的服务。装不上不算 install 失败——按需拉起那条路还在。"""
     from lib.browse_daemon import socket_path
-    from lib.browse_log import log_path
     from lib.lazyhelp import _resolve
 
     exe = _resolve("browse")
     if not exe:
         out.info("找不到 browse 可执行文件，跳过服务安装（bridge 仍会按需自动拉起）")
         return False
-    path, results = browse_service.install(
-        home, plat, str(exe), str(socket_path()), str(log_path()))
+    path, results = browse_service.install(home, plat, str(exe), str(socket_path()))
     failed = [cmd for cmd, code in results if code != 0 and cmd[:2] != ["launchctl", "bootout"]]
     if failed:
         out.info(f"bridge 服务已写入 {path}，但启用没成功：{' '.join(failed[0])}")

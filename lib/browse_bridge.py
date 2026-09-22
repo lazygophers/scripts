@@ -300,7 +300,19 @@ class _Adapter:
 async def run(path: Path | None = None, idle_timeout: float | None = None,
               port: int | None = None) -> bool:
     """起 bridge 并守到它退出。已经有一个在跑就直接返回 False。"""
+    from lib import log as slog
     from lib.browse_daemon import IDLE_TIMEOUT
+
+    slog.install_excepthook("browse-daemon")
+    loop = asyncio.get_running_loop()
+
+    def _on_loop_exception(_loop, ctx) -> None:
+        exc = ctx.get("exception")
+        slog.record("crash", logger="browse-daemon", level="error",
+                    msg=str(ctx.get("message") or exc),
+                    exc_info=(type(exc), exc, exc.__traceback__) if exc else None)
+
+    loop.set_exception_handler(_on_loop_exception)
     bridge = Bridge(path=daemon_socket_path() if path is None else path,
                     idle_timeout=IDLE_TIMEOUT if idle_timeout is None else idle_timeout,
                     ws_port=ws_port() if port is None else port)
