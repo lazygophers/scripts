@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import os
@@ -157,88 +158,91 @@ class TestParsing(unittest.TestCase):
         with self.assertRaises(browse.UsageError):
             browse.split_tokens(["--=v"])
 
-    def test_resolve_method_adds_lg_prefix(self):
-        self.assertEqual(browse.resolve_method("history", "search"), "lg:history.search")
-        self.assertEqual(browse.resolve_method("lg:history", "search"), "lg:history.search")
-        self.assertEqual(browse.resolve_method("input", "click"), "input.click")
+    def test_resolve_api_adds_lg_prefix(self):
+        self.assertEqual(browse.resolve_api("history", "search"), "lg:history.search")
+        self.assertEqual(browse.resolve_api("lg:history", "search"), "lg:history.search")
+        self.assertEqual(browse.resolve_api("input", "click"), "input.click")
         with self.assertRaises(browse.UsageError):
-            browse.resolve_method("input", "teleport")
+            browse.resolve_api("input", "teleport")
 
-    def test_parse_command_positional_and_flags(self):
-        method, params, opts = browse.parse_command(
-            ["input", "type", "css=input[name=user]", "myname", "--clear", "--table"])
-        self.assertEqual(method, "input.type")
+    def test_route_flat_verb_positional_and_flags(self):
+        name, params, opts = browse.route(
+            ["fill", "css=input[name=user]", "myname", "--clear", "--table"])
+        self.assertEqual(name, "fill")
         self.assertEqual(params, {"selector": "css=input[name=user]", "text": "myname", "clear": True})
         self.assertEqual(opts, {"table": True})
 
-    def test_parse_command_rejects_extra_positional(self):
+    def test_route_rejects_extra_positional(self):
         with self.assertRaises(browse.UsageError):
-            browse.parse_command(["input", "click", "css=a", "css=b"])
+            browse.route(["click", "css=a", "css=b"])
 
-    def test_parse_command_needs_module_and_action(self):
+    def test_route_needs_a_command(self):
         with self.assertRaises(browse.UsageError):
-            browse.parse_command(["input"])
+            browse.route([])
+
+    def test_route_click_without_prefix_defaults_to_text(self):
+        _, params, _ = browse.route(["click", "登录"])
+        self.assertEqual(params["selector"], "text=登录")
+        _, params, _ = browse.route(["fill", "css=input", "名字"])
+        self.assertEqual(params["selector"], "css=input")
+
+    def test_route_aliases(self):
+        self.assertEqual(browse.route(["navigate", "https://a.com"])[0], "goto")
+        self.assertEqual(browse.route(["shot"])[0], "screenshot")
+        self.assertEqual(browse.route(["script", "1+1"])[0], "eval")
+
+    def test_route_tab_list_and_close_are_the_flat_forms(self):
+        self.assertEqual(browse.route(["tab", "list"])[0], "list")
+        self.assertEqual(browse.route(["tab", "close", "a.com/*"])[0], "close")
 
     def test_parse_command_numeric_context_stays_string(self):
-        # 扩展端要求 context 是 string；裸数字不该被 JSON 解析成 number 打回去
-        _, params, _ = browse.parse_command(
-            ["script", "evaluate", "1", "--context", "1163532091"])
-        self.assertEqual(params["context"], "1163532091")
-        _, params, _ = browse.parse_command(
-            ["browsingContext", "getTree", "--root", "42"])
+        # --context 是 CLI 自己的选项；发出去前由 _resolve_target 转成 params["context"]
+        _, params, opts = browse.route(["eval", "1", "--context", "1163532091"])
+        self.assertEqual(str(opts["context"]), "1163532091")
+        self.assertNotIn("context", params)
+        _, params, _ = browse.route(["api", "browsingContext", "getTree", "--root", "42"])
         self.assertEqual(params["root"], "42")
         # run 的指令串走同一条路
-        _, params = browse.parse_run_item("script.evaluate 1 --context 1163532091")
+        _, params = browse.parse_run_item("eval 1 --context 1163532091")
         self.assertEqual(params["context"], "1163532091")
-        # 显式 JSON 引号的字符串、真数字参数不受影响
-        # bookmarks.remove 的 id 线上是 string（downloads.cancel 的才是 number）
-        _, params, _ = browse.parse_command(
-            ["bookmarks", "remove", "--id", "1691"])
+        # 线上要求 string 的 id 类参数（STRING_NUMERIC_PARAMS）不被 JSON 数字化
+        _, params, _ = browse.route(["data", "bookmark-del", "--id", "1691"])
         self.assertEqual(params["id"], "1691")
-        # tabs.group / tabs.ungroup 的 group（分组 id）线上也是 string
-        _, params, _ = browse.parse_command(
-            ["tabs", "group", "--context", "1163532091", "--group", "42"])
-        self.assertEqual(params["group"], "42")
-        _, params, _ = browse.parse_command(
-            ["tabs", "ungroup", "--group", "42"])
-        self.assertEqual(params["group"], "42")
-        _, params, _ = browse.parse_command(
-            ["tabs", "updateGroup", "42", "--title", "新名"])
-        self.assertEqual(params["group"], "42")
-        # 2026-09-16 扩容面：录屏 id、WebAuthn request、打印 job/request 都是 string
-        _, params, _ = browse.parse_command(
-            ["capture", "recordStop", "rec-3"])
+        _, params, _ = browse.route(["rec", "stop", "rec-3"])
         self.assertEqual(params["recording"], "rec-3")
-        _, params, _ = browse.parse_command(
-            ["wauth", "complete", "42", "get"])
+        _, params, _ = browse.route(
+            ["api", "wauth", "complete", "42", "get"])
         self.assertEqual(params["request"], "42")
-        _, params, _ = browse.parse_command(
-            ["printing", "respond", "7", "--status", "OK"])
+        _, params, _ = browse.route(
+            ["api", "printing", "respond", "7", "--status", "OK"])
         self.assertEqual(params["request"], "7")
         # 真数字参数不受影响
-        _, params, _ = browse.parse_command(
-            ["input", "click", "css=a", "--index", "3"])
+        _, params, _ = browse.route(["click", "css=a", "--index", "3"])
         self.assertEqual(params["index"], 3)
 
     def test_parse_run_item_shell_style(self):
-        method, params = browse.parse_run_item(
-            "browsingContext.navigate https://a.com --wait none")
-        self.assertEqual(method, "browsingContext.navigate")
+        name, params = browse.parse_run_item("goto https://a.com --wait none")
+        self.assertEqual(name, "goto")
         self.assertEqual(params, {"url": "https://a.com", "wait": "none"})
 
     def test_parse_run_item_quoted_selector_keeps_spaces(self):
-        method, params = browse.parse_run_item("input.click 'text=登 录'")
-        self.assertEqual((method, params), ("input.click", {"selector": "text=登 录"}))
+        name, params = browse.parse_run_item("click 'text=登 录'")
+        self.assertEqual((name, params), ("click", {"selector": "text=登 录"}))
 
-    def test_parse_run_item_rejects_bare_method(self):
+    def test_parse_run_item_rejects_unknown_command(self):
         with self.assertRaises(browse.UsageError):
-            browse.parse_run_item("navigate https://a.com")
+            browse.parse_run_item("browsingContext.navigate https://a.com")  # 旧写法已废
         with self.assertRaises(browse.UsageError):
             browse.parse_run_item("   ")
 
     def test_parse_run_item_rejects_cli_flags(self):
         with self.assertRaises(browse.UsageError):
-            browse.parse_run_item("input.click css=a --table")
+            browse.parse_run_item("click css=a --table")
+
+    def test_parse_run_item_rejects_multistep_commands(self):
+        for line in ("open https://a.com", "close a.com/*", "wait css=a"):
+            with self.assertRaises(browse.UsageError, msg=line):
+                browse.parse_run_item(line)
 
     def test_parse_duration(self):
         self.assertEqual(browse.parse_duration("30s"), 30.0)
@@ -250,9 +254,8 @@ class TestParsing(unittest.TestCase):
             browse.parse_duration("一会儿")
 
     def test_read_stdin_items_skips_blanks_and_comments(self):
-        text = "input.click css=a\n\n# 注释\n  script.evaluate 1+1  \n"
-        self.assertEqual(browse.read_stdin_items(text),
-                         ["input.click css=a", "script.evaluate 1+1"])
+        text = "click css=a\n\n# 注释\n  eval 1+1  \n"
+        self.assertEqual(browse.read_stdin_items(text), ["click css=a", "eval 1+1"])
 
     def test_methods_table_matches_extension_handlers(self):
         """CLI 的指令表必须和扩展侧 HANDLERS 逐条对齐，少一条就是 CLI 发不出去。
@@ -278,7 +281,7 @@ class TestParsing(unittest.TestCase):
             self.assertNotIn(method, browse.METHODS)
             module, _, action = method.rpartition(".")
             with self.assertRaises(browse.UsageError, msg=method):
-                browse.resolve_method(module, action)
+                browse.resolve_api(module, action)
 
 
 # ---------------------------------------------------------------- 输出与退出码
@@ -319,7 +322,7 @@ class TestSingleCommand(unittest.TestCase):
         with Harness(lambda method, params: {"contexts": [{"context": "7", "url": params}]}) as h:
             out = io.StringIO()
             with mock.patch("sys.stdout", out):
-                code = h.cli("browsingContext", "getTree")
+                code = h.cli("api", "browsingContext", "getTree")
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(out.getvalue())["contexts"][0]["context"], "7")
             self.assertEqual(h.browser.seen, ["browsingContext.getTree"])
@@ -333,14 +336,14 @@ class TestSingleCommand(unittest.TestCase):
 
         with Harness(handler) as h:
             with mock.patch("sys.stdout", io.StringIO()):
-                h.cli("input", "type", "css=input[name=user]", "myname", "--index", "2")
+                h.cli("fill", "css=input[name=user]", "myname", "--index", "2")
         self.assertEqual(got, {"selector": "css=input[name=user]", "text": "myname", "index": 2})
 
     def test_failed_command_exits_1_and_writes_only_stderr(self):
         with Harness(lambda m, p: ("no such element", "找不到 css=nope")) as h:
             out, err = io.StringIO(), io.StringIO()
             with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err):
-                code = h.cli("input", "click", "css=nope")
+                code = h.cli("click", "css=nope")
         self.assertEqual(code, 1)
         self.assertEqual(out.getvalue(), "")
         self.assertEqual(json.loads(err.getvalue())["error"], "no such element")
@@ -349,34 +352,34 @@ class TestSingleCommand(unittest.TestCase):
         with Harness() as h:  # daemon 起着，但没有浏览器连上来
             err = io.StringIO()
             with mock.patch("sys.stderr", err):
-                code = h.cli("browsingContext", "getTree")
+                code = h.cli("api", "browsingContext", "getTree")
         self.assertEqual(code, 3)
         self.assertEqual(json.loads(err.getvalue())["error"], ERR_NOT_CONNECTED)
 
     def test_user_rejected_exits_4(self):
         with Harness(lambda m, p: (ERR_USER_REJECTED, "用户点了取消")) as h:
             with mock.patch("sys.stderr", io.StringIO()):
-                code = h.cli("storage", "getCookies", "--domain", "example.com")
+                code = h.cli("data", "cookies", "--domain", "example.com")
         self.assertEqual(code, 4)
 
     def test_unknown_command_exits_2_without_sending(self):
         with Harness(lambda m, p: {}) as h:
             with mock.patch("sys.stderr", io.StringIO()):
-                code = h.cli("input", "teleport", "css=a")
+                code = h.cli("teleport", "css=a")
         self.assertEqual(code, 2)
         self.assertEqual(h.browser.seen, [])
 
     def test_duration_only_for_subscribe(self):
         with Harness(lambda m, p: {}) as h:
             with mock.patch("sys.stderr", io.StringIO()):
-                code = h.cli("input", "click", "css=a", "--duration", "5s")
+                code = h.cli("click", "css=a", "--duration", "5s")
         self.assertEqual(code, 2)
         self.assertEqual(h.browser.seen, [])
 
     def test_lg_prefix_is_added(self):
         with Harness(lambda m, p: {"nodes": []}) as h:
             with mock.patch("sys.stdout", io.StringIO()):
-                h.cli("bookmarks", "search", "python")
+                h.cli("data", "bookmarks", "python")
         self.assertEqual(h.browser.seen, ["lg:bookmarks.search"])
 
     def test_daemon_not_running_exits_3(self):
@@ -385,7 +388,7 @@ class TestSingleCommand(unittest.TestCase):
         err = io.StringIO()
         with mock.patch.object(browse, "ensure_daemon", return_value=False), \
              mock.patch("sys.stderr", err):
-            code = browse._main(["browse", "browsingContext", "getTree", "--socket", str(missing)])
+            code = browse._main(["browse", "api", "browsingContext", "getTree", "--socket", str(missing)])
         self.assertEqual(code, 3)
         self.assertEqual(json.loads(err.getvalue())["error"], ERR_NOT_CONNECTED)
 
@@ -413,7 +416,7 @@ class TestSubscribeStream(unittest.TestCase):
             asyncio.run_coroutine_threadsafe(push_event(), h.loop)
             out = io.StringIO()
             with mock.patch("sys.stdout", out):
-                code = h.cli("network", "subscribe", "--match-url", "*/api/*", "--duration", "300ms")
+                code = h.cli("net", "watch", "--match-url", "*/api/*", "--duration", "300ms")
 
         self.assertEqual(code, 0)
         # 事件是 JSONL（一行一条），最后那个订阅结果是缩进过的多行 JSON
@@ -428,7 +431,7 @@ class TestSubscribeStream(unittest.TestCase):
 
 class TestRunBatch(unittest.TestCase):
     def _items(self, n: int) -> list[str]:
-        return [f"browsingContext.navigate https://{i}.com" for i in range(n)]
+        return [f"goto https://{i}.com" for i in range(n)]
 
     def test_all_ok_exits_0(self):
         with Harness(lambda m, p: {"url": p["url"]}) as h:
@@ -500,18 +503,18 @@ class TestRunBatch(unittest.TestCase):
     def test_stdin_mode(self):
         with Harness(lambda m, p: {}) as h:
             out = io.StringIO()
-            stdin = io.StringIO("browsingContext.navigate https://a.com\n# 注释\n\ninput.click css=b\n")
+            stdin = io.StringIO("goto https://a.com\n# 注释\n\nclick css=b\n")
             with mock.patch("sys.stdout", out), mock.patch("sys.stdin", stdin):
                 code = h.cli("run", "-")
         self.assertEqual(code, 0)
         report = json.loads(out.getvalue())
         self.assertEqual([r["command"] for r in report],
-                         ["browsingContext.navigate https://a.com", "input.click css=b"])
+                         ["goto https://a.com", "click css=b"])
 
     def test_bad_item_exits_2_before_anything_is_sent(self):
         with Harness(lambda m, p: {}) as h:
             with mock.patch("sys.stderr", io.StringIO()):
-                code = h.cli("run", "browsingContext.navigate https://a.com", "input.teleport css=a")
+                code = h.cli("run", "goto https://a.com", "teleport css=a")
         self.assertEqual(code, 2)
         self.assertEqual(h.browser.seen, [])
 
@@ -528,7 +531,7 @@ class TestRunBatch(unittest.TestCase):
     def test_daemon_down_during_batch_exits_3(self):
         with mock.patch.object(browse, "ensure_daemon", return_value=False), \
              mock.patch("sys.stderr", io.StringIO()):
-            code = browse._main(["browse", "run", "input.click css=a", "--socket", "/nope/x.sock"])
+            code = browse._main(["browse", "run", "click css=a", "--socket", "/nope/x.sock"])
         self.assertEqual(code, 3)
 
 
@@ -659,7 +662,7 @@ class TestDaemonCommands(unittest.TestCase):
         with Harness(handler) as h:
             done: list[int] = []
             thread = threading.Thread(
-                target=lambda: done.append(h.cli("storage", "getCookies",
+                target=lambda: done.append(h.cli("data", "cookies",
                                                  "--domain", "bank.test")),
                 daemon=True)
             with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
@@ -692,6 +695,61 @@ class TestDaemonCommands(unittest.TestCase):
                 self.assertEqual(browse.daemon_run(h.sock, 1.0), browse.EXIT_FAILED)
             # 而且没把别人的 pid 文件删掉
             self.assertTrue(browse.pid_path(h.sock).exists())
+
+    def test_daemon_run_service_mode_adopts_when_the_occupant_leaves(self):
+        """服务模式（--idle-timeout 0）不因 socket 被占退出 1：等临时 daemon 自己退，接管。"""
+        with Harness() as h:
+            env = mock.patch.dict(os.environ, {"BROWSE_BRIDGE_PORT": "0"})
+            env.start()
+            self.addCleanup(env.stop)
+            evict = threading.Thread(
+                target=lambda: (time.sleep(0.2), h._call(h.daemon.stop())),
+                daemon=True)
+            evict.start()
+            stopped: list[int] = []
+
+            def stop_when_ours():
+                # 占着的 Harness daemon 不写 pid 文件；看到 pid 文件 = 接管的那个起来了
+                for _ in range(200):
+                    if browse.pid_path(h.sock).exists() and browse.probe(h.sock):
+                        with mock.patch("sys.stderr", io.StringIO()):
+                            stopped.append(browse.daemon_stop(h.sock))
+                        return
+                    time.sleep(0.02)
+
+            stopper = threading.Thread(target=stop_when_ours, daemon=True)
+            stopper.start()
+            with mock.patch.object(browse, "ADOPT_GRACE", 0.5), \
+                 mock.patch("sys.stderr", io.StringIO()):
+                self.assertEqual(browse.daemon_run(h.sock, 0.0), browse.EXIT_OK)
+            stopper.join(TIMEOUT)
+            self.assertEqual(stopped, [browse.EXIT_OK])
+
+    def test_adopt_socket_sigterms_a_stubborn_occupant(self):
+        """临时 daemon 超过体面期还不退（扩展连着它就永不空闲退）：SIGTERM 掉再接管。"""
+        with Harness() as h:
+            browse.pid_path(h.sock).write_text("12345", encoding="utf-8")
+            killed: list[int] = []
+            with mock.patch.object(browse, "ADOPT_GRACE", 0.05), \
+                 mock.patch.object(browse, "probe", side_effect=lambda path: not killed), \
+                 mock.patch("subprocess.run", return_value=mock.Mock(
+                     stdout=f"python3 bin/browse bridge run --socket {h.sock}")), \
+                 mock.patch("os.kill", side_effect=lambda pid, sig: killed.append(pid)):
+                self.assertTrue(browse._adopt_socket(h.sock, mock.Mock()))
+            self.assertEqual(len(killed), 1)
+
+    def test_adopt_socket_refuses_to_kill_a_reused_pid(self):
+        """pid 文件里的号已被别的进程复用（命令行对不上）就不动手。"""
+        with Harness() as h:
+            browse.pid_path(h.sock).write_text(str(os.getpid()), encoding="utf-8")
+            killed: list[int] = []
+            with mock.patch.object(browse, "ADOPT_GRACE", 0.05), \
+                 mock.patch.object(browse, "probe", return_value=True), \
+                 mock.patch("subprocess.run", return_value=mock.Mock(
+                     stdout="some unrelated process")), \
+                 mock.patch("os.kill", side_effect=lambda pid, sig: killed.append(pid)):
+                self.assertFalse(browse._adopt_socket(h.sock, mock.Mock()))
+            self.assertEqual(killed, [])
 
     def test_daemon_run_then_daemon_stop_end_to_end(self):
         """`browse daemon run` 前台跑起来，另一头 `browse daemon stop` 把它收干净。
@@ -743,13 +801,16 @@ class TestEntry(unittest.TestCase):
             err = io.StringIO()
             with mock.patch("sys.stderr", err):
                 self.assertEqual(browse._main(argv), 0)
-            self.assertIn("browse <module> <action>", err.getvalue())
+            self.assertIn("browse <动词>", err.getvalue())
 
-    def test_help_lists_every_method(self):
+    def test_help_covers_every_layer(self):
         text = browse.help_text()
-        for method in browse.METHODS:
-            module, _, action = method.rpartition(".")
-            self.assertIn(f"browse {module} {action}", text)
+        for verb in browse.FLAT_SIMPLE:
+            self.assertIn(f"browse {verb}", text)
+        for group in browse.NOUN_GROUPS:
+            self.assertIn(f"browse {group}", text)
+        self.assertIn("browse api <module> <action>", text)
+        self.assertIn("稳定性承诺", text)
 
     def test_main_consumes_repo_wide_flags(self):
         with mock.patch("sys.stderr", io.StringIO()):
@@ -909,7 +970,7 @@ class TestMultipleBrowsers(unittest.TestCase):
         with self.TwoBrowsers() as h:
             out = io.StringIO()
             with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
-                code = h.cli("browsingContext", "getTree", "--browser", "brave")
+                code = h.cli("api", "browsingContext", "getTree", "--browser", "brave")
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out.getvalue())["who"], "brave")
 
@@ -917,7 +978,7 @@ class TestMultipleBrowsers(unittest.TestCase):
         with self.TwoBrowsers() as h:
             err = io.StringIO()
             with mock.patch("sys.stderr", err):
-                code = h.cli("browsingContext", "getTree")
+                code = h.cli("api", "browsingContext", "getTree")
         self.assertEqual(code, 1)
         message = json.loads(err.getvalue().splitlines()[0])["message"]
         self.assertIn("chrome", message)
@@ -926,8 +987,9 @@ class TestMultipleBrowsers(unittest.TestCase):
 
     def test_browser_is_a_cli_flag_not_a_wire_param(self):
         """`--browser` 不能被当成指令参数发给浏览器。"""
-        method, params, opts = browse.parse_command(
-            ["browsingContext", "navigate", "https://a.test", "--browser", "brave"])
+        name, params, opts = browse.route(
+            ["api", "browsingContext", "navigate", "https://a.test", "--browser", "brave"])
+        self.assertEqual(name, "api browsingContext.navigate")
         self.assertEqual(params, {"url": "https://a.test"})
         self.assertEqual(opts, {"browser": "brave"})
         self.assertEqual(browse.browser_of(opts), "brave")
@@ -952,7 +1014,7 @@ class TestMultipleBrowsers(unittest.TestCase):
             out = io.StringIO()
             with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
                 code = h.cli("run", "--browser", "brave",
-                             "browsingContext.getTree", "browsingContext.getTree")
+                             "api browsingContext getTree", "api browsingContext getTree")
         self.assertEqual(code, 0)
         report = json.loads(out.getvalue())
         self.assertEqual([item["result"]["who"] for item in report], ["brave", "brave"])
@@ -960,3 +1022,289 @@ class TestMultipleBrowsers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------- 友好层（spec 12 验收）
+class TestFriendlyMapping(unittest.TestCase):
+    """映射完整性：友好命令 + api-only 清单 == 扩展 HANDLERS 全集，不多不少。"""
+
+    # 多步 / 包装命令用到的底层方法（各自函数里的 execute 调用）
+    INTERNAL_METHODS = frozenset({
+        "browsingContext.create", "browsingContext.close", "browsingContext.getTree",
+        "browsingContext.captureScreenshot", "script.evaluate",
+        "lg:page.snapshot", "lg:tabs.group", "lg:tabs.ungroup", "lg:tabs.groups",
+        "lg:tabs.updateGroup",
+        "network.subscribe", "network.unsubscribe", "lg:pageCapture.saveMhtml",
+    })
+
+    def test_every_method_is_friendly_or_api_only(self):
+        friendly = {m for m, _ in browse.FLAT_SIMPLE.values()}
+        for actions in browse.NOUN_GROUPS.values():
+            friendly |= {m for m, _ in actions.values()}
+        friendly |= self.INTERNAL_METHODS
+        self.assertEqual(set(browse.METHODS), friendly | browse.API_ONLY)
+
+    def test_naming_layers_do_not_collide(self):
+        flat = set(browse.FLAT_SIMPLE) | browse.FLAT_SPECIAL | set(browse.FLAT_ALIASES)
+        groups = set(browse.NOUN_GROUPS)
+        others = browse.MANAGEMENT | {"api"}
+        self.assertFalse(flat & groups, flat & groups)
+        self.assertFalse(flat & others, flat & others)
+        self.assertFalse(groups & others, groups & others)
+
+    def test_api_only_methods_are_not_friendly(self):
+        # 冷门方法只在 API_ONLY 里出现一次；友好层如果也映射了它就是重复入口
+        for actions in browse.NOUN_GROUPS.values():
+            for method, _ in actions.values():
+                self.assertNotIn(method, browse.API_ONLY)
+
+    def test_old_two_part_syntax_is_dead_without_a_rename_hint(self):
+        """spec 8：硬切，不留兼容，也不提示新写法。"""
+        with Harness(lambda m, p: {}) as h:
+            err = io.StringIO()
+            with mock.patch("sys.stderr", err):
+                code = h.cli("browsingContext", "navigate", "https://a.com")
+        self.assertEqual(code, 2)
+        self.assertNotIn("改名", err.getvalue())
+        self.assertNotIn("新写法", err.getvalue())
+        self.assertEqual(h.browser.seen, [])
+
+
+class TestGroupNaming(unittest.TestCase):
+    def test_full_group_name_prefixes_once(self):
+        self.assertEqual(browse._full_group_name("调研"), "browse/调研")
+        self.assertEqual(browse._full_group_name("browse/调研"), "browse/调研")
+
+    def test_color_is_stable_across_processes(self):
+        first = {n: browse._group_color(n) for n in ("default", "调研", "a", "b")}
+        again = {n: browse._group_color(n) for n in ("default", "调研", "a", "b")}
+        self.assertEqual(first, again)
+
+    def test_open_without_group_flag_targets_the_default_group(self):
+        """open 的两步：create + group，组名 browse/default（spec 5.1）。"""
+        calls = []
+
+        def handler(method, params):
+            calls.append((method, params))
+            if method == "browsingContext.create":
+                return {"context": "42"}
+            if method == "lg:tabs.groups":
+                return {"groups": []}
+            return {"group": "7", "title": params.get("title"), "color": params.get("color")}
+
+        with Harness(handler) as h:
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("open", "https://a.com")
+        self.assertEqual(code, 0)
+        self.assertEqual([m for m, _ in calls],
+                         ["browsingContext.create", "lg:tabs.groups", "lg:tabs.group"])
+        self.assertEqual(calls[-1][1]["title"], "browse/default")
+        self.assertEqual(calls[-1][1]["context"], "42")
+
+    def test_open_with_named_group_reuses_an_existing_one(self):
+        calls = []
+
+        def handler(method, params):
+            calls.append((method, params))
+            if method == "browsingContext.create":
+                return {"context": "43"}
+            if method == "lg:tabs.groups":
+                return {"groups": [{"group": "9", "title": "browse/调研", "window": 1, "tabs": [7]}]}
+            return {"group": params.get("group"), "title": params.get("title"), "color": ""}
+
+        with Harness(handler) as h:
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("open", "https://a.com", "--group", "调研")
+        self.assertEqual(code, 0)
+        self.assertEqual(calls[-1][1]["group"], "9")
+
+    def test_dissolve_maps_the_name_to_a_group_id(self):
+        seen = []
+
+        def handler(method, params):
+            seen.append((method, params))
+            if method == "lg:tabs.groups":
+                return {"groups": [{"group": "9", "title": "browse/调研", "window": 1, "tabs": [7]}]}
+            return {"ungrouped": 1}
+
+        with Harness(handler) as h:
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("group", "dissolve", "调研")
+        self.assertEqual(code, 0)
+        self.assertEqual(seen[-1], ("lg:tabs.ungroup", {"group": "9"}))
+
+
+class TestTargetResolution(unittest.TestCase):
+    """五级链的 CLI 侧三级 + 多匹配裁决（spec 6）。"""
+
+    @staticmethod
+    def tree_handler(urls):
+        def handler(method, params):
+            if method == "browsingContext.getTree":
+                return {"contexts": [
+                    {"context": str(i + 1), "parent": None, "url": u, "lg:title": u,
+                     "lg:active": i == 0} for i, u in enumerate(urls)]}
+            return {}
+        return handler
+
+    def test_url_flag_resolves_to_a_single_context(self):
+        got = {}
+
+        def spy(method, params):
+            if method == "script.evaluate":
+                got.update(params)
+            if method == "browsingContext.getTree":
+                return {"contexts": [
+                    {"context": "1", "parent": None, "url": "https://a.com/1", "lg:title": "a"},
+                    {"context": "2", "parent": None, "url": "https://b.com/2", "lg:title": "b"}]}
+            return {}
+
+        with Harness(spy) as h:
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("text", "--url", "b.com/*")
+        self.assertEqual(code, 0)
+        self.assertEqual(got.get("context"), "2")
+
+    def test_url_multi_match_is_an_error_for_reads(self):
+        with Harness(self.tree_handler(["https://a.com/1", "https://a.com/2"])) as h:
+            err = io.StringIO()
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", err):
+                code = h.cli("text", "--url", "a.com/*")
+        self.assertEqual(code, 2)
+        self.assertIn("a.com/*", err.getvalue())
+
+    def test_url_zero_match_lists_what_is_there(self):
+        with Harness(self.tree_handler(["https://a.com/1"])) as h:
+            err = io.StringIO()
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", err):
+                code = h.cli("text", "--url", "nope.com/*")
+        self.assertEqual(code, 2)
+        self.assertIn("a.com/1", err.getvalue())
+
+    def test_close_applies_to_every_match(self):
+        closed = []
+
+        def handler(method, params):
+            if method == "browsingContext.getTree":
+                return {"contexts": [
+                    {"context": str(i + 1), "parent": None, "url": u, "lg:title": u}
+                    for i, u in enumerate(["https://a.com/1", "https://a.com/2", "https://b.com/3"])]}
+            if method == "browsingContext.close":
+                closed.append(params.get("context"))
+            return {}
+
+        with Harness(handler) as h:
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("close", "a.com/*")
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(closed), ["1", "2"])
+        self.assertEqual(json.loads(out.getvalue())["closed"], 2)
+
+
+class TestWait(unittest.TestCase):
+    def _snapshot_handler(self, entries_fn):
+        state = {"n": 0}
+        def handler(method, params):
+            if method == "lg:page.snapshot":
+                state["n"] += 1
+                return {"elements": entries_fn(state["n"]), "truncated": False}
+            return {}
+        return handler
+
+    def test_element_appearing_ends_the_wait(self):
+        handler = self._snapshot_handler(lambda n: [] if n < 3
+                                         else [{"tag": "button", "text": "提交", "css": "#s", "xpath": "//b"}])
+        with Harness(handler) as h:
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("wait", "提交", "--timeout", "5s")
+        self.assertEqual(code, 0)
+
+    def test_element_gone_ends_the_wait(self):
+        handler = self._snapshot_handler(lambda n: [] if n >= 2
+                                         else [{"tag": "button", "text": "加载中", "css": "#s", "xpath": "//b"}])
+        with Harness(handler) as h:
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("wait", "--gone", "加载中", "--timeout", "5s")
+        self.assertEqual(code, 0)
+
+    def test_timeout_exits_1_with_context(self):
+        handler = self._snapshot_handler(lambda n: [])
+        with Harness(handler) as h:
+            err = io.StringIO()
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", err):
+                code = h.cli("wait", "永不出来", "--timeout", "500ms")
+        self.assertEqual(code, 1)
+        self.assertIn("永不出来", err.getvalue())
+
+    def test_wait_text_polls_the_page_body(self):
+        calls = []
+
+        def handler(method, params):
+            calls.append((method, params))
+            if method == "script.evaluate":
+                return {"type": "success", "realm": "1",
+                        "result": {"value": "加载完成" if len(calls) >= 2 else "加载中"}}
+            return {}
+
+        with Harness(handler) as h:
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("wait", "--text", "完成", "--timeout", "5s")
+        self.assertEqual(code, 0)
+        self.assertTrue(all(m == "script.evaluate" for m, _ in calls))
+        self.assertGreaterEqual(len(calls), 2)
+
+
+class TestOutputFormat(unittest.TestCase):
+    def test_piped_output_is_json_and_table_flag_forces_table(self):
+        with Harness(lambda m, p: {"contexts": [{"context": "7"}]}) as h:
+            out = io.StringIO()  # StringIO 没有 tty，默认就该是 JSON
+            with mock.patch("sys.stdout", out):
+                code = h.cli("api", "browsingContext", "getTree")
+            self.assertEqual(code, 0)
+            json.loads(out.getvalue())
+            out2 = io.StringIO()
+            with mock.patch("sys.stdout", out2):
+                h.cli("api", "browsingContext", "getTree", "--table")
+            self.assertIn("context", out2.getvalue())
+
+    def test_json_flag_forces_json_even_on_a_tty(self):
+        with Harness(lambda m, p: {"contexts": []}) as h:
+            fake_tty = io.StringIO()
+            fake_tty.isatty = lambda: True
+            with mock.patch("sys.stdout", fake_tty):
+                code = h.cli("api", "browsingContext", "getTree", "--json")
+            self.assertEqual(code, 0)
+            json.loads(fake_tty.getvalue())
+
+    def test_text_command_prints_the_page_text(self):
+        def handler(method, params):
+            if method == "script.evaluate":
+                return {"type": "success", "realm": "1", "result": {"value": "页面正文"}}
+            return {}
+
+        with Harness(handler) as h:
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("text")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue().strip(), "页面正文")
+        self.assertEqual(h.browser.seen, ["script.evaluate"])
+
+    def test_screenshot_writes_the_file_and_prints_the_path(self):
+        png = base64.b64encode(b"\x89PNG-fake").decode()
+
+        def handler(method, params):
+            if method == "browsingContext.captureScreenshot":
+                return {"data": png, "lg:viewportOnly": True, "lg:activated": False}
+            return {}
+
+        with Harness(handler) as h:
+            out = io.StringIO()
+            target = pathlib.Path(tempfile.mkdtemp()) / "shot.png"
+            with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("screenshot", str(target))
+        self.assertEqual(code, 0)
+        self.assertEqual(target.read_bytes(), b"\x89PNG-fake")
+        self.assertEqual(json.loads(out.getvalue())["file"], str(target))

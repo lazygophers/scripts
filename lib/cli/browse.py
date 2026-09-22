@@ -1,34 +1,40 @@
 """browse — 用命令行驱动浏览器扩展
 
 常用：
-  browse install                            # 第一次用：构建扩展 + 注册通信配置 + 指引你加载扩展
   browse status                             # 一条命令看链路：bridge / 插件连接 / 心跳
-  browse bridge start                       # 起中转服务（幂等；平时不用手动跑）
-  browse browsingContext getTree --table    # 看浏览器连上没有、有哪些标签页
-  browse browsingContext navigate https://example.com
-  browse page snapshot --table              # 这一页能点/能填的元素 + 可用 locator
-  browse input click 'text=登录'
+  browse open https://example.com           # 开新标签页（自动进 browse/ 分组）
+  browse list                               # 列出所有标签页
+  browse goto https://example.com           # 当前页跳转（别名 navigate）
+  browse snapshot                           # 这一页能点/能填的元素 + 可用定位符
+  browse click '登录'                        # 按可见文字点（不写前缀默认 text=）
+  browse fill 'css=input[name=user]' '我的名字'
+  browse text                               # 正文纯文字；html 拿源码
+  browse wait '提交' | browse wait --text 完成 | browse wait --url '*ok*'
+  browse close 'example.com/*'              # 匹配到的全部关掉；--group 调研 关整组
+  browse screenshot                         # 存 ~/Downloads/browse-<时间戳>.png 并打路径
+  browse data history '关键词'               # 历史；data 组还有 cookie/书签/下载/阅读清单
+  browse net watch --match-url '*/api/*' --duration 30s   # 事件流 JSONL
+  browse api gcm token <entity>             # 底层透传，参数形状直接跟扩展 handler
+  browse run 'goto https://a.com' 'click 登录'            # 并发批量
   browse stop                               # 中止在途指令（daemon 留着）
-  browse audit --limit 20 --table           # 看最近 20 条审计
-  browse script evaluate 'document.title'
-  browse network subscribe --match-url '*/api/*' --duration 30s   # 事件流 JSONL
-  browse run 'browsingContext.navigate https://a.com' \
-             'browsingContext.navigate https://b.com'             # 并发批量
-  browse run -                              # 从 stdin 读，一行一条
 
-结果走 stdout 纯 JSON（可 `| jq`），进度与错误走 stderr，`--table` 出表格。
-退出码：0 成功 / 1 指令失败 / 2 参数错误 / 3 浏览器未连接 / 4 用户拒绝确认。
+结果默认：终端里出表格（Rich），被管道接走出 JSON（--table / --json 强制）。
+进度与错误走 stderr；`net watch` 和 `audit` 永远是一行一条 JSON（JSONL，可 | jq）。
+退出码：0 成功 / 1 指令失败或等待超时 / 2 参数错误 / 3 浏览器未连接 / 4 用户拒绝确认。
 
-调用形态是固定的 `browse <module> <action> [位置参数...] [--参数 值...]`
-（`.scratch/browser-control-extension/spec.md` 6.2）。`--参数` 的名字按 kebab →
-camel 转成线上 params 的 key（`--match-url` → `matchUrl`），值先当 JSON 解，解不动
-就当字符串：所以 `--index 3` 是数字 3，`--domain example.com` 是字符串。要强行传字
-符串 `"123"` 就把引号带上：`--text '"123"'`。
+调用形态（spec：.scratch/browse-cli-redesign/spec.md）三层：
+  browse <动词>                常用层·平铺（open / close / goto / click / …）
+  browse <名词组> <动词>        常用层·分组（tab / page / group / data / net / sys / rec）
+  browse api <module> <action> 底层透传
+`--参数` 名字按 kebab → camel 转成线上 key（--match-url → matchUrl）；值先按 JSON
+解，解不动当字符串：`--index 3` 是数字，`--domain example.com` 是字符串。要强行传
+字符串 `"123"` 就把引号带上：`--text '"123"'`。
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import os
@@ -39,6 +45,7 @@ import signal
 import subprocess
 import sys
 import time
+import zlib
 
 from lib import browse_bridge, browse_log
 from lib.browse_daemon import (
@@ -176,8 +183,9 @@ STRING_NUMERIC_PARAMS: dict[str, tuple[str, ...]] = {
     "lg:printing.respond": ("request",),
 }
 
-CLI_FLAGS = frozenset({"table", "socket", "concurrency", "failFast", "duration",
-                       "idleTimeout", "limit", "browser"})
+CLI_FLAGS = frozenset({"table", "json", "socket", "concurrency", "failFast", "duration",
+                       "idleTimeout", "limit", "browser", "timeout", "url", "group",
+                       "context"})
 
 DEFAULT_CONCURRENCY = 4
 # 自举起 daemon 后等它把 socket 建起来的上限。这不是轮询别人的异步结果，是本地进程
@@ -185,7 +193,126 @@ DEFAULT_CONCURRENCY = 4
 SPAWN_TIMEOUT = 5.0
 # 自举是后台起进程、日志丢弃的，起不来时看不到原因；把手动前台跑的命令写进报错里。
 SPAWN_HINT = "看具体原因：把 `browse bridge run --socket <path>` 放前台跑一遍"
+# 服务模式接管被占 socket 前，先给临时 daemon 这么长的体面退出时间。
+ADOPT_GRACE = 30.0
 _DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)(ms|s|m|h)?$")
+
+# ---------------------------------------------------------------- 友好层（spec：.scratch/browse-cli-redesign/spec.md）
+GROUP_PREFIX = "browse/"
+DEFAULT_GROUP_NAME = "default"
+# Chrome 的标签组只认这固定一套色（handlers/tabs.ts 的 COLORS）
+GROUP_COLORS = ("grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange")
+
+DEFAULT_WAIT_TIMEOUT = 30.0
+WAIT_POLL = 0.2
+# `wait --idle` 的「网络安静」定义：连续这么久没有新网络事件
+WAIT_IDLE_GAP = 0.5
+
+# 只走 `browse api` 的方法（spec 3.9：普通使用者一年也不会敲一次，或只作为别的
+# 命令的内部步骤）。与下面的友好命令合起来必须正好等于 METHODS 全集（测试钉死）。
+API_ONLY = frozenset({
+    "script.callFunction",
+    "lg:offscreen.documents",
+    "lg:gcm.id", "lg:gcm.token", "lg:gcm.deleteToken",
+    "lg:userScripts.register", "lg:userScripts.list", "lg:userScripts.unregister",
+    "lg:userScripts.reset", "lg:userScripts.world",
+    "lg:declContent.setRules", "lg:declContent.clear",
+    "lg:commands.list",
+    "lg:sidePanel.open", "lg:sidePanel.close", "lg:sidePanel.behavior",
+    "lg:omnibox.setDefault",
+    "lg:wauth.attach", "lg:wauth.detach", "lg:wauth.complete",
+    "lg:printing.respond",
+    "lg:permissions.contains",
+    "lg:readingList.update",
+    "lg:audit.read", "lg:audit.clear",
+})
+
+# 平铺动词 → (底层方法, 位置参数名)。多步 / 有包装的（open / close / list /
+# screenshot / text / html / back / forward / wait）不在这张表里，各走各的函数。
+# 进平铺层的判据（spec 2.1）：动词全工具无歧义 + 日常高频，两条同时满足；否则进名词组。
+FLAT_SIMPLE: dict[str, tuple[str, tuple[str, ...]]] = {
+    "goto": ("browsingContext.navigate", ("url",)),
+    "click": ("input.click", ("selector",)),
+    "fill": ("input.type", ("selector", "text")),
+    "snapshot": ("lg:page.snapshot", ()),
+    "reload": ("browsingContext.reload", ()),
+    "activate": ("browsingContext.activate", ()),
+    "eval": ("script.evaluate", ("expression",)),
+}
+# 别名：不写进 --help，只保留肌肉记忆（spec 4）
+FLAT_ALIASES = {"navigate": "goto", "shot": "screenshot", "script": "eval"}
+FLAT_SPECIAL = frozenset({"open", "close", "list", "screenshot", "text", "html",
+                          "back", "forward", "wait"})
+
+# 名词组 → action → (底层方法, 位置参数名)。group 组是五条多步命令，走专门函数。
+NOUN_GROUPS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
+    "tab": {
+        "save": ("lg:pageCapture.saveMhtml", ("filename",)),
+        "list": ("browsingContext.getTree", ()),
+        "close": ("browsingContext.close", ()),
+    },
+    "page": {
+        "key": ("input.key", ("key",)),
+        "scroll": ("input.scroll", ()),
+    },
+    # group 组的五条（list/add/rename/color/dissolve）是多步命令，见 GROUP_SPECIAL
+    "group": {},
+    "data": {
+        "cookies": ("storage.getCookies", ()),
+        "cookie-set": ("storage.setCookie", ("url", "name", "value")),
+        "cookie-del": ("storage.deleteCookies", ()),
+        "local-get": ("storage.getLocalStorage", ("key",)),
+        "local-set": ("storage.setLocalStorage", ("key", "value")),
+        "history": ("lg:history.search", ("text",)),
+        "history-del": ("lg:history.delete", ("url",)),
+        "bookmarks": ("lg:bookmarks.search", ("query",)),
+        "bookmark-add": ("lg:bookmarks.create", ("url",)),
+        "bookmark-del": ("lg:bookmarks.remove", ("id",)),
+        "downloads": ("lg:downloads.list", ()),
+        "download": ("lg:downloads.start", ("url",)),
+        "download-cancel": ("lg:downloads.cancel", ("id",)),
+        "download-open": ("lg:downloads.open", ("id",)),
+        "reading-list": ("lg:readingList.list", ()),
+        "reading-add": ("lg:readingList.add", ("url", "title")),
+        "reading-del": ("lg:readingList.remove", ("id",)),
+        "top-sites": ("lg:topSites.list", ()),
+    },
+    "net": {
+        "watch": ("network.subscribe", ()),
+        "unwatch": ("network.unsubscribe", ("subscription",)),
+        "proxy": ("lg:proxy.get", ()),
+        "proxy-set": ("lg:proxy.set", ("mode",)),
+        "proxy-clear": ("lg:proxy.clear", ()),
+    },
+    "sys": {
+        "info": ("lg:system.info", ()),
+        "idle": ("lg:idle.state", ()),
+        "notify": ("lg:notifications.show", ("title", "message")),
+        "notify-clear": ("lg:notifications.clear", ("id",)),
+        "awake": ("lg:power.keepAwake", ()),
+        "awake-off": ("lg:power.release", ()),
+        "clipboard": ("lg:clipboard.read", ()),
+        "clipboard-set": ("lg:clipboard.write", ("text",)),
+        "search": ("lg:search.query", ("text",)),
+        "perms": ("lg:permissions.getAll", ()),
+    },
+    "rec": {
+        "tab": ("lg:capture.recordTab", ()),
+        "desktop": ("lg:capture.recordDesktop", ()),
+        "stop": ("lg:capture.recordStop", ("recording",)),
+    },
+}
+
+# group 组的五条是多步命令（名字 → 组 id 的折算在 CLI 侧），在 _cmd_group_special 里
+GROUP_SPECIAL = frozenset({"list", "add", "rename", "color", "dissolve"})
+
+# 定位符前缀（locator.ts 的 SCHEMES）；友好层的 click/fill 不写前缀默认按可见文字
+# 找（与旧写法的 css= 默认不同，spec 3.1）
+_LOCATOR_PREFIXES = ("css=", "text=", "text*=", "xpath=", "js=")
+
+# 管理命令：不属于三层里的任何一层（spec 2）
+MANAGEMENT = frozenset({"status", "install", "uninstall", "audit", "bridge", "daemon",
+                        "stop", "run"})
 
 
 class UsageError(Exception):
@@ -246,20 +373,16 @@ def split_tokens(tokens: list[str]) -> tuple[list[str], dict]:
     return positional, flags
 
 
-def resolve_method(module: str, action: str) -> str:
-    """`history` + `search` → `lg:history.search`。私有能力的 `lg:` 前缀可省。"""
+def resolve_api(module: str, action: str) -> str:
+    """`browse api history search` → `lg:history.search`。`lg:` 前缀可省。"""
     for candidate in (f"{module}.{action}", f"lg:{module}.{action}"):
         if candidate in METHODS:
             return candidate
-    raise UsageError(f"没有这条指令: {module} {action}（`browse --help` 看全部）")
+    raise UsageError(f"没有这条指令: api {module} {action}（`browse --help` 看全部）")
 
 
-def parse_command(tokens: list[str]) -> tuple[str, dict, dict]:
-    """`['input','click','text=登录','--index','1']` → (method, params, CLI 选项)。"""
-    if len(tokens) < 2:
-        raise UsageError("要写成 `browse <module> <action> [参数...]`")
-    method = resolve_method(tokens[0], tokens[1])
-    positional, flags = split_tokens(tokens[2:])
+def _bind_params(method: str, positional: list[str], flags: dict) -> tuple[dict, dict]:
+    """位置参数按 METHODS 的名字绑定，flags 拆成 (指令参数, CLI 选项)。"""
     names = METHODS[method]
     if len(positional) > len(names):
         extra = " ".join(positional[len(names):])
@@ -273,27 +396,112 @@ def parse_command(tokens: list[str]) -> tuple[str, dict, dict]:
     for key in ("context", "root", *STRING_NUMERIC_PARAMS.get(method, ())):
         if isinstance(params.get(key), (int, float)):
             params[key] = str(params[key])
-    return method, params, opts
+    return params, opts
+
+
+def route(tokens: list[str]) -> tuple[str, dict, dict]:
+    """`browse ...` 的 token → (命令名, 指令参数, CLI 选项)。
+
+    命令名形如 `'goto'`（平铺）、`'data cookies'`（名词组）、`'api lg:history.search'`
+    （透传）。旧的两段式协议名（`browse browsingContext navigate`）从这层起不存在：
+    落不进任何一层就是「没有这条指令」，和敲错任何命令一样（spec 8，硬切）。
+    """
+    if not tokens:
+        raise UsageError("要写成 `browse <命令> [参数...]`（`browse --help` 看全部）")
+    head = tokens[0]
+    head = FLAT_ALIASES.get(head, head)
+
+    # `tab list` / `tab close` 就是 `list` / `close` 的全名形式（spec 3.2），同一条路
+    if head == "tab" and len(tokens) > 1 and tokens[1] in ("list", "close"):
+        tokens = [tokens[1], *tokens[2:]]
+        head = tokens[0]
+
+    if head == "api":
+        if len(tokens) < 3:
+            raise UsageError("要写成 `browse api <module> <action> [参数...]`")
+        method = resolve_api(tokens[1], tokens[2])
+        params, opts = _bind_params(method, *split_tokens(tokens[3:]))
+        return f"api {method}", params, opts
+
+    if head in NOUN_GROUPS:
+        group = NOUN_GROUPS[head]
+        action = tokens[1] if len(tokens) > 1 else ""
+        if action in GROUP_SPECIAL and head == "group":
+            name = f"group {action}"
+            positional, flags = split_tokens(tokens[2:])
+            opts = {key: flags.pop(key) for key in list(flags) if key in CLI_FLAGS}
+            return name, dict(zip(_GROUP_ARGS[action], (_coerce(v) for v in positional))), opts
+        entry = group.get(action)
+        if entry is None:
+            known = " / ".join(sorted({*group, *GROUP_SPECIAL})) if head == "group" \
+                else " / ".join(sorted(group))
+            raise UsageError(f"没有这条指令: {head} {action}（{head} 组有: {known}）")
+        method, names = entry
+        params, opts = _bind_params(method, *split_tokens(tokens[2:]))
+        return f"{head} {action}", params, opts
+
+    if head in FLAT_SPECIAL:
+        positional, flags = split_tokens(tokens[1:])
+        # `wait --gone <target>`：--gone 是模式开关，不是它自己的字符串参数。
+        if head == "wait" and flags.get("gone") not in (None, True, False):
+            positional.insert(0, str(flags.pop("gone")))
+            flags["gone"] = True
+        opts = {key: flags.pop(key) for key in list(flags) if key in CLI_FLAGS}
+        params = {_FLAT_ARGS[head][i]: _coerce(v) for i, v in enumerate(positional)
+                  if i < len(_FLAT_ARGS[head])}
+        if len(positional) > len(_FLAT_ARGS[head]):
+            raise UsageError(f"{head} 最多吃 {len(_FLAT_ARGS[head])} 个位置参数，多出来的: "
+                             f"{' '.join(positional[len(_FLAT_ARGS[head]):])}")
+        params.update(flags)
+        return head, params, opts
+
+    if head in FLAT_SIMPLE:
+        method, names = FLAT_SIMPLE[head]
+        params, opts = _bind_params(method, *split_tokens(tokens[1:]))
+        if head in ("click", "fill") and isinstance(params.get("selector"), str):
+            # 友好层默认按可见文字找；要 CSS 就写全 `css=...`（spec 3.1）
+            if not params["selector"].startswith(_LOCATOR_PREFIXES):
+                params["selector"] = f"text={params['selector']}"
+        return head, params, opts
+
+    raise UsageError(f"没有这条指令: {' '.join(tokens[:2])}（`browse --help` 看全部）")
+
+
+# 平铺多步命令的位置参数名（spec 3.1）
+_FLAT_ARGS: dict[str, tuple[str, ...]] = {
+    "open": ("url",),
+    "close": ("target",),
+    "list": (),
+    "screenshot": ("file",),
+    "text": (),
+    "html": (),
+    "back": (),
+    "forward": (),
+    "wait": ("target",),
+}
+# group 组五条命令的位置参数名（spec 3.4）
+_GROUP_ARGS: dict[str, tuple[str, ...]] = {
+    "list": (),
+    "add": ("name",),
+    "rename": ("old", "new"),
+    "color": ("name", "color"),
+    "dissolve": ("name",),
+}
 
 
 def parse_run_item(line: str) -> tuple[str, dict]:
-    """`run` 的一条指令串 → (method, params)。
-
-    转义规则选 **shell 风格（`shlex`）**，不另开 JSON 数组那一套。理由：flag 的值
-    本来就走 JSON 解析（`_coerce`），嵌套对象写 `--entries '{"a":1}'` 已经能表达，
-    再加一套 JSON 数组语法是第二套语法换零能力；而 spec 6.2 / 6.8 的例子、用户手敲
-    的样子，都是 `'browsingContext.navigate https://a.com'` 这种 shell 风格。
-    """
+    """`run` 的一条指令串 → (命令名, params)。shell 风格转义（shlex），同单条命令。"""
     tokens = shlex.split(line)
     if not tokens:
         raise UsageError(f"空指令: {line!r}")
-    head, dot, action = tokens[0].rpartition(".")
-    if not dot:
-        raise UsageError(f"指令要写成 `<module>.<action> [参数...]`: {line!r}")
-    method, params, opts = parse_command([head, action, *tokens[1:]])
+    name, params, opts = route(tokens)
+    if "context" in opts:
+        params["context"] = str(opts.pop("context"))
     if opts:
-        raise UsageError(f"`run` 的指令串里不能带 CLI 选项 {sorted(opts)}: {line!r}")
-    return method, params
+        raise UsageError(f"`run` 的指令串里不能带 CLI 选项 {sorted(opts)}"
+                         "（选页用 --context <id>）: " + repr(line))
+    _runnable(name, params)  # 多步命令（open/close/wait…）在这里就拒，别等发出去一半
+    return name, params
 
 
 def browser_of(opts: dict) -> str:
@@ -360,17 +568,71 @@ async def _serve(sock: pathlib.Path, idle_timeout: float) -> bool:
         return True
 
 
+def _kill_occupant(sock: pathlib.Path, report) -> bool:
+    """SIGTERM 掉占着 socket 的临时 daemon，pid 复用靠命令行核对防住。
+
+    pid 文件读不到、或那个 pid 现在跑的已经不是 `bridge run --socket <sock>`
+    （被系统回收复用了），就不动手，交回调用方按「起不来」报错。
+    """
+    try:
+        pid = int(pid_path(sock).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        out = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                             capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    command = out.stdout
+    if "bridge" not in command or "run" not in command or str(sock) not in command:
+        return False
+    report.info(f"临时 daemon（pid {pid}）超过体面期还占着 socket，SIGTERM 后接管：{sock}")
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass  # 刚好自己退了，正好
+    return True
+
+
+def _adopt_socket(sock: pathlib.Path, report) -> bool:
+    """服务模式下等 / 抢占被占的 socket。
+
+    占着的只会是 `ensure_daemon` 临时拉起的 daemon：扩展一连上它就永不空闲退出，
+    光等永远等不到（2026-09-22 实测：临时 daemon 连跑 16 小时，launchd 服务在旁边
+    每 10 秒失败一次、刷了 742 行日志）。所以先给 `ADOPT_GRACE` 秒体面退出，超时
+    SIGTERM 掉再接管。
+    """
+    deadline = time.monotonic() + ADOPT_GRACE
+    while probe(sock):
+        left = deadline - time.monotonic()
+        if left > 0:
+            time.sleep(min(1.0, left))
+            continue
+        if not _kill_occupant(sock, report):
+            return False
+        wait_until = time.monotonic() + SPAWN_TIMEOUT
+        while probe(sock) and time.monotonic() < wait_until:
+            time.sleep(0.05)
+        return not probe(sock)
+    return True
+
+
 def daemon_run(sock: pathlib.Path, idle_timeout: float) -> int:
     """`browse bridge run`（`daemon run` 是它的旧名）：前台守着，由 `ensure_daemon` 拉起。
 
     `_serve` 返回 False 表示这个 socket 上已经有另一个 daemon 在跑，这一次没起来 ——
-    所以是失败，不是成功。
+    所以是失败，不是成功。唯一例外是服务模式（`idle_timeout <= 0`）：目标状态是
+    「这个 socket 上常驻一个 daemon」，现在占着的退了之后就算达成，见 `_adopt_socket`。
     """
+    report = reporter(stderr=True)
     if probe(sock):
-        # pid 文件写在这里，先确认这一个是我们的——否则下面的 finally 会把正在跑的
-        # 那个 daemon 的 pid 文件删掉，`daemon stop` 就再也找不到它
-        reporter(stderr=True).err(f"这个 socket 上已经有 daemon 在跑：{sock}")
-        return EXIT_FAILED
+        if idle_timeout > 0:
+            # pid 文件在下面才写，正是为了不动正在跑的那个 daemon 的 pid 文件
+            report.err(f"这个 socket 上已经有 daemon 在跑：{sock}")
+            return EXIT_FAILED
+        if not _adopt_socket(sock, report):
+            report.err(f"这个 socket 上已经有 daemon 在跑，接管失败：{sock}")
+            return EXIT_FAILED
     pid_file = pid_path(sock)
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
@@ -566,73 +828,110 @@ def exit_code_for(outcome: dict) -> int:
 
 HELP = """browse — 用命令行驱动浏览器扩展
 
-用法
-  browse <module> <action> [位置参数...] [--参数 值...]
-  browse run [--concurrency N] [--no-fail-fast] '<指令串>'... | browse run -
-  browse status                                      一条命令看完整条链路（装没装、连没连）
-  browse bridge start | stop | status | log        （daemon 是旧名）status 列出插件连接，log 看服务端日志
-  browse stop                                       中止在途指令，daemon 留着
-  browse audit [--limit N] [--table]                看审计日志（存在插件里）
-  browse install | uninstall                        装 / 卸（扩展本体仍需你手动加载一次）
+用法（三层，spec：.scratch/browse-cli-redesign/spec.md）
+  browse <动词>              常用层·平铺
+  browse <名词组> <动词>      常用层·分组
+  browse api <module> <action>   底层透传
 
 先跑起来
-  browse install                                    第一次用：构建 + 注册 + 指引加载扩展
-  browse status                                     看链路：daemon / 浏览器连接 / 注册三环
-  browse browsingContext getTree --table            看浏览器连上没有、有哪些标签页
-  browse browsingContext navigate https://example.com
-  browse page snapshot --table                      列出这一页能点/能填的元素
-  browse input type 'css=input[name=user]' 'myname'
-  browse input click 'text=登录'
-  browse script evaluate 'document.title'
-  browse storage getCookies --domain example.com
-  browse network subscribe --match-url '*/api/*' --duration 30s > api.jsonl
-  browse run 'browsingContext.navigate https://a.com' 'browsingContext.navigate https://b.com'
+  browse install            第一次用：构建 + 注册 + 指引加载扩展（装完/升级要重启浏览器）
+  browse status             看链路：bridge / 浏览器连接 / 注册三环
+  browse open https://example.com
+  browse list               列出所有标签页
+  browse click '登录'
+
+常用·平铺
+  browse open <url>                      开新标签页；自动进分组（--group 名字 / --no-group 不分）
+  browse close [网址通配]                 关匹配到的所有页；--group <名字> 关整组；不给关当前页
+  browse goto <url>                      原地跳转（别名 navigate）
+  browse list                            所有标签页：id / 标题 / 网址 / 分组 / 窗口
+  browse click <目标>                    点一下；不写前缀默认按可见文字找
+  browse fill <目标> <文字>               填输入框
+  browse screenshot [文件]               截当前视口，默认存 ~/Downloads；--base64 才吐 base64
+  browse snapshot                        这一页能点/能填的元素 + 可用定位符
+  browse text                            正文纯文字（给人和 AI 读的）
+  browse html                            页面源码
+  browse eval <js>                       在页面里跑一段 JS 拿返回值（别名 script）
+  browse wait <目标>                     等元素出现；--gone 等消失 / --text 文字 / --url 通配 / --idle 网络安静
+  browse back                              后退（forward 前进；页面 JS 调不动跨域历史时会失败）
+  browse reload                            刷新（--ignore-cache 跳过缓存）
+  browse activate                          把某个标签页提到前台
+  browse run '<指令>'...                 并发批量；`browse run -` 从 stdin 读，一行一条
+
+tab 组（标签页整体）
+  browse tab save [文件]                 整页存成单文件存档（MHTML）
+  browse tab list | tab close            同 browse list / browse close
+
+page 组（页面内部）
+  browse page key <键>                   按一个键（Enter、Escape……）
+  browse page scroll                     --dx / --dy 滚动
+
+group 组（标签分组；前缀 browse/ 自动补，默认色按组名哈希）
+  browse group list                      分组：名字 / 颜色 / 窗口 / 组内页数
+  browse group add <名字>                把当前（或 --url 匹配到的）页加进某组
+  browse group rename <旧> <新>
+  browse group color <名字> <颜色>        颜色只认 grey/blue/red/yellow/green/pink/purple/cyan/orange
+  browse group dissolve <名字>           解散分组，标签页都留着
+
+data 组（浏览器替你记住的东西）
+  browse data cookies                    查 cookie（--domain 过滤）
+  browse data cookie-set <url> <名> <值> | cookie-del
+  browse data local-get <键> | local-set <键> <值>
+  browse data history <文字> | history-del <url>
+  browse data bookmarks <关键词> | bookmark-add <url> | bookmark-del <id>
+  browse data downloads | download <url> | download-cancel <id> | download-open <id>
+  browse data reading-list | reading-add <url> <标题> | reading-del <id>
+  browse data top-sites
+
+net 组（网络）
+  browse net watch --match-url '*/api/*' --duration 30s    事件流一行一个 JSON
+  browse net unwatch <订阅号>
+  browse net proxy | proxy-set <模式> | proxy-clear
+
+sys 组（浏览器/系统杂项）
+  browse sys info | idle | notify <标题> <正文> | notify-clear <id>
+  browse sys awake | awake-off           防休眠开/关
+  browse sys clipboard | clipboard-set <文字>
+  browse sys search <文字> | perms
+
+rec 组（录制）
+  browse rec tab | rec desktop | rec stop <录制号>
+
+底层透传
+  browse api <module> <action> [参数]    全部 74 个扩展方法都在；lg: 前缀可省
+  （例：browse api gcm token <entity>）
+
+管理
+  browse status | install | uninstall | audit [--limit N] | bridge start|stop|status|log | stop
 
 选项（CLI 自己的，其余 --xxx 一律当指令参数发给浏览器）
-  --table            结果用表格给人看（默认 stdout 出纯 JSON，可 | jq）
-  --socket PATH      指定 daemon 的 socket 文件
-  --concurrency N    run 的并发上限，默认 4
-  --no-fail-fast     run 的每条各自独立，不因为前面失败就停，整体退出码 0
-  --duration 30s     network subscribe 听多久，事件一行一个 JSON
-  --limit N          audit 只取最近 N 条
-  --browser NAME     发给哪个浏览器：chrome / brave / edge / ...
-                     只有一个连着时不用写；多个连着又不写会报错并列出都有谁
-  --debug / --no-say 仓库通用开关
+  --context <id>            指定标签页
+  --url <通配符>            按网址选标签页（多匹配报错列出候选；close 是全部作用）
+  --group <名字>            按分组选（open 时是「放进哪个组」）
+  --browser <名字>          发给哪个浏览器；多个连着又不写会报错并列出都有谁
+  --table / --json          强制输出格式；默认终端出表格、管道出 JSON
+  --timeout 10s             wait 的超时（默认 30s）
+  --socket PATH | --concurrency N | --no-fail-fast | --duration 30s | --limit N
+  --debug / --no-say        仓库通用开关
 
 参数怎么写
   --参数名按 kebab → camel 转成线上 key：--match-url 就是 matchUrl
   值先按 JSON 解、解不动当字符串：--index 3 是数字，--domain a.com 是字符串
   要强行传字符串形态的数字，把 JSON 引号带上：--text '"123"'
-  定位器四种前缀：css= / text= / xpath= / js=，不写前缀默认 css=
-  选哪个标签页：--context <id> > --match-url '<glob>' > 当前活动标签页
-  选哪个浏览器：--browser <名字>（跟在 action 后面）；只有一个连着时可以不写
+  定位器四种前缀：text= / css= / xpath= / js=；click/fill 不写前缀默认 text=
+  选哪个标签页：--context <id> > --url '<glob>' > --group <名字> > 当前活动页
 
-同时开着好几个浏览器
-  `browse install` 默认给探测到的每个浏览器都注册，所以 Chrome 和 Brave 可以同时连着
-  `browse daemon status` 看现在连着谁
-  `browse browsingContext getTree --browser brave` 指定发给谁
-  装完或升级后**要重启浏览器**，它才会去读新的通信配置
-
-确认与审计（都在插件里，不在这边）
-  设置页：浏览器的扩展详情 →「扩展程序选项」，或点插件面板上的「设置」
-  确认模式 silent 直接执行（默认） / per_domain 每个域名问一次 / always 每次都问
-  要问的时候浏览器会弹一个小窗，不点就按拒绝算（退出码 4）
-  拒绝名单里的域名一律拒绝，连窗都不弹
-  这些设置和审计日志都存在插件的 chrome.storage.local 里 —— daemon 没起来也能改
+稳定性承诺
+  browse api 的参数形状直接跟随扩展 handler，不做任何兼容包装，扩展改了它就跟着改。
+  常用层的命令名和参数可以为了手感调整。
 
 退出码
-  0 成功   1 指令失败   2 参数写错   3 浏览器未连接   4 用户拒绝确认
-
-指令全集"""
+  0 成功   1 指令失败或等待超时   2 参数写错   3 浏览器未连接   4 用户拒绝确认
+"""
 
 
 def help_text() -> str:
-    lines = [HELP]
-    for method, names in METHODS.items():
-        module, _, action = method.rpartition(".")
-        args = "".join(f" <{name}>" for name in names)
-        lines.append(f"  browse {module} {action}{args}")
-    return "\n".join(lines) + "\n"
+    return HELP + "\n"
 
 
 # ---------------------------------------------------------------- 入口
@@ -714,7 +1013,7 @@ def _cmd_run(tokens: list[str]) -> int:
         raise UsageError("`run` 至少要给一条指令串，或者用 `browse run -` 从 stdin 读")
 
     # 先全部解析，再决定要不要起 daemon：写错一条就一条都不发，副作用为零
-    items = [parse_run_item(line) for line in raw]
+    items = [_runnable(*parse_run_item(line)) for line in raw]
     if not ensure_daemon(sock):
         print_error({"error": ERR_NOT_CONNECTED, "message": f"daemon 起不来：{sock}（{SPAWN_HINT}）"})
         return EXIT_NOT_CONNECTED
@@ -730,23 +1029,519 @@ def _cmd_run(tokens: list[str]) -> int:
     return EXIT_OK if failed is None else exit_code_for(failed)
 
 
-def _cmd_single(tokens: list[str]) -> int:
-    method, params, opts = parse_command(tokens)
+def _runnable(name: str, params: dict) -> tuple[str, dict]:
+    """`run` 只吃一步能发出去的命令；多步的（open/close/wait…）单条跑，报参数错误。"""
+    if name.startswith("api "):
+        return name[4:], params
+    if name in FLAT_SIMPLE:
+        return FLAT_SIMPLE[name][0], params
+    head, _, action = name.partition(" ")
+    entry = NOUN_GROUPS.get(head, {}).get(action)
+    if entry is not None:
+        return entry[0], params
+    raise UsageError(f"`run` 不支持 {name}（多步或流式，单条跑）")
+
+
+# ---------------------------------------------------------------- 友好层执行
+def _glob(pattern: str) -> re.Pattern:
+    """shell 通配符 → 正则，**不锚定**：`a.com/*` 直接匹配 https://a.com/x。
+
+    扩展侧的 matchUrl（订阅过滤、matchUrl 选页）是锚定的，但 CLI 这边的网址选页
+    和 close 按的是 spec 6.2 的写法（`browse close 'a.com/*'`），不带协议也想命中。
+    """
+    body = re.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".")
+    return re.compile(body)
+
+
+def _full_group_name(name: str) -> str:
+    """`调研` → `browse/调研`；写全了的不重复补（spec 5.1）。"""
+    return name if name.startswith(GROUP_PREFIX) else GROUP_PREFIX + name
+
+
+def _group_color(name: str) -> str:
+    """组名哈希取色：同名组永远同色，跨会话稳定（spec 5.2）。"""
+    return GROUP_COLORS[zlib.crc32(name.encode("utf-8")) % len(GROUP_COLORS)]
+
+
+def _want_table(opts: dict) -> bool:
+    """TTY 出表格、管道出 JSON，--table / --json 强制（spec 9.1）。"""
+    if opts.get("json") is True:
+        return False
+    if opts.get("table") is True:
+        return True
+    return sys.stdout.isatty()
+
+
+def _outcome_or_die(outcome: dict) -> dict:
+    if outcome["status"] != "ok":
+        print_error(outcome)
+        raise _CommandFailed(exit_code_for(outcome))
+    return outcome.get("result", {})
+
+
+class _CommandFailed(Exception):
+    """友好层内部：指令已把错误打到 stderr，直接带着退出码出去。"""
+
+    def __init__(self, code: int):
+        super().__init__(code)
+        self.code = code
+
+
+async def _tabs(sock: pathlib.Path, browser: str) -> list[dict]:
+    """getTree 的顶层 context（= 标签页；children 是 frame，这里不看）。"""
+    result = _outcome_or_die(await execute("browsingContext.getTree", {}, sock, browser=browser))
+    return [c for c in result.get("contexts", []) if not c.get("parent")]
+
+async def _tab_groups(sock: pathlib.Path, browser: str) -> list[dict]:
+    result = _outcome_or_die(await execute("lg:tabs.groups", {}, sock, browser=browser))
+    return result.get("groups", [])
+
+
+async def _named_group(name: str, sock: pathlib.Path, browser: str) -> dict:
+    """按展示名找组。零个或多个（两个窗口同名组）都报错并列出候选。"""
+    full = _full_group_name(name)
+    hits = [g for g in await _tab_groups(sock, browser) if g.get("title") == full]
+    if not hits:
+        raise UsageError(f"没有叫 {full} 的分组（`browse group list` 看全部）")
+    if len(hits) > 1:
+        where = ", ".join(f"窗口 {g.get('window')}" for g in hits)
+        raise UsageError(f"{full} 在 {where} 各有一组，Chrome 的组不跨窗口，分不清要哪个")
+    return hits[0]
+
+
+async def _resolve_target(params: dict, opts: dict, sock: pathlib.Path, browser: str) -> None:
+    """把 --context / --url / --group 折算成 params['context']（就地改）。
+
+    五级链（spec 6.1）的前三级在 CLI 侧：--context 直通；--url / --group 在这里解析成
+    单个标签页。后两级（活动页）不用解析——不给 context，扩展自己挑当前活动页。
+    多匹配一律报错列出候选（读写操作打错页比报错更糟，spec 6.2；`close` 走自己的路）。
+    """
+    if opts.get("context") not in (None, True):
+        params["context"] = str(opts["context"])
+        return
+    if opts.get("url") not in (None, True):
+        pattern = _glob(str(opts["url"]))
+        hits = [t for t in await _tabs(sock, browser) if pattern.search(t.get("url", ""))]
+        if not hits:
+            have = "\n".join(f"  {t.get('context')} {t.get('url', '')}" for t in await _tabs(sock, browser))
+            raise UsageError(f"--url {opts['url']} 一个都没匹配到。现在的标签页：\n{have}")
+        if len(hits) > 1:
+            many = "\n".join(f"  {t.get('context')} {t.get('lg:title', '')} {t.get('url', '')}" for t in hits)
+            raise UsageError(f"--url {opts['url']} 匹配到 {len(hits)} 个标签页：\n{many}")
+        params["context"] = hits[0]["context"]
+        return
+    if opts.get("group") not in (None, True):
+        group = await _named_group(str(opts["group"]), sock, browser)
+        ids = {str(t) for t in group.get("tabs", [])}
+        members = [t for t in await _tabs(sock, browser) if t.get("context") in ids]
+        active = [t for t in members if t.get("lg:active")]
+        if len(active) == 1:
+            params["context"] = active[0]["context"]
+        elif len(members) == 1:
+            params["context"] = members[0]["context"]
+        else:
+            many = "\n".join(f"  {t.get('context')} {t.get('lg:title', '')}" for t in members)
+            raise UsageError(f"{group.get('title')} 里没有唯一的活动页，先 `browse activate` 选一个：\n{many}")
+
+
+async def _cmd_open(params: dict, opts: dict, sock: pathlib.Path, browser: str) -> None:
+    url = params.pop("url", None)
+    if not isinstance(url, str) or not url:
+        raise UsageError("`browse open <url>` 要给网址")
+    extra = {k: params.pop(k) for k in ("type", "background") if k in params}
+    context = _outcome_or_die(
+        await execute("browsingContext.create", {"url": url, **extra}, sock, browser=browser)
+    )["context"]
+    if params.get("noGroup") is True:
+        params.pop("noGroup")
+        # 扩展会自动把新开的页收进它自己的 "browse" 组；--no-group 就是把这一步退掉
+        _outcome_or_die(await execute("lg:tabs.ungroup", {"context": context}, sock, browser=browser))
+        print_result({"context": context, "group": None}, table=_want_table(opts))
+        return
+    full = _full_group_name(str(opts.get("group") or DEFAULT_GROUP_NAME))
+    color = params.pop("color", None) or _group_color(full)
+    params_g = {"context": context, "title": full, "color": color}
+    hits = [g for g in await _tab_groups(sock, browser) if g.get("title") == full]
+    if len(hits) > 1:
+        where = ", ".join(f"窗口 {g.get('window')}" for g in hits)
+        raise UsageError(f"{full} 在 {where} 各有一组，分不清新页进哪个；换个组名或 --no-group")
+    if hits:
+        params_g["group"] = str(hits[0]["group"])
+    grouped = _outcome_or_die(await execute("lg:tabs.group", params_g, sock, browser=browser))
+    print_result({"context": context, "group": grouped.get("title"), "color": grouped.get("color")},
+                 table=_want_table(opts))
+
+
+async def _close_contexts(params: dict, opts: dict, sock: pathlib.Path, browser: str) -> list[dict]:
+    """`close` 的目标：位置参数网址通配 / --group 整组 / --context / 活动页。
+
+    多匹配全部关掉（收拾动作，多关正是本意，spec 6.2）；零匹配报错列出现在的页。
+    """
+    target = params.pop("target", None)
+    contexts: list[str] | None = None
+    if opts.get("context") not in (None, True):
+        contexts = [str(opts["context"])]
+    elif opts.get("group") not in (None, True):
+        group = await _named_group(str(opts["group"]), sock, browser)
+        contexts = [str(t) for t in group.get("tabs", [])]
+        if not contexts:
+            raise UsageError(f"{group.get('title')} 里已经没有标签页了")
+    elif target:
+        pattern = _glob(str(target))
+        hits = [t for t in await _tabs(sock, browser) if pattern.search(t.get("url", ""))]
+        if not hits:
+            have = "\n".join(f"  {t.get('context')} {t.get('url', '')}" for t in await _tabs(sock, browser))
+            raise UsageError(f"{target} 一个都没匹配到。现在的标签页：\n{have}")
+        contexts = [t["context"] for t in hits]
+    close_params = {k: v for k, v in params.items() if k != "target"}
+    if contexts is None:
+        return [await execute("browsingContext.close", close_params, sock, browser=browser)]
+    return [await execute("browsingContext.close", {**close_params, "context": c},
+                          sock, browser=browser) for c in contexts]
+
+
+async def _cmd_list(opts: dict, sock: pathlib.Path, browser: str) -> None:
+    tree = await execute("browsingContext.getTree", {}, sock, browser=browser)
+    if tree["status"] != "ok":
+        print_error(tree)
+        raise _CommandFailed(exit_code_for(tree))
+    tabs = [c for c in tree.get("result", {}).get("contexts", []) if not c.get("parent")]
+    groups_outcome = await execute("lg:tabs.groups", {}, sock, browser=browser)
+    groups = groups_outcome.get("result", {}).get("groups", []) \
+        if groups_outcome["status"] == "ok" else []  # Firefox 没有组能力时照样列页
+    rows = []
+    for tab in tabs:
+        ctx = str(tab.get("context", ""))
+        group = next((g for g in groups if ctx in {str(t) for t in g.get("tabs", [])}), None)
+        rows.append({"id": ctx, "title": tab.get("lg:title", ""), "url": tab.get("url", ""),
+                     "group": group.get("title", "") if group else "",
+                     "window": group.get("window", "") if group else ""})
+    print_result({"tabs": rows}, table=_want_table(opts))
+
+
+async def _cmd_screenshot(params: dict, opts: dict, sock: pathlib.Path, browser: str) -> None:
+    file_arg = params.pop("file", None)
+    if params.pop("base64", None) is True:
+        result = _outcome_or_die(await execute("browsingContext.captureScreenshot", params,
+                                               sock, browser=browser))
+        print_result(result, table=_want_table(opts))
+        return
+    if file_arg in (None, True):
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        file_arg = str(pathlib.Path.home() / "Downloads" / f"browse-{stamp}.png")
+    result = _outcome_or_die(await execute("browsingContext.captureScreenshot", params,
+                                           sock, browser=browser))
+    data = result.get("data", "")
+    path = pathlib.Path(str(file_arg)).expanduser()
+    if not path.suffix and params.get("format") == "jpeg":
+        path = path.with_suffix(".jpg")
+    path.write_bytes(base64.b64decode(data))
+    print_result({"file": str(path), "bytes": len(data) * 3 // 4}, table=_want_table(opts))
+
+
+_EVAL_WRAPPERS = {
+    "text": "document.body ? document.body.innerText : ''",
+    "html": "document.documentElement.outerHTML",
+    "back": "history.back()",
+    "forward": "history.forward()",
+}
+
+
+async def _cmd_eval_wrapped(verb: str, params: dict, opts: dict, sock: pathlib.Path,
+                           browser: str) -> None:
+    """text / html / back / forward：一段写死的 JS 包一层 script.evaluate（spec 3.1）。"""
+    result = _outcome_or_die(await execute("script.evaluate",
+                                           {"expression": _EVAL_WRAPPERS[verb], **params},
+                                           sock, browser=browser))
+    value = result.get("result", {}).get("value")
+    if verb in ("text", "html"):
+        sys.stdout.write(f"{value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)}\n")
+    else:
+        print_result(result)
+
+
+def _snapshot_hit(entries: list[dict], target: str) -> bool:
+    """`wait <目标>` 的匹配：基于 snapshot 条目——text 包含、css/xpath 子串（spec 7）。"""
+    if target.startswith("text="):
+        return any(str(target[5:]) in str(e.get("text", "")) for e in entries)
+    if target.startswith("css="):
+        return any(str(target[4:]) in str(e.get("css", "")) for e in entries)
+    if target.startswith("xpath="):
+        return any(str(target[6:]) in str(e.get("xpath", "")) for e in entries)
+    if target.startswith("js="):
+        raise UsageError("`wait` 不支持 js= 定位符（页面里跑任意 JS 不是等待该干的事）")
+    return any(target in str(e.get("text", "")) for e in entries)
+
+
+async def _cmd_wait(params: dict, opts: dict, sock: pathlib.Path, browser: str) -> int:
+    """纯 CLI 侧轮询（spec 7）：200ms 一拍，默认 30s，超时退出码 1。"""
+    gone_value = params.pop("gone", None)
+    if gone_value not in (None, True, False):
+        if params.get("target") is not None:
+            raise UsageError("`wait` 只能给一个元素条件")
+        params["target"] = gone_value
+        gone_value = True
+    modes = [m for m, on in (("target", params.get("target")),
+                             ("text", params.get("text")),
+                             ("url", opts.get("url")),
+                             ("idle", params.get("idle"))) if on not in (None, True, False)]
+    if len(modes) != 1:
+        raise UsageError("`wait` 要正好给一个条件：默认元素 / --text 文字 / --url 通配 / --idle 网络安静")
+    mode = modes[0]
+    if mode == "idle":
+        return await _cmd_wait_idle(sock, browser,
+                                    parse_duration(opts["timeout"]) if "timeout" in opts
+                                    else DEFAULT_WAIT_TIMEOUT)
+    target = str(params.pop("target", ""))
+    text_cond = params.pop("text", None)
+    params.pop("idle", None)
+    gone = gone_value is True
+    if opts.get("context") not in (None, True):
+        # wait 的 --url 是等待条件不是选页条件；选页只认 --context
+        params["context"] = str(opts["context"])
+    timeout = parse_duration(opts["timeout"]) if "timeout" in opts else DEFAULT_WAIT_TIMEOUT
+    deadline = time.monotonic() + timeout
+    while True:
+        if mode == "target":
+            hit = await _wait_snapshot(target, params, sock, browser)
+        else:
+            hit = await _wait_url_or_text(mode, text_cond, opts, params, sock, browser)
+        if hit is not None and hit != gone:
+            return EXIT_OK
+        if time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(WAIT_POLL)
+    what = {"target": target, "text": str(text_cond), "url": str(opts.get("url"))}[mode]
+    waited = f"等 {mode} {what!r}{' 消失' if gone else ''} 超过 {timeout:g}s"
+    tabs = "\n".join(f"  {t.get('context')} {t.get('lg:title', '')} {t.get('url', '')}"
+                     for t in await _tabs(sock, browser)) or "  （一个标签页都没有）"
+    reporter(stderr=True).err(f"{waited}。当时的标签页：\n{tabs}")
+    return EXIT_FAILED
+
+
+async def _wait_snapshot(target: str, params: dict, sock: pathlib.Path,
+                         browser: str) -> bool | None:
+    try:
+        result = _outcome_or_die(await execute("lg:page.snapshot", params, sock, browser=browser))
+    except _CommandFailed:
+        return None
+    return _snapshot_hit(result.get("elements", []), target)
+
+
+async def _wait_url_or_text(mode: str, text_cond, opts: dict, params: dict,
+                            sock: pathlib.Path, browser: str) -> bool | None:
+    if mode == "url":
+        pattern = _glob(str(opts["url"]))
+        return any(pattern.search(t.get("url", "")) and t.get("lg:active")
+                   for t in await _tabs(sock, browser))
+    try:
+        result = _outcome_or_die(
+            await execute("script.evaluate",
+                          {"expression": "document.body ? document.body.innerText : ''",
+                           **params}, sock, browser=browser))
+    except _CommandFailed:
+        return None
+    value = result.get("result", {}).get("value")
+    return str(text_cond) in (value if isinstance(value, str) else "")
+
+
+async def _cmd_wait_idle(sock: pathlib.Path, browser: str, timeout: float) -> int:
+    """`--idle`：订一圈网络事件，连续 WAIT_IDLE_GAP 秒没有新事件就算安静（spec 7 / 13）。"""
+    try:
+        reader, writer, _ = await connect("cli", sock, browser=browser)
+    except (OSError, ProtocolError) as exc:
+        print_error({"error": ERR_NOT_CONNECTED, "message": f"连不上 daemon: {exc}"})
+        return EXIT_NOT_CONNECTED
+    try:
+        writer.write(pack(command(1, "network.subscribe", {}), MAX_INCOMING_FRAME_BYTES))
+        await writer.drain()
+        reply = await _await_reply(reader, 1)
+        if reply.get("type") == "error":
+            print_error(reply)
+            return exit_code_for(reply)
+        deadline = time.monotonic() + timeout
+        last = time.monotonic()
+        quiet = False
+        while True:
+            if time.monotonic() - last >= WAIT_IDLE_GAP:
+                quiet = True
+                break
+            if time.monotonic() >= deadline:
+                break
+            try:
+                message = await asyncio.wait_for(
+                    read_frame(reader, MAX_INCOMING_FRAME_BYTES), WAIT_IDLE_GAP)
+                if message.get("type") == "event":
+                    last = time.monotonic()
+            except asyncio.TimeoutError:
+                continue
+            except (ProtocolError, OSError, asyncio.IncompleteReadError):
+                break
+        subscription = reply.get("result", {}).get("subscription")
+        if isinstance(subscription, str):
+            with contextlib.suppress(OSError, ProtocolError, asyncio.TimeoutError,
+                                     asyncio.IncompleteReadError):
+                writer.write(pack(command(2, "network.unsubscribe",
+                                          {"subscription": subscription}),
+                                  MAX_INCOMING_FRAME_BYTES))
+                await writer.drain()
+                await asyncio.wait_for(_await_reply(reader, 2), 2.0)
+        if quiet:
+            return EXIT_OK
+        reporter(stderr=True).err(
+            f"等 idle 超过 {timeout:g}s，网络一直没安静（安静 = 连续 {WAIT_IDLE_GAP:g}s 没有新事件）")
+        return EXIT_FAILED
+    finally:
+        writer.close()
+
+
+def _cmd_any(tokens: list[str]) -> int:
+    name, params, opts = route(tokens)
     sock = _sock_of(opts)
+    browser = browser_of(opts)
     duration = parse_duration(opts["duration"]) if "duration" in opts else None
-    if duration is not None and method != "network.subscribe":
-        raise UsageError("--duration 只对 `browse network subscribe` 有意义")
+    if duration is not None and "network.subscribe" not in name and name != "net watch":
+        raise UsageError("--duration 只对 `browse net watch`（和 api network subscribe）有意义")
     if not ensure_daemon(sock):
         print_error({"error": ERR_NOT_CONNECTED, "message": f"daemon 起不来：{sock}（{SPAWN_HINT}）"})
         return EXIT_NOT_CONNECTED
 
-    outcome = asyncio.run(execute(method, params, sock, duration=duration,
-                                  browser=browser_of(opts)))
-    if outcome["status"] != "ok":
-        print_error(outcome)
-        return exit_code_for(outcome)
-    print_result(outcome["result"], table=opts.get("table") is True)
+    async def go() -> int:
+        try:
+            return await _dispatch_friendly(name, params, opts, sock, browser, duration)
+        except _CommandFailed as stop:
+            return stop.code
+
+    return asyncio.run(go())
+
+
+async def _dispatch_friendly(name: str, params: dict, opts: dict, sock: pathlib.Path,
+                             browser: str, duration: float | None) -> int:
+    # ---- 平铺层
+    if name in FLAT_SIMPLE:
+        await _resolve_target(params, opts, sock, browser)
+        method = FLAT_SIMPLE[name][0]
+        result = _outcome_or_die(await execute(method, params, sock, browser=browser))
+        if name == "eval":
+            value = result.get("result", {}).get("value")
+            sys.stdout.write(f"{value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)}\n")
+            return EXIT_OK
+        print_result(result, table=_want_table(opts))
+        return EXIT_OK
+    if name == "open":
+        await _cmd_open(params, opts, sock, browser)
+        return EXIT_OK
+    if name == "close":
+        outcomes = await _close_contexts(params, opts, sock, browser)
+        ok = [o for o in outcomes if o.get("status") == "ok"]
+        failed = [o for o in outcomes if o.get("status") != "ok"]
+        for outcome in failed:
+            print_error(outcome)
+        print_result({"closed": len(ok), "failed": len(failed)}, table=_want_table(opts))
+        return EXIT_OK if not failed else EXIT_FAILED
+    if name == "list":
+        await _cmd_list(opts, sock, browser)
+        return EXIT_OK
+    if name == "screenshot":
+        await _resolve_target(params, opts, sock, browser)
+        await _cmd_screenshot(params, opts, sock, browser)
+        return EXIT_OK
+    if name in _EVAL_WRAPPERS:
+        await _resolve_target(params, opts, sock, browser)
+        await _cmd_eval_wrapped(name, params, opts, sock, browser)
+        return EXIT_OK
+    if name == "wait":
+        return await _cmd_wait(params, opts, sock, browser)
+
+    # ---- api 透传
+    if name.startswith("api "):
+        method = name[4:]
+        outcome = await execute(method, params, sock, duration=duration, browser=browser)
+        if outcome["status"] != "ok":
+            print_error(outcome)
+            return exit_code_for(outcome)
+        print_result(outcome["result"], table=_want_table(opts))
+        return EXIT_OK
+
+    # ---- 名词组
+    head, _, action = name.partition(" ")
+    if head == "group":
+        return await _cmd_group_special(action, params, opts, sock, browser)
+    if name == "net watch":
+        outcome = await execute("network.subscribe", params, sock, duration=duration,
+                                browser=browser)
+        if outcome["status"] != "ok":
+            print_error(outcome)
+            return exit_code_for(outcome)
+        print_result(outcome["result"], table=_want_table(opts))
+        return EXIT_OK
+    entry = NOUN_GROUPS.get(head, {}).get(action)
+    if entry is None:  # 路由层已挡住，到不了这里
+        raise UsageError(f"没有这条指令: {name}")
+    method = entry[0]
+    await _resolve_target(params, opts, sock, browser)
+    result = _outcome_or_die(await execute(method, params, sock, browser=browser))
+    print_result(result, table=_want_table(opts))
     return EXIT_OK
+
+
+async def _cmd_group_special(action: str, params: dict, opts: dict, sock: pathlib.Path,
+                             browser: str) -> int:
+    if action == "list":
+        result = _outcome_or_die(await execute("lg:tabs.groups", {}, sock, browser=browser))
+        rows = [{"title": g.get("title", ""), "color": g.get("color", ""),
+                 "collapsed": g.get("collapsed", False), "window": g.get("window", ""),
+                 "tabs": len(g.get("tabs", []))} for g in result.get("groups", [])]
+        print_result({"groups": rows}, table=_want_table(opts))
+        return EXIT_OK
+    if action == "add":
+        name = params.pop("name", None)
+        if not isinstance(name, str) or not name:
+            raise UsageError("`browse group add <名字>` 要给组名")
+        await _resolve_target(params, {k: v for k, v in opts.items() if k != "group"},
+                              sock, browser)
+        full = _full_group_name(name)
+        body = {"title": full, "color": params.pop("color", None) or _group_color(full),
+                **params}
+        hits = [g for g in await _tab_groups(sock, browser) if g.get("title") == full]
+        if len(hits) > 1:
+            where = ", ".join(f"窗口 {g.get('window')}" for g in hits)
+            raise UsageError(f"{full} 在 {where} 各有一组，分不清进哪个；换个名字")
+        if hits:
+            body["group"] = str(hits[0]["group"])
+        result = _outcome_or_die(await execute("lg:tabs.group", body, sock, browser=browser))
+        print_result(result, table=_want_table(opts))
+        return EXIT_OK
+    if action in ("rename", "color"):
+        if action == "rename":
+            old, new = params.pop("old", None), params.pop("new", None)
+            if not (isinstance(old, str) and isinstance(new, str)):
+                raise UsageError("`browse group rename <旧名> <新名>` 要两个名字")
+            body = {"title": _full_group_name(new)}
+        else:
+            old, color = params.pop("name", None), params.pop("color", None)
+            if not (isinstance(old, str) and isinstance(color, str)):
+                raise UsageError("`browse group color <名字> <颜色>` 要名字和颜色")
+            if color not in GROUP_COLORS:
+                raise UsageError(f"颜色只认 {', '.join(GROUP_COLORS)}")
+            body = {"color": color}
+        group = await _named_group(old, sock, browser)
+        result = _outcome_or_die(await execute("lg:tabs.updateGroup",
+                                               {"group": str(group["group"]), **body},
+                                               sock, browser=browser))
+        print_result(result, table=_want_table(opts))
+        return EXIT_OK
+    if action == "dissolve":
+        name = params.pop("name", None)
+        if not isinstance(name, str) or not name:
+            raise UsageError("`browse group dissolve <名字>` 要给组名")
+        group = await _named_group(name, sock, browser)
+        result = _outcome_or_die(await execute("lg:tabs.ungroup",
+                                               {"group": str(group["group"])},
+                                               sock, browser=browser))
+        print_result(result, table=_want_table(opts))
+        return EXIT_OK
+    raise UsageError(f"group 只有 {' / '.join(sorted(GROUP_SPECIAL))}：{action!r}")
 
 
 def _cmd_audit(tokens: list[str]) -> int:
@@ -885,7 +1680,7 @@ def _main(argv: list[str]) -> int:
             return _cmd_audit(tokens[1:])
         if tokens[0] in ("install", "uninstall"):
             return _cmd_install(tokens[1:], uninstall=tokens[0] == "uninstall")
-        return _cmd_single(tokens)
+        return _cmd_any(tokens)
     except UsageError as exc:
         reporter(stderr=True).err(str(exc))
         return EXIT_USAGE

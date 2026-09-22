@@ -11,9 +11,9 @@ browse — 用命令行驱动浏览器扩展
   browse <module> <action> [位置参数...] [--参数 值...]
   browse run [--concurrency N] [--no-fail-fast] '<指令串>'... | browse run -
   browse status                                      一条命令看完整条链路（装没装、连没连）
-  browse bridge start | stop | status | log        （daemon 是旧名）status 列出插件连接，log 看服务端日志
-  browse stop                                       中止在途指令，daemon 留着
-  browse audit [--limit N] [--table]                看审计日志（存在插件里）
+  browse bridge start | stop | status | log          管理 bridge 进程
+  browse stop                                       中止在途指令，bridge 留着
+  browse audit [clear] [--limit N] [--table]        看或清空插件里的审计日志
   browse install | uninstall                        装 / 卸（扩展本体仍需你手动加载一次）
 
 先跑起来
@@ -50,8 +50,8 @@ browse — 用命令行驱动浏览器扩展
 
 同时开着好几个浏览器
   `browse install` 默认给探测到的每个浏览器都注册，所以 Chrome 和 Brave 可以同时连着
-  `browse daemon status` 看现在连着谁
-  `browse browsingContext getTree --browser brave` 指定发给谁
+  browse bridge status                             看现在连着谁
+  browse browsingContext getTree --browser brave    指定发给谁
   装完或升级后**要重启浏览器**，它才会去读新的通信配置
 
 确认与审计（都在插件里，不在这边）
@@ -94,8 +94,8 @@ browse — 用命令行驱动浏览器扩展
   browse lg:downloads list
   browse lg:downloads cancel <id>
   browse lg:page snapshot
-  browse lg:audit read
-  browse lg:audit clear
+  browse audit
+  browse audit clear
 ```
 
 ## 示例

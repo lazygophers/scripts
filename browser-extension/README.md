@@ -165,7 +165,7 @@ browse@lazygophers.com
 
 ### 装不上时按这个顺序查
 
-1. `browse daemon status` —— daemon 没在跑就 `browse daemon start`
+1. `browse bridge status` —— bridge 没在跑就 `browse bridge start`
 2. `chrome://extensions` 上扩展 ID 是不是 `podeceeeafjdcemppcgjhhokcokpcama`
 3. `browse install --list` —— 你的浏览器在列表里吗
 4. manifest 的 `path` 指的那个 wrapper 还在吗、有执行位吗
@@ -185,7 +185,7 @@ npm test           # node --test，无第三方测试框架
 
 daemon 没起时这是**正常现象**：service worker 控制台会持续打印
 `[browse] daemon unavailable (...); retry #N in Nms`，间隔从 500ms 逐步退避到 60s，
-连续失败 10 次后转 5 分钟长冷却。图标徽标为空；连上后显示绿点，执行指令时显示在途条数。
+连续失败 10 次后冷却 60 秒。图标徽标为空；连上后显示绿点，执行指令时显示在途条数。
 
 ## 为什么用 esbuild 而不是 Vite
 
