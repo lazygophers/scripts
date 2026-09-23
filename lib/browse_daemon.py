@@ -44,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import hashlib
 import os
 import socket
 import struct
@@ -102,12 +103,29 @@ class _NoBrowser(Exception):
         self.code = code
 
 
+# macOS sun_path 上限 104 字节（Linux 108）。超长路径 bind 直接
+# OSError: AF_UNIX path too long —— 2026-09-22/23 实测刷了 983 次崩溃循环。
+_UNIX_PATH_MAX = 104
+
+
+def _fit_unix_path(path: Path) -> Path:
+    """超长路径截断尾部、用内容哈希兜底，保证 ≤ _UNIX_PATH_MAX 字节。"""
+    raw = str(path)
+    if len(raw.encode()) <= _UNIX_PATH_MAX:
+        return path
+    digest = hashlib.sha256(raw.encode()).hexdigest()[:8]
+    cut = _UNIX_PATH_MAX - len(digest) - 1 - len(path.suffix)
+    return Path(raw[:cut] + "." + digest + path.suffix)
+
+
 def socket_path() -> Path:
-    """socket 落点：优先 `$XDG_RUNTIME_DIR`，没有就回落用户状态目录。"""
+    """socket 落点：优先 `$XDG_RUNTIME_DIR`，没有就回落用户状态目录。
+    超过 AF_UNIX sun_path 上限时截断+哈希，避免 bind 直接炸。"""
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime:
-        return Path(runtime) / "lazygophers" / "browse.sock"
-    return Path.home() / ".local" / "state" / "lazygophers" / "scripts" / "browse.sock"
+        return _fit_unix_path(Path(runtime) / "lazygophers" / "browse.sock")
+    return _fit_unix_path(Path.home() / ".local" / "state" / "lazygophers"
+                          / "scripts" / "browse.sock")
 
 
 def pack(message: dict, limit: int = MAX_INCOMING_FRAME_BYTES) -> bytes:
@@ -165,6 +183,8 @@ def bind(path: Path) -> socket.socket:
     old = os.umask(0o177)
     try:
         sock.bind(str(path))
+    except OSError as exc:
+        raise OSError(exc.errno, f"{exc.strerror}: {path}") from None
     finally:
         os.umask(old)
     sock.setblocking(False)

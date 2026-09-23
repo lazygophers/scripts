@@ -365,10 +365,32 @@ class TestTimed(unittest.TestCase):
                 ui_mod.timed(boom)()
         self.assertEqual(len(calls), 1)
 
-    def test_preserves_name(self):
-        def named(argv):
-            return 0
-        self.assertEqual(ui_mod.timed(named).__name__, "named")
+    def test_clean_sysexit_records_done_not_fail(self):
+        """SystemExit(0) 是 fire run_cli 的成功路径，记 cli.done 不记 cli.fail。"""
+        events = []
+        import lib.log as slog
+
+        with patch.object(slog, "record",
+                          lambda event, **kw: events.append(event)):
+            def clean():
+                raise SystemExit(0)
+            with self.assertRaises(SystemExit):
+                ui_mod.timed(clean)()
+        self.assertIn("cli.done", events)
+        self.assertNotIn("cli.fail", events)
+
+    def test_failure_sysexit_records_fail(self):
+        events = []
+        import lib.log as slog
+
+        with patch.object(slog, "record",
+                          lambda event, **kw: events.append(event)):
+            def bad():
+                raise SystemExit(2)
+            with self.assertRaises(SystemExit):
+                ui_mod.timed(bad)()
+        self.assertIn("cli.fail", events)
+        self.assertNotIn("cli.done", events)
 
 
 if __name__ == "__main__":

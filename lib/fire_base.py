@@ -83,7 +83,10 @@ def timed_cli(method: Callable[..., Any]) -> Callable[..., Any]:
                 t.append(elapsed_s, style="dim bold")
                 t.append(f" · {start_s}–{end_s}", style="dim")
                 con.print(t)
-            if failed is not None:
+            # SystemExit(0/None) 是 run_cli 成功路径的 sys.exit(0)，不是失败
+            # （见 lib/ui.py timed 同款注释）
+            clean_exit = isinstance(failed, SystemExit) and failed.code in (0, None)
+            if failed is not None and not clean_exit:
                 # 失败只带退出码；错误详情由 Reporter.err 记，两边不重复
                 fields = {"rc": failed.code} if isinstance(failed, SystemExit) else {
                     "exc_type": type(failed).__name__}
@@ -92,7 +95,8 @@ def timed_cli(method: Callable[..., Any]) -> Callable[..., Any]:
                             exc_info=(type(failed), failed, failed.__traceback__), **fields)
             else:
                 slog.record("cli.done", logger=name, elapsed_ms=elapsed_ms,
-                            **({"rc": result} if isinstance(result, int) else {}))
+                            **({"rc": result} if isinstance(result, int)
+                               else ({"rc": 0} if clean_exit else {})))
         if failed is not None:
             raise failed  # 异常对象自带原 traceback，raise 不丢栈
         return result

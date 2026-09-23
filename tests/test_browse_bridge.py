@@ -273,12 +273,17 @@ class LogCase(unittest.TestCase):
             browse_log.record("ws.open", path=blocked)  # 不抛就算过
 
     def test_log_path_follows_the_environment_override(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": "/tmp/x.log"}):
+        with unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": "/tmp/x.log",
+                                                   "SCRIPTS_LOG": ""}):
             self.assertEqual(browse_log.log_path(), pathlib.Path("/tmp/x.log"))
         import tempfile
-        with unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": ""}, clear=False), \
+        # tests/__init__ 会全局设 SCRIPTS_LOG 指向套件临时文件，这里要验的是
+        # 「两个覆盖都没有时的默认落点」，所以连 SCRIPTS_LOG 一起清掉
+        with unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": "", "SCRIPTS_LOG": ""},
+                                      clear=False), \
              unittest.mock.patch.object(tempfile, "tempdir", None):  # gettempdir 有缓存
             os.environ.pop("BROWSE_BRIDGE_LOG", None)
+            os.environ.pop("SCRIPTS_LOG", None)
             self.assertEqual(browse_log.log_path(),
                              pathlib.Path(tempfile.gettempdir()) / "lazygophers" / "scripts.log")
 
@@ -289,7 +294,8 @@ class BridgeIntrospectionCase(BridgeCase):
     def setUp(self) -> None:
         super().setUp()
         self.log_path = pathlib.Path(self._tmp.name) / "bridge.log"
-        patch = unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": str(self.log_path)})
+        patch = unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": str(self.log_path),
+                                               "SCRIPTS_LOG": ""})
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -365,7 +371,8 @@ class TransportCase(BridgeCase):
     def setUp(self) -> None:
         super().setUp()
         self.log_path = pathlib.Path(self._tmp.name) / "bridge.log"
-        patch = unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": str(self.log_path)})
+        patch = unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": str(self.log_path),
+                                               "SCRIPTS_LOG": ""})
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -483,7 +490,8 @@ class AdapterCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         log_path = pathlib.Path(self._tmp.name) / "bridge.log"
-        patch = unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": str(log_path)})
+        patch = unittest.mock.patch.dict(os.environ, {"BROWSE_BRIDGE_LOG": str(log_path),
+                                               "SCRIPTS_LOG": ""})
         patch.start()
         self.addCleanup(patch.stop)
 

@@ -526,7 +526,10 @@ def timed(fn, *, label: str | None = None):
             end_wall = time.time()
             if failed is not None or not is_ai_shell_env():
                 print_runtime(start_wall, end_wall, label=label, elapsed=elapsed)
-            if failed is not None:
+            # SystemExit(0/None) 是 fire run_cli 成功路径的 sys.exit(0)，
+            # 不是失败——记 done，否则每次成功跑 CLI 都留一条 rc:0 假 cli.fail
+            clean_exit = isinstance(failed, SystemExit) and failed.code in (0, None)
+            if failed is not None and not clean_exit:
                 # 失败只带退出码；错误详情由 Reporter.err 记，两边不重复
                 fields = {"rc": failed.code} if isinstance(failed, SystemExit) else {
                     "exc_type": type(failed).__name__}
@@ -535,7 +538,8 @@ def timed(fn, *, label: str | None = None):
                             exc_info=(type(failed), failed, failed.__traceback__), **fields)
             else:
                 slog.record("cli.done", logger=name, elapsed_ms=int(elapsed * 1000),
-                            **({"rc": result} if isinstance(result, int) else {}))
+                            **({"rc": result} if isinstance(result, int)
+                               else ({"rc": 0} if clean_exit else {})))
         if failed is not None:
             raise failed  # 异常对象自带原 traceback，raise 不丢栈
         return result

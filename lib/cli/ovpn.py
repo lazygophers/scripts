@@ -22,6 +22,7 @@ import pathlib
 import sys
 
 from lib.fire_base import BaseCli, run_cli, timed_cli
+from lib import log as slog
 from lib.ovpn import (
     CONFIG_PATH,
     load_config,
@@ -192,6 +193,7 @@ class OvpnCli(BaseCli):
             if not items:
                 self._r.err("没给规则。例: ovpn route add '*.startpago.com'")
                 return 1
+            before = (list(domains), list(cidrs))
             for raw in items:
                 try:
                     net = str(ipaddress.ip_network(raw, strict=False))

@@ -873,5 +873,50 @@ class TestBrowsersDoNotInterfere(DaemonCase):
         self.assertEqual(event["params"]["subscriptions"], [brave_sub])
 
 
+class TestSocketPathFit(unittest.TestCase):
+    """AF_UNIX sun_path 上限 104 字节的截断+哈希兜底（2026-09-23 983 次崩溃循环的修复）。"""
+
+    def test_short_path_unchanged(self):
+        from pathlib import Path
+
+        from lib.browse_daemon import _fit_unix_path
+
+        p = Path("/tmp/abc/browse.sock")
+        self.assertEqual(_fit_unix_path(p), p)
+
+    def test_long_path_fits_limit(self):
+        from pathlib import Path
+
+        from lib.browse_daemon import _UNIX_PATH_MAX, _fit_unix_path
+
+        long_dir = Path("/" + "x" * 120)
+        fitted = _fit_unix_path(long_dir / "lazygophers" / "browse.sock")
+        self.assertLessEqual(len(str(fitted).encode()), _UNIX_PATH_MAX)
+        self.assertTrue(str(fitted).endswith(".sock"))
+        self.assertIn(".", Path(str(fitted)).stem[-9:])  # 尾部带 8 位哈希
+
+    def test_fit_is_stable(self):
+        from pathlib import Path
+
+        from lib.browse_daemon import _fit_unix_path
+
+        long_dir = Path("/" + "y" * 90)
+        a = _fit_unix_path(long_dir / "browse.sock")
+        b = _fit_unix_path(long_dir / "browse.sock")
+        self.assertEqual(a, b)
+        # 不同输入不同输出（哈希可区分）
+        c = _fit_unix_path(Path("/" + "z" * 90) / "browse.sock")
+        self.assertNotEqual(a, c)
+
+    def test_socket_path_respects_xdg_and_fits(self):
+        import os as _os
+        from unittest.mock import patch as _patch
+
+        from lib.browse_daemon import _UNIX_PATH_MAX, socket_path
+
+        with _patch.dict(_os.environ, {"XDG_RUNTIME_DIR": "/" + "w" * 120}):
+            self.assertLessEqual(len(str(socket_path()).encode()), _UNIX_PATH_MAX)
+
+
 if __name__ == "__main__":
     unittest.main()

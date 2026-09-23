@@ -127,9 +127,12 @@ class Bridge(Daemon):
             await browse_ws.server_handshake(reader, writer, origin_allowed=_origin_allowed)
             await self._adopt_ws(reader, writer)
         except (ConnectionError, asyncio.IncompleteReadError, browse_ws.WsClosed,
-                OSError, json.JSONDecodeError, ValueError) as exc:
+                asyncio.TimeoutError, OSError, json.JSONDecodeError, ValueError) as exc:
             # 握手被拒 / 对端断开 / 坏消息 —— 这条连接不要了，不拖垮 bridge。
             # 但要记一笔：扩展连不上时，被拒的原因就写在这儿。
+            # asyncio.TimeoutError：_ws_to_sock 的静默超时（py3.9 上它不是
+            # OSError 子类，不接住会一路打到 excepthook 记 critical ——
+            # 2026-09-23 日志审计里 7 次误报 crash 就是它）
             browse_log.record("ws.dropped", reason=type(exc).__name__, detail=str(exc)[:200])
         finally:
             with contextlib.suppress(OSError):

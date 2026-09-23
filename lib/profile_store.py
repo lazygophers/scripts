@@ -99,6 +99,11 @@ class ProfileStore:
         finally:
             tmp.unlink(missing_ok=True)
         os.chmod(target, 0o600)
+        from lib import log as slog
+
+        # 凭据文件变更审计：谁在什么时候动了哪份配置（只记路径和 profile 名，不记内容）
+        slog.record("config.write", logger=self.tool, path=str(target),
+                    keys=sorted((data.get("profiles") or {}).keys()) if isinstance(data, dict) else [])
 
     @contextlib.contextmanager
     def lock(self, path: pathlib.Path | None = None):

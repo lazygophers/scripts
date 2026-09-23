@@ -120,6 +120,10 @@ class EmailCli(BaseCli):
 
         self._r.step(f"正在验证 {address}（真连一次 IMAP 和 SMTP）…")
         ok, detail = do_check(address, profile)
+        from lib import log as slog
+
+        slog.record("email.login", logger="email", address=address, ok=ok,
+                    detail=detail[:200])
         if ok:
             self._r.ok(detail)
         else:

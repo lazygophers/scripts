@@ -25,6 +25,8 @@ import subprocess
 import threading
 import time
 
+from lib import log as slog
+
 RESOLVER_DIR = pathlib.Path("/etc/resolver")
 
 # 写进 resolver 文件的标记：靠它认出哪些是本工具写的，好清理残留
@@ -201,11 +203,15 @@ class RouteTable:
             if "File exists" not in (r.stderr or ""):
                 if self.reporter:
                     self.reporter.warn(f"给 {ip} 加 VPN 路由失败；这个 IP 可能走不到 VPN。系统返回: {(r.stderr or '').strip()}")
+                slog.record("ovpn.route", action="add", kind="host", target=ip, interface=self.interface,
+                            ok=False, error=(r.stderr or "").strip())
                 with self._lock:
                     self.added.discard(ip)
                 return False
         elif self.reporter:
             self.reporter.step(f"已让 {ip} 走 VPN 网卡 {self.interface}")
+        slog.record("ovpn.route", action="add", kind="host", target=ip, interface=self.interface,
+                    ok=True, existing="File exists" in (r.stderr or ""))
         return True
 
     def add_network(self, cidr: str) -> bool:
@@ -215,6 +221,8 @@ class RouteTable:
         except ValueError:
             if self.reporter:
                 self.reporter.warn(f"分流网段写错，已跳过: {cidr}。例子: 10.8.0.0/16")
+            slog.record("ovpn.route", action="add", kind="network", target=cidr,
+                        interface=self.interface, ok=False, error="invalid CIDR")
             return False
         family = "-inet6" if net.version == 6 else "-inet"
         cmd = ["sudo", "route", "-n", "add", family, "-net", str(net),
@@ -228,6 +236,10 @@ class RouteTable:
                 self.reporter.step(f"已让 {net} 走 VPN 网卡 {self.interface}")
         elif self.reporter:
             self.reporter.warn(f"给分流网段 {net} 加 VPN 路由失败。系统返回: {(r.stderr or '').strip()}")
+        slog.record("ovpn.route", action="add", kind="network", target=str(net),
+                    interface=self.interface, ok=ok,
+                    existing="File exists" in (r.stderr or ""),
+                    error=(r.stderr or "").strip())
         return ok
 
     def flush(self) -> None:
@@ -241,8 +253,11 @@ class RouteTable:
         for t in targets:
             family = "-inet6" if ":" in t else "-inet"
             kind = "-net" if "/" in t else "-host"
-            subprocess.run(["sudo", "route", "-n", "delete", family, kind, t],
-                           capture_output=True, text=True)
+            result = subprocess.run(["sudo", "route", "-n", "delete", family, kind, t],
+                                    capture_output=True, text=True)
+            slog.record("ovpn.route", action="delete", kind="network" if kind == "-net" else "host",
+                        target=t, interface=self.interface, ok=result.returncode == 0,
+                        error=(result.stderr or "").strip())
 
 
 # ---------------------------------------------------------------- resolver 文件
@@ -270,12 +285,16 @@ def clean_resolver_files(reporter=None, resolver_dir: pathlib.Path = RESOLVER_DI
     """删掉所有本工具写的 resolver 文件，返回删掉的个数。"""
     stale = stale_resolver_files(resolver_dir)
     if not stale:
+        slog.record("ovpn.resolver", action="clean", ok=True, count=0)
         return 0
-    subprocess.run(["sudo", "rm", "-f", *[str(p) for p in stale]],
-                   capture_output=True, text=True)
-    if reporter:
+    result = subprocess.run(["sudo", "rm", "-f", *[str(p) for p in stale]],
+                            capture_output=True, text=True)
+    ok = result.returncode == 0
+    slog.record("ovpn.resolver", action="clean", ok=ok, count=len(stale),
+                paths=[str(p) for p in stale], error=(result.stderr or "").strip())
+    if reporter and ok:
         reporter.step(f"已清理上次残留的 DNS 分流文件 {len(stale)} 个: {', '.join(p.name for p in stale)}")
-    return len(stale)
+    return len(stale) if ok else 0
 
 
 def write_resolver_files(domains: list[str], port: int, reporter=None,
@@ -283,15 +302,29 @@ def write_resolver_files(domains: list[str], port: int, reporter=None,
     """为每个域名写一个 resolver 文件，把它的 DNS 指到本地代理。需要 sudo。"""
     if not domains:
         return
-    subprocess.run(["sudo", "mkdir", "-p", str(resolver_dir)], capture_output=True, text=True)
+    mkdir = subprocess.run(["sudo", "mkdir", "-p", str(resolver_dir)],
+                           capture_output=True, text=True)
+    if mkdir.returncode != 0:
+        slog.record("ovpn.resolver", action="write", ok=False, error=(mkdir.stderr or "").strip())
+        if reporter:
+            reporter.warn(f"创建 DNS 分流目录失败: {resolver_dir}。系统返回: {(mkdir.stderr or '').strip()}")
+        return
     content = resolver_file_content(port)
+    written = []
+    failed = []
     for d in domains:
         target = resolver_dir / d
         r = subprocess.run(["sudo", "tee", str(target)], input=content,
                            capture_output=True, text=True)
-        if r.returncode != 0 and reporter:
-            reporter.warn(f"写入 DNS 分流文件失败: {target}。系统返回: {(r.stderr or '').strip()}")
-    if reporter:
+        if r.returncode != 0:
+            failed.append(str(target))
+            if reporter:
+                reporter.warn(f"写入 DNS 分流文件失败: {target}。系统返回: {(r.stderr or '').strip()}")
+        else:
+            written.append(str(target))
+    slog.record("ovpn.resolver", action="write", ok=not failed, port=port,
+                written=written, failed=failed)
+    if reporter and not failed:
         reporter.step(f"DNS 分流已打开。以下域名会先走 VPN DNS: {', '.join(domains)}")
 
 

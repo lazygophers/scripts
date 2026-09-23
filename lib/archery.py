@@ -146,6 +146,10 @@ def require_root(script: pathlib.Path, argv: list[str], config_path: pathlib.Pat
     if is_root():
         return
     cmd = sudo_argv(script, argv, config_path)
+    from lib import log as slog
+
+    slog.record("archery.root", logger="archery", level="warning",
+                action=argv[0] if argv else "", config=str(config_path))
     try:
         os.execvp("sudo", cmd)
     except OSError as e:
@@ -260,17 +264,26 @@ class ArcheryClient:
         if not username or not password:
             raise ArcheryError(f"{self.key} 缺用户名或密码。跑 `archery login --url {self.key}`")
         resp = self._post_json(TOKEN_PATH, {"username": username, "password": password})
+        from lib import log as slog
+
         if resp.status_code != 200:
+            slog.record("archery.login", logger="archery", level="warning",
+                        host=self.key, ok=False, http=resp.status_code)
             raise ArcheryError(f"登录失败 HTTP {resp.status_code}: {_body_text(resp)}")
         data = resp.json()
         access, refresh = str(data.get("access") or ""), str(data.get("refresh") or "")
         if not access:
+            slog.record("archery.login", logger="archery", level="warning",
+                        host=self.key, ok=False, reason="no-access-token")
             raise ArcheryError(f"登录响应里没有 access token: {data}")
         self._store_token(access, refresh)
+        slog.record("archery.login", logger="archery", host=self.key, ok=True)
         return access
 
     def refresh_token(self) -> str:
         """用 refresh 换新 access；refresh 失效时回落到重新登录。"""
+        from lib import log as slog
+
         refresh = self._token("refresh")
         if refresh:
             resp = self._post_json(TOKEN_REFRESH_PATH, {"refresh": refresh})
@@ -280,7 +293,11 @@ class ArcheryClient:
                 if access:
                     # refresh 轮换（ROTATE_REFRESH_TOKENS 开启时响应会带新 refresh）
                     self._store_token(access, str(data.get("refresh") or ""))
+                    slog.record("archery.token", logger="archery",
+                                host=self.key, action="refreshed")
                     return access
+        slog.record("archery.token", logger="archery", level="warning",
+                    host=self.key, action="relogin")
         return self.login()
 
     def verify_token(self) -> bool:

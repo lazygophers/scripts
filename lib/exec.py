@@ -67,7 +67,30 @@ def run(
         raise KeyboardInterrupt(f"命令被用户中断: {shell_join(cmd)}") from None
 
     _debug_log(p, cmd, cwd, time.monotonic() - t0)
+    if p.returncode != 0:
+        from lib import log as slog
+
+        slog.record("exec.fail", logger="exec",
+                    cmd=_scrub_secrets(cmd), cwd=cwd or "", rc=p.returncode,
+                    stderr=(p.stderr or "")[:200] if capture_output else "")
     return p
+
+
+_SECRET_FLAGS = re.compile(r"pass(word|wd)?|secret|token|credential|api[_-]?key|auth",
+                           re.IGNORECASE)
+
+
+def _scrub_secrets(cmd: Sequence[str]) -> str:
+    """命令行打码：跟在 password/token/secret 类 flag 后面的值替换 <REDACTED>。"""
+    parts = list(cmd)
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        out.append(part)
+        if part.startswith("-") and _SECRET_FLAGS.search(part) and i + 1 < len(parts) \
+                and not parts[i + 1].startswith("-"):
+            out.append("<REDACTED>")
+            parts[i + 1] = ""  # 已消费，跳过
+    return " ".join(o for o in out if o != "")
 
 
 def _debug_log(
