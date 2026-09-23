@@ -86,7 +86,8 @@ Run scripts from the repository root (`./bin/<name>`; `chmod +x bin/*` once). Ea
 - **Safety First**: `merge_*` / `push_*` cannot be run directly on the target branch (safety mechanism)
 - **Voice Notifications**: Use `n` for system voice notifications. All `bin/*` (except `n`) accept `--no-say` (or `SCRIPTS_NO_SAY=1`) to mute; implemented via `lib/notify.py` (`consume_no_say` + `set_say_disabled`), so every bin entry must call `sys.argv = consume_no_say(sys.argv)` before its main/argparse.
 - **Debug**: All `bin/*` accept `--debug` (or `SCRIPTS_DEBUG=1`) to print successful command stdout/stderr (normally only failures surface). Implemented via `lib/notify.py` (`consume_debug` + `set_debug` + `is_debug`) and `lib/exec.py` (`_log_after_run` honors `is_debug`; `_propagate_debug_env` injects `SCRIPTS_DEBUG=1` into subprocess env so child `bin/*` inherit). Every bin entry chains `sys.argv = consume_debug(consume_no_say(sys.argv))` before main/argparse. Same REMAINDER caveat as `--no-say`: for `loop`/`unsleep`, place `--debug` before the wrapped command.
- - **Output**: All Python scripts prefer Rich `Reporter` output (fallback to plain stderr)
+- **Output**: All Python scripts prefer Rich `Reporter` output (fallback to plain stderr)
+- **AI 极简输出**: 进程由 AI 工具派生（`lib/ai_env.py` 的 `is_ai_shell_env()` 查标记环境变量）时 `Reporter` 自动去图标/去框/去色，丢弃 `info`/`step`/`rule`，保留结论行为纯文本；全部 CLI 经此一处继承。见 `.claude/rules/ai-shell-minimal-output.md`
 
 ### Testing Scripts
 

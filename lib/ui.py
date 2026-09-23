@@ -9,6 +9,8 @@ from __future__ import annotations
 import sys
 from collections.abc import Sequence
 
+from lib.ai_env import is_ai_shell_env
+
 try:
     from rich.box import ROUNDED
     from rich.console import Console
@@ -97,12 +99,15 @@ class Reporter:
 
     def __init__(self, *, stderr: bool = True, console: Console | None = None,
                  file: object | None = None) -> None:
+        # AI 派生环境（lib/ai_env.py）自动切极简输出：去图标去框去色，
+        # 只留结论行。tests/__init__.py 会清掉标记变量保证套件确定性。
+        self.minimal = is_ai_shell_env()
         if file is not None:
-            self.console = Console(file=file, stderr=False)
+            self.console = Console(file=file, stderr=False, no_color=self.minimal)
         elif console is not None:
             self.console = console
         else:
-            self.console = Console(stderr=stderr)
+            self.console = Console(stderr=stderr, no_color=self.minimal)
         self.stderr = stderr
         self._file = file
 
@@ -114,7 +119,12 @@ class Reporter:
     def _print(self, rich_text, plain_text: str) -> None:
         self.console.print(rich_text)
 
-    def _icon_msg(self, icon: str, msg: str, color: str) -> None:
+    def _icon_msg(self, icon: str, msg: str, color: str, *,
+                  minimal_keep: bool = True) -> None:
+        if self.minimal:
+            if minimal_keep:
+                self.console.print(msg)
+            return
         text = Text()
         text.append(icon, style=f"bold {color}")
         text.append(" ")
@@ -135,6 +145,10 @@ class Reporter:
         status_idx: int = 1,
     ) -> None:
         """状态汇总表：items 行与 columns 同宽，状态列（status_idx）按状态着色。"""
+        if self.minimal:
+            for item in items:
+                self.console.print(" | ".join(str(v) for v in item))
+            return
         table = Table(title=title, show_header=True, box=ROUNDED, border_style="blue",
                       title_style="bold", header_style="bold cyan")
         table.add_column(columns[0], style="bold")
@@ -152,6 +166,9 @@ class Reporter:
         """单行统计 footer：parts 为 (text, color) 列表，用 · 连接，各段按其色。"""
         if not parts:
             return
+        if self.minimal:
+            self.console.print(" · ".join(s for s, _ in parts))
+            return
         text = Text()
         for i, (s, color) in enumerate(parts):
             if i > 0:
@@ -160,16 +177,23 @@ class Reporter:
         self.console.print(text)
 
     def rule(self, title: str, *, style: str = "blue") -> None:
+        if self.minimal:
+            return
         self.console.print(Rule(f"[bold]{title}[/bold]", style=style))
 
     def panel(self, title: str, content: str, *, style: str = "blue") -> None:
+        if self.minimal:
+            self.console.print(f"{title}:")
+            if content:
+                self.console.print(content)
+            return
         self.console.print(Panel(content, title=title, border_style=style))
 
     def info(self, msg: str) -> None:
-        self._icon_msg(ICON_INFO, msg, "cyan")
+        self._icon_msg(ICON_INFO, msg, "cyan", minimal_keep=False)
 
     def step(self, msg: str) -> None:
-        self._icon_msg(ICON_STEP, msg, "blue")
+        self._icon_msg(ICON_STEP, msg, "blue", minimal_keep=False)
 
     def ok(self, msg: str) -> None:
         self._icon_msg(ICON_SUCCESS, msg, "green")
@@ -185,6 +209,10 @@ class Reporter:
         slog.record("cli.error", msg=msg)
 
     def kv(self, title: str, rows: dict[str, str], *, style: str = "blue") -> None:
+        if self.minimal:
+            for k, v in rows.items():
+                self.console.print(f"{k}: {v}")
+            return
         table = Table(title=title, show_header=False, box=ROUNDED, border_style=style)
         table.add_column("Key", style="bold")
         table.add_column("Value")
@@ -208,7 +236,10 @@ class Reporter:
         head = f"{title}: {cmd_s}{where}" if title else f"{cmd_s}{where}"
 
         if returncode is None or returncode == 0:
-            self.step(head)
+            if self.minimal:
+                self.console.print(head)
+            else:
+                self.step(head)
         else:
             self.err(f"{head} (exit={returncode})")
 
@@ -232,6 +263,10 @@ class Reporter:
             )
 
     def summary(self, title: str, items: list[tuple[str, str, str | None]]) -> None:
+        if self.minimal:
+            for label, value, _style in items:
+                self.console.print(f"{label}: {value}")
+            return
         table = Table(title=title, show_header=False, box=ROUNDED)
         table.add_column("Label", style="bold")
         table.add_column("Value")
