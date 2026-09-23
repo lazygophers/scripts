@@ -429,6 +429,14 @@ def _print_copy_plan(plan: CopyPlan, ctx: RunCtx) -> None:
         ("日志", log_labels.get(ctx.log, ctx.log)),
     ]
 
+    from lib.ai_env import is_ai_shell_env
+
+    if is_ai_shell_env():
+        for k, v in rows:
+            ctx.print_line(f"{k}: {v}")
+        for src, copy_contents in plan.sources:
+            ctx.print_line(f"源: {src}{os.sep if copy_contents else ''}")
+        return
     console = ctx.console
     if console is not None and Table is not None:
         table = Table(title="复制计划", show_header=False, box=None)

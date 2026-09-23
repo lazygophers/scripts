@@ -122,6 +122,13 @@ def _render_table(rows: list[tuple[str, str, str]], r: Reporter) -> None:
     for name, cat, desc in rows:
         by_cat.setdefault(cat, []).append((name, cat, desc))
 
+    from lib.ai_env import is_ai_shell_env
+
+    if is_ai_shell_env():
+        from lib.ui import print_tsv
+
+        print_tsv(["tool", "category", "description"], rows)
+        return
     for cat in CATEGORIES_ORDER:
         items = by_cat.get(cat)
         if not items:

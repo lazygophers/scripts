@@ -136,6 +136,16 @@ def make_process_table(
     include_ppid: bool = False,
 ) -> None:
     """统一表格输出（支持 Rich 和纯文本降级）。"""
+    from lib.ai_env import is_ai_shell_env
+
+    if is_ai_shell_env():
+        from lib.ui import print_tsv
+
+        width = 5 if include_ppid else 4
+        print_tsv(["pid", "user", "command", "args"] + (["ppid"] if include_ppid else []),
+                  [tuple(row[:width]) for pid in pids
+                   if (row := info.get(pid)) is not None and len(row) >= 4])
+        return
     c = r.console
     if c is not None and Table is not None:
         table = Table(title=title, show_lines=False)

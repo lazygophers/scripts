@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for lib.git (list_branch 分支总览)."""
 import io
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -237,6 +238,56 @@ class TestListBranches(unittest.TestCase):
             list_branch(Path("/repo"))
         _, kwargs = mock_render.call_args
         self.assertFalse(kwargs["mark_duplicates"])
+
+
+class TestRenderBranchMinimal(unittest.TestCase):
+    """AI shell 环境的极简分支输出：每仓一行状态 + 每分支一行紧凑列。"""
+
+    def _run_minimal(self, env):
+        import contextlib
+
+        branches = [
+            {"name": "master", "current": True, "sha": "a", "date": "d",
+             "upstream": "origin/master", "track": "[ahead 4]"},
+            {"name": "dev", "current": False, "sha": "b", "date": "d",
+             "upstream": "", "track": ""},
+        ]
+        root = Path("/root")
+        repos = [root / "proj"]
+        with patch.dict(os.environ, env, clear=False):
+            with patch("lib.batch_git.scan_repos", return_value=repos):
+                with patch("lib.git._parse_branch_refs", return_value=branches):
+                    with patch("lib.git._worktree_state", return_value="clean"):
+                        with contextlib.redirect_stderr(io.StringIO()) as buf:
+                            rc = list_branch(root)
+        return rc, buf.getvalue()
+
+    def test_minimal_lines(self):
+        rc, out = self._run_minimal({"CLAUDECODE": "1"})
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            out,
+            "proj | clean\n"
+            "*master | origin/master | [ahead 4]\n"
+            "dev | - | -\n",
+        )
+        self.assertNotIn("╭", out)  # 无 Rich 边框
+
+    def test_human_env_keeps_rich(self):
+        with patch.dict(os.environ, {"CLAUDECODE": ""}, clear=False):
+            rc, out = self._run_minimal({"CLAUDECODE": ""})
+        # 人类路径走 _render_branch_table，不是三行紧凑格式
+        self.assertNotEqual(out.count("\n"), 3)
+
+    def test_worktree_state_counts(self):
+        from lib.git import _worktree_state
+
+        fake = MagicMock(stdout=" M a.py\n M b.py\n?? c.txt\n")
+        with patch("lib.git.run", return_value=fake):
+            self.assertEqual(_worktree_state(Path("/repo")), "M2 ??1")
+        clean = MagicMock(stdout="")
+        with patch("lib.git.run", return_value=clean):
+            self.assertEqual(_worktree_state(Path("/repo")), "clean")
 
 
 if __name__ == "__main__":

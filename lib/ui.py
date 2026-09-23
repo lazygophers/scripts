@@ -69,6 +69,19 @@ def console(stderr: bool = False) -> Console:
     return Console(stderr=stderr)
 
 
+def print_tsv(headers: Sequence[str], rows, *, file=None) -> None:
+    """TSV 输出（AI 环境的表格降级形态）：首行列名，制表符分列，
+    单元格内 \\ \t \n 转义保证一行一条记录。人类环境不走这里。"""
+    def esc(v) -> str:
+        return str(v).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
+
+    out = sys.stdout if file is None else file
+    if headers:
+        print("\t".join(esc(h) for h in headers), file=out)
+    for row in rows:
+        print("\t".join(esc(c) for c in row), file=out)
+
+
 def progress(console_obj: Console | None) -> Progress:
     if console_obj is None:
         raise ValueError("progress() 需要 console_obj")
@@ -174,8 +187,7 @@ class Reporter:
         if not parts:
             return
         if self.minimal:
-            self.console.print(" · ".join(s for s, _ in parts))
-            return
+            return  # 统计 footer 可从数据行数推出，AI 环境不重复播报
         text = Text()
         for i, (s, color) in enumerate(parts):
             if i > 0:

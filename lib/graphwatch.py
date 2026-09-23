@@ -103,6 +103,13 @@ class GraphwatchCli(BaseCli):
         if not folders:
             self._r.info("还没有注册任何文件夹。先: graphwatch add <目录>")
             return 0
+        from lib.ai_env import is_ai_shell_env
+
+        if is_ai_shell_env():
+            for f in folders:
+                _st, detail = folder_freshness(f)
+                print(f"{f} | {detail}")
+            return 0
         from rich.table import Table
 
         table = Table(title=f"graphwatch 注册表（{len(folders)} 个目录）")
@@ -136,17 +143,27 @@ class GraphwatchCli(BaseCli):
         """
         if action == "show":
             cfg = load_config()
+            kv = [
+                ("folders", f"{len(cfg['folders'])} 个目录（graphwatch list 查看）"),
+                ("backend", str(cfg["backend"]) or "（空）"),
+                ("api_key", mask_secret(str(cfg["api_key"])) or "（空）"),
+                ("base_url", str(cfg["base_url"]) or "（空）"),
+                ("model", str(cfg["model"]) or "（空）"),
+                ("debounce", str(cfg["debounce"])),
+            ]
+            from lib.ai_env import is_ai_shell_env
+
+            if is_ai_shell_env():
+                for k, v in kv:
+                    print(f"{k}: {v}")
+                return 0
             from rich.table import Table
 
             table = Table(title=f"graphwatch 配置（{config_path()}）")
             table.add_column("字段", style="bold")
             table.add_column("值")
-            table.add_row("folders", f"{len(cfg['folders'])} 个目录（graphwatch list 查看）")
-            table.add_row("backend", str(cfg["backend"]) or "（空）")
-            table.add_row("api_key", mask_secret(str(cfg["api_key"])) or "（空）")
-            table.add_row("base_url", str(cfg["base_url"]) or "（空）")
-            table.add_row("model", str(cfg["model"]) or "（空）")
-            table.add_row("debounce", str(cfg["debounce"]))
+            for k, v in kv:
+                table.add_row(k, v)
             self._r.console.print(table)
             return 0
         if action != "wizard":
@@ -254,6 +271,14 @@ class GraphwatchCli(BaseCli):
         for f in list_folders():
             st, detail = folder_freshness(f)
             rows.append((f, st, detail))
+        from lib.ai_env import is_ai_shell_env
+
+        if is_ai_shell_env():
+            for folder, fs, detail in rows:
+                print(f"{folder} | {FRESHNESS_LABEL[fs]} | {detail}")
+            return 0
+        from rich.table import Table
+
         table = Table(title=f"graphwatch 状态（服务{head}）")
         table.add_column("目录", style="bold")
         table.add_column("图谱")

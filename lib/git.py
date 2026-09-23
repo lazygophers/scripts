@@ -424,6 +424,45 @@ def _render_branch_table(
         r.warn(f"⟱ = 跨仓库重复分支名（{len(dup_names)} 个）")
 
 
+def _render_branch_minimal(repos: list[Path], root: Path,
+                            rows: list[tuple[str, dict]]) -> None:
+    """AI 环境极简输出（省 token）：每仓一行 `repo | 工作区状态`，
+    每分支一行 `[*]name | upstream | track`（* = 当前分支，⟱ = 跨仓重名，
+    - = 无该字段）。分支名/upstream/track 是关键数据，一字不减。"""
+    import sys
+
+    dup_names: set[str] = set()
+    if len(repos) > 1:
+        counter = Counter(br["name"] for _, br in rows)
+        dup_names = {n for n, c in counter.items() if c > 1}
+
+    groups: dict[str, list[dict]] = {}
+    for repo, br in rows:
+        groups.setdefault(repo, []).append(br)
+
+    for repo in repos:
+        display = str(repo.relative_to(root)) if str(repo) != str(root) else repo.name
+        print(f"{display} | {_worktree_state(repo)}", file=sys.stderr)
+        for br in groups.get(display, []):
+            name = ("*" if br["current"] else "") + br["name"] \
+                + (" ⟱" if br["name"] in dup_names else "")
+            print(f"{name} | {br['upstream'] or '-'} | {br['track'] or '-'}",
+                  file=sys.stderr)
+
+
+def _worktree_state(repo: Path) -> str:
+    """工作区一句话状态：clean 或变更计数（M2 ??1 形态）。"""
+    out = run(["git", "status", "--short"], check=False, capture_output=True,
+              cwd=str(repo)).stdout or ""
+    codes = [ln[:2].replace(" ", "") for ln in out.splitlines() if ln.strip()]
+    if not codes:
+        return "clean"
+    counts: dict[str, int] = {}
+    for c in codes:
+        counts[c or "?"] = counts.get(c or "?", 0) + 1
+    return " ".join(f"{k}{v}" for k, v in counts.items())
+
+
 def list_branch(root: Path = Path(".")) -> int:
     """列出所有仓库的本地分支。
 
@@ -447,8 +486,13 @@ def list_branch(root: Path = Path(".")) -> int:
         r.info("无仓库可处理")
         return 0
 
+    from lib.ai_env import is_ai_shell_env
+
     rows = _collect_all_branches(repos, root)
-    _render_branch_table(r, rows, mark_duplicates=len(repos) > 1)
+    if is_ai_shell_env():
+        _render_branch_minimal(repos, root, rows)
+    else:
+        _render_branch_table(r, rows, mark_duplicates=len(repos) > 1)
 
     total_branches = len(rows)
     r.status_footer([(f"仓库 {len(repos)}", "cyan"), (f"分支 {total_branches}", "green")])

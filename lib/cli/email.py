@@ -149,19 +149,31 @@ class EmailCli(BaseCli):
             self._r.info("还没有配置任何邮箱。先跑: email login")
             return 0
         current = str(cfg.get("current") or "")
+        from lib.ai_env import is_ai_shell_env
+
+        def rows():
+            for key in sorted(all_p):
+                p = all_p[key]
+                imap = p.get("imap") or {}
+                yield (key, str(p.get("provider") or "?"),
+                       f"{imap.get('host')}:{imap.get('port')}",
+                       mask(str(p.get("password") or "")),
+                       "*" if key == current else "")
+        if is_ai_shell_env():
+            from lib.ui import print_tsv
+
+            print_tsv(["email", "provider", "imap", "password", "default"], rows())
+            return 0
+        from rich.table import Table
+
         table = Table(title=f"已配置的邮箱（{len(all_p)} 个）")
         table.add_column("邮箱", style="bold")
         table.add_column("服务商")
         table.add_column("IMAP")
         table.add_column("密码")
         table.add_column("默认")
-        for key in sorted(all_p):
-            p = all_p[key]
-            imap = p.get("imap") or {}
-            table.add_row(key, str(p.get("provider") or "?"),
-                          f"{imap.get('host')}:{imap.get('port')}",
-                          mask(str(p.get("password") or "")),
-                          "✓" if key == current else "")
+        for row in rows():
+            table.add_row(*row)
         self._r.console.print(table)
         return 0
 
@@ -269,6 +281,15 @@ class EmailCli(BaseCli):
 
         if not rows:
             self._r.info(empty_msg)
+            return 0
+        from lib.ai_env import is_ai_shell_env
+
+        if is_ai_shell_env():
+            from lib.ui import print_tsv
+
+            print_tsv(["uid", "unread", "from", "subject", "date"],
+                      [(r["uid"], "1" if r["unread"] else "", r["From"],
+                        r["Subject"], r["Date"]) for r in rows])
             return 0
         table = Table(title=f"{address} · {folder}（{len(rows)} 封）")
         table.add_column("UID", style="bold")

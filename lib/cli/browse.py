@@ -781,8 +781,20 @@ def print_result(result: dict, *, table: bool, out=None) -> None:
     from lib.ai_env import is_ai_shell_env
 
     out = sys.stdout if out is None else out
-    # AI 环境强制 JSON：框线表格的制表符对模型纯耗 token
-    if not table or is_ai_shell_env():
+    if not table:
+        out.write(json_dumps(result) + "\n")
+        return
+    # AI 环境：框线表格纯耗 token。能拍平的（list-of-dicts）降级 TSV，
+    # 嵌套结构保持压缩 JSON —— 两者都不丢字段
+    if is_ai_shell_env():
+        rows = next((v for v in result.values()
+                     if isinstance(v, list) and v and isinstance(v[0], dict)), None)
+        if rows is not None:
+            from lib.ui import print_tsv
+
+            cols = list(dict.fromkeys(k for r in rows for k in r))
+            print_tsv(cols, [[r.get(c, "") for c in cols] for r in rows], file=out)
+            return
         out.write(json_dumps(result) + "\n")
         return
     _print_table(result, out)

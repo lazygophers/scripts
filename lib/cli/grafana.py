@@ -97,9 +97,16 @@ class GrafanaCli(_Group):
             self._r.warn(f"还没有配置任何站点（{default_config_path()}）。跑 `grafana login`")
             return 1
         current = str(cfg.get("current") or "")
-        for name, profile in sorted(known.items()):
-            marker = "★" if name == current else " "
-            self._r.step(f"{marker} {name} -> {profile.get('url') or name}")
+        from lib.ai_env import is_ai_shell_env
+
+        if is_ai_shell_env():
+            for name, profile in sorted(known.items()):
+                cur = "* " if name == current else ""
+                print(f"{cur}{name} -> {profile.get('url') or name}")
+        else:
+            for name, profile in sorted(known.items()):
+                marker = "★" if name == current else " "
+                self._r.step(f"{marker} {name} -> {profile.get('url') or name}")
         return 0
 
     @cmd

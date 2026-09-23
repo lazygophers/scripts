@@ -84,15 +84,21 @@ class TestMinimalOtherChannels(unittest.TestCase):
             p = ui_mod.progress(Console(file=io.StringIO()))
         self.assertTrue(p.disable)
 
-    def test_browse_table_forced_json(self):
+    def test_browse_table_tsv_or_json(self):
         from lib.cli.browse import print_result
 
         buf = io.StringIO()
         with patch.dict(os.environ, {"CLAUDECODE": "1"}):
-            print_result({"tabs": [{"title": "a"}]}, table=True, out=buf)
-        out = buf.getvalue()
-        self.assertTrue(out.startswith("{"))  # JSON 而非 Rich 表格
-        self.assertNotIn("╭", out)
+            # 拍得平的（list-of-dicts）降级 TSV
+            print_result({"tabs": [{"title": "a"}, {"title": "b"}]}, table=True, out=buf)
+            # 拍不平的保持压缩 JSON
+            print_result({"nested": {"a": [1, 2]}}, table=True, out=buf)
+        lines = buf.getvalue().splitlines()
+        self.assertEqual(lines[0], "title")
+        self.assertEqual(lines[1], "a")
+        self.assertEqual(lines[2], "b")
+        self.assertEqual(lines[3], '{"nested":{"a":[1,2]}}')
+        self.assertNotIn("╭", buf.getvalue())
 
     def test_archery_table_forced_tsv(self):
         import inspect
@@ -100,6 +106,30 @@ class TestMinimalOtherChannels(unittest.TestCase):
         from lib.cli import archery
         src = inspect.getsource(archery)
         self.assertIn("table and not is_ai_shell_env()", src)
+
+    def test_print_tsv_escapes(self):
+        import io as _io
+
+        from lib.ui import print_tsv
+
+        buf = _io.StringIO()
+        print_tsv(["a", "b"], [["x\ty", "z\nw"]], file=buf)
+        self.assertEqual(buf.getvalue(), "a\tb\nx\\ty\tz\\nw\n")
+
+    def test_websearch_default_tsv_in_ai_env(self):
+        import contextlib
+        import io as _io
+
+        import lib.websearch as ws
+        from unittest.mock import patch as _patch
+
+        with _patch.object(ws, "search", return_value=[{"url": "u", "title": "t", "snippet": "s"}]):
+            buf = _io.StringIO()
+            with patch.dict(os.environ, {"CLAUDECODE": "1"}):
+                with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(_io.StringIO()):
+                    rc = ws.main(["websearch", "query"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(buf.getvalue(), "index\turl\ttitle\tsnippet\n1\tu\tt\ts\n")
 
     def test_fire_help_no_forced_ansi(self):
         import inspect

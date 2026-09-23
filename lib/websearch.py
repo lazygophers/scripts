@@ -394,9 +394,11 @@ def load_searx_instances(timeout: float = 15) -> list[str]:
     if cache is None:
         return refresh()
     if age_days > 30:
-        print(f"[websearch] searx.space 缓存 {age_days:.0f} 天,超过一个月,强制更新", file=sys.stderr)
+        if not _ai_env():
+            print(f"[websearch] searx.space 缓存 {age_days:.0f} 天,超过一个月,强制更新", file=sys.stderr)
     elif age_days > 7 and not _metered():
-        print(f"[websearch] searx.space 缓存 {age_days:.0f} 天,超过一周且非计费网络,自动更新", file=sys.stderr)
+        if not _ai_env():
+            print(f"[websearch] searx.space 缓存 {age_days:.0f} 天,超过一周且非计费网络,自动更新", file=sys.stderr)
     else:
         return cache["instances"]
     try:
@@ -595,7 +597,8 @@ def _e_searx(query, timeout, limit, page):
             items = parse_searx(data)
             if items:
                 _promote_searx(url, instances)
-                print(f"[websearch] searx 命中实例 {url}", file=sys.stderr)
+                if not _ai_env():
+                    print(f"[websearch] searx 命中实例 {url}", file=sys.stderr)
                 return items
         except Exception as e:  # 403/429/慢,换下一个实例
             errors.append(f"{url}: {e}")
@@ -675,7 +678,8 @@ def search(query: str, limit: int = 20, engine: str | None = None,
         if err:
             errors.append(f"{name}: {err}")
             continue
-        print(f"[websearch] {name} 返回 {len(items)} 条", file=sys.stderr)
+        if not _ai_env():
+            print(f"[websearch] {name} 返回 {len(items)} 条", file=sys.stderr)
         for it in items:
             # 去重键做归一化:百分号解码 + 去尾斜杠,同页不同写法算同一条
             key = unquote(it["url"]).rstrip("/")
@@ -685,6 +689,12 @@ def search(query: str, limit: int = 20, engine: str | None = None,
     if not results:
         raise SearchError("所有引擎都没有结果: " + "; ".join(errors or ["解析到 0 条"]))
     return results
+
+
+def _ai_env() -> bool:
+    from lib.ai_env import is_ai_shell_env
+
+    return is_ai_shell_env()
 
 
 def list_engines() -> int:
@@ -837,6 +847,12 @@ def main(argv: list[str] | None = None) -> int:
     except SearchError as e:
         print(f"[websearch] 检索失败: {e}", file=sys.stderr)
         return 1
-    FORMATTERS["json" if args.json else args.format](results)
-    print("[websearch] 看正文: webgrab <url>", file=sys.stderr)
+    from lib.ai_env import is_ai_shell_env
+
+    fmt = "json" if args.json else args.format
+    if fmt == "plain" and is_ai_shell_env():
+        fmt = "tsv"  # 默认三行一条的 plain 对模型纯耗 token，AI 环境降级 TSV
+    FORMATTERS[fmt](results)
+    if not _ai_env():
+        print("[websearch] 看正文: webgrab <url>", file=sys.stderr)
     return 0
