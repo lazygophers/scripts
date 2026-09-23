@@ -88,8 +88,34 @@ test("recordTab 启动失败回未知错误", async () => {
   await rejectsWith(() => captureRecordTab({ context: "7" }), "unknown error");
 });
 
-test("recordStop 的 id 要对得上，且没人录时报 invalid argument", async () => {
-  await rejectsWith(() => captureRecordStop({ recording: "rec-1" }), "invalid argument");
+test("recordStop 没人录时由 offscreen 兜底报错", async () => {
+  const sent: Any[] = [];
+  installChrome({
+    runtime: {
+      sendMessage: async (message: Any) => {
+        sent.push(message);
+        return { ok: false, error: "not recording" };
+      },
+    },
+  });
+  await rejectsWith(() => captureRecordStop({ recording: "rec-1" }), "unknown error");
+  assert.equal(sent.filter((m) => m.type === "lg:record-stop").length, 1);
+});
+
+test("recordStop 在 SW 失忆（active 丢了）时仍走 offscreen 停录并回包", async () => {
+  installChrome({
+    runtime: {
+      // offscreen 文档自己记得在录：回 id / kind / seconds，不依赖 SW 的缓存
+      sendMessage: async () => ({
+        ok: true, id: "rec-1", kind: "tab", seconds: 3.5, base64: "aGk=", bytes: 2,
+      }),
+    },
+  });
+  const stopped = await captureRecordStop({ recording: "rec-1", save: false }) as Any;
+  assert.equal(stopped.kind, "tab");
+  assert.equal(stopped.seconds, 3.5);
+  assert.equal(stopped.base64, "aGk=");
+  assert.equal(stopped.bytes, 2);
 });
 
 test("idle threshold 越界拒绝", async () => {

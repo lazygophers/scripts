@@ -1,3 +1,4 @@
+import { blobToBase64 } from "../base64.ts";
 import { CommandError, optionalString, requireString } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
 import { requireApi, resolveContextOnce, targetUrl } from "./context.ts";
@@ -13,8 +14,6 @@ import { requireApi, resolveContextOnce, targetUrl } from "./context.ts";
 /** 一次只允许一路录制（offscreen 文档里也就一个 MediaRecorder）。 */
 interface Recording {
   id: string;
-  kind: "tab" | "desktop";
-  startedAt: number;
 }
 let active: Recording | null = null;
 let seq = 0;
@@ -38,17 +37,6 @@ export async function ensureOffscreen(justification: string): Promise<void> {
       justification,
     });
   }
-}
-
-/** Blob → base64（SW 里 FileReader 可用，但 arrayBuffer+btoa 更好测，两处通用）。 */
-export async function blobToBase64(blob: Blob): Promise<string> {
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  let binary = "";
-  const CHUNK = 0x8000;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(binary);
 }
 
 /** `lg:pageCapture.saveMhtml`：整页存 MHTML。默认落成下载文件；save=false 回 base64。 */
@@ -110,7 +98,7 @@ async function startRecording(
   if (!reply?.ok) {
     throw new CommandError("unknown error", reply?.error ?? "recording failed to start");
   }
-  active = { id, kind, startedAt: Date.now() };
+  active = { id };
   return id;
 }
 
@@ -204,23 +192,28 @@ export function desktopSourcePicked(streamId: unknown): boolean {
 export async function captureRecordStop(
   params: Record<string, unknown>,
 ): Promise<unknown> {
-  if (active === null) {
-    throw new CommandError("invalid argument", "no recording in progress");
-  }
   const recording = requireString(params.recording, "recording", ", the id from recordTab/recordDesktop");
-  if (recording !== active.id) {
+  // SW 被杀重启后 active 会失忆，但录像在 offscreen 文档里还活着——
+  // 在不在录以那边为准，这里照发 stop；active 只是缓存，用来挡 id 对不上的停止请求
+  if (active !== null && recording !== active.id) {
     throw new CommandError("invalid argument", `not the active recording (${active.id})`);
   }
-  const kind = active.kind;
-  const seconds = (Date.now() - active.startedAt) / 1000;
   const reply = (await chrome.runtime.sendMessage({
     type: "lg:record-stop",
     id: recording,
-  })) as { ok?: boolean; error?: string; base64?: string; bytes?: number } | undefined;
-  active = null;
+  })) as {
+    ok?: boolean;
+    error?: string;
+    base64?: string;
+    bytes?: number;
+    kind?: "tab" | "desktop";
+    seconds?: number;
+  } | undefined;
   if (!reply?.ok) {
     throw new CommandError("unknown error", reply?.error ?? "recording failed to stop");
   }
+  active = null;
+  const { kind, seconds } = reply;
   if (params.save === false) {
     return { base64: reply.base64, bytes: reply.bytes, seconds, kind };
   }

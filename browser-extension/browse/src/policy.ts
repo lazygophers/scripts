@@ -338,7 +338,7 @@ export function domainMatches(domain: string | null, pattern: string): boolean {
  * 这条指令冲着哪个页面 / 域名去。cookie 类给的是 `domain`（没有 scheme），页面类给的
  * 是 `url`，浏览器全局的（列书签、搜历史）两个都没有 —— 返回 null。
  */
-export function targetUrl(params: Record<string, unknown> | undefined): string | null {
+export function policyUrlFromParams(params: Record<string, unknown> | undefined): string | null {
   for (const key of ["url", "domain"]) {
     const value = params?.[key];
     if (typeof value === "string" && value) {

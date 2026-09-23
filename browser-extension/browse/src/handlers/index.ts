@@ -1,8 +1,8 @@
 import { record } from "../audit.ts";
-import { domainOf, enforceDenyList, enforceFeatureToggles, riskyAction, targetUrl } from "../policy.ts";
+import { domainOf, enforceDenyList, enforceFeatureToggles, policyUrlFromParams, riskyAction } from "../policy.ts";
 import { CommandError } from "../protocol.ts";
 import { auditClear, auditRead } from "./audit.ts";
-import { dropContextCache, resolveContextOnce, targetUrl as tabUrl } from "./context.ts";
+import { dropContextCache, resolveContextOnce, targetUrl } from "./context.ts";
 import { bookmarksCreate, bookmarksRemove, bookmarksSearch } from "./bookmarks.ts";
 import {
   browsingContextActivate,
@@ -255,7 +255,7 @@ async function resolvePolicyTarget(
   method: string,
   params: Record<string, unknown>,
 ): Promise<string | null> {
-  const explicit = targetUrl(params);
+  const explicit = policyUrlFromParams(params);
   if (explicit) {
     return explicit;
   }
@@ -263,7 +263,7 @@ async function resolvePolicyTarget(
     return null; // 全局动作：没有目标域，只有全局禁用管得到
   }
   const target = await resolveContextOnce(params); // 解析失败本身就是拒绝（fail closed）
-  const url = await tabUrl(target);
+  const url = await targetUrl(target);
   if (url === null) {
     throw new CommandError(
       "no such frame",
@@ -271,6 +271,31 @@ async function resolvePolicyTarget(
     );
   }
   return url;
+}
+
+/**
+ * 一条指令的结局记进审计：时间戳、指令、域名、高危动作、结果、耗时，失败再带
+ * 原文。dispatch 里的三条路径（拒绝 / 成功 / 出错）共用这一份，字段永远对齐。
+ */
+function recordOutcome(
+  result: "denied" | "success" | "error",
+  method: string,
+  params: Record<string, unknown>,
+  domain: string | null,
+  started: number,
+  err?: unknown,
+): Promise<void> {
+  return record({
+    ts: new Date().toISOString(),
+    method,
+    domain,
+    action: riskyAction(method, params),
+    result,
+    ms: Date.now() - started,
+    ...(err !== undefined && {
+      error: err instanceof Error ? err.message : String(err),
+    }),
+  });
 }
 
 /**
@@ -308,40 +333,17 @@ export async function dispatch(
       await enforceDenyList(method, url);
       await enforceFeatureToggles(method, url);
     } catch (err) {
-      await record({
-        ts: new Date().toISOString(),
-        method,
-        domain,
-        action: riskyAction(method, params),
-        result: "denied",
-        ms: Date.now() - started,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      await recordOutcome("denied", method, params, domain, started, err);
       throw err;
     }
 
     try {
       const result = await handler(params);
-      await record({
-        ts: new Date().toISOString(),
-        method,
-        domain,
-        action: riskyAction(method, params),
-        result: "success",
-        ms: Date.now() - started,
-      });
+      await recordOutcome("success", method, params, domain, started);
       return result;
     } catch (err) {
       const rejected = err instanceof CommandError && err.code === "lg:user rejected";
-      await record({
-        ts: new Date().toISOString(),
-        method,
-        domain,
-        action: riskyAction(method, params),
-        result: rejected ? "denied" : "error",
-        ms: Date.now() - started,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      await recordOutcome(rejected ? "denied" : "error", method, params, domain, started, err);
       throw err;
     }
   } finally {

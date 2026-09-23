@@ -19,7 +19,7 @@ import {
   readConfig,
   riskyAction,
   setConfig,
-  targetUrl,
+  policyUrlFromParams,
 } from "../src/policy.ts";
 import { clearChrome, rejectsWith, storageMock } from "./mock.ts";
 
@@ -111,10 +111,10 @@ test("域名匹配连子域一起盖，两种写法同义", () => {
 });
 
 test("目标 URL 从 url 或 domain 里取，两个都没有就是浏览器全局", () => {
-  assert.equal(targetUrl({ url: "https://a.test" }), "https://a.test");
-  assert.equal(targetUrl({ domain: "a.test" }), "a.test");
-  assert.equal(targetUrl({}), null);
-  assert.equal(targetUrl(undefined), null);
+  assert.equal(policyUrlFromParams({ url: "https://a.test" }), "https://a.test");
+  assert.equal(policyUrlFromParams({ domain: "a.test" }), "a.test");
+  assert.equal(policyUrlFromParams({}), null);
+  assert.equal(policyUrlFromParams(undefined), null);
 });
 
 // ------------------------------------------------------------------ 拒绝名单

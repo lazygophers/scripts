@@ -2,11 +2,17 @@
  * offscreen 文档：SW 没有 DOM，录屏的 MediaRecorder 和剪贴板的
  * navigator.clipboard 都住在这里。SW 发消息进来，这边动手、把结果回在
  * sendMessage 的应答里（Blob 走不了 runtime 消息，回 base64）。
+ *
+ * 录制的真身在内存里 SW 是看不到的——id / kind / 时长都记在这边，stop 的
+ * 应答回带回去，SW 那份只是缓存，被杀重启了也不影响停录。
  */
+import { blobToBase64 } from "./base64.ts";
 
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
 let recordingId = "";
+let recordingKind: "tab" | "desktop" = "tab";
+let startedAt = 0;
 
 // getUserMedia 的 chromeMediaSource 约束不在 TS 的 DOM 类型里，扩一下。
 interface TabOrDesktopConstraints {
@@ -21,17 +27,6 @@ interface TabOrDesktopConstraints {
   };
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return blob.arrayBuffer().then((buffer) => {
-    const bytes = new Uint8Array(buffer);
-    let binary = "";
-    const CHUNK = 0x8000;
-    for (let i = 0; i < bytes.length; i += CHUNK) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-    }
-    return btoa(binary);
-  });
-}
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   const msg = message as { type?: string } | null;
@@ -74,6 +69,8 @@ async function start(
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
     chunks = [];
     recordingId = message.id;
+    recordingKind = message.kind;
+    startedAt = Date.now();
     recorder = new MediaRecorder(stream, { mimeType: "video/webm" });
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
@@ -94,13 +91,22 @@ function stop(sendResponse: (reply: unknown) => void): void {
   }
   const done = recorder;
   const id = recordingId;
+  const kind = recordingKind;
+  const started = startedAt;
   recorder = null;
   recordingId = "";
   done.onstop = () => {
     done.stream.getTracks().forEach((track) => track.stop());
     const blob = new Blob(chunks, { type: "video/webm" });
     void blobToBase64(blob).then((base64) => {
-      sendResponse({ ok: true, id, base64, bytes: blob.size });
+      sendResponse({
+        ok: true,
+        id,
+        kind,
+        seconds: (Date.now() - started) / 1000,
+        base64,
+        bytes: blob.size,
+      });
     });
   };
   done.stop();
