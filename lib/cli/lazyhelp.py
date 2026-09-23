@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 
@@ -51,6 +52,37 @@ class LazyhelpCli(BaseCli):
         names = _all_bins()
         for n in names:
             print(n)
+        return 0
+
+    @timed_cli
+    def env(self):
+        """输出 lazyhelp / scripts 相关配置与运行环境信息
+
+        ai-shell-env 判定（含命中的标记变量）、输出模式、系统与 Python、
+        统一日志落点、已设置的 SCRIPTS_* 环境变量。
+
+        用法: lazyhelp env
+        """
+        import platform
+
+        from lib import log as slog
+        from lib.ai_env import _MARKERS, ai_tool_name
+
+        hits = {v: os.environ[v] for v in sorted(_MARKERS) if os.environ.get(v)}
+        scripts_env = ", ".join(f"{k}={os.environ[k]}"
+                                for k in sorted(os.environ) if k.startswith("SCRIPTS_"))
+        self._r.kv("运行环境", {
+            "ai-shell-env": ai_tool_name() or "否（美化输出）",
+            "命中标记": ", ".join(f"{k}={v}" for k, v in hits.items()) or "(无)",
+            "输出模式": "极简（AI 环境）" if self._r.minimal else "美化（用户终端）",
+            "系统": f"{platform.system()} {platform.release()} {platform.machine()}",
+            "Python": platform.python_version(),
+            "shell": os.environ.get("SHELL", "(未知)"),
+            "终端": os.environ.get("TERM_PROGRAM") or "(未知)",
+            "统一日志": str(slog.path()),
+            "日志级别": os.environ.get("SCRIPTS_LOG_LEVEL", "INFO（默认）"),
+            "SCRIPTS_*": scripts_env or "(无)",
+        })
         return 0
 
     @timed_cli

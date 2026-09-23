@@ -71,18 +71,19 @@ def timed_cli(method: Callable[..., Any]) -> Callable[..., Any]:
             else:
                 m, s = divmod(int(elapsed), 60)
                 elapsed_s = f"{m}m{s}s"
-            if is_ai_shell_env():
-                # 极简：一行纯文本，去起止时间（省 token）
-                print(f"{name}: {elapsed_s}", file=sys.stderr)
-            else:
-                start_s = datetime.fromtimestamp(start_wall).strftime("%H:%M:%S")
-                end_s = datetime.fromtimestamp(time.time()).strftime("%H:%M:%S")
-                con = Console(stderr=True)
-                t = Text()
-                t.append("⏱ ", style="dim")
-                t.append(elapsed_s, style="dim bold")
-                t.append(f" · {start_s}–{end_s}", style="dim")
-                con.print(t)
+            # 成功路径 AI 环境静默（与 lib/ui.py timed 同款），只有失败才出耗时行
+            if failed is not None or not is_ai_shell_env():
+                if is_ai_shell_env():
+                    print(f"{name}: {elapsed_s}", file=sys.stderr)
+                else:
+                    start_s = datetime.fromtimestamp(start_wall).strftime("%H:%M:%S")
+                    end_s = datetime.fromtimestamp(time.time()).strftime("%H:%M:%S")
+                    con = Console(stderr=True)
+                    t = Text()
+                    t.append("⏱ ", style="dim")
+                    t.append(elapsed_s, style="dim bold")
+                    t.append(f" · {start_s}–{end_s}", style="dim")
+                    con.print(t)
             # SystemExit(0/None) 是 run_cli 成功路径的 sys.exit(0)，不是失败
             # （见 lib/ui.py timed 同款注释）
             clean_exit = isinstance(failed, SystemExit) and failed.code in (0, None)
