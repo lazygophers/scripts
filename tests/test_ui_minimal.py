@@ -28,13 +28,13 @@ class TestMinimalOutput(unittest.TestCase):
         r.step("执行中")
         self.assertEqual(r.console.file.getvalue(), "")
 
-    def test_ok_err_kept_plain(self):
+    def test_ok_is_silent_and_err_is_kept_plain(self):
         r = make_reporter({"CLAUDECODE": "1"})
         r.ok("合并成功")
         r.err("合并失败")
         out = r.console.file.getvalue()
-        self.assertIn("合并成功", out)
-        self.assertIn("合并失败", out)
+        self.assertNotIn("合并成功", out)
+        self.assertIn("ERROR: 合并失败", out)
         self.assertNotIn("✓", out)  # 无图标
         self.assertNotIn("✗", out)
 

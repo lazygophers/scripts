@@ -47,6 +47,7 @@ import sys
 import time
 import zlib
 
+from lib.ai_env import json_dumps
 from lib import browse_bridge, browse_log
 from lib.browse_daemon import (
     ABORT_METHOD,
@@ -782,7 +783,7 @@ def print_result(result: dict, *, table: bool, out=None) -> None:
     out = sys.stdout if out is None else out
     # AI 环境强制 JSON：框线表格的制表符对模型纯耗 token
     if not table or is_ai_shell_env():
-        out.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        out.write(json_dumps(result) + "\n")
         return
     _print_table(result, out)
 
@@ -1025,7 +1026,7 @@ def _cmd_run(tokens: list[str]) -> int:
                                      browser=browser_of(flags)))
     report = [{"index": i, "command": line, **outcome}
               for i, (line, outcome) in enumerate(zip(raw, outcomes))]
-    sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    sys.stdout.write(json_dumps(report) + "\n")
     if not fail_fast:
         return EXIT_OK
     failed = next((o for o in outcomes if o["status"] == "failed"), None)

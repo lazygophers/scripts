@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 
 # 变量名 → 工具名。判断只看「存在且非空」，CLAUDECODE 额外要求 == "1"。
@@ -43,3 +44,10 @@ def ai_tool_name(environ: dict[str, str] | None = None) -> str | None:
 def is_ai_shell_env(environ: dict[str, str] | None = None) -> bool:
     """当前进程是否运行在 AI 工具派生的 shell 环境里。"""
     return ai_tool_name(environ) is not None
+
+
+def json_dumps(value: object) -> str:
+    """序列化 CLI 数据；AI 环境去缩进和空格，保留全部字段和值。"""
+    if is_ai_shell_env():
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(value, ensure_ascii=False, indent=2)

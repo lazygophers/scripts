@@ -6,6 +6,7 @@ import json
 import sys
 from functools import wraps
 
+from lib.ai_env import json_dumps
 from lib.fire_base import run_cli, timed_cli
 from lib.grafana import (
     GrafanaError,
@@ -46,7 +47,7 @@ def emit(data) -> None:
     if isinstance(data, str):
         print(data)
     else:
-        print(json.dumps(data, ensure_ascii=False, indent=2))
+        print(json_dumps(data))
 
 
 def cmd(method):

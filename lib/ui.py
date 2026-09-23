@@ -134,6 +134,12 @@ class Reporter:
 
     def status(self, status: str, msg: str) -> None:
         """按状态选图标 + 色（ok=✓绿 / skip=•黄 / fail=✗红）。"""
+        if self.minimal:
+            if status == "fail":
+                self.console.print(f"ERROR: {msg}")
+            elif status not in {"ok", "skip"}:
+                self.console.print(msg)
+            return
         icon, color = STATUS_STYLE.get(status, (ICON_INFO, "cyan"))
         self._icon_msg(icon, msg, color)
 
@@ -197,12 +203,22 @@ class Reporter:
         self._icon_msg(ICON_STEP, msg, "blue", minimal_keep=False)
 
     def ok(self, msg: str) -> None:
+        if self.minimal:
+            return
         self._icon_msg(ICON_SUCCESS, msg, "green")
 
     def warn(self, msg: str) -> None:
+        if self.minimal:
+            self.console.print(f"WARN: {msg}")
+            return
         self._icon_msg(ICON_WARNING, msg, "yellow")
 
     def err(self, msg: str) -> None:
+        if self.minimal:
+            self.console.print(f"ERROR: {msg}")
+            from lib import log as slog
+            slog.record("cli.error", msg=msg)
+            return
         self._icon_msg(ICON_ERROR, msg, "red")
         # 错误详情落盘的唯一出口：错误路径全部汇到 Reporter.err，timed() 只记
         # 退出码——一次错误在日志文件里恰好一条（去重分工见票 03）
@@ -496,7 +512,8 @@ def timed(fn, *, label: str | None = None):
         finally:
             elapsed = time.monotonic() - start  # 只读一次时钟
             end_wall = time.time()
-            print_runtime(start_wall, end_wall, label=label, elapsed=elapsed)
+            if failed is not None or not is_ai_shell_env():
+                print_runtime(start_wall, end_wall, label=label, elapsed=elapsed)
             if failed is not None:
                 # 失败只带退出码；错误详情由 Reporter.err 记，两边不重复
                 fields = {"rc": failed.code} if isinstance(failed, SystemExit) else {

@@ -59,13 +59,13 @@ class TestRun(unittest.TestCase):
     def test_timeout_kills_proc_group(self):
         """超时后子进程不留残留。"""
         import subprocess
+        # 时长用机器上不会撞车的 987：-fx 精确匹配整条命令行，任何 cmdline 里
+        # 含 sleep 的无关进程都不能误判成本测试残留（"sleep 10" 撞过两次假失败）
         try:
-            exec_mod.run(["sleep", "10"], timeout=1)
+            exec_mod.run(["sleep", "987"], timeout=1)
         except exec_mod.CommandTimeout:
             pass
-        # -fx 精确匹配整条命令行：-f 子串匹配会把任何 cmdline 里含 "sleep 10"
-        # 的无关进程（守护进程参数等）误判成本测试残留，导致假失败
-        r = subprocess.run(["pgrep", "-fx", "sleep 10"], capture_output=True)
+        r = subprocess.run(["pgrep", "-fx", "sleep 987"], capture_output=True)
         self.assertEqual(r.stdout.strip(), b"", "sleep 子进程未被清理")
 
 

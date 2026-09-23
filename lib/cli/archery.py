@@ -49,7 +49,7 @@ from lib.archery import (
     resolve_profile,
     save_config,
 )
-from lib.ai_env import is_ai_shell_env
+from lib.ai_env import is_ai_shell_env, json_dumps
 from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.ovpn import normalize_secret, totp
 from lib.ui import Reporter, ask_confirm, ask_text, reporter
@@ -73,7 +73,7 @@ def emit(data) -> None:
     if isinstance(data, str):
         print(data)
     else:
-        print(json.dumps(data, ensure_ascii=False, indent=2))
+        print(json_dumps(data))
 
 
 def cmd(method):

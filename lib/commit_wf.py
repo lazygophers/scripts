@@ -7,6 +7,7 @@ import os
 import urllib.error
 import urllib.request
 
+from lib.ai_env import json_dumps
 from lib.ai_workflow import current_branch, generate_via_claude
 from lib.exec import run
 from lib.ui import reporter
@@ -128,7 +129,7 @@ def _debug_dump(url: str, payload: dict, raw: bytes | None = None) -> None:
     rr = reporter(stderr=True)
     rr.step(f"[debug] LAZYGOPHERS POST {url}")
     rr.step("[debug] request body:")
-    rr.output(json.dumps(payload, ensure_ascii=False, indent=2))
+    rr.output(json_dumps(payload))
     rr.step("[debug] response body:")
     rr.output(raw.decode("utf-8", "replace") if raw else "(无)")
 

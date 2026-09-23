@@ -772,9 +772,9 @@ def _fmt_plain(results: list[dict]) -> None:
 
 
 def _fmt_json(results: list[dict]) -> None:
-    import json
+    from lib.ai_env import json_dumps
 
-    print(json.dumps(results, ensure_ascii=False, indent=2))
+    print(json_dumps(results))
 
 
 def _fmt_tsv(results: list[dict]) -> None:
