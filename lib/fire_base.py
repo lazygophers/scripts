@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 
 from lib.ai_env import is_ai_shell_env
 from functools import wraps
@@ -33,74 +32,17 @@ class BaseCli:
 
 
 def timed_cli(method: Callable[..., Any]) -> Callable[..., Any]:
-    """装饰 bin/* CLI 方法：跑完用 Rich 打 dim 灰色耗时（含起止时间）。
+    """装饰 bin/* CLI 方法：委托 lib.ui.timed 计时 + 统一日志 + AI 静默。
 
-    自适应单位：<1s 显示 ms；<60s 显示 s；≥1m 显示 m+s。
-    走 Rich Console(stderr=True) → dim 样式统一。
-    透传方法返回值（fire 用作 exit code）。
+    类名即命令名（GraphwatchCli → graphwatch），作 label 传给 timed；
+    输出格式与 bin 层 timed(main, label=...) 完全一致。
     """
+    from lib.ui import timed
 
     @wraps(method)
     def wrapper(self, *args, **kwargs):
-        from datetime import datetime
-
-        from rich.console import Console
-        from rich.text import Text
-
-        # 类名即命令名（GraphwatchCli → graphwatch）；统一日志与终端计时共用
         name = type(self).__name__.removesuffix("Cli").lower() or type(self).__name__.lower()
-        from lib import log as slog
-        slog.set_context(name)
-        slog.record("cli.start", logger=name)
-        t0 = time.monotonic()
-        start_wall = time.time()
-        failed: BaseException | None = None
-        result = None
-        try:
-            result = method(self, *args, **kwargs)
-        except BaseException as exc:
-            failed = exc
-        finally:
-            elapsed = time.monotonic() - t0  # 只读一次时钟：测试用假时钟注入固定次数
-            elapsed_ms = int(elapsed * 1000)
-            ms = elapsed_ms
-            if ms < 1000:
-                elapsed_s = f"{ms}ms"
-            elif elapsed < 60:
-                elapsed_s = f"{elapsed:.1f}s"
-            else:
-                m, s = divmod(int(elapsed), 60)
-                elapsed_s = f"{m}m{s}s"
-            # 成功路径 AI 环境静默（与 lib/ui.py timed 同款），只有失败才出耗时行
-            if failed is not None or not is_ai_shell_env():
-                if is_ai_shell_env():
-                    print(f"{name}: {elapsed_s}", file=sys.stderr)
-                else:
-                    start_s = datetime.fromtimestamp(start_wall).strftime("%H:%M:%S")
-                    end_s = datetime.fromtimestamp(time.time()).strftime("%H:%M:%S")
-                    con = Console(stderr=True)
-                    t = Text()
-                    t.append("⏱ ", style="dim")
-                    t.append(elapsed_s, style="dim bold")
-                    t.append(f" · {start_s}–{end_s}", style="dim")
-                    con.print(t)
-            # SystemExit(0/None) 是 run_cli 成功路径的 sys.exit(0)，不是失败
-            # （见 lib/ui.py timed 同款注释）
-            clean_exit = isinstance(failed, SystemExit) and failed.code in (0, None)
-            if failed is not None and not clean_exit:
-                # 失败只带退出码；错误详情由 Reporter.err 记，两边不重复
-                fields = {"rc": failed.code} if isinstance(failed, SystemExit) else {
-                    "exc_type": type(failed).__name__}
-                slog.record("cli.fail", logger=name, level="warning",
-                            elapsed_ms=elapsed_ms,
-                            exc_info=(type(failed), failed, failed.__traceback__), **fields)
-            else:
-                slog.record("cli.done", logger=name, elapsed_ms=elapsed_ms,
-                            **({"rc": result} if isinstance(result, int)
-                               else ({"rc": 0} if clean_exit else {})))
-        if failed is not None:
-            raise failed  # 异常对象自带原 traceback，raise 不丢栈
-        return result
+        return timed(lambda: method(self, *args, **kwargs), label=name)()
 
     return wrapper
 

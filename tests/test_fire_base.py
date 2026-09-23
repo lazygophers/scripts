@@ -48,8 +48,8 @@ class TestTimedCli(unittest.TestCase):
                     return fn()
                 return 7
 
-        with mock.patch("rich.console.Console", FakeConsole), \
-             mock.patch.object(fb.time, "monotonic", lambda: next(clock)):
+        with mock.patch("lib.ui.Console", FakeConsole), \
+             mock.patch("time.monotonic", lambda: next(clock)):  # timed_cli 委托 lib.ui.timed，时钟在 time 模块上
             try:
                 rc = Cli().go()
             except RuntimeError:

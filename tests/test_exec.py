@@ -233,7 +233,7 @@ class TestKillProcGroup(unittest.TestCase):
 
 class TestDebugLog(unittest.TestCase):
     def setUp(self):
-        import lib.notify as notify_mod
+        import lib.cli_flags as notify_mod
         self._notify = notify_mod
         self._prev = notify_mod._DEBUG
 
@@ -298,7 +298,7 @@ class TestDebugLog(unittest.TestCase):
 
 class TestPropagateDebugEnv(unittest.TestCase):
     def setUp(self):
-        import lib.notify as notify_mod
+        import lib.cli_flags as notify_mod
         self._notify = notify_mod
         self._prev = notify_mod._DEBUG
 

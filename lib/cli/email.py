@@ -145,15 +145,12 @@ class EmailCli(BaseCli):
 
         用法: email list
         """
-        from rich.table import Table
-
         cfg = load_config()
         all_p = profiles(cfg)
         if not all_p:
             self._r.info("还没有配置任何邮箱。先跑: email login")
             return 0
         current = str(cfg.get("current") or "")
-        from lib.ai_env import is_ai_shell_env
 
         def rows():
             for key in sorted(all_p):
@@ -163,22 +160,8 @@ class EmailCli(BaseCli):
                        f"{imap.get('host')}:{imap.get('port')}",
                        mask(str(p.get("password") or "")),
                        "*" if key == current else "")
-        if is_ai_shell_env():
-            from lib.ui import print_tsv
-
-            print_tsv(["email", "provider", "imap", "password", "default"], rows())
-            return 0
-        from rich.table import Table
-
-        table = Table(title=f"已配置的邮箱（{len(all_p)} 个）")
-        table.add_column("邮箱", style="bold")
-        table.add_column("服务商")
-        table.add_column("IMAP")
-        table.add_column("密码")
-        table.add_column("默认")
-        for row in rows():
-            table.add_row(*row)
-        self._r.console.print(table)
+        self._r.data_table(["邮箱", "服务商", "IMAP", "密码", "默认"], rows(),
+                           title=f"已配置的邮箱（{len(all_p)} 个）")
         return 0
 
     @_cmd
@@ -281,30 +264,14 @@ class EmailCli(BaseCli):
         return self._print_rows(address, folder, rows, f"没搜到含「{query}」的邮件")
 
     def _print_rows(self, address: str, folder: str, rows: list[dict], empty_msg: str) -> int:
-        from rich.table import Table
-
         if not rows:
             self._r.info(empty_msg)
             return 0
-        from lib.ai_env import is_ai_shell_env
-
-        if is_ai_shell_env():
-            from lib.ui import print_tsv
-
-            print_tsv(["uid", "unread", "from", "subject", "date"],
-                      [(r["uid"], "1" if r["unread"] else "", r["From"],
-                        r["Subject"], r["Date"]) for r in rows])
-            return 0
-        table = Table(title=f"{address} · {folder}（{len(rows)} 封）")
-        table.add_column("UID", style="bold")
-        table.add_column("")
-        table.add_column("发件人")
-        table.add_column("主题")
-        table.add_column("时间")
-        for r in rows:
-            table.add_row(r["uid"], "●" if r["unread"] else "",
-                          _short(r["From"], 30), _short(r["Subject"], 50), _short(r["Date"], 31))
-        self._r.console.print(table)
+        self._r.data_table(
+            ["UID", "", "发件人", "主题", "时间"],
+            [(r["uid"], "●" if r["unread"] else "", r["From"], r["Subject"], r["Date"])
+             for r in rows],
+            title=f"{address} · {folder}（{len(rows)} 封）")
         self._r.info("● = 未读 · 读正文: email read <UID>")
         return 0
 
@@ -358,11 +325,6 @@ class EmailCli(BaseCli):
         do_mark(address, profile, str(uid), seen=not unread, folder=folder)
         self._r.ok(f"UID {uid} 已标为{'未读' if unread else '已读'}")
         return 0
-
-
-def _short(text: str, width: int) -> str:
-    s = " ".join((text or "").split())
-    return s if len(s) <= width else s[: width - 1] + "…"
 
 
 def main():

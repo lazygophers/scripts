@@ -49,10 +49,10 @@ from lib.archery import (
     resolve_profile,
     save_config,
 )
-from lib.ai_env import is_ai_shell_env, json_dumps
+from lib.ai_env import json_dumps
 from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.ovpn import normalize_secret, totp
-from lib.ui import Reporter, ask_confirm, ask_text, reporter
+from lib.ui import Reporter, ask_confirm, ask_text, print_tsv, reporter
 
 # 提权重跑的是用户实际敲的那个命令（仓库里的 bin/<name>，或装成包后 PATH 上的入口），
 # 不是 lib/cli/ 下的实现模块——后者单独 python 起不来。
@@ -525,10 +525,21 @@ class QueryCli(_Group):
             lambda: client.post("v1/sqlquery/execute/", body),
             lambda: client.web("POST", "/query/", form=body),
         )
-        # AI 环境强制 TSV：框线表格的制表符对模型纯耗 token
-        render = _render_table if (table and not is_ai_shell_env()) else _render_tsv
-        if json_out or not render(data):
+        if json_out:
             emit(data)
+            return 0
+        got = _result_rows(data)
+        if got is None:
+            emit(data)
+            return 0
+        columns, values = got
+        # NULL → 空串：SQL NULL 在 TSV / Rich 表格里都占一个空单元格
+        values = [["" if v is None else v for v in row] for row in values]
+        if table:
+            # AI 环境自动降级 TSV：框线表格对模型纯耗 token
+            self._r.data_table(columns, values)
+        else:
+            print_tsv(columns, values)  # 默认 TSV（两种环境一致，管道友好）
         return 0
 
     @cmd
@@ -577,44 +588,6 @@ def _result_rows(data):
     values = [row if isinstance(row, (list, tuple)) else [row.get(c) for c in columns]
               for row in rows]
     return columns, values
-
-
-def _tsv_cell(value) -> str:
-    """一个单元格转成一行 TSV 里的一段：制表符和换行转义掉，免得撑破行列。"""
-    if value is None:
-        return ""
-    return str(value).replace("\\", "\\\\").replace("\t", "\\t").replace("\r", "\\r").replace("\n", "\\n")
-
-
-def _render_tsv(data) -> bool:
-    """把查询结果按 TSV 打到 stdout（首行列名），返回是否渲染成功。"""
-    got = _result_rows(data)
-    if got is None:
-        return False
-    columns, rows = got
-    lines = ["\t".join(_tsv_cell(c) for c in columns)]
-    lines += ["\t".join(_tsv_cell(v) for v in row) for row in rows]
-    print("\n".join(lines))
-    return True
-
-
-def _render_table(data) -> bool:
-    """把查询结果渲染成框线表格，返回是否渲染成功。"""
-    got = _result_rows(data)
-    if got is None:
-        return False
-    columns, rows = got
-
-    from rich.console import Console
-    from rich.table import Table
-
-    table = Table(show_lines=False)
-    for col in columns:
-        table.add_column(str(col), overflow="fold")
-    for row in rows:
-        table.add_row(*["" if v is None else str(v) for v in row])
-    Console().print(table)
-    return True
 
 
 # ---------------------------------------------------------------- workflow

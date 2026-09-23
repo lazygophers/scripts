@@ -73,7 +73,8 @@ def print_tsv(headers: Sequence[str], rows, *, file=None) -> None:
     """TSV 输出（AI 环境的表格降级形态）：首行列名，制表符分列，
     单元格内 \\ \t \n 转义保证一行一条记录。人类环境不走这里。"""
     def esc(v) -> str:
-        return str(v).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
+        return (str(v).replace("\\", "\\\\").replace("\t", "\\t")
+                .replace("\n", "\\n").replace("\r", "\\r"))
 
     out = sys.stdout if file is None else file
     if headers:
@@ -236,6 +237,29 @@ class Reporter:
         # 退出码——一次错误在日志文件里恰好一条（去重分工见票 03）
         from lib import log as slog
         slog.record("cli.error", msg=msg)
+
+    def data_table(self, headers, rows, *, kind="table", title=None) -> None:
+        r"""数据出口（唯一分流点）：表格或 JSON 数据的渲染。
+
+        数据一律写 stdout（可管道给 jq），不走 Reporter 的 stderr 诊断通道。
+        kind="table"：人类环境 Rich Table，AI 环境 TSV 降级（print_tsv）。
+        kind="json"：payload 直接给 rows，人类 indent / AI 压缩（json_dumps）。
+        转义契约只在此处（\ \t \n \r），调用方不再各写一份。
+        """
+        from lib.ai_env import json_dumps
+        if kind == "json":
+            print(json_dumps(rows))
+            return
+        if self.minimal:
+            print_tsv(headers, rows)
+            return
+        table = Table(title=title, show_header=bool(headers), box=ROUNDED,
+                      border_style="blue", header_style="bold cyan")
+        for h in headers:
+            table.add_column(str(h))
+        for row in rows:
+            table.add_row(*[str(c) for c in row])
+        Console(no_color=False).print(table)
 
     def kv(self, title: str, rows: dict[str, str], *, style: str = "blue") -> None:
         if self.minimal:

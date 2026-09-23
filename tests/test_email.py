@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import email as stdlib_email
 import imaplib
+import io
 import pathlib
 import sys
 import tempfile
@@ -660,10 +661,15 @@ class TestCli(unittest.TestCase):
     # -------------------------------------------------------- 配置类
 
     def test_list_shows_accounts_with_masked_password(self):
-        self.assertEqual(self.cli.list(), 0)
-        self.assertIn("me@qq.com", self.out)
-        self.assertIn("me@gmail.com", self.out)
-        self.assertNotIn("code1234", self.out, "密码绝不能明文出现在输出里")
+        import contextlib
+
+        buf = io.StringIO()  # data_table 数据出口是 stdout，不走 Reporter buffer
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(self.cli.list(), 0)
+        out = buf.getvalue()
+        self.assertIn("me@qq.com", out)
+        self.assertIn("me@gmail.com", out)
+        self.assertNotIn("code1234", out, "密码绝不能明文出现在输出里")
 
     def test_list_on_empty_config_points_at_login(self):
         self.cli_mod.load_config = lambda *a, **kw: {}
@@ -743,11 +749,15 @@ class TestCli(unittest.TestCase):
         self.assertIn("550 rejected", self.out)
 
     def test_inbox_prints_a_table(self):
+        import contextlib
+
         self._patch("inbox", lambda *a, **kw: [
             {"uid": "9", "unread": True, "From": "a@b.com", "Subject": "发票", "Date": "今天"},
         ])
-        self.assertEqual(self.cli.inbox(), 0)
-        self.assertIn("发票", self.out)
+        buf = io.StringIO()  # data_table 数据出口是 stdout，不走 Reporter buffer
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(self.cli.inbox(), 0)
+        self.assertIn("发票", buf.getvalue())
         self.assertIn("email read <UID>", self.out)
 
     def test_inbox_forwards_flags(self):

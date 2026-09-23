@@ -56,6 +56,45 @@ class TestMinimalOutput(unittest.TestCase):
         self.assertIn("第一行", out)
 
 
+class TestDataTable(unittest.TestCase):
+    """data_table 矩阵：kind × AI/人类环境。"""
+
+    def test_kind_table_tsv_in_ai_rich_in_human(self):
+        import contextlib
+
+        headers = ["a", "b"]
+        rows = [[1, "x\ty"], [None, "z"]]
+        # AI：TSV（首行列名，单元格内 \t 转义）
+        buf = io.StringIO()
+        with patch.dict(os.environ, {"CLAUDECODE": "1"}), contextlib.redirect_stdout(buf):
+            make_reporter({"CLAUDECODE": "1"}).data_table(headers, rows)
+        self.assertEqual(buf.getvalue().splitlines(),
+                         ["a\tb", "1\tx\\ty", "None\tz"])
+        # 人类：Rich 框线表格，标题和列头保留
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            make_reporter({}).data_table(headers, rows, title="演示")
+        out = buf.getvalue()
+        self.assertIn("│", out)
+        self.assertIn("演示", out)
+        self.assertIn("None", out)
+
+    def test_kind_json_compact_in_ai_indented_in_human(self):
+        import contextlib
+
+        payload = {"k": [1, 2]}
+        # AI：压缩单行 JSON
+        buf = io.StringIO()
+        with patch.dict(os.environ, {"CLAUDECODE": "1"}), contextlib.redirect_stdout(buf):
+            make_reporter({"CLAUDECODE": "1"}).data_table(None, payload, kind="json")
+        self.assertEqual(buf.getvalue(), '{"k":[1,2]}\n')
+        # 人类：indent=2
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            make_reporter({}).data_table(None, payload, kind="json")
+        self.assertIn('{\n  "k": [', buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -105,7 +144,8 @@ class TestMinimalOtherChannels(unittest.TestCase):
 
         from lib.cli import archery
         src = inspect.getsource(archery)
-        self.assertIn("table and not is_ai_shell_env()", src)
+        # --table 走 Reporter.data_table：AI 环境由它自动降级 TSV
+        self.assertIn("self._r.data_table(columns, values)", src)
 
     def test_print_tsv_escapes(self):
         import io as _io

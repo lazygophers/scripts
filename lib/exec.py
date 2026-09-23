@@ -209,8 +209,7 @@ def _log_after_run(
 
 
 def _debug_enabled() -> bool:
-    """延迟导入避免 exec ↔ notify 循环依赖。"""
-    from lib.notify import is_debug
+    from lib.cli_flags import is_debug
     return is_debug()
 
 
@@ -222,7 +221,7 @@ def _propagate_debug_env(env: dict[str, str] | None) -> dict[str, str] | None:
     os.environ，故 None 路径下子进程拿不到。统一在 debug 时显式注入。
     非 debug 时原样返回，保留 None 的「继承父」语义。
     """
-    from lib.notify import is_debug
+    from lib.cli_flags import is_debug
     if not is_debug():
         return env
     base = dict(os.environ if env is None else env)

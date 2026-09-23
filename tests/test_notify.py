@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import lib.notify as notify_mod
+import lib.cli_flags as flags_mod  # flag 状态已搬 cli_flags
 from lib.exec import CommandTimeout
 
 
@@ -24,11 +25,11 @@ class TestNotify(unittest.TestCase):
     def setUp(self):
         # SCRIPTS_NO_SAY=1 全量跑时 _SAY_DISABLED=True，会吞掉 run 调用；
         # 这里测的是 say 路径，重置后还原
-        self._prev = notify_mod._SAY_DISABLED
-        notify_mod._SAY_DISABLED = False
+        self._prev = flags_mod._SAY_DISABLED
+        flags_mod._SAY_DISABLED = False
 
     def tearDown(self):
-        notify_mod._SAY_DISABLED = self._prev
+        flags_mod._SAY_DISABLED = self._prev
 
     @patch("lib.notify.run")
     def test_notify_calls_say(self, mock_run):
@@ -58,11 +59,11 @@ class TestNotify(unittest.TestCase):
 class TestNotifyViaN(unittest.TestCase):
     def setUp(self):
         # 同 TestNotify：notify_via_n 走 notify，受 _SAY_DISABLED 影响
-        self._prev = notify_mod._SAY_DISABLED
-        notify_mod._SAY_DISABLED = False
+        self._prev = flags_mod._SAY_DISABLED
+        flags_mod._SAY_DISABLED = False
 
     def tearDown(self):
-        notify_mod._SAY_DISABLED = self._prev
+        flags_mod._SAY_DISABLED = self._prev
 
     @patch("lib.notify.run")
     def test_delegates_to_notify(self, mock_run):
@@ -83,64 +84,64 @@ class TestNotifyViaN(unittest.TestCase):
 class TestConsumeDebug(unittest.TestCase):
     def setUp(self):
         # 保留并恢复全局 flag, 避免污染其他用例
-        self._prev = notify_mod._DEBUG
-        notify_mod._DEBUG = False
+        self._prev = flags_mod._DEBUG
+        flags_mod._DEBUG = False
 
     def tearDown(self):
-        notify_mod._DEBUG = self._prev
+        flags_mod._DEBUG = self._prev
 
     def test_strips_debug_and_sets_flag(self):
-        out = notify_mod.consume_debug(["bin/x", "--debug", "arg"])
+        out = flags_mod.consume_debug(["bin/x", "--debug", "arg"])
         self.assertEqual(out, ["bin/x", "arg"])
-        self.assertTrue(notify_mod.is_debug())
+        self.assertTrue(flags_mod.is_debug())
 
     def test_no_debug_keeps_argv(self):
-        out = notify_mod.consume_debug(["bin/x", "arg"])
+        out = flags_mod.consume_debug(["bin/x", "arg"])
         self.assertEqual(out, ["bin/x", "arg"])
-        self.assertFalse(notify_mod.is_debug())
+        self.assertFalse(flags_mod.is_debug())
 
     def test_set_debug_toggles(self):
-        notify_mod.set_debug(True)
-        self.assertTrue(notify_mod.is_debug())
-        notify_mod.set_debug(False)
-        self.assertFalse(notify_mod.is_debug())
+        flags_mod.set_debug(True)
+        self.assertTrue(flags_mod.is_debug())
+        flags_mod.set_debug(False)
+        self.assertFalse(flags_mod.is_debug())
 
     def test_debug_concurrency_forces_serial(self):
         # debug 模式看的就是日志，并发日志交错没法读 → 强制串行
-        notify_mod.set_debug(True)
-        self.assertEqual(notify_mod.debug_concurrency(4), 1)
-        notify_mod.set_debug(False)
-        self.assertEqual(notify_mod.debug_concurrency(4), 4)
-        self.assertEqual(notify_mod.debug_concurrency(0), 1)  # default 下限 1
+        flags_mod.set_debug(True)
+        self.assertEqual(flags_mod.debug_concurrency(4), 1)
+        flags_mod.set_debug(False)
+        self.assertEqual(flags_mod.debug_concurrency(4), 4)
+        self.assertEqual(flags_mod.debug_concurrency(0), 1)  # default 下限 1
 
 
 class TestConsumeNoSay(unittest.TestCase):
     def setUp(self):
-        self._prev = notify_mod._SAY_DISABLED
-        notify_mod._SAY_DISABLED = False
+        self._prev = flags_mod._SAY_DISABLED
+        flags_mod._SAY_DISABLED = False
 
     def tearDown(self):
-        notify_mod._SAY_DISABLED = self._prev
+        flags_mod._SAY_DISABLED = self._prev
 
     def test_strips_all_occurrences(self):
-        out = notify_mod.consume_no_say(["bin/x", "--no-say", "a", "--no-say"])
+        out = flags_mod.consume_no_say(["bin/x", "--no-say", "a", "--no-say"])
         self.assertEqual(out, ["bin/x", "a"])
-        self.assertTrue(notify_mod.is_say_disabled())
+        self.assertTrue(flags_mod.is_say_disabled())
 
     def test_absent_keeps_argv(self):
-        out = notify_mod.consume_no_say(["bin/x", "a"])
+        out = flags_mod.consume_no_say(["bin/x", "a"])
         self.assertEqual(out, ["bin/x", "a"])
-        self.assertFalse(notify_mod.is_say_disabled())
+        self.assertFalse(flags_mod.is_say_disabled())
 
     def test_set_say_disabled_toggles(self):
-        notify_mod.set_say_disabled(True)
-        self.assertTrue(notify_mod.is_say_disabled())
-        notify_mod.set_say_disabled(False)
-        self.assertFalse(notify_mod.is_say_disabled())
+        flags_mod.set_say_disabled(True)
+        self.assertTrue(flags_mod.is_say_disabled())
+        flags_mod.set_say_disabled(False)
+        self.assertFalse(flags_mod.is_say_disabled())
 
     @patch("lib.notify.run")
     def test_notify_skips_say_when_disabled(self, mock_run):
-        notify_mod.set_say_disabled(True)
+        flags_mod.set_say_disabled(True)
         notify_mod.notify("hello")
         mock_run.assert_not_called()
 
