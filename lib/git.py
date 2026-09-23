@@ -427,8 +427,9 @@ def _render_branch_table(
 def _render_branch_minimal(repos: list[Path], root: Path,
                             rows: list[tuple[str, dict]]) -> None:
     """AI 环境极简输出（省 token）：每仓一行 `repo | 工作区状态`，
-    每分支一行 `[*]name | upstream | track`（* = 当前分支，⟱ = 跨仓重名，
-    - = 无该字段）。分支名/upstream/track 是关键数据，一字不减。"""
+    每分支一行 `[*]name | upstream`（* = 当前分支，⟱ = 跨仓重名，
+    - = 无 upstream）。track 列（[ahead N] 等）不输出——用户 2026-09-23
+    指定：该列对 AI 纯耗 token。"""
     import sys
 
     dup_names: set[str] = set()
@@ -446,8 +447,7 @@ def _render_branch_minimal(repos: list[Path], root: Path,
         for br in groups.get(display, []):
             name = ("*" if br["current"] else "") + br["name"] \
                 + (" ⟱" if br["name"] in dup_names else "")
-            print(f"{name} | {br['upstream'] or '-'} | {br['track'] or '-'}",
-                  file=sys.stderr)
+            print(f"{name} | {br['upstream'] or '-'}", file=sys.stderr)
 
 
 def _worktree_state(repo: Path) -> str:

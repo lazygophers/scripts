@@ -265,12 +265,14 @@ class TestRenderBranchMinimal(unittest.TestCase):
     def test_minimal_lines(self):
         rc, out = self._run_minimal({"CLAUDECODE": "1"})
         self.assertEqual(rc, 0)
+        # track 列（[ahead 4]）不输出：AI 环境纯耗 token（2026-09-23）
         self.assertEqual(
             out,
             "proj | clean\n"
-            "*master | origin/master | [ahead 4]\n"
-            "dev | - | -\n",
+            "*master | origin/master\n"
+            "dev | -\n",
         )
+        self.assertNotIn("ahead", out)
         self.assertNotIn("╭", out)  # 无 Rich 边框
 
     def test_human_env_keeps_rich(self):
