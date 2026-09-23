@@ -58,3 +58,52 @@ class TestMinimalOutput(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMinimalOtherChannels(unittest.TestCase):
+    def test_runtime_line_plain(self):
+        import contextlib
+        import io
+
+        import lib.ui as ui_mod
+        buf = io.StringIO()
+        with patch.dict(os.environ, {"CLAUDECODE": "1"}):
+            with contextlib.redirect_stderr(buf):
+                ui_mod.print_runtime(1_700_000_000.0, 1_700_000_012.5,
+                                     label="merge", elapsed=12.5)
+        out = buf.getvalue()
+        self.assertIn("merge: 12.5s", out)
+        self.assertNotIn("⏱", out)
+        self.assertNotIn("–", out)  # 无起止时间段
+
+    def test_progress_disabled(self):
+        from rich.console import Console
+
+        import lib.ui as ui_mod
+        with patch.dict(os.environ, {"CLAUDECODE": "1"}):
+            p = ui_mod.progress(Console(file=io.StringIO()))
+        self.assertTrue(p.disable)
+
+    def test_browse_table_forced_json(self):
+        from lib.cli.browse import print_result
+
+        buf = io.StringIO()
+        with patch.dict(os.environ, {"CLAUDECODE": "1"}):
+            print_result({"tabs": [{"title": "a"}]}, table=True, out=buf)
+        out = buf.getvalue()
+        self.assertTrue(out.startswith("{"))  # JSON 而非 Rich 表格
+        self.assertNotIn("╭", out)
+
+    def test_archery_table_forced_tsv(self):
+        import inspect
+
+        from lib.cli import archery
+        src = inspect.getsource(archery)
+        self.assertIn("table and not is_ai_shell_env()", src)
+
+    def test_fire_help_no_forced_ansi(self):
+        import inspect
+
+        from lib import fire_base
+        src = inspect.getsource(fire_base._render_fire_help)
+        self.assertIn("force_terminal=not is_ai_shell_env()", src)

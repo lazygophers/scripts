@@ -777,8 +777,11 @@ def read_stdin_items(text: str) -> list[str]:
 
 # ---------------------------------------------------------------- 输出
 def print_result(result: dict, *, table: bool, out=None) -> None:
+    from lib.ai_env import is_ai_shell_env
+
     out = sys.stdout if out is None else out
-    if not table:
+    # AI 环境强制 JSON：框线表格的制表符对模型纯耗 token
+    if not table or is_ai_shell_env():
         out.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
         return
     _print_table(result, out)

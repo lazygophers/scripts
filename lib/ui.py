@@ -80,6 +80,7 @@ def progress(console_obj: Console | None) -> Progress:
         TimeElapsedColumn(),
         console=console_obj,
         transient=True,  # 完成后自动清掉该行，不残留
+        disable=is_ai_shell_env(),  # AI 环境：进度条纯耗 token，直接关
     )
 
 
@@ -444,6 +445,12 @@ def print_runtime(start: float, end: float, *, label: str | None = None,
     from datetime import datetime
 
     from rich.text import Text
+
+    if is_ai_shell_env():
+        # 极简：一行纯文本，去起止时间（对 AI 只有耗时有用，省 token）
+        elapsed_s = _format_elapsed(end - start if elapsed is None else elapsed)
+        print(f"{label or '耗时'}: {elapsed_s}", file=sys.stderr)
+        return
 
     fmt = "%H:%M:%S"
     start_s = datetime.fromtimestamp(start).strftime(fmt)

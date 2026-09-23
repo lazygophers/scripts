@@ -63,7 +63,9 @@ class TestRun(unittest.TestCase):
             exec_mod.run(["sleep", "10"], timeout=1)
         except exec_mod.CommandTimeout:
             pass
-        r = subprocess.run(["pgrep", "-f", "sleep 10"], capture_output=True)
+        # -fx 精确匹配整条命令行：-f 子串匹配会把任何 cmdline 里含 "sleep 10"
+        # 的无关进程（守护进程参数等）误判成本测试残留，导致假失败
+        r = subprocess.run(["pgrep", "-fx", "sleep 10"], capture_output=True)
         self.assertEqual(r.stdout.strip(), b"", "sleep 子进程未被清理")
 
 

@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import sys
 import time
+
+from lib.ai_env import is_ai_shell_env
 from functools import wraps
 from typing import Any, Callable
 
@@ -69,14 +71,18 @@ def timed_cli(method: Callable[..., Any]) -> Callable[..., Any]:
             else:
                 m, s = divmod(int(elapsed), 60)
                 elapsed_s = f"{m}m{s}s"
-            start_s = datetime.fromtimestamp(start_wall).strftime("%H:%M:%S")
-            end_s = datetime.fromtimestamp(time.time()).strftime("%H:%M:%S")
-            con = Console(stderr=True)
-            t = Text()
-            t.append("⏱ ", style="dim")
-            t.append(elapsed_s, style="dim bold")
-            t.append(f" · {start_s}–{end_s}", style="dim")
-            con.print(t)
+            if is_ai_shell_env():
+                # 极简：一行纯文本，去起止时间（省 token）
+                print(f"{name}: {elapsed_s}", file=sys.stderr)
+            else:
+                start_s = datetime.fromtimestamp(start_wall).strftime("%H:%M:%S")
+                end_s = datetime.fromtimestamp(time.time()).strftime("%H:%M:%S")
+                con = Console(stderr=True)
+                t = Text()
+                t.append("⏱ ", style="dim")
+                t.append(elapsed_s, style="dim bold")
+                t.append(f" · {start_s}–{end_s}", style="dim")
+                con.print(t)
             if failed is not None:
                 # 失败只带退出码；错误详情由 Reporter.err 记，两边不重复
                 fields = {"rc": failed.code} if isinstance(failed, SystemExit) else {
@@ -133,6 +139,9 @@ def _handle_fire_result(component_trace) -> None:
 def _render_fire_info(args, kwargs) -> None:
     """替代 fire.core 内部的 print('INFO: Showing help ...')：改成一行 dim 提示。"""
     from rich.console import Console
+    if is_ai_shell_env():
+        print(args[0].rstrip(), file=sys.stderr)
+        return
     c = Console(stderr=True, force_terminal=True, highlight=False)
     c.print(f"[dim]{args[0].rstrip()}[/dim]")
 
@@ -147,7 +156,9 @@ def _render_fire_help(lines, out) -> None:
     from rich.console import Console
     from rich.text import Text
 
-    console = Console(file=out, force_terminal=True, highlight=False)
+    # AI 环境不 force_terminal：强制 ANSI 会把转义码喂给管道对面的模型，
+    # 纯耗 token。非终端下 Rich 本来就不出样式。
+    console = Console(file=out, force_terminal=not is_ai_shell_env(), highlight=False)
     name, desc = _help_name(text)
     synopsis = _help_section(text, "SYNOPSIS").strip().splitlines()
     description = _help_section(text, "DESCRIPTION").strip().splitlines()

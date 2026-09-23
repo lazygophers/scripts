@@ -49,6 +49,7 @@ from lib.archery import (
     resolve_profile,
     save_config,
 )
+from lib.ai_env import is_ai_shell_env
 from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.ovpn import normalize_secret, totp
 from lib.ui import Reporter, ask_confirm, ask_text, reporter
@@ -524,7 +525,8 @@ class QueryCli(_Group):
             lambda: client.post("v1/sqlquery/execute/", body),
             lambda: client.web("POST", "/query/", form=body),
         )
-        render = _render_table if table else _render_tsv
+        # AI 环境强制 TSV：框线表格的制表符对模型纯耗 token
+        render = _render_table if (table and not is_ai_shell_env()) else _render_tsv
         if json_out or not render(data):
             emit(data)
         return 0
