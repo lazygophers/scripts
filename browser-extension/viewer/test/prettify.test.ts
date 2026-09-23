@@ -593,6 +593,61 @@ test("图的语法有错时留下原文加一句错在哪，整篇照常", async
   assert.equal(host.textContent?.includes("后面还有正文。"), true);
 });
 
+test("图上有「查看大图」，点开全屏预览，Esc 关闭", async () => {
+  const { doc, host } = await mdPage("```mermaid\ngraph TD;\nA-->B;\n```\n");
+
+  const view = host.querySelector<HTMLButtonElement>(".lfv-diagram-view");
+  assert.equal(view?.textContent, "查看大图");
+  view?.click();
+
+  const win = doc.defaultView!;
+  const lightbox = doc.querySelector(".lfv-lightbox");
+  assert.ok(lightbox, "点开后应有全屏预览");
+  assert.equal(lightbox.querySelectorAll(":scope .lfv-lightbox-inner svg").length, 1, "预览里是那张图");
+  // 按钮本身不能混进预览的图里。
+  assert.equal(lightbox.querySelector(".lfv-diagram-view"), null);
+  assert.equal(lightbox.querySelectorAll(".lfv-lightbox-btn").length, 4, "放大/缩小/重置/关闭");
+
+  doc.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape" }));
+  assert.equal(doc.querySelector(".lfv-lightbox"), null, "Esc 应关闭预览");
+});
+
+test("预览里滚轮缩放、拖动平移都会体现在 transform 上", async () => {
+  const { doc, host } = await mdPage("```mermaid\ngraph TD;\nA-->B;\n```\n");
+  const win = doc.defaultView!;
+  host.querySelector<HTMLButtonElement>(".lfv-diagram-view")?.click();
+
+  const inner = doc.querySelector<HTMLElement>(".lfv-lightbox-inner")!;
+  const stage = doc.querySelector<HTMLElement>(".lfv-lightbox-stage")!;
+  const zoom = doc.querySelector(".lfv-lightbox-zoom")!;
+  const before = inner.style.transform;
+
+  // jsdom 没有 WheelEvent 构造器时退回 MouseEvent——处理器只读 clientX/clientY/deltaY。
+  const wheelCtor = (win as { WheelEvent?: typeof WheelEvent }).WheelEvent ?? win.MouseEvent;
+  stage.dispatchEvent(new wheelCtor("wheel", { cancelable: true, clientX: 100, clientY: 100 } as WheelEventInit));
+  assert.notEqual(inner.style.transform, before, "滚轮后 transform 应变化");
+  assert.ok(zoom.textContent?.endsWith("%"));
+
+  const pointerCtor = (win as { PointerEvent?: typeof PointerEvent }).PointerEvent ?? win.MouseEvent;
+  const xBefore = Number(/translate\((-?[\d.]+)px/.exec(inner.style.transform)?.[1] ?? 0);
+  stage.dispatchEvent(new pointerCtor("pointerdown", { button: 0, clientX: 50, clientY: 50 }));
+  stage.dispatchEvent(new pointerCtor("pointermove", { clientX: 150, clientY: 170 }));
+  stage.dispatchEvent(new pointerCtor("pointerup", { clientX: 150, clientY: 170 }));
+  // 平移位移 = pointerdown 到 pointermove 的屏幕距离（50→150 即 100px），与缩放基准无关
+  const m = /translate\((-?[\d.]+)px/.exec(inner.style.transform);
+  assert.ok(m, `transform 里有 translate: ${inner.style.transform}`);
+  assert.ok(Math.abs(Number(m[1]) - xBefore - 100) < 0.001,
+    `拖 100px 应平移 100px，基准 ${xBefore}，实际 ${m[1]}`);
+
+  // 点背景关闭；点图本身不关。
+  const backdrop = doc.querySelector<HTMLElement>(".lfv-lightbox")!;
+  stage.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+  assert.ok(doc.querySelector(".lfv-lightbox"), "点到图不该关");
+  backdrop.dispatchEvent(new win.MouseEvent("click"));
+  assert.equal(doc.querySelector(".lfv-lightbox"), null, "点背景应关闭");
+});
+
+
 test("行内和独立成行的公式都排版，样式表也挂上", async () => {
   const { doc, host } = await mdPage("能量是 $E = mc^2$ 这么来的。\n\n$$\n\\sum_{i=1}^n i\n$$\n");
 

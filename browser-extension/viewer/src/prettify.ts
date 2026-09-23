@@ -4,6 +4,7 @@
  * 这一版只有「原样文本」一种渲染结果（排版好的纯文本），按类型分流的渲染器是后面的票。
  */
 
+import { openDiagramPreview } from "./diagram-preview.ts";
 import { onSettingsChange, readSettings, writeSettings } from "./settings.ts";
 import { PALETTES, STYLES, applyTheme } from "./themes.ts";
 
@@ -505,7 +506,15 @@ async function drawDiagrams(doc: Document, article: HTMLElement): Promise<void> 
       const box = doc.createElement("div");
       box.className = "lfv-diagram";
       try {
-        box.innerHTML = await draw(code.textContent ?? "", `lfv-diagram-${i}`);
+        const svg = await draw(code.textContent ?? "", `lfv-diagram-${i}`);
+        box.innerHTML = svg;
+        // 全屏预览要的是画出来的 SVG 本体；闭包存字符串，box 里追加的按钮不会混进去。
+        const view = doc.createElement("button");
+        view.type = "button";
+        view.className = "lfv-diagram-view";
+        view.textContent = "查看大图";
+        view.addEventListener("click", () => openDiagramPreview(doc, svg));
+        box.append(view);
       } catch (error) {
         box.classList.add("lfv-diagram-error");
         const source = doc.createElement("pre");

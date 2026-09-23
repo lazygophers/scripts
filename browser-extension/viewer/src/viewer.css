@@ -467,6 +467,7 @@ html.lfv-on .lfv-md dd {
 
 /* Mermaid 图：居中一张，宽度跟着正文收。 */
 html.lfv-on .lfv-diagram {
+  position: relative;
   margin: 1.5rem 0;
   text-align: center;
 }
@@ -474,6 +475,92 @@ html.lfv-on .lfv-diagram {
 html.lfv-on .lfv-diagram svg {
   max-width: 100%;
   height: auto;
+}
+
+/* 「查看大图」浮在图右下角，点开全屏预览（缩放/拖动）。 */
+html.lfv-on .lfv-diagram-view {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 1;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--foreground);
+  font: 12px / 1.4 system-ui, sans-serif;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+html.lfv-on .lfv-diagram:hover .lfv-diagram-view,
+html.lfv-on .lfv-diagram-view:focus-visible {
+  opacity: 1;
+}
+
+/* Mermaid 全屏预览：背景全黑遮罩，图在自由画布上缩放拖动。 */
+html.lfv-on .lfv-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  background: rgb(0 0 0 / 0.85);
+}
+
+html.lfv-on .lfv-lightbox-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+
+html.lfv-on .lfv-lightbox-stage:active {
+  cursor: grabbing;
+}
+
+html.lfv-on .lfv-lightbox-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+html.lfv-on .lfv-lightbox-inner svg {
+  display: block;
+  max-width: none;
+}
+
+html.lfv-on .lfv-lightbox-bar {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+html.lfv-on .lfv-lightbox-zoom {
+  min-width: 3.5em;
+  text-align: center;
+  color: #fff;
+  font: 12px / 1.4 system-ui, sans-serif;
+  opacity: 0.8;
+}
+
+html.lfv-on .lfv-lightbox-btn {
+  padding: 4px 10px;
+  border: 1px solid rgb(255 255 255 / 0.4);
+  border-radius: var(--radius);
+  background: rgb(0 0 0 / 0.5);
+  color: #fff;
+  font: 13px / 1.4 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+html.lfv-on .lfv-lightbox-btn:hover {
+  background: rgb(255 255 255 / 0.15);
 }
 
 /* 画不出来时：原文照留，底下一句说明画不出来的原因。 */
