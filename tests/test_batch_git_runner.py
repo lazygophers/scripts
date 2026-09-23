@@ -690,11 +690,12 @@ class TestSyncFactoryExecute(unittest.TestCase):
             return plan.execute(Path("/repo"), plan, _r(), Path("/"))
 
     def _base_rules(self) -> dict:
-        return {"git rev-list": _cp(0, "0\t0\n"), "git rev-parse --short": _cp(0, "abc1234\n")}
+        # rev-list 给 0\t2（落后）：detect 须产出 ok plan 才有 execute 可测
+        return {"git rev-list": _cp(0, "0\t2\n"), "git rev-parse --short": _cp(0, "abc1234\n")}
 
     def test_checkout_happens_when_on_another_branch(self) -> None:
         fake = FakeRun({**self._base_rules(), "git branch --show-current": _cp(0, "feat\n")})
-        status, detail = self._exec("main|origin/main|0|0", fake)
+        status, detail = self._exec("main|origin/main|0|0|align", fake)
         self.assertEqual(status, "ok")
         self.assertTrue(fake.ran("git checkout -q main"))
         self.assertIn("已在最新", detail)
@@ -705,20 +706,72 @@ class TestSyncFactoryExecute(unittest.TestCase):
             "git branch --show-current": _cp(0, "feat\n"),
             "git checkout": _cp(1, stderr="error: 本地改动会被覆盖"),
         })
-        status, detail = self._exec("main|origin/main|0|0", fake)
+        status, detail = self._exec("main|origin/main|0|0|align", fake)
         self.assertEqual(status, "fail")
         self.assertIn("覆盖", detail)
         self.assertFalse(fake.ran("git reset"))
 
     def test_ahead_reports_discarded_commits(self) -> None:
         fake = FakeRun({**self._base_rules(), "git branch --show-current": _cp(0, "main\n")})
-        status, detail = self._exec("main|origin/main|2|0", fake)
+        status, detail = self._exec("main|origin/main|2|0|align", fake)
         self.assertIn("丢弃 2", detail)
 
     def test_behind_reports_fast_forward(self) -> None:
         fake = FakeRun({**self._base_rules(), "git branch --show-current": _cp(0, "main\n")})
-        status, detail = self._exec("main|origin/main|0|3", fake)
+        status, detail = self._exec("main|origin/main|0|3|align", fake)
         self.assertIn("快进 3", detail)
+
+    def test_two_way_current_mode_pushes_ahead(self) -> None:
+        """current 模式（branch=None）领先 → 推上去（双向同步）。"""
+        fake = FakeRun({
+            "git branch --show-current": _cp(0, "feat\n"),
+            "git rev-list": _cp(0, "2\t0\n"),
+            "git push": _cp(0),
+            "git rev-parse --short HEAD": _cp(0, "abc1234\n"),
+        })
+        with mock.patch.object(bg, "_run", fake):
+            plan = _plan_of(bg._sync_one_factory(None, False))
+            self.assertEqual(plan.status, "ok")
+            self.assertTrue(plan.detail.endswith("|push"))
+            status, detail = plan.execute(Path("/repo"), plan, _r(), Path("/"))
+        self.assertEqual(status, "ok")
+        self.assertIn("推送 2 个 commit", detail)
+        self.assertTrue(fake.ran("git push origin feat"))
+
+    def test_two_way_diverged_clean_preview_merges_and_pushes(self) -> None:
+        fake = FakeRun({
+            "git branch --show-current": _cp(0, "feat\n"),
+            "git rev-list": _cp(0, "1\t2\n"),
+            "git merge-tree": _cp(0, "treeoid\n"),
+            "git pull --no-rebase": _cp(0),
+            "git push": _cp(0),
+            "git rev-parse --short HEAD": _cp(0, "abc1234\n"),
+        })
+        with mock.patch.object(bg, "_run", fake):
+            plan = _plan_of(bg._sync_one_factory(None, False))
+            self.assertEqual(plan.status, "ok")
+            self.assertTrue(plan.detail.endswith("|merge_push"))
+            status, detail = plan.execute(Path("/repo"), plan, _r(), Path("/"))
+        self.assertEqual(status, "ok")
+        self.assertIn("合并分叉并推送", detail)
+
+    def test_two_way_diverged_conflict_preview_skips(self) -> None:
+        fake = FakeRun({
+            "git branch --show-current": _cp(0, "feat\n"),
+            "git rev-list": _cp(0, "1\t2\n"),
+            "git merge-tree": _cp(1, "treeoid\nbad.py\n"),
+        })
+        with mock.patch.object(bg, "_run", fake):
+            plan = _plan_of(bg._sync_one_factory(None, False))
+        self.assertEqual(plan.status, "skip")
+        self.assertIn("分叉且预演有冲突", plan.detail)
+
+    def test_named_mode_synced_skips(self) -> None:
+        fake = FakeRun({"git rev-list": _cp(0, "0\t0\n")})
+        with mock.patch.object(bg, "_run", fake):
+            plan = _plan_of(bg._sync_one_factory("main", False))
+        self.assertEqual(plan.status, "skip")
+        self.assertIn("已在最新", plan.detail)
 
 
 class TestSyncFactoryDetect(unittest.TestCase):
@@ -745,7 +798,7 @@ class TestSyncFactoryDetect(unittest.TestCase):
     def test_missing_local_branch_is_created(self) -> None:
         fake = FakeRun({
             "git rev-parse --verify -q main": _cp(1),
-            "git rev-list": _cp(0, "0\t0\n"),
+            "git rev-list": _cp(0, "0\t1\n"),
         })
         with mock.patch.object(bg, "_run", fake):
             plan = _plan_of(bg._sync_one_factory("main", False))
@@ -787,10 +840,10 @@ class TestSyncFactoryDetect(unittest.TestCase):
         with mock.patch.object(bg, "_run", fake):
             plan = _plan_of(bg._sync_one_factory("main", True))
         self.assertEqual(plan.status, "ok")
-        self.assertEqual(plan.detail, "main|origin/main|2|0")
+        self.assertEqual(plan.detail, "main|origin/main|2|0|align")
 
     def test_master_sentinel_resolves_the_real_branch(self) -> None:
-        fake = FakeRun({"git rev-list": _cp(0, "0\t0\n")})
+        fake = FakeRun({"git rev-list": _cp(0, "0\t1\n")})
         with mock.patch.object(bg, "_run", fake), \
              mock.patch.object(bg, "_resolve_main_branch", return_value="trunk"):
             plan = _plan_of(bg._sync_one_factory(bg._MAIN_SENTINEL, False))
@@ -800,7 +853,8 @@ class TestSyncFactoryDetect(unittest.TestCase):
         fake = FakeRun({"git rev-list": _cp(0, "")})
         with mock.patch.object(bg, "_run", fake):
             plan = _plan_of(bg._sync_one_factory("main", False))
-        self.assertEqual(plan.detail, "main|origin/main|0|0")
+        self.assertEqual(plan.status, "skip")  # 0\t0 → 已同步
+        self.assertIn("已在最新", plan.detail)
 
 
 class TestSyncEntryPoints(unittest.TestCase):
@@ -834,7 +888,10 @@ class TestPushBranchExecute(unittest.TestCase):
             return plan.execute(Path("/repo"), plan, _r(), Path("/"))
 
     def _base(self) -> dict:
-        return {"git rev-parse --short HEAD": _cp(0, "abc1234\n")}
+        return {
+            "git rev-parse --short HEAD": _cp(0, "abc1234\n"),
+            "git rev-list": _cp(0, "2\t0\n"),  # ahead-only：detect 产出 push 模式
+        }
 
     def test_create_mode_branches_then_pushes_with_u(self) -> None:
         fake = FakeRun(self._base())
@@ -917,7 +974,7 @@ class TestPushBranchExecute(unittest.TestCase):
         })
         status, detail = self._exec("feat|1|1|push", fake)
         self.assertEqual(status, "fail")
-        self.assertIn("push 失败", detail)
+        self.assertIn("push feat", detail)
 
 
 class TestPushBranchDetect(unittest.TestCase):
@@ -934,7 +991,7 @@ class TestPushBranchDetect(unittest.TestCase):
         self.assertEqual(plan.status, "skip")
 
     def test_master_sentinel_resolves(self) -> None:
-        fake = FakeRun({"git rev-list --count": _cp(0, "1\n")})
+        fake = FakeRun({"git rev-list": _cp(0, "1\t0\n")})
         with mock.patch.object(bg, "_run", fake), \
              mock.patch.object(bg, "_resolve_main_branch", return_value="main"):
             plan = _plan_of(bg._push_branch_one_factory(bg._MAIN_SENTINEL, False))
@@ -963,10 +1020,30 @@ class TestPushBranchDetect(unittest.TestCase):
         self.assertEqual(plan.detail, "feat|0|0|create")
 
     def test_ahead_count_is_encoded(self) -> None:
-        fake = FakeRun({"git rev-list --count": _cp(0, "5\n")})
+        fake = FakeRun({"git rev-list": _cp(0, "5\t0\n")})
         with mock.patch.object(bg, "_run", fake):
             plan = _plan_of(bg._push_branch_one_factory("feat", False))
         self.assertEqual(plan.detail, "feat|1|5|push")
+
+    def test_synced_skips_without_push(self) -> None:
+        fake = FakeRun({"git rev-list": _cp(0, "0\t0\n")})
+        with mock.patch.object(bg, "_run", fake):
+            plan = _plan_of(bg._push_branch_one_factory("feat", False))
+        self.assertEqual(plan.status, "skip")
+        self.assertIn("已在最新", plan.detail)
+
+    def test_diverged_conflict_preview_skips(self) -> None:
+        fake = FakeRun({"git rev-list": _cp(0, "1\t2\n"), "git merge-tree": _cp(1, "t\nb.py\n")})
+        with mock.patch.object(bg, "_run", fake):
+            plan = _plan_of(bg._push_branch_one_factory("feat", False))
+        self.assertEqual(plan.status, "skip")
+        self.assertIn("分叉且预演有冲突", plan.detail)
+
+    def test_diverged_clean_preview_becomes_merge_mode(self) -> None:
+        fake = FakeRun({"git rev-list": _cp(0, "1\t2\n"), "git merge-tree": _cp(0, "t\n")})
+        with mock.patch.object(bg, "_run", fake):
+            plan = _plan_of(bg._push_branch_one_factory("feat", False))
+        self.assertEqual(plan.detail, "feat|1|1|merge")
 
 
 class TestPushBranchAll(unittest.TestCase):

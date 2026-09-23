@@ -172,26 +172,61 @@ class TestRunGitRetry(unittest.TestCase):
 
 
 class TestUpdateBranch(unittest.TestCase):
+    """update_branch 智能判形：fetch → rev-parse/rev-list → 按形态行动。
+
+    run 调用序（已在目标分支）：branch --show-current → fetch → rev-parse
+    --verify origin/<b> → rev-list --left-right --count HEAD...origin/<b>
+    （分叉时多一次 merge-tree；push 被拒自愈时整序再来一遍）。
+    """
+
+    def _shape_runs(self, branch="dev", exists=True, shape="0\t0"):
+        runs = [_proc(0, f"{branch}\n"),        # branch --show-current（已在目标分支）
+                _proc(0),                        # fetch
+                _proc(0) if exists else _proc(2)]  # rev-parse origin/<b>
+        if exists:
+            runs.append(_proc(0, shape + "\n"))  # rev-list
+        return runs
+
     @patch("lib.git.check_bit_clean")
     @patch("lib.git.retry_command")
     @patch("lib.git.run")
-    def test_pull_then_push(self, mock_run, mock_retry, mock_clean):
-        # branch --show-current → 已在目标分支；ls-remote → 存在
-        mock_run.side_effect = [_proc(0, "dev\n"), _proc(0)]
+    def test_synced_skips_all(self, mock_run, mock_retry, mock_clean):
+        mock_run.side_effect = self._shape_runs(shape="0\t0")
+        r = MagicMock()
+        update_branch("dev", r=r)
+        mock_retry.assert_not_called()
+        mock_clean.assert_not_called()
+        r.ok.assert_called_once()  # 「已同步」一行
+
+    @patch("lib.git.check_bit_clean")
+    @patch("lib.git.retry_command")
+    @patch("lib.git.run")
+    def test_behind_ff_only_pull_then_push(self, mock_run, mock_retry, mock_clean):
+        mock_run.side_effect = self._shape_runs(shape="0\t3")
         mock_retry.return_value = _retry(True, "")
         update_branch("dev")
         cmds = [c.args[0] for c in mock_retry.call_args_list]
-        self.assertEqual(cmds[0], ["git", "-c", "merge.autoEdit=false", "pull", "origin", "dev"])
+        self.assertEqual(cmds[0], ["git", "pull", "--ff-only", "origin", "dev"])
         self.assertEqual(cmds[1], ["git", "push", "origin", "dev"])
         mock_clean.assert_called_once()
+
+    @patch("lib.git.check_bit_clean")
+    @patch("lib.git.retry_command")
+    @patch("lib.git.run")
+    def test_ahead_only_pushes_without_pull(self, mock_run, mock_retry, mock_clean):
+        mock_run.side_effect = self._shape_runs(shape="2\t0")
+        mock_retry.return_value = _retry(True, "")
+        update_branch("dev")
+        cmds = [c.args[0] for c in mock_retry.call_args_list]
+        self.assertEqual(cmds, [["git", "push", "origin", "dev"]])
+        mock_clean.assert_not_called()
 
     @patch("lib.git.check_bit_clean")
     @patch("lib.git.retry_command")
     @patch("lib.git._switch_to_branch")
     @patch("lib.git.run")
     def test_switches_when_on_other_branch(self, mock_run, mock_switch, mock_retry, mock_clean):
-        mock_run.side_effect = [_proc(0, "main\n"), _proc(0)]
-        mock_retry.return_value = _retry(True, "")
+        mock_run.side_effect = [_proc(0, "main\n")] + self._shape_runs()
         update_branch("dev")
         mock_switch.assert_called_once_with("dev", "git", "origin", "main")
 
@@ -199,7 +234,7 @@ class TestUpdateBranch(unittest.TestCase):
     @patch("lib.git.retry_command")
     @patch("lib.git.run")
     def test_skips_clean_check(self, mock_run, mock_retry, mock_clean):
-        mock_run.side_effect = [_proc(0, "dev\n"), _proc(0)]
+        mock_run.side_effect = self._shape_runs(shape="0\t3")
         mock_retry.return_value = _retry(True, "")
         update_branch("dev", check_after_pull=False)
         mock_clean.assert_not_called()
@@ -208,7 +243,7 @@ class TestUpdateBranch(unittest.TestCase):
     @patch("lib.git.retry_command")
     @patch("lib.git.run")
     def test_missing_remote_branch_pushes_upstream(self, mock_run, mock_retry, mock_clean):
-        mock_run.side_effect = [_proc(0, "dev\n"), _proc(2)]
+        mock_run.side_effect = self._shape_runs(exists=False)
         mock_retry.return_value = _retry(True, "")
         r = MagicMock()
         update_branch("dev", r=r)
@@ -221,7 +256,7 @@ class TestUpdateBranch(unittest.TestCase):
     @patch("lib.git.retry_command")
     @patch("lib.git.run")
     def test_missing_remote_branch_no_clean_check(self, mock_run, mock_retry, mock_clean):
-        mock_run.side_effect = [_proc(0, "dev\n"), _proc(2)]
+        mock_run.side_effect = self._shape_runs(exists=False)
         mock_retry.return_value = _retry(True, "")
         update_branch("dev", check_after_pull=False)
         mock_clean.assert_not_called()
@@ -229,12 +264,81 @@ class TestUpdateBranch(unittest.TestCase):
     @patch("lib.git.check_bit_clean")
     @patch("lib.git.retry_command")
     @patch("lib.git.run")
+    def test_fetch_failure_raises(self, mock_run, mock_retry, mock_clean):
+        mock_run.side_effect = [_proc(0, "dev\n"), _proc(128, stderr="fatal: network"), _proc(0, "dev\n")]
+        with self.assertRaises(GitError) as cm:
+            update_branch("dev")
+        self.assertIn("fetch", str(cm.exception))
+
+    @patch("lib.git.check_bit_clean")
+    @patch("lib.git.retry_command")
+    @patch("lib.git.run")
     def test_pull_failure_raises(self, mock_run, mock_retry, mock_clean):
-        mock_run.side_effect = [_proc(0, "dev\n"), _proc(0), _proc(0, "dev\n")]
+        mock_run.side_effect = self._shape_runs(shape="0\t1") + [_proc(0, "dev\n")]
         mock_retry.return_value = _retry(False, "conflict")
         with self.assertRaises(GitError) as cm:
             update_branch("dev")
         self.assertIn("拉取或合并失败", str(cm.exception))
+
+    @patch("lib.git.check_bit_clean")
+    @patch("lib.git.retry_command")
+    @patch("lib.git.run")
+    def test_diverged_with_conflict_aborts(self, mock_run, mock_retry, mock_clean):
+        mock_run.side_effect = self._shape_runs(shape="1\t1") + [
+            _proc(1, "treeoid\nconflicted.py\n"),  # merge-tree 预演冲突
+            _proc(0, "dev\n"),  # branch_session 回滚幂等检查
+        ]
+        with self.assertRaises(GitError) as cm:
+            update_branch("dev")
+        self.assertIn("冲突", str(cm.exception))
+        self.assertIn("conflicted.py", str(cm.exception))
+        mock_retry.assert_not_called()  # 冲突即中止，无 pull/push
+
+    @patch("lib.git.check_bit_clean")
+    @patch("lib.git.retry_command")
+    @patch("lib.git.run")
+    def test_diverged_clean_merges_then_pushes(self, mock_run, mock_retry, mock_clean):
+        mock_run.side_effect = self._shape_runs(shape="1\t2") + [
+            _proc(0, "treeoid\n"),  # merge-tree 干净
+        ]
+        mock_retry.return_value = _retry(True, "")
+        update_branch("dev")
+        cmds = [c.args[0] for c in mock_retry.call_args_list]
+        self.assertEqual(cmds[0], ["git", "-c", "merge.autoEdit=false", "pull", "origin", "dev"])
+        self.assertEqual(cmds[1], ["git", "push", "origin", "dev"])
+
+    @patch("lib.git.check_bit_clean")
+    @patch("lib.git.retry_command")
+    @patch("lib.git.run")
+    def test_push_rejected_heals_next_round(self, mock_run, mock_retry, mock_clean):
+        """push 被拒（远端并发变动）→ 整轮重判形：第二轮分叉干净 → merge 后推成功。"""
+        mock_run.side_effect = (
+            self._shape_runs(shape="2\t0")            # 第 1 轮：仅领先
+            + [_proc(0), _proc(0), _proc(0, "1\t1\n")]  # 第 2 轮 fetch/ref/count：变分叉
+            + [_proc(0, "treeoid\n")]                 # 第 2 轮 merge-tree 干净
+        )
+        mock_retry.side_effect = [
+            _retry(False, "! [rejected] (non-fast-forward)"),  # 第 1 轮 push 被拒
+            _retry(True, "Merge made by the 'ort' strategy."),  # 第 2 轮 pull
+            _retry(True, ""),                                  # 第 2 轮 push
+        ]
+        r = MagicMock()
+        update_branch("dev", r=r)
+        self.assertEqual(mock_retry.call_count, 3)
+        r.warn.assert_called()  # 「push 被拒，重同步一轮」
+
+    @patch("lib.git.check_bit_clean")
+    @patch("lib.git.retry_command")
+    @patch("lib.git.run")
+    def test_push_rejected_twice_raises(self, mock_run, mock_retry, mock_clean):
+        mock_run.side_effect = self._shape_runs(shape="2\t0") + [
+            _proc(0), _proc(0), _proc(0, "2\t0\n"), _proc(0, "dev\n")
+        ]
+        mock_retry.return_value = _retry(False, "! [rejected] (non-fast-forward)")
+        r = MagicMock()
+        with self.assertRaises(GitError) as cm:
+            update_branch("dev", r=r)
+        self.assertIn("推送失败", str(cm.exception))
 
 
 class TestToolAndRemoteHelpers(unittest.TestCase):

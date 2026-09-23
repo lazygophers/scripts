@@ -922,17 +922,73 @@ def _resolve_main_branch(repo: Path) -> str:
             return cand
     return "master"
 
+
+# ── 批量形态判定共享 helper（sync_branch / push_branch 统一语义） ──────────────
+
+def _merge_tree_conflicts(repo: Path, base: str, head: str) -> bool | None:
+    """merge-tree 预演 base..head 是否冲突（无副作用）。None = git 不支持（旧版本）。"""
+    p = _run(["git", "merge-tree", "--write-tree", "--name-only", base, head],
+             cwd=str(repo), check=False, capture_output=True)
+    if p.returncode in (0, 1):
+        return p.returncode == 1
+    return None
+
+
+def _shape_of(repo: Path, remote_ref: str) -> tuple[int, int]:
+    """rev-list 算 (ahead, behind)：HEAD vs remote_ref。调用前须已 fetch。"""
+    p = _run(["git", "rev-list", "--left-right", "--count", f"HEAD...{remote_ref}"],
+             cwd=str(repo), check=False, capture_output=True)
+    parts = (p.stdout or "0\t0").strip().split()
+    ahead = int(parts[0]) if len(parts) >= 1 else 0
+    behind = int(parts[1]) if len(parts) >= 2 else 0
+    return (ahead, behind)
+
+
+def _push_heal(repo: Path, target: str, r: Reporter, *, force: bool = False, rounds: int = 2) -> tuple[str, str] | None:
+    """push origin/<target>，被拒（远端并发变动）自愈：re-fetch → 分叉则预演 merge → 再 push。
+
+    force=True 用 --force-with-lease。返回 None = 成功；(status, detail) = 最终失败/跳过。
+    """
+    remote_ref = f"origin/{target}"
+    push_args = ["git", "push"]
+    if force:
+        push_args += ["--force-with-lease"]
+    push_args += ["origin", target]
+    for attempt in range(rounds):
+        r.step(f"push {target} → {remote_ref} …")
+        p = _run(push_args,
+                 cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
+        if p.returncode == 0:
+            return None
+        out = ((p.stderr or "") + (p.stdout or "")).strip()
+        if attempt >= rounds - 1:
+            return "fail", _extract_error(out, p.returncode, f"push {target}")
+        _run(["git", "fetch", "-q", "origin"], cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
+        ahead, behind = _shape_of(repo, remote_ref)
+        if behind == 0:
+            return "fail", _extract_error(out, p.returncode, f"push {target}")
+        # 远端有新提交：预演合并后重推
+        if _merge_tree_conflicts(repo, "HEAD", remote_ref):
+            return "skip", f"分叉且合并预演有冲突（{target}）"
+        pull = _run(["git", "pull", "--no-rebase", "--no-edit", "origin", target],
+                    cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
+        if pull.returncode != 0:
+            return "skip", _extract_error((pull.stderr or "") + (pull.stdout or ""), pull.returncode, "自动 merge 失败（需手动解决）")
+    return "fail", f"push {target} 失败（自愈 {rounds} 轮后仍被拒）"
+
+
 def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
     """构造单仓库同步检测函数。
 
-    branch=None → 同步该仓库当前分支；branch=<name> → 同步指定分支（不还原原 checkout）。
-    硬对齐到 origin/<branch>：本地领先默认 skip，--force 才 reset 丢弃。dirty → fail。
-    detect 把 (target, remote_ref, ahead, behind) 塞进 plan.detail 供 execute 复用。
+    branch=None → 双向同步该仓库当前分支：领先推上去、落后快进、分叉预演后合并推送；
+    branch=<name> → 硬对齐到 origin/<branch>：本地领先默认 skip，--force 才 reset 丢弃。
+    两模式 dirty → fail。detect 把 (target, remote_ref, ahead, behind, action) 塞进
+    plan.detail 供 execute 复用；action ∈ align（reset 硬对齐）/ push / merge_push。
     """
     def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
-        # detail 编码: target|remote_ref|ahead|behind
-        target, remote_ref, ahead, behind = plan.detail.split("|")
-        ahead, behind = int(ahead), int(behind)
+        # detail 编码: target|remote_ref|ahead|behind|action
+        target, remote_ref, ahead_s, behind_s, action = plan.detail.split("|")
+        ahead, behind = int(ahead_s), int(behind_s)
         cur_p = _run(["git", "branch", "--show-current"],
                      cwd=str(repo), check=False, capture_output=True)
         if (cur_p.stdout or "").strip() != target:
@@ -941,6 +997,25 @@ def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
                       cwd=str(repo), check=False, capture_output=True)
             if co.returncode != 0:
                 return "fail", _extract_error((co.stderr or "") + (co.stdout or ""), co.returncode, f"checkout {target} 失败")
+
+        if action in ("push", "merge_push"):
+            if action == "merge_push":
+                r.step(f"pull --no-rebase（合并分叉）{remote_ref} …")
+                pull = _run(["git", "pull", "--no-rebase", "--no-edit", "origin", target],
+                            cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
+                if pull.returncode != 0:
+                    return "skip", _extract_error((pull.stderr or "") + (pull.stdout or ""), pull.returncode, "自动 merge 失败（需手动解决）")
+            err = _push_heal(repo, target, r)
+            if err is not None:
+                return err
+            sha_p = _run(["git", "rev-parse", "--short", "HEAD"],
+                         cwd=str(repo), check=False, capture_output=True)
+            sha = (sha_p.stdout or "").strip()
+            if action == "merge_push":
+                return "ok", f"合并分叉并推送 → {remote_ref} ({sha})"
+            return "ok", f"推送 {ahead} 个 commit → {remote_ref} ({sha})"
+
+        # action == align：reset 硬对齐（现状语义）
         r.step(f"reset --hard {remote_ref} …")
         _run_exec(["git", "reset", "--hard", "-q", remote_ref],
                   label=repo.name, r=r, cwd=str(repo), check=False)
@@ -1004,20 +1079,38 @@ def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
         ahead = int(parts[0]) if len(parts) >= 1 else 0
         behind = int(parts[1]) if len(parts) >= 2 else 0
 
-        if ahead > 0 and not force:
-            log_p = _run(
-                ["git", "log", "--oneline", f"{remote_ref}..{target}"],
-                cwd=str(repo), check=False, capture_output=True,
-            )
-            commits = (log_p.stdout or "").strip()
-            detail = f"本地 {target} 领先 {ahead} 个 commit"
-            if commits:
-                detail += "\n" + "\n".join(f"    {line}" for line in commits.splitlines()[:5])
-            return RepoPlan(status="skip", detail=detail)
+        two_way = branch is None  # current 模式 = 双向同步；指定分支 = 硬对齐
+
+        if not force:
+            if ahead > 0 and two_way:
+                # 双向模式：领先推上去，分叉先预演（冲突 skip，干净 merge_push）
+                if behind > 0:
+                    if _merge_tree_conflicts(repo, target, remote_ref):
+                        return RepoPlan(status="skip", detail=f"{target} 与 {remote_ref} 分叉且预演有冲突")
+                    action = "merge_push"
+                else:
+                    action = "push"
+                return RepoPlan(
+                    status="ok",
+                    detail=f"{target}|{remote_ref}|{ahead}|{behind}|{action}",
+                    execute=_execute,
+                )
+            if ahead > 0:
+                log_p = _run(
+                    ["git", "log", "--oneline", f"{remote_ref}..{target}"],
+                    cwd=str(repo), check=False, capture_output=True,
+                )
+                commits = (log_p.stdout or "").strip()
+                detail = f"本地 {target} 领先 {ahead} 个 commit"
+                if commits:
+                    detail += "\n" + "\n".join(f"    {line}" for line in commits.splitlines()[:5])
+                return RepoPlan(status="skip", detail=detail)
+            if ahead == 0 and behind == 0:
+                return RepoPlan(status="skip", detail=f"已在最新 {remote_ref}")
 
         return RepoPlan(
             status="ok",
-            detail=f"{target}|{remote_ref}|{ahead}|{behind}",
+            detail=f"{target}|{remote_ref}|{ahead}|{behind}|align",
             execute=_execute,
         )
 
@@ -1045,11 +1138,12 @@ def sync_master_all(*, force: bool = False) -> int:
 
 
 def _push_branch_one_factory(branch: str | None, force: bool, single: bool = False) -> DetectFn:
-    """构造单仓库推送检测函数（本地 → 远端同名分支）。
+    """构造单仓库推送检测函数（本地 → 远端同名分支，与 sync 共用形态判定语义）。
 
     branch=None → 推送该仓库当前分支；branch=<name> → 推送指定分支。
-    流程：detect 只读判 fetch/dirty/分支存在; execute 跑 pull --ff-only → push (实时)。
-    分叉：批量 skip; 单仓(single=True) execute 内自动 pull --no-rebase 合并。
+    detect：fetch/dirty/分支存在 + rev-list 判形——已同步 skip（省 push 往返）、
+    分叉 merge-tree 预演（冲突 skip、干净 mode=merge 直接合并推送）。
+    execute：mode=push 走 _push_heal（被拒自愈一轮）；mode=merge 先 pull --no-rebase。
     dirty → fail；--force 用 --force-with-lease。
     """
     def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
@@ -1076,14 +1170,23 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
                 if co.returncode != 0:
                     return "fail", _extract_error((co.stderr or "") + (co.stdout or ""), co.returncode, f"checkout {target} 失败")
 
-        if remote_exists:
+        if mode == "merge":
+            # detect 已预演无冲突 → 直接合并分叉
+            r.step(f"pull --no-rebase（合并分叉）{remote_ref} …")
+            pull_merge = _run_exec(
+                ["git", "pull", "--no-rebase", "--no-edit", "origin", target],
+                label=repo.name, r=r, cwd=str(repo), check=False, timeout=NET_TIMEOUT,
+            ).returncode
+            if pull_merge != 0:
+                return "skip", f"自动 merge 失败（需手动解决冲突）(rc={pull_merge})"
+        elif remote_exists:
             r.step(f"pull --ff-only {remote_ref} …")
             pull = _run_exec(["git", "pull", "--ff-only", "-q", "origin", target],
                              label=repo.name, r=r, cwd=str(repo), check=False, timeout=NET_TIMEOUT).returncode
             if pull != 0:
                 if not single:
                     return "skip", f"远端有分叉/冲突 (pull rc={pull})"
-                # 单仓: ff-only 失败 → pull --no-rebase 合并分叉
+                # 单仓: ff-only 失败 → pull --no-rebase 合并分叉（detect 预演漏网时的兜底）
                 r.step(f"pull --no-rebase（合并分叉）{remote_ref} …")
                 pull_merge = _run_exec(
                     ["git", "pull", "--no-rebase", "--no-edit", "origin", target],
@@ -1092,23 +1195,25 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
                 if pull_merge != 0:
                     return "skip", f"自动 merge 失败（需手动解决冲突）(rc={pull_merge})"
 
-        push_args = ["git", "push"]
         if not remote_exists:
-            push_args += ["-u"]
-        if force:
-            push_args += ["--force-with-lease"]
-        push_args += ["origin", target]
-
-        r.step(f"push {target} → origin/{target} …")
-        push = _run_exec(push_args, label=repo.name, r=r, cwd=str(repo), check=False, timeout=NET_TIMEOUT).returncode
-        if push != 0:
-            return "fail", f"push 失败 (rc={push})"
+            # 新建远端分支：push -u 不走自愈（无远端不可能被拒）
+            r.step(f"push -u {target} → origin/{target} …")
+            push = _run_exec(["git", "push", "-u", "origin", target],
+                             label=repo.name, r=r, cwd=str(repo), check=False, timeout=NET_TIMEOUT).returncode
+            if push != 0:
+                return "fail", f"push 失败 (rc={push})"
+        else:
+            err = _push_heal(repo, target, r, force=force)
+            if err is not None:
+                return err
 
         sha_p = _run(["git", "rev-parse", "--short", "HEAD"],
                      cwd=str(repo), check=False, capture_output=True)
         sha = (sha_p.stdout or "").strip()
         if not remote_exists:
             return "ok", f"新建远端分支 origin/{target} ({sha})"
+        if mode == "merge":
+            return "ok", f"合并分叉并推送 → origin/{target} ({sha})"
         if ahead_n > 0:
             return "ok", f"推送 {ahead_n} 个 commit → origin/{target} ({sha})"
         return "ok", f"无变化（已在最新 origin/{target}, {sha})"
@@ -1149,13 +1254,17 @@ def _push_branch_one_factory(branch: str | None, force: bool, single: bool = Fal
                 return RepoPlan(status="skip", detail=f"无本地 {target} 分支")
             mode = "create"
 
-        # push 前统计要推送的区间（push 会更新本地 remote-tracking ref，之后无法再数）
         ahead_n = 0
         if remote_exists:
-            ahead_n = int((_run(
-                ["git", "rev-list", "--count", f"{remote_ref}..HEAD"],
-                cwd=str(repo), check=False, capture_output=True,
-            ).stdout or "0").strip() or "0")
+            ahead_n, behind_n = _shape_of(repo, remote_ref)
+            if mode == "push":
+                if ahead_n == 0 and behind_n == 0:
+                    return RepoPlan(status="skip", detail=f"已在最新 {remote_ref}（无待推送 commit）")
+                if ahead_n > 0 and behind_n > 0:
+                    # 分叉：merge-tree 预演（冲突 skip，干净转 merge 模式）
+                    if _merge_tree_conflicts(repo, "HEAD", remote_ref):
+                        return RepoPlan(status="skip", detail=f"{target} 与 {remote_ref} 分叉且预演有冲突")
+                    mode = "merge"
 
         return RepoPlan(
             status="ok",

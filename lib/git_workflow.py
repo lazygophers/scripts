@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .build import BuildError, check_build
 from .exec import DEFAULT_TIMEOUT, NET_TIMEOUT, retry_command, run_logged
-from .git import GitError, check_bit_clean, update_branch
+from .git import GitError, check_bit_clean, is_push_rejected, update_branch
 from .notify import notify_via_n, project_done_message
 from .ui import reporter
 
@@ -232,61 +232,69 @@ def run_workflow(
             check_bit_clean()
             _gate_check_build(r, where=f"当前分支 {current_branch} ")
 
-        _step(f"同步当前分支 {current_branch}", r)
-        update_branch(current_branch, r=r)
+        # 同步 → 预演 → 合并 → 推送 整轮可重跑：push 被拒（远端并发变动）时
+        # re-fetch → 重新对齐两分支 → 重新预演/合并 → 重推，最多 2 轮，仍拒才报错。
+        for _round in range(2):
+            _step(f"同步当前分支 {current_branch}", r)
+            update_branch(current_branch, r=r)
 
-        if not _ensure_remote_branch_exists(target_branch, r=r):
-            raise GitError(f"自动创建 {target_branch} 分支失败（可能无推送权限或网络问题）")
+            if not _ensure_remote_branch_exists(target_branch, r=r):
+                raise GitError(f"自动创建 {target_branch} 分支失败（可能无推送权限或网络问题）")
 
-        _step(f"同步目标分支 {target_branch}", r)
-        # 目标分支 checkout 后工作区可能因 gitignore/行尾残留显示"脏"但无实质改动，
-        # 此处不 check；合并后的干净度检查在 merge 完成后统一做（下方 check_bit_clean）。
-        update_branch(target_branch, r=r, check_after_pull=False)
+            _step(f"同步目标分支 {target_branch}", r)
+            # 目标分支 checkout 后工作区可能因 gitignore/行尾残留显示"脏"但无实质改动，
+            # 此处不 check；合并后的干净度检查在 merge 完成后统一做（下方 check_bit_clean）。
+            update_branch(target_branch, r=r, check_after_pull=False)
 
-        _step(f"预演合并 {current_branch} → {target_branch}（无副作用）", r)
-        if _preview_merge_conflicts(target_branch, current_branch, r=r):
-            r.err("预演发现合并冲突，中止操作（未执行实际合并）")
-            r.warn("请先在本地解决冲突后重新运行")
-            _notify_done("预演发现冲突，未执行", script_dir=script_dir)
-            raise GitError("预演发现合并冲突，操作已中止")
+            _step(f"预演合并 {current_branch} → {target_branch}（无副作用）", r)
+            if _preview_merge_conflicts(target_branch, current_branch, r=r):
+                r.err("预演发现合并冲突，中止操作（未执行实际合并）")
+                r.warn("请先在本地解决冲突后重新运行")
+                _notify_done("预演发现冲突，未执行", script_dir=script_dir)
+                raise GitError("预演发现合并冲突，操作已中止")
 
-        _step(f"合并 {current_branch} → {target_branch}", r)
-        merge = _git(["merge", "--no-edit", current_branch], r=r, title="执行合并", show_ok=True, timeout=DEFAULT_TIMEOUT)
-        if merge.returncode != 0:
-            if sys.stdin.isatty():
-                r.warn("检测到合并冲突：请手动解决后按回车继续")
-                input()
-                _git(["add", "."], r=r, title="标记所有冲突已解决")
-                cont = _git(["commit", "--no-edit"], r=r, title="完成合并提交", show_ok=True)
+            _step(f"合并 {current_branch} → {target_branch}", r)
+            merge = _git(["merge", "--no-edit", current_branch], r=r, title="执行合并", show_ok=True, timeout=DEFAULT_TIMEOUT)
+            if merge.returncode != 0:
+                if sys.stdin.isatty():
+                    r.warn("检测到合并冲突：请手动解决后按回车继续")
+                    input()
+                    _git(["add", "."], r=r, title="标记所有冲突已解决")
+                    cont = _git(["commit", "--no-edit"], r=r, title="完成合并提交", show_ok=True)
+                else:
+                    r.err("检测到合并冲突：非交互模式下无法继续，请手动解决后重新运行")
+                    _notify_done("合并冲突未解决", script_dir=script_dir)
+                    raise GitError("合并冲突未解决")
+                if cont.returncode != 0:
+                    _notify_done("合并冲突未解决", script_dir=script_dir)
+                    raise GitError("冲突未完全解决，操作已终止！")
+
+            check_bit_clean()
+            if parsed.no_check:
+                _step(f"跳过合并结果({target_branch}) 构建检查（--no-check）", r)
             else:
-                r.err("检测到合并冲突：非交互模式下无法继续，请手动解决后重新运行")
-                _notify_done("合并冲突未解决", script_dir=script_dir)
-                raise GitError("合并冲突未解决")
-            if cont.returncode != 0:
-                _notify_done("合并冲突未解决", script_dir=script_dir)
-                raise GitError("冲突未完全解决，操作已终止！")
+                _gate_check_build(r, where=f"合并结果({target_branch}) ")
 
-        check_bit_clean()
-        if parsed.no_check:
-            _step(f"跳过合并结果({target_branch}) 构建检查（--no-check）", r)
-        else:
-            _gate_check_build(r, where=f"合并结果({target_branch}) ")
+            _step(f"推送 {target_branch} 到远端", r)
+            sync = retry_command(["git", "push", "origin", target_branch], max_retries=3, timeout=NET_TIMEOUT)
+            if not sync.ok:
+                if _round == 0 and is_push_rejected(sync.last_output):
+                    r.warn(f"push 被拒（{target_branch} 在 fetch 后远端又有新提交），整轮重同步后重试")
+                    continue
+                r.err("推送失败！请检查网络或权限。")
+                r.cmd_result(
+                    ["git", "push", "origin", target_branch],
+                    returncode=1,
+                    output=sync.last_output,
+                    show_output=True,
+                    title="push 输出",
+                )
+                _notify_done("推送失败", script_dir=script_dir)
+                raise GitError("推送失败！请检查网络或权限。")
+            if sync.last_output.strip():
+                r.output(sync.last_output)
+            break  # push 成功
 
-        _step(f"推送 {target_branch} 到远端", r)
-        sync = retry_command(["git", "push", "origin", target_branch], max_retries=3, timeout=NET_TIMEOUT)
-        if not sync.ok:
-            r.err("推送失败！请检查网络或权限。")
-            r.cmd_result(
-                ["git", "push", "origin", target_branch],
-                returncode=1,
-                output=sync.last_output,
-                show_output=True,
-                title="push 输出",
-            )
-            _notify_done("推送失败", script_dir=script_dir)
-            raise GitError("推送失败！请检查网络或权限。")
-        if sync.last_output.strip():
-            r.output(sync.last_output)
 
         if stay_on_target:
             r.panel(

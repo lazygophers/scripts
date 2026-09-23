@@ -115,39 +115,111 @@ def branch_session(
     return _session()
 
 
+_PUSH_REJECTED_RE = re.compile(r"non-fast-forward|fetch first|\[rejected\]|stale info", re.IGNORECASE)
+
+
+def is_push_rejected(output: str) -> bool:
+    """push 输出是否为「远端已变动导致的拒绝」（而非网络/权限故障）。"""
+    return bool(_PUSH_REJECTED_RE.search(output or ""))
+
+
+def _fetch_shape(bit_cmd: str, remote: str, branch: str, r: Reporter | None = None) -> tuple[bool, int, int]:
+    """fetch 后判形：返回 (远端是否存在, 本地领先, 本地落后)。
+
+    fetch 失败直接抛 GitError（网络故障时不允许拿陈旧 remote-tracking ref 判形）。
+    """
+    p = run([bit_cmd, "fetch", "--prune", "-q", remote], check=False, capture_output=True, timeout=NET_TIMEOUT)
+    if p.returncode != 0:
+        raise GitError(f"fetch {remote} 失败: {((p.stderr or '') + (p.stdout or '')).strip()}")
+    vp = run([bit_cmd, "rev-parse", "--verify", "-q", f"{remote}/{branch}"], check=False, capture_output=True)
+    if vp.returncode != 0:
+        return (False, 0, 0)
+    c = run([bit_cmd, "rev-list", "--left-right", "--count", f"HEAD...{remote}/{branch}"], check=False, capture_output=True)
+    parts = (c.stdout or "0\t0").strip().split()
+    ahead = int(parts[0]) if len(parts) >= 1 else 0
+    behind = int(parts[1]) if len(parts) >= 2 else 0
+    return (True, ahead, behind)
+
+
 def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", r: Reporter | None = None, check_after_pull: bool = True) -> None:
-    """更新分支：切换到目标分支，同步远程更新，推送本地更改。
+    """更新分支：切换到目标分支，fetch 判形后按形态同步（同步则跳过，双向差异最小化网络往返）。
+
+    - 已同步（ahead=behind=0）：跳过 pull/push
+    - 仅落后：pull --ff-only（不制造 merge commit）
+    - 仅领先：直接 push
+    - 分叉：merge-tree 预演，无冲突 pull(merge)+push，有冲突 GitError 中止
+    - 远端无分支：push -u 创建（现状）
+    - push 被拒（fetch 后远端又变动）：重同步一轮，最多 2 轮
 
     check_after_pull=False 时跳过 pull 后的 check_bit_clean（用于切到目标分支后，
     工作区可能因 gitignore/行尾等残留显示"脏"但无实质改动的场景；合并后的检查
     由调用方在 merge 完成后统一做）。失败时由 branch_session 回原分支。
 
     Raises:
-        GitError: 当切换分支、拉取或推送失败时
+        GitError: 当切换分支、fetch、拉取、合并预演冲突或推送失败时
     """
     with branch_session(branch, bit_cmd=bit_cmd, remote=remote):
         retry_ctx = dict(bit_cmd=bit_cmd, r=r)
 
-        remote_ref = run([bit_cmd, "ls-remote", "--exit-code", "--heads", remote, branch], check=False, capture_output=True, timeout=NET_TIMEOUT)
-        if remote_ref.returncode != 0:
-            _report(r, "warn", f"远端不存在 {remote}/{branch}，将先 push -u 创建该分支")
-            _run_git_retry(
-                [bit_cmd, "push", "-u", remote, branch],
-                **retry_ctx, error_msg="推送失败", title="push -u 输出",
-            )
-            if check_after_pull:
-                check_bit_clean(bit_cmd=bit_cmd)
+        for attempt in range(2):  # push 被拒 → 整轮重判形，自愈一次
+            remote_exists, ahead, behind = _fetch_shape(bit_cmd, remote, branch)
+
+            if not remote_exists:
+                _report(r, "warn", f"远端不存在 {remote}/{branch}，将先 push -u 创建该分支")
+                _run_git_retry(
+                    [bit_cmd, "push", "-u", remote, branch],
+                    **retry_ctx, error_msg="推送失败", title="push -u 输出",
+                )
+                if check_after_pull:
+                    check_bit_clean(bit_cmd=bit_cmd)
+                return
+
+            if ahead == 0 and behind == 0:
+                _report(r, "ok", f"{branch} 已同步 {remote}/{branch}，跳过 pull/push")
+                return
+
+            if ahead > 0 and behind > 0:
+                # 分叉：merge-tree 预演，冲突即中止（无副作用，Git ≥2.38）
+                mt = run([bit_cmd, "merge-tree", "--write-tree", "--name-only", "HEAD", f"{remote}/{branch}"],
+                         check=False, capture_output=True)
+                if mt.returncode == 1:
+                    files = (mt.stdout or "").strip().splitlines()[1:]  # 首行是 tree oid
+                    raise GitError(
+                        f"{branch} 与 {remote}/{branch} 分叉且预演发现冲突，中止\n冲突文件: " +
+                        (", ".join(files[:10]) if files else "(见 merge-tree 输出)")
+                    )
+                # rc 0 = 干净合并；其它 rc = 旧 git 不支持 --write-tree → 按现状直接 merge
+
+            did_pull = False
+            if behind > 0:
+                pull_cmd = (
+                    [bit_cmd, "pull", "--ff-only", remote, branch]
+                    if ahead == 0
+                    else [bit_cmd, "-c", "merge.autoEdit=false", "pull", remote, branch]
+                )
+                _report(r, "step", f"{bit_cmd} pull {remote} {branch}{' (ff-only)' if ahead == 0 else ' (合并分叉)'}")
+                _run_git_retry(
+                    pull_cmd,
+                    **retry_ctx, error_msg="拉取或合并失败", title="pull 输出",
+                )
+                if check_after_pull:
+                    check_bit_clean(bit_cmd=bit_cmd)
+                did_pull = True
+
+            if ahead > 0 or did_pull:
+                push_cmd = [bit_cmd, "push", remote, branch]
+                _report(r, "step", f"{bit_cmd} push {remote} {branch}")
+                res = retry_command(push_cmd, max_retries=3, timeout=NET_TIMEOUT)
+                if res.ok:
+                    if res.last_output.strip():
+                        _report(r, "output", res.last_output)
+                    return
+                if is_push_rejected(res.last_output) and attempt == 0:
+                    _report(r, "warn", f"push 被拒（{branch} 在 fetch 后远端又有新提交），重同步一轮")
+                    continue
+                _report(r, "cmd_result", push_cmd, returncode=1, output=res.last_output, show_output=True, title="push 输出")
+                raise GitError(f"推送失败: {res.last_output}".rstrip())
             return
-
-        pull_cmd = [bit_cmd, "-c", "merge.autoEdit=false", "pull", remote, branch]
-        _report(r, "step", f"{bit_cmd} pull {remote} {branch}")
-        _run_git_retry(pull_cmd, **retry_ctx, error_msg="拉取或合并失败", title="pull 输出")
-        if check_after_pull:
-            check_bit_clean(bit_cmd=bit_cmd)
-
-        push_cmd = [bit_cmd, "push", remote, branch]
-        _report(r, "step", f"{bit_cmd} push {remote} {branch}")
-        _run_git_retry(push_cmd, **retry_ctx, error_msg="推送失败", title="push 输出")
 
 
 def ensure_tool_exists(cmd: str) -> None:
