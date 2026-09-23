@@ -154,6 +154,7 @@ class TestResolverFiles(unittest.TestCase):
             (base / "example.com").write_text(S.resolver_file_content(5354))
             (base / "keep.me").write_text("nameserver 10.0.0.1\n")
             with mock.patch.object(S.subprocess, "run") as run:
+                run.return_value = mock.Mock(returncode=0, stderr="")
                 n = S.clean_resolver_files(None, base)
             self.assertEqual(n, 1)
             cmd = run.call_args[0][0]
@@ -582,14 +583,14 @@ class TestResolverFileReporting(unittest.TestCase):
             self.assertEqual(S.clean_resolver_files(r), 1)
         self.assertIn("a.com", r.lines[0][1])
 
-    def test_write_warns_on_failure_and_reports_success(self):
+    def test_write_warns_on_failure_without_success_step(self):
         r = _FakeReporter()
         with mock.patch.object(S.subprocess, "run", _Run([(0, ""), (1, "denied")])):
             S.write_resolver_files(["a.com"], 5354, r, pathlib.Path("/tmp/resolver-test"))
         kinds = [k for k, _ in r.lines]
-        self.assertEqual(kinds, ["warn", "step"])
+        # 2026-09-23 语义：有文件写失败就不再报「分流已打开」
+        self.assertEqual(kinds, ["warn"])
         self.assertIn("denied", r.lines[0][1])
-        self.assertIn("会先走 VPN DNS", r.lines[1][1])
 
 
 class _FakeSock:

@@ -158,6 +158,7 @@ class TestApply(CliCase):
 
         rc, _ = self._call(self.cli.apply, run)
         self.assertEqual(rc, 3)
+        self.cli._r.err.assert_called_once()  # 失败必须走 Reporter（进 cli.error 日志）
 
 
 class TestReset(CliCase):
@@ -193,6 +194,7 @@ class TestReset(CliCase):
 
         rc, _ = self._call(self.cli.reset, run)
         self.assertEqual(rc, 2)
+        self.cli._r.err.assert_called_once()  # 失败必须走 Reporter（进 cli.error 日志）
 
 
 if __name__ == "__main__":

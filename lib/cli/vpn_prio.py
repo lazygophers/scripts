@@ -193,7 +193,7 @@ class VpnPrioCli(BaseCli):
             return 13
         rc, out, err = _run(["networksetup", "-ordernetworkservices", *desired])
         if rc != 0:
-            print(f"✗ 调整失败: {err.strip() or out.strip()}", file=sys.stderr)
+            self._r.err(f"vpn-prio 调整失败: {err.strip() or out.strip()}")
             return rc
         print("✓ Service Order 已调整")
         print()
@@ -222,7 +222,7 @@ class VpnPrioCli(BaseCli):
             return 13
         rc, out, err = _run(["networksetup", "-ordernetworkservices", *restored])
         if rc != 0:
-            print(f"✗ 还原失败: {err.strip() or out.strip()}", file=sys.stderr)
+            self._r.err(f"vpn-prio 还原失败: {err.strip() or out.strip()}")
             return rc
         print("✓ 已还原为字母顺序")
         return 0

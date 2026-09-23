@@ -245,7 +245,9 @@ def main(argv: list[str] | None = None) -> int:
         html, source = grab(args.url, timeout=timeout, force_render=args.render,
                             headed=args.headed, scroll=args.scroll, wait=wait)
     except GrabError as e:
-        print(f"[webgrab] 抓取失败: {e}", file=sys.stderr)
+        from lib.ui import Reporter
+
+        Reporter().err(f"webgrab 抓取失败 {args.url}: {e}")
         return 1
 
     content = html if args.html else to_markdown(html)

@@ -79,7 +79,9 @@ def _semantic(files: list[Path], root: Path) -> dict:
                 cache_root=root,
             )
     except Exception as e:  # noqa: BLE001
-        print(f"[graphwatch] 语义抽取失败（{type(e).__name__}: {e}），本轮只做 AST", file=sys.stderr)
+        from lib.ui import Reporter
+
+        Reporter().warn(f"graphwatch 语义抽取失败（{type(e).__name__}: {e}），本轮只做 AST")
         return dict(_EMPTY)
 
 

@@ -845,7 +845,9 @@ def main(argv: list[str] | None = None) -> int:
         results = search(" ".join(args.query), limit=args.limit,
                          engine=args.engine, timeout=args.timeout, page=args.page)
     except SearchError as e:
-        print(f"[websearch] 检索失败: {e}", file=sys.stderr)
+        from lib.ui import Reporter
+
+        Reporter().err(f"websearch 检索失败 {' '.join(args.query)}: {e}")
         return 1
     from lib.ai_env import is_ai_shell_env
 

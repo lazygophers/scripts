@@ -193,7 +193,6 @@ class OvpnCli(BaseCli):
             if not items:
                 self._r.err("没给规则。例: ovpn route add '*.startpago.com'")
                 return 1
-            before = (list(domains), list(cidrs))
             for raw in items:
                 try:
                     net = str(ipaddress.ip_network(raw, strict=False))
@@ -238,6 +237,10 @@ class OvpnCli(BaseCli):
         if action != "list" or dns_port:
             cfg["routes"] = {"domains": sorted(set(domains)), "cidrs": sorted(set(cidrs))}
             save_config(cfg)
+            # 配置变更事件：成败都记（save_config 抛异常走 cli.fail），数据用于回查规则时间线
+            slog.record("ovpn.route", action="config", op=action,
+                        domains=sorted(set(domains)), cidrs=sorted(set(cidrs)),
+                        dns_port=int(cfg.get("dns_port") or DEFAULT_DNS_PORT))
 
         self._r.kv("分流规则", {
             "域名": ", ".join(sorted(set(domains))) or "(无)",

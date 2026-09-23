@@ -294,6 +294,8 @@ def clean_resolver_files(reporter=None, resolver_dir: pathlib.Path = RESOLVER_DI
                 paths=[str(p) for p in stale], error=(result.stderr or "").strip())
     if reporter and ok:
         reporter.step(f"已清理上次残留的 DNS 分流文件 {len(stale)} 个: {', '.join(p.name for p in stale)}")
+    elif reporter and not ok:
+        reporter.warn(f"清理 DNS 分流文件失败。系统返回: {(result.stderr or '').strip()}")
     return len(stale) if ok else 0
 
 

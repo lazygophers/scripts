@@ -184,7 +184,9 @@ def _llm_labels(G, communities: dict, root: Path) -> dict[int, str]:
             return {}
         return _parse_label_response(payload, cids)
     except Exception as e:  # noqa: BLE001
-        print(f"[graphwatch] 社区命名失败（{type(e).__name__}: {e}），沿用 hub 名", file=sys.stderr)
+        from lib.ui import Reporter
+
+        Reporter().warn(f"graphwatch 社区命名失败（{type(e).__name__}: {e}），沿用 hub 名")
         return {}
 
 

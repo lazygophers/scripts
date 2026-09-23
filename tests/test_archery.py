@@ -315,11 +315,15 @@ class TestRootGate(unittest.TestCase):
 
     def test_require_root_execs_sudo_when_not_root(self):
         with unittest.mock.patch("lib.archery.is_root", return_value=False), \
-                unittest.mock.patch("lib.archery.os.execvp") as execvp:
+                unittest.mock.patch("lib.archery.os.execvp") as execvp, \
+                unittest.mock.patch("lib.log.record") as rec:
             require_root(pathlib.Path("/x/bin/archery"), ["code"], pathlib.Path("/c.yaml"))
         execvp.assert_called_once()
         self.assertEqual(execvp.call_args[0][0], "sudo")
         self.assertIn("--config", execvp.call_args[0][1])
+        # 提权动作留痕：安全敏感操作要有时间线（2026-09-23 审计票）
+        events = [c.args[0] for c in rec.call_args_list]
+        self.assertIn("archery.root", events)
 
     def test_require_root_is_noop_when_root(self):
         with unittest.mock.patch("lib.archery.is_root", return_value=True), \
@@ -363,10 +367,14 @@ class TestRootGate(unittest.TestCase):
 class TestClient(ServerCase):
     def test_login_stores_tokens_in_config_file(self):
         client = self.client()
-        client.login()
+        with unittest.mock.patch("lib.log.record") as rec:
+            client.login()
         saved = load_config(self.config_path)["profiles"][self.key]["token"]
         self.assertEqual(saved["access"], "access-1")
         self.assertEqual(saved["refresh"], "refresh-1")
+        # 域层审计票：登录事件要留痕（2026-09-23）；token 事件只在刷新/重登路径出
+        events = [c.args[0] for c in rec.call_args_list]
+        self.assertIn("archery.login", events)
 
     def test_login_failure_message_carries_body(self):
         client = self.client(password="wrong")
@@ -401,8 +409,13 @@ class TestClient(ServerCase):
         client.login()
         FakeArchery.state["access"] = "server-rotated"
         FakeArchery.state["refresh_ok"] = False
-        self.assertEqual(client.get("v1/ping/"), {"pong": "/api/v1/ping/"})
+        with unittest.mock.patch("lib.log.record") as rec:
+            self.assertEqual(client.get("v1/ping/"), {"pong": "/api/v1/ping/"})
         self.assertEqual(FakeArchery.state["logins"], 2)
+        # 域层审计票：refresh 失效回落重登要留 token 事件（2026-09-23）
+        token_events = [c for c in rec.call_args_list if c.args[0] == "archery.token"]
+        self.assertTrue(token_events)
+        self.assertEqual(token_events[0].kwargs.get("action"), "relogin")
 
     def test_query_params_drop_empty_values(self):
         client = self.client()
