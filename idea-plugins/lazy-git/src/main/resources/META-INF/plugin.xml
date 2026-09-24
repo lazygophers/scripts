@@ -13,7 +13,7 @@
         <notificationGroup id="Lazy Git" displayType="BALLOON"/>
         <editor.linePainter implementation="com.lazygophers.lazygit.InlineBlamePainter"/>
         <projectService serviceImplementation="com.lazygophers.lazygit.InlineBlameService"/>
-        <projectService serviceImplementation="com.lazygophers.lazygit.InlineBlameTrigger"/>
+        <postStartupActivity implementation="com.lazygophers.lazygit.InlineBlameStartup"/>
     </extensions>
 
     <actions>

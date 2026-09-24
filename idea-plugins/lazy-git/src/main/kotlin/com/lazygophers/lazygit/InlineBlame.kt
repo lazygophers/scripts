@@ -15,6 +15,7 @@ import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.startup.StartupActivity
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.vcs.annotate.FileAnnotation
 import com.intellij.openapi.vfs.VirtualFile
@@ -104,6 +105,12 @@ class InlineBlameService(private val project: Project) {
     }
 }
 
+class InlineBlameStartup : StartupActivity {
+    override fun runActivity(project: Project) {
+        project.getService(InlineBlameTrigger::class.java)
+    }
+}
+
 /** 光标/点击跟踪：监听 EditorFactory 事件多路广播器，随 project 注销。 */
 @Service(Service.Level.PROJECT)
 class InlineBlameTrigger(private val project: Project) {
@@ -144,7 +151,9 @@ class InlineBlamePainter : EditorLinePainter() {
         project.getService(InlineBlameTrigger::class.java)
         val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return null
         if (FileDocumentManager.getInstance().getFile(editor.document) != file) return null
-        if (editor.getUserData(BLAME_LINE) != editorLineIndex) return null
+        val activeLine = editor.getUserData(BLAME_LINE) ?: editor.caretModel.logicalPosition.line
+        if (activeLine != editorLineIndex) return null
+        editor.putUserData(BLAME_LINE, activeLine)
         val blame = project.getService(InlineBlameService::class.java).blameFor(file, editorLineIndex)
             ?: return null
         return listOf(
