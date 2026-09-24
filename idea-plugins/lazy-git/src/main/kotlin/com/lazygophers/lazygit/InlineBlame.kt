@@ -3,6 +3,7 @@ package com.lazygophers.lazygit
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.EditorLinePainter
@@ -25,6 +26,8 @@ import java.awt.Font
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
+
+private val LOG = Logger.getInstance("com.lazygophers.lazygit")
 
 data class LineBlame(val author: String, val time: String, val message: String) {
     fun display(): String = " $author · $time · $message"
@@ -66,6 +69,7 @@ class InlineBlameService(private val project: Project) {
             val map = try {
                 annotateAll(file)
             } catch (e: Exception) {
+                LOG.warn("blame 失败: ${file.path}", e)
                 emptyMap()
             }
             cache[key] = map
@@ -83,7 +87,7 @@ class InlineBlameService(private val project: Project) {
             try {
                 provider.annotate(file)
             } catch (e: Exception) {
-                com.intellij.openapi.diagnostic.Logger.getInstance("lazy-git").warn("annotate 失败: ${file.path}", e)
+                LOG.warn("annotate 失败: ${file.path}", e)
                 null
             }
         }
