@@ -82,6 +82,7 @@ class InlineBlameService(private val project: Project) {
             try {
                 provider.annotate(file)
             } catch (e: Exception) {
+                com.intellij.openapi.diagnostic.Logger.getInstance("lazy-git").warn("annotate 失败: ${file.path}", e)
                 null
             }
         }
@@ -141,7 +142,6 @@ class InlineBlamePainter : EditorLinePainter() {
     ): Collection<LineExtensionInfo>? {
         // projectService 懒加载：第一次绘制时把光标监听器挂上，否则 BLAME_LINE 永远没值
         project.getService(InlineBlameTrigger::class.java)
-        if (!com.lazygophers.lazygit.settings.LazyGitSettings.getInstance().api.inlineEnabled) return null
         val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return null
         if (FileDocumentManager.getInstance().getFile(editor.document) != file) return null
         if (editor.getUserData(BLAME_LINE) != editorLineIndex) return null

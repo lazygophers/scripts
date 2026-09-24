@@ -18,7 +18,6 @@ import javax.swing.SwingUtilities
 /** 中文独立设置页。纯 Swing，避免 UI DSL 版本差异。 */
 class LazyGitConfigurable : Configurable {
 
-    private val aiEnabled = JBCheckBox("启用 AI 生成")
     private val protocol = ComboBox(arrayOf("openai", "anthropic"))
     private val endpoint = JBTextField()
     private val model = JBTextField()
@@ -26,7 +25,6 @@ class LazyGitConfigurable : Configurable {
     private val temperature = JBTextField()
     private val timeout = JBTextField()
     private val language = ComboBox(arrayOf("zh（中文）", "en（English）"))
-    private val inlineEnabled = JBCheckBox("启用行内信息（点击行显示 Git 提交信息）")
     private val testResult = JLabel(" ")
 
     private val panel: JPanel = JPanel().apply {
@@ -43,7 +41,6 @@ class LazyGitConfigurable : Configurable {
     }
 
     init {
-        row("启用 AI 生成：", aiEnabled)
         row("协议：", protocol)
         row("Endpoint（base URL）：", endpoint)
         row("模型：", model)
@@ -51,7 +48,6 @@ class LazyGitConfigurable : Configurable {
         row("Temperature：", temperature)
         row("连接超时（秒）：", timeout)
         row("Commit message 语言：", language)
-        panel.add(inlineEnabled)
         panel.add(JPanel().apply {
             layout = FlowLayout(FlowLayout.LEFT)
             add(JButton("测试连接").apply {
@@ -89,14 +85,12 @@ class LazyGitConfigurable : Configurable {
 
     private fun currentSettings(): LazyGitSettings.State {
         val s = LazyGitSettings.State()
-        s.aiEnabled = aiEnabled.isSelected
         s.protocol = protocol.selectedItem as? String ?: s.protocol
         s.endpoint = endpoint.text.trim()
         s.model = model.text.trim()
         s.temperature = temperature.text.trim().toDoubleOrNull() ?: 0.3
         s.connectTimeoutSeconds = timeout.text.trim().toIntOrNull() ?: 15
         s.language = when (language.selectedIndex) { 1 -> "en"; else -> "zh" }
-        s.inlineEnabled = inlineEnabled.isSelected
         return s
     }
 
@@ -119,14 +113,12 @@ class LazyGitConfigurable : Configurable {
 
     override fun reset() {
         val s = LazyGitSettings.getInstance().api
-        aiEnabled.isSelected = s.aiEnabled
         protocol.selectedItem = s.protocol
         endpoint.text = s.endpoint
         model.text = s.model
         temperature.text = s.temperature.toString()
         timeout.text = s.connectTimeoutSeconds.toString()
         language.selectedIndex = if (s.language == "en") 1 else 0
-        inlineEnabled.isSelected = s.inlineEnabled
         apiKey.text = LazyGitSettings.getInstance().apiKey() ?: ""
         testResult.text = " "
     }

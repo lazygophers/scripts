@@ -15,14 +15,12 @@ import com.intellij.openapi.components.Storage
 class LazyGitSettings : PersistentStateComponent<LazyGitSettings.State> {
 
     data class State(
-        var aiEnabled: Boolean = false,
-        var protocol: String = "openai",        // openai | anthropic
-        var endpoint: String = "",              // base URL，如 https://api.example.com
+        var protocol: String = "openai",         // openai | anthropic
+        var endpoint: String = "",               // base URL，如 https://api.example.com
         var model: String = "",
         var temperature: Double = 0.3,
         var connectTimeoutSeconds: Int = 15,
-        var language: String = "zh",            // zh | en：commit message 语言，用户选定
-        var inlineEnabled: Boolean = true,
+        var language: String = "zh",             // zh | en：commit message 语言，用户选定
     )
 
     private var state = State()
@@ -45,7 +43,7 @@ class LazyGitSettings : PersistentStateComponent<LazyGitSettings.State> {
     }
 
     fun isAiReady(): Boolean =
-        state.aiEnabled && state.endpoint.isNotBlank() && state.model.isNotBlank() && !apiKey().isNullOrBlank()
+        state.endpoint.isNotBlank() && state.model.isNotBlank() && !apiKey().isNullOrBlank()
 
     companion object {
         private const val SERVICE = "lazy-git"
