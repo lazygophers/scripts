@@ -25,6 +25,8 @@ java {
 
 dependencies {
     testImplementation(kotlin("test"))
+    // IntelliJ 平台注入的测试类路径引用了 JUnit4 的 Statement，缺了它测试进程起不来
+    testRuntimeOnly("junit:junit:4.13.2")
 
     intellijPlatform {
         intellijIdeaCommunity("2025.1")
