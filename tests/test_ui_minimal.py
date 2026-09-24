@@ -49,15 +49,16 @@ class TestMinimalOutput(unittest.TestCase):
     def test_status_table_keeps_status_hides_nonfailure_details(self):
         r = make_reporter({"CLAUDECODE": "1"})
         r.status_table("执行结果", [
-            ("repo-ok", "ok", ""),
-            ("repo-skip", "skip", "当前分支无新 commit；目标分支同步"),
-            ("repo-fail", "fail", "fetch 失败"),
+            ("repo-ok", "ok", "工作区干净"),
+            ("repo-skip", "skip", "当前分支与远端同步"),
+            ("repo-fail", "fail", "push 被拒绝"),
         ])
         out = r.console.file.getvalue()
-        self.assertIn("repo-ok | ok | ", out)
-        self.assertIn("repo-skip | skip | ", out)
-        self.assertNotIn("当前分支无新 commit", out)
-        self.assertIn("repo-fail | fail | fetch 失败", out)
+        self.assertIn("repo-ok | ok |", out)
+        self.assertIn("repo-skip | skip |", out)
+        self.assertIn("repo-fail | fail | push 被拒绝", out)
+        self.assertNotIn("工作区干净", out)
+        self.assertNotIn("当前分支与远端同步", out)
 
     def test_rule_and_panel(self):
         r = make_reporter({"CLAUDECODE": "1"})
