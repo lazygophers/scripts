@@ -7,4 +7,17 @@
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.vcs</depends>
     <depends>Git4Idea</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationConfigurable instance="com.lazygophers.lazygit.settings.LazyGitConfigurable" id="com.lazygophers.lazygit.settings" parentId="tools" displayName="Lazy Git"/>
+        <notificationGroup id="Lazy Git" displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <action id="com.lazygophers.lazygit.generateCommitMessage"
+                class="com.lazygophers.lazygit.action.GenerateCommitMessageAction"
+                text="AI 生成" description="根据当前勾选变更生成 commit message">
+            <add-to-group group-id="Vcs.MessageActionGroup" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>
