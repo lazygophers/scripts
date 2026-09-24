@@ -67,6 +67,14 @@ class TestResolveProvider(unittest.TestCase):
         info = resolve_provider("github.com/owner/repo")
         self.assertEqual((info.provider, info.host, info.repo), ("gh", "github.com", "owner/repo"))
 
+    def test_bare_gitlab_path_preserves_group(self):
+        info = resolve_provider("overseas/tmtc_console")
+        self.assertEqual((info.provider, info.host, info.repo), ("glab", "", "overseas/tmtc_console"))
+
+    def test_gitlab_project_url_preserves_group(self):
+        info = resolve_provider("https://gitlab.example.com/group/repo")
+        self.assertEqual((info.provider, info.host, info.repo), ("glab", "gitlab.example.com", "group/repo"))
+
     def test_github_prefix_without_repo_path(self):
         """`github.com/` 解析不出 repo，但仍应认成 GitHub 而不是 GitLab。"""
         info = resolve_provider("github.com/")

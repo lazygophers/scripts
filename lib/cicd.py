@@ -48,14 +48,15 @@ def resolve_provider(project: str = "") -> ProviderInfo | None:
     """指定项目时按 URL/路径推断 provider；未指定时从当前 git remote 解析。"""
     if not project:
         return detect_provider()
-    parsed = parse_remote_url(project)
     host = ""
     repo = project
-    if parsed:
-        host, repo = parsed
-    elif project.startswith("github.com/"):
+    if project.startswith("github.com/"):
         host, repo = "github.com", project.split("/", 1)[1]
-    provider = "gh" if host == "github.com" or project.startswith("github.com/") else "glab"
+    elif "://" in project or project.startswith("git@"):
+        parsed = parse_remote_url(project)
+        if parsed:
+            host, repo = parsed
+    provider = "gh" if host == "github.com" else "glab"
     return ProviderInfo(provider=provider, host=host or ("github.com" if provider == "gh" else ""),
                         repo=repo, remote="", remote_url=project)
 

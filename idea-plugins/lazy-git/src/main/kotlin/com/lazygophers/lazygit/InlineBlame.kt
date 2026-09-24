@@ -1,9 +1,8 @@
 package com.lazygophers.lazygit
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
-import com.intellij.openapi.components.State
-import com.intellij.openapi.components.Storage
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.EditorLinePainter
@@ -25,12 +24,6 @@ import java.awt.Font
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
-
-@State(name = "LazyGitSettings", storages = [Storage("lazy-git.xml")])
-@Service(Service.Level.PROJECT)
-class LazyGitSettings {
-    var enableInlineBlame: Boolean = true
-}
 
 data class LineBlame(val author: String, val time: String, val message: String) {
     fun display(): String = " $author · $time · $message"
@@ -84,7 +77,15 @@ class InlineBlameService(private val project: Project) {
 
     private fun annotateAll(file: VirtualFile): Map<Int, LineBlame> {
         val provider = GitVcs.getInstance(project)?.annotationProvider ?: return emptyMap()
-        val annotation: FileAnnotation = provider.annotate(file)
+        // annotate 读 VFS/文档，必须持读锁；后台线程 + ReadAction 是标准组合
+        val annotation: FileAnnotation? = ReadAction.compute<FileAnnotation, Exception> {
+            try {
+                provider.annotate(file)
+            } catch (e: Exception) {
+                null
+            }
+        }
+        if (annotation == null) return emptyMap()
         val details = HashMap<String, Pair<String, String?>>() // revision asString -> (author, message)
         val revisions = annotation.revisions ?: return emptyMap()
         for (rev in revisions) {
@@ -138,7 +139,9 @@ class InlineBlamePainter : EditorLinePainter() {
         file: VirtualFile,
         editorLineIndex: Int,
     ): Collection<LineExtensionInfo>? {
-        if (!project.getService(LazyGitSettings::class.java).enableInlineBlame) return null
+        // projectService 懒加载：第一次绘制时把光标监听器挂上，否则 BLAME_LINE 永远没值
+        project.getService(InlineBlameTrigger::class.java)
+        if (!com.lazygophers.lazygit.settings.LazyGitSettings.getInstance().api.inlineEnabled) return null
         val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return null
         if (FileDocumentManager.getInstance().getFile(editor.document) != file) return null
         if (editor.getUserData(BLAME_LINE) != editorLineIndex) return null
