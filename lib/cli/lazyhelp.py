@@ -97,10 +97,17 @@ class LazyhelpCli(BaseCli):
 
         command = ["mise", "exec", "--", "gradle", "-p", str(project), "buildPlugin"]
         try:
-            return subprocess.call(command)
+            rc = subprocess.call(command)
         except FileNotFoundError:
             self._r.err("找不到 mise；请先安装 mise 并执行 mise install")
             return 1
+        if rc == 0:
+            zips = sorted((project / "build" / "distributions").glob("*.zip"))
+            if zips:
+                latest = zips[-1]
+                # 产物路径是数据不是过程叙述：AI 极简模式也照出
+                self._r.kv("插件构建完成", {"zip": str(latest), "安装": "IDEA → Settings → Plugins → ⚙ → Install Plugin from Disk"})
+        return rc
 
     @timed_cli
     def install(self, yes: bool = False):

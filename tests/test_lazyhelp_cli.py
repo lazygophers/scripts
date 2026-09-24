@@ -50,6 +50,9 @@ class TestIdeaBuild(unittest.TestCase):
         self.assertEqual(command[:3], ["mise", "exec", "--"])
         self.assertEqual(command[-1], "buildPlugin")
         self.assertIn("idea-plugins/lazy-git", command[5])
+        # 成功后必须把产物路径报给用户（zip 是数据，不是过程叙述）
+        cli._r.kv.assert_called_once()
+        self.assertIn(".zip", cli._r.kv.call_args.args[1]["zip"])
 
     def test_idea_reports_missing_mise(self) -> None:
         cli = LazyhelpCli()
