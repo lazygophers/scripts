@@ -1,0 +1,10 @@
+<idea-plugin>
+    <id>com.lazygophers.lazygit</id>
+    <name>Lazy Git</name>
+    <vendor email="support@lazygophers.com">懒人开发者</vendor>
+    <description><![CDATA[为 Git 提交信息提供中文界面的辅助工具。]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.vcs</depends>
+    <depends>Git4Idea</depends>
+</idea-plugin>
