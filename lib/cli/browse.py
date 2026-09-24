@@ -4,6 +4,8 @@
   browse status                             # 一条命令看链路：bridge / 插件连接 / 心跳
   browse open https://example.com           # 开新标签页（自动进 browse/ 分组）
   browse list                               # 列出所有标签页
+  browse list --url '*example.com*'          # 只列出网址匹配的标签页
+  browse list --group 调研                   # 只列出分组匹配的标签页
   browse goto https://example.com           # 当前页跳转（别名 navigate）
   browse snapshot                           # 这一页能点/能填的元素 + 可用定位符
   browse click '登录'                        # 按可见文字点（不写前缀默认 text=）
@@ -922,8 +924,8 @@ rec 组（录制）
 
 选项（CLI 自己的，其余 --xxx 一律当指令参数发给浏览器）
   --context <id>            指定标签页
-  --url <通配符>            按网址选标签页（多匹配报错列出候选；close 是全部作用）
-  --group <名字>            按分组选（open 时是「放进哪个组」）
+  --url <通配符>            按网址选标签页（list/close 过滤；其他命令选页）
+  --group <名字>            按分组选（list 过滤；open 时是「放进哪个组」）
   --browser <名字>          发给哪个浏览器；多个连着又不写会报错并列出都有谁
   --table / --json          强制输出格式；默认终端出表格、管道出 JSON
   --timeout 10s             wait 的超时（默认 30s）
@@ -1226,12 +1228,22 @@ async def _cmd_list(opts: dict, sock: pathlib.Path, browser: str) -> None:
     groups = groups_outcome.get("result", {}).get("groups", []) \
         if groups_outcome["status"] == "ok" else []  # Firefox 没有组能力时照样列页
     rows = []
+    url_filter = opts.get("url")
+    pattern = _glob(str(url_filter)) if url_filter not in (None, True) else None
+    group_filter = opts.get("group")
+    wanted_group = (_full_group_name(str(group_filter))
+                    if group_filter not in (None, True) else None)
     for tab in tabs:
         ctx = str(tab.get("context", ""))
         group = next((g for g in groups if ctx in {str(t) for t in g.get("tabs", [])}), None)
-        rows.append({"id": ctx, "title": tab.get("lg:title", ""), "url": tab.get("url", ""),
-                     "group": group.get("title", "") if group else "",
-                     "window": group.get("window", "") if group else ""})
+        row = {"id": ctx, "title": tab.get("lg:title", ""), "url": tab.get("url", ""),
+               "group": group.get("title", "") if group else "",
+               "window": group.get("window", "") if group else ""}
+        if pattern is not None and not pattern.search(row["url"]):
+            continue
+        if wanted_group is not None and row["group"] != wanted_group:
+            continue
+        rows.append(row)
     print_result({"tabs": rows}, table=_want_table(opts))
 
 

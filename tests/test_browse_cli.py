@@ -327,6 +327,27 @@ class TestSingleCommand(unittest.TestCase):
             self.assertEqual(json.loads(out.getvalue())["contexts"][0]["context"], "7")
             self.assertEqual(h.browser.seen, ["browsingContext.getTree"])
 
+    def test_list_filters_by_url_and_group(self):
+        def handler(method, params):
+            if method == "browsingContext.getTree":
+                return {"contexts": [
+                    {"context": "1", "url": "https://example.com/a", "lg:title": "A"},
+                    {"context": "2", "url": "https://other.test/b", "lg:title": "B"},
+                ]}
+            if method == "lg:tabs.groups":
+                return {"groups": [{"title": "browse/调研", "window": 1, "tabs": [1]}]}
+            raise AssertionError(method)
+
+        with Harness(handler) as h:
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out):
+                code = h.cli("list", "--url", "*example.com*", "--group", "调研")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue())["tabs"], [{
+            "id": "1", "title": "A", "url": "https://example.com/a",
+            "group": "browse/调研", "window": 1,
+        }])
+
     def test_positional_and_flags_reach_the_browser(self):
         got = {}
 
