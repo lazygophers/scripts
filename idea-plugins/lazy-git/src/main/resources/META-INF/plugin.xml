@@ -11,6 +11,9 @@
     <extensions defaultExtensionNs="com.intellij">
         <applicationConfigurable instance="com.lazygophers.lazygit.settings.LazyGitConfigurable" id="com.lazygophers.lazygit.settings" parentId="tools" displayName="Lazy Git"/>
         <notificationGroup id="Lazy Git" displayType="BALLOON"/>
+        <editor.linePainter implementation="com.lazygophers.lazygit.InlineBlamePainter"/>
+        <projectService serviceImplementation="com.lazygophers.lazygit.InlineBlameService"/>
+        <projectService serviceImplementation="com.lazygophers.lazygit.InlineBlameTrigger"/>
     </extensions>
 
     <actions>
