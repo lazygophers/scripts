@@ -16,7 +16,8 @@ import com.lazygophers.lazygit.settings.LazyGitSettings
 import java.lang.reflect.Method
 import javax.swing.SwingUtilities
 
-class GenerateCommitMessageAction : AnAction("AI 生成", "根据当前勾选变更生成 commit message", null) {
+class GenerateCommitMessageAction :
+    AnAction("AI 生成", "根据当前变更生成多行 commit message", null) {
     override fun update(e: AnActionEvent) {
         e.presentation.isEnabled = e.getData(VcsDataKeys.COMMIT_WORKFLOW_UI) != null
     }
@@ -30,17 +31,28 @@ class GenerateCommitMessageAction : AnAction("AI 生成", "根据当前勾选变
             return
         }
         val ui = e.getData(VcsDataKeys.COMMIT_WORKFLOW_UI) ?: return
-        val changes = ui.getIncludedChanges()
+        // 暂存区空：取全部展示的变更并自动勾选（进暂存）；非空：只用户勾选的那些
+        val changes = ui.getIncludedChanges().ifEmpty {
+            val all = ui.getDisplayedChanges()
+            (ui as? com.intellij.vcs.commit.ChangesViewCommitWorkflowUi)?.inclusionModel?.addInclusion(all)
+            all
+        }
         val diff = IncludedChangesDiff.build(changes)
         if (diff.isBlank()) {
-            notify(project, "当前没有勾选的变更", NotificationType.WARNING)
+            notify(project, "当前没有任何变更", NotificationType.WARNING)
             return
         }
         val client = AiCommitClient(
             settings.api.protocol, settings.api.endpoint, settings.api.model,
             settings.apiKey() ?: return, settings.api.temperature, settings.api.connectTimeoutSeconds,
         )
-        val prompt = "请根据以下 Git diff 生成一条 Conventional Commits 格式的 commit message。只输出一行，不要 markdown，不要解释。\n\n$diff"
+        val lang = if (settings.api.language == "en") "English" else "Chinese (Simplified)"
+        val prompt = "Generate a commit message from the Git diff below. Requirements:\n" +
+            "- Format: Conventional Commits (type(scope): subject)\n" +
+            "- First line is the subject, <= 72 characters, no period\n" +
+            "- Then a blank line, then a detailed body: one bullet per logical change, what changed and why\n" +
+            "- Write entirely in $lang\n" +
+            "- Output the commit message only, no markdown fences, no explanation\n\n$diff"
         ProgressManager.getInstance().run(object : com.intellij.openapi.progress.Task.Backgroundable(project, "AI 生成 commit message", true) {
             private val generated = StringBuilder()
             override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {

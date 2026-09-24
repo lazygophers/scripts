@@ -25,6 +25,7 @@ class LazyGitConfigurable : Configurable {
     private val apiKey = JPasswordField()
     private val temperature = JBTextField()
     private val timeout = JBTextField()
+    private val language = ComboBox(arrayOf("zh（中文）", "en（English）"))
     private val inlineEnabled = JBCheckBox("启用行内信息（点击行显示 Git 提交信息）")
     private val testResult = JLabel(" ")
 
@@ -49,6 +50,7 @@ class LazyGitConfigurable : Configurable {
         row("API Key（存于 IDE 密码库）：", apiKey)
         row("Temperature：", temperature)
         row("连接超时（秒）：", timeout)
+        row("Commit message 语言：", language)
         panel.add(inlineEnabled)
         panel.add(JPanel().apply {
             layout = FlowLayout(FlowLayout.LEFT)
@@ -93,6 +95,7 @@ class LazyGitConfigurable : Configurable {
         s.model = model.text.trim()
         s.temperature = temperature.text.trim().toDoubleOrNull() ?: 0.3
         s.connectTimeoutSeconds = timeout.text.trim().toIntOrNull() ?: 15
+        s.language = when (language.selectedIndex) { 1 -> "en"; else -> "zh" }
         s.inlineEnabled = inlineEnabled.isSelected
         return s
     }
@@ -122,6 +125,7 @@ class LazyGitConfigurable : Configurable {
         model.text = s.model
         temperature.text = s.temperature.toString()
         timeout.text = s.connectTimeoutSeconds.toString()
+        language.selectedIndex = if (s.language == "en") 1 else 0
         inlineEnabled.isSelected = s.inlineEnabled
         apiKey.text = LazyGitSettings.getInstance().apiKey() ?: ""
         testResult.text = " "
