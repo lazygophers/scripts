@@ -46,6 +46,19 @@ class TestMinimalOutput(unittest.TestCase):
         self.assertIn("远端: origin", out)
         self.assertNotIn("╭", out)  # 无边框
 
+    def test_status_table_only_keeps_failures(self):
+        r = make_reporter({"CLAUDECODE": "1"})
+        r.status_table("执行结果", [
+            ("repo-ok", "ok", ""),
+            ("repo-skip", "skip", "当前分支无新 commit；目标分支同步"),
+            ("repo-fail", "fail", "fetch 失败"),
+        ])
+        out = r.console.file.getvalue()
+        self.assertNotIn("repo-ok", out)
+        self.assertNotIn("repo-skip", out)
+        self.assertNotIn("当前分支无新 commit", out)
+        self.assertIn("repo-fail | fail | fetch 失败", out)
+
     def test_rule_and_panel(self):
         r = make_reporter({"CLAUDECODE": "1"})
         r.rule("开始")

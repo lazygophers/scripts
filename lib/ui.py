@@ -167,8 +167,10 @@ class Reporter:
     ) -> None:
         """状态汇总表：items 行与 columns 同宽，状态列（status_idx）按状态着色。"""
         if self.minimal:
+            # 成功/跳过不输出详情；AI 只需看到失败仓库及其诊断。
             for item in items:
-                self.console.print(" | ".join(str(v) for v in item))
+                if item[status_idx] == "fail":
+                    self.console.print(" | ".join(str(v) for v in item))
             return
         table = Table(title=title, show_header=True, box=ROUNDED, border_style="blue",
                       title_style="bold", header_style="bold cyan")
