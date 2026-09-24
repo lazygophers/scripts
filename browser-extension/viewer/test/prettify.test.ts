@@ -596,6 +596,10 @@ test("图的语法有错时留下原文加一句错在哪，整篇照常", async
 test("图上有「查看大图」，点开全屏预览，Esc 关闭", async () => {
   const { doc, host } = await mdPage("```mermaid\ngraph TD;\nA-->B;\n```\n");
 
+  let bubbled = false;
+  doc.addEventListener("click", () => {
+    bubbled = true;
+  });
   const view = host.querySelector<HTMLButtonElement>(".lfv-diagram-view");
   assert.equal(view?.textContent, "查看大图");
   view?.click();
@@ -603,6 +607,7 @@ test("图上有「查看大图」，点开全屏预览，Esc 关闭", async () =
   const win = doc.defaultView!;
   const lightbox = doc.querySelector(".lfv-lightbox");
   assert.ok(lightbox, "点开后应有全屏预览");
+  assert.equal(bubbled, false, "查看大图不应把点击继续交给外层页面");
   assert.equal(lightbox.querySelectorAll(":scope .lfv-lightbox-inner svg").length, 1, "预览里是那张图");
   // 按钮本身不能混进预览的图里。
   assert.equal(lightbox.querySelector(".lfv-diagram-view"), null);

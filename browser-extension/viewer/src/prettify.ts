@@ -513,7 +513,11 @@ async function drawDiagrams(doc: Document, article: HTMLElement): Promise<void> 
         view.type = "button";
         view.className = "lfv-diagram-view";
         view.textContent = "查看大图";
-        view.addEventListener("click", () => openDiagramPreview(doc, svg));
+        view.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openDiagramPreview(doc, svg);
+        });
         box.append(view);
       } catch (error) {
         box.classList.add("lfv-diagram-error");
