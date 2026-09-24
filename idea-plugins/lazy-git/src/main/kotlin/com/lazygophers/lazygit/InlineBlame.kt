@@ -5,8 +5,9 @@ import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.EditorCustomElementRenderer
 import com.intellij.openapi.editor.EditorFactory
-import com.intellij.openapi.editor.EditorLinePainter
+import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.LineExtensionInfo
 import com.intellij.openapi.editor.event.CaretEvent
 import com.intellij.openapi.editor.event.CaretListener
@@ -28,6 +29,8 @@ import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
 
 private val LOG = Logger.getInstance("com.lazygophers.lazygit")
+private val BLAME_INLAY: Key<Inlay<*>?> = Key.create("lazygit.blameInlay")
+private val BLAME_FONT = Font("SansSerif", Font.ITALIC, 12)
 
 data class LineBlame(val author: String, val time: String, val message: String) {
     fun display(): String = " $author · $time · $message"
@@ -36,76 +39,54 @@ data class LineBlame(val author: String, val time: String, val message: String) 
 object BlameFormatter {
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd")
 
-    /** 任一要素缺失（未提交行/无作者/空 message）返回 null = 该行不显示。 */
     fun format(author: String?, date: Date?, message: String?): LineBlame? {
-        val a = author?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        val d = date ?: return null
-        val m = message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()?.takeIf { it.isNotEmpty() }
-            ?: return null
-        return LineBlame(a, dateFormat.format(d), m)
+        val name = author?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val day = date ?: return null
+        val firstLine = message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()
+            ?.takeIf { it.isNotEmpty() } ?: return null
+        return LineBlame(name, dateFormat.format(day), firstLine)
     }
 }
 
-val BLAME_LINE: Key<Int> = Key.create<Int>("lazygit.blameLine")
-
 @Service(Service.Level.PROJECT)
 class InlineBlameService(private val project: Project) {
-
-    /** key = 路径:modificationStamp；空 map = 该文件 blame 不可得（无 Git/新文件），负缓存。 */
     private val cache = ConcurrentHashMap<String, Map<Int, LineBlame>>()
     private val pending = ConcurrentHashMap.newKeySet<String>()
 
-    fun blameFor(file: VirtualFile, line: Int): LineBlame? {
+    fun blameFor(file: VirtualFile, line: Int, ready: (LineBlame?) -> Unit = {}) {
         val key = "${file.path}:${file.modificationStamp}"
-        val map = cache[key]
-        if (map != null) return map[line]
-        requestBlame(file, key)
-        return null
-    }
-
-    private fun requestBlame(file: VirtualFile, key: String) {
+        cache[key]?.let { ready(it[line]); return }
         if (!pending.add(key)) return
         ApplicationManager.getApplication().executeOnPooledThread {
-            val map = try {
-                annotateAll(file)
-            } catch (e: Exception) {
+            val map = try { annotateAll(file) } catch (e: Exception) {
                 LOG.warn("blame 失败: ${file.path}", e)
                 emptyMap()
             }
             cache[key] = map
             pending.remove(key)
-            ApplicationManager.getApplication().invokeLater {
-                FileEditorManager.getInstance(project).selectedTextEditor?.contentComponent?.repaint()
-            }
+            ApplicationManager.getApplication().invokeLater { ready(map[line]) }
         }
     }
 
     private fun annotateAll(file: VirtualFile): Map<Int, LineBlame> {
         val provider = GitVcs.getInstance(project)?.annotationProvider ?: return emptyMap()
-        // annotate 读 VFS/文档，必须持读锁；后台线程 + ReadAction 是标准组合
-        val annotation: FileAnnotation? = ReadAction.compute<FileAnnotation, Exception> {
-            try {
-                provider.annotate(file)
-            } catch (e: Exception) {
+        val annotation = ReadAction.compute<FileAnnotation?, Exception> {
+            try { provider.annotate(file) } catch (e: Exception) {
                 LOG.warn("annotate 失败: ${file.path}", e)
                 null
             }
-        }
-        if (annotation == null) return emptyMap()
-        val details = HashMap<String, Pair<String, String?>>() // revision asString -> (author, message)
+        } ?: return emptyMap()
         val revisions = annotation.revisions ?: return emptyMap()
-        for (rev in revisions) {
-            val author = try { rev.author ?: "" } catch (e: Exception) { "" }
-            val message = try { rev.commitMessage } catch (e: Exception) { null }
-            details[rev.revisionNumber.asString()] = author to message
+        val details = revisions.associate {
+            it.revisionNumber.asString() to ((it.author ?: "") to it.commitMessage)
         }
-        val result = HashMap<Int, LineBlame>()
-        for (line in 0 until annotation.lineCount) {
-            val rev = annotation.getLineRevisionNumber(line) ?: continue // 未提交行
-            val (author, message) = details[rev.asString()] ?: continue
-            BlameFormatter.format(author, annotation.getLineDate(line), message)?.let { result[line] = it }
+        return buildMap {
+            for (line in 0 until annotation.lineCount) {
+                val revision = annotation.getLineRevisionNumber(line) ?: continue
+                val (author, message) = details[revision.asString()] ?: continue
+                BlameFormatter.format(author, annotation.getLineDate(line), message)?.let { put(line, it) }
+            }
         }
-        return result
     }
 }
 
@@ -115,59 +96,43 @@ class InlineBlameStartup : StartupActivity {
     }
 }
 
-/** 光标/点击跟踪：监听 EditorFactory 事件多路广播器，随 project 注销。 */
 @Service(Service.Level.PROJECT)
 class InlineBlameTrigger(private val project: Project) {
-
     init {
-        val multicaster = EditorFactory.getInstance().eventMulticaster
-        val onPosition = { editor: Editor, line: Int ->
-            if (editor.project == project) {
-                editor.putUserData(BLAME_LINE, line)
-                val file = FileDocumentManager.getInstance().getFile(editor.document)
-                if (file != null && file.isInLocalFileSystem) {
-                    project.getService(InlineBlameService::class.java).blameFor(file, line)
-                }
-                editor.contentComponent.repaint()
+        val events = EditorFactory.getInstance().eventMulticaster
+        val selectLine = selectLine@{ editor: Editor, line: Int ->
+            if (editor.project != project) return@selectLine
+            val file = FileDocumentManager.getInstance().getFile(editor.document) ?: return@selectLine
+            if (!file.isInLocalFileSystem) return@selectLine
+            project.getService(InlineBlameService::class.java).blameFor(file, line) { blame ->
+                installInlay(editor, line, blame)
             }
         }
-        multicaster.addCaretListener(object : CaretListener {
-            override fun caretPositionChanged(event: CaretEvent) {
-                onPosition(event.editor, event.newPosition.line)
-            }
+        events.addCaretListener(object : CaretListener {
+            override fun caretPositionChanged(event: CaretEvent) = selectLine(event.editor, event.newPosition.line)
         }, project)
-        multicaster.addEditorMouseListener(object : EditorMouseListener {
-            override fun mouseClicked(event: EditorMouseEvent) {
-                onPosition(event.editor, event.editor.xyToLogicalPosition(event.mouseEvent.point).line)
-            }
+        events.addEditorMouseListener(object : EditorMouseListener {
+            override fun mouseClicked(event: EditorMouseEvent) = selectLine(
+                event.editor, event.editor.xyToLogicalPosition(event.mouseEvent.point).line,
+            )
         }, project)
     }
-}
 
-class InlineBlamePainter : EditorLinePainter() {
+    private fun installInlay(editor: Editor, line: Int, blame: LineBlame?) {
+        editor.getUserData(BLAME_INLAY)?.dispose()
+        if (blame == null || editor.isDisposed) return
+        val offset = editor.document.getLineEndOffset(line)
+        val text = blame.display()
+        val renderer = object : EditorCustomElementRenderer {
+            override fun calcWidthInPixels(inlay: Inlay<*>): Int =
+                editor.contentComponent.getFontMetrics(BLAME_FONT).stringWidth(text)
 
-    override fun getLineExtensions(
-        project: Project,
-        file: VirtualFile,
-        editorLineIndex: Int,
-    ): Collection<LineExtensionInfo>? {
-        // projectService 懒加载：第一次绘制时把光标监听器挂上，否则 BLAME_LINE 永远没值
-        project.getService(InlineBlameTrigger::class.java)
-        val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return null
-        if (FileDocumentManager.getInstance().getFile(editor.document) != file) return null
-        val activeLine = editor.getUserData(BLAME_LINE) ?: editor.caretModel.logicalPosition.line
-        if (activeLine != editorLineIndex) return null
-        editor.putUserData(BLAME_LINE, activeLine)
-        val blame = project.getService(InlineBlameService::class.java).blameFor(file, editorLineIndex)
-            ?: return null
-        return listOf(
-            LineExtensionInfo(
-                blame.display(),
-                TextAttributes().apply {
-                    foregroundColor = JBColor.GRAY
-                    setFontType(Font.ITALIC)
-                },
-            ),
-        )
+            override fun paint(inlay: Inlay<*>, g: java.awt.Graphics, target: java.awt.Rectangle, attrs: TextAttributes) {
+                g.color = JBColor.GRAY
+                g.font = BLAME_FONT
+                g.drawString(text, target.x, target.y + g.fontMetrics.ascent)
+            }
+        }
+        editor.putUserData(BLAME_INLAY, editor.inlayModel.addAfterLineEndElement(offset, false, renderer))
     }
 }
