@@ -86,6 +86,23 @@ class LazyhelpCli(BaseCli):
         return 0
 
     @timed_cli
+    def idea(self):
+        """构建 idea-plugins/lazy-git IntelliJ 插件，产出可安装 zip。"""
+        import subprocess
+
+        project = pathlib.Path(__file__).resolve().parents[2] / "idea-plugins" / "lazy-git"
+        if not project.is_dir():
+            self._r.err(f"未找到 IntelliJ 插件目录：{project}")
+            return 2
+
+        command = ["mise", "exec", "--", "gradle", "-p", str(project), "buildPlugin"]
+        try:
+            return subprocess.call(command)
+        except FileNotFoundError:
+            self._r.err("找不到 mise；请先安装 mise 并执行 mise install")
+            return 1
+
+    @timed_cli
     def install(self, yes: bool = False):
         """构建全部浏览器扩展，并安装 graphwatch 后台服务
 

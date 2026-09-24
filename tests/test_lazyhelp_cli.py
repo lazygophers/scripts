@@ -38,6 +38,29 @@ class TestBrowserExtensions(unittest.TestCase):
         self.assertEqual(browser_extensions(pathlib.Path("/definitely/missing/extensions")), [])
 
 
+class TestIdeaBuild(unittest.TestCase):
+    def test_idea_runs_mise_managed_gradle(self) -> None:
+        cli = LazyhelpCli()
+        cli._r = mock.MagicMock()
+        import subprocess
+
+        with mock.patch.object(subprocess, "call", return_value=0) as call:
+            self.assertEqual(cli.idea(), 0)
+        command = call.call_args.args[0]
+        self.assertEqual(command[:3], ["mise", "exec", "--"])
+        self.assertEqual(command[-1], "buildPlugin")
+        self.assertIn("idea-plugins/lazy-git", command[5])
+
+    def test_idea_reports_missing_mise(self) -> None:
+        cli = LazyhelpCli()
+        cli._r = mock.MagicMock()
+        import subprocess
+
+        with mock.patch.object(subprocess, "call", side_effect=FileNotFoundError):
+            self.assertEqual(cli.idea(), 1)
+        cli._r.err.assert_called_once()
+
+
 class InstallCase(unittest.TestCase):
     def setUp(self) -> None:
         self.cli = LazyhelpCli()
