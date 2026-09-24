@@ -21,7 +21,7 @@ import com.intellij.openapi.vcs.annotate.FileAnnotation
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.JBColor
 import git4idea.GitVcs
-import java.awt.font.TextAttribute
+import java.awt.Font
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
@@ -86,12 +86,11 @@ class InlineBlameService(private val project: Project) {
         val provider = GitVcs.getInstance(project)?.annotationProvider ?: return emptyMap()
         val annotation: FileAnnotation = provider.annotate(file)
         val details = HashMap<String, Pair<String, String?>>() // revision asString -> (author, message)
-        for (rev in annotation.revisions) {
-            details[rev.revisionNumber.asString()] = try {
-                rev.author to rev.commitMessage
-            } catch (e: Exception) {
-                "" to null
-            }
+        val revisions = annotation.revisions ?: return emptyMap()
+        for (rev in revisions) {
+            val author = try { rev.author ?: "" } catch (e: Exception) { "" }
+            val message = try { rev.commitMessage } catch (e: Exception) { null }
+            details[rev.revisionNumber.asString()] = author to message
         }
         val result = HashMap<Int, LineBlame>()
         for (line in 0 until annotation.lineCount) {
@@ -150,7 +149,7 @@ class InlineBlamePainter : EditorLinePainter() {
                 blame.display(),
                 TextAttributes().apply {
                     foregroundColor = JBColor.GRAY
-                    setFontType(TextAttribute.ITALIC)
+                    setFontType(Font.ITALIC)
                 },
             ),
         )

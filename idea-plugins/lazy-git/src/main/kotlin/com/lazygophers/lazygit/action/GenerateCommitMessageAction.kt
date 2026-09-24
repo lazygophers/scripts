@@ -8,7 +8,7 @@ import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.PlatformDataKeys
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.vcs.VcsDataKeys
-import com.intellij.openapi.vcs.changes.Change
+import com.intellij.vcs.commit.CommitWorkflowUi
 import com.lazygophers.lazygit.ai.AiCommitClient
 import com.lazygophers.lazygit.ai.SseConsumer
 import com.lazygophers.lazygit.diff.IncludedChangesDiff
@@ -30,7 +30,7 @@ class GenerateCommitMessageAction : AnAction("AI 生成", "根据当前勾选变
             return
         }
         val ui = e.getData(VcsDataKeys.COMMIT_WORKFLOW_UI) ?: return
-        val changes = ui.includedChanges
+        val changes = ui.getIncludedChanges()
         val diff = IncludedChangesDiff.build(changes)
         if (diff.isBlank()) {
             notify(project, "当前没有勾选的变更", NotificationType.WARNING)

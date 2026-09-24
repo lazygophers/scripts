@@ -115,7 +115,7 @@ class AiCommitClient(
         resp.body().use { lines ->
             lines.forEach { line ->
                 val data = SseParser.dataOf(line) ?: return@forEach
-                if (SseParser.isDone(data)) return@use
+                if (SseParser.isDone(data)) return@forEach
                 val delta = try { extract(data) } catch (_: Exception) { null } ?: return@forEach
                 sb.append(delta)
                 consumer.onDelta(delta)
