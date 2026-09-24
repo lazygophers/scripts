@@ -237,7 +237,7 @@ def _print_final(status: CiStatus, *, attempts: int, elapsed: float) -> None:
     ]
     r.summary("", rows)
     if status.detail.strip():
-        r.output(status.detail, max_lines=80, prefix="")
+        r.output(status.detail, max_lines=80, prefix="", force=True)
 
 
 def _resolve_ref(ref: str | None) -> str | None:
@@ -289,7 +289,7 @@ def play_cicd(job_id: str, *, project: str = "") -> int:
         return 0
     r.err("启用失败")
     if detail:
-        r.output(detail, max_lines=80, prefix="")
+        r.output(detail, max_lines=80, prefix="", force=True)
     return p.returncode or 1
 
 
@@ -305,7 +305,7 @@ def logs_cicd(target: str, *, project: str = "", failed: bool = False, job: str 
     p = run(cmd, check=False, capture_output=True)
     detail = (p.stdout or "").strip() or (p.stderr or "").strip()
     if detail:
-        reporter(stderr=True).output(detail, max_lines=400, prefix="")
+        reporter(stderr=True).output(detail, max_lines=400, prefix="", force=True)
     return p.returncode
 
 

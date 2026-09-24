@@ -52,8 +52,25 @@ class TestMinimalOutput(unittest.TestCase):
         self.assertEqual(r.console.file.getvalue(), "")  # rule 直接丢弃
         r.panel("摘要", "第一行\n第二行")
         out = r.console.file.getvalue()
-        self.assertIn("摘要:", out)
-        self.assertIn("第一行", out)
+        self.assertIn("摘要", out)  # 成功面板只留标题行
+        self.assertNotIn("第一行", out)  # 内容（message/详情）丢弃
+        self.assertNotIn("第二行", out)
+
+    def test_output_gated_unless_forced(self):
+        r = make_reporter({"CLAUDECODE": "1"})
+        r.output("Switched to branch 'dev'")
+        self.assertEqual(r.console.file.getvalue(), "")  # 过程性回放默认丢弃
+        r.output("fatal: conflict", force=True)
+        self.assertIn("fatal: conflict", r.console.file.getvalue())  # 失败详情放行
+
+    def test_cmd_result_success_silent_failure_kept(self):
+        r = make_reporter({"CLAUDECODE": "1"})
+        r.cmd_result(["git", "merge"], returncode=0)
+        self.assertEqual(r.console.file.getvalue(), "")  # 成功静默
+        r.cmd_result(["git", "push"], returncode=1, output="rejected", show_output=True)
+        out = r.console.file.getvalue()
+        self.assertIn("ERROR:", out)
+        self.assertIn("rejected", out)
 
 
 class TestDataTable(unittest.TestCase):

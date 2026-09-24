@@ -129,9 +129,9 @@ def _debug_dump(url: str, payload: dict, raw: bytes | None = None) -> None:
     rr = reporter(stderr=True)
     rr.step(f"[debug] LAZYGOPHERS POST {url}")
     rr.step("[debug] request body:")
-    rr.output(json_dumps(payload))
+    rr.output(json_dumps(payload), force=True)
     rr.step("[debug] response body:")
-    rr.output(raw.decode("utf-8", "replace") if raw else "(无)")
+    rr.output(raw.decode("utf-8", "replace") if raw else "(无)", force=True)
 
 
 def _has_changes(*, cwd: str | None = None) -> tuple[bool, list[str]]:

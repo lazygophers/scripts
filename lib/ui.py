@@ -203,9 +203,9 @@ class Reporter:
 
     def panel(self, title: str, content: str, *, style: str = "blue") -> None:
         if self.minimal:
-            self.console.print(f"{title}:")
-            if content:
-                self.console.print(content)
+            # 成功面板只留标题行（如「提交完成 7a72e45」），内容（message/分支详情）丢弃
+            if title:
+                self.console.print(title)
             return
         self.console.print(Panel(content, title=title, border_style=style))
 
@@ -290,19 +290,21 @@ class Reporter:
 
         if returncode is None or returncode == 0:
             if self.minimal:
-                self.console.print(head)
-            else:
-                self.step(head)
+                return  # 成功静默：退出码 0 已含此信息
+            self.step(head)
         else:
             self.err(f"{head} (exit={returncode})")
 
         if show_output and output.strip():
-            self.output(output)
+            self.output(output, force=returncode is not None and returncode != 0)
 
-    def output(self, text: str, *, max_lines: int = 30, prefix: str = "  ") -> None:
+    def output(self, text: str, *, max_lines: int = 30, prefix: str = "  ",
+               force: bool = False) -> None:
         t = (text or "").rstrip()
         if not t:
             return
+        if self.minimal and not force:
+            return  # 过程性原文回放默认丢弃；失败详情由调用方 force=True 放行
         lines = t.splitlines()
         truncated = False
         if len(lines) > max_lines:

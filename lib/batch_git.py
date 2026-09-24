@@ -439,13 +439,21 @@ _EXEC_PARALLEL = False
 
 
 def _run_exec(cmd, *, label: str, r=None, **kw):
-    """execute 阶段的子进程调用统一走这里（串行直吐 / 并发捕获回放）。"""
+    """execute 阶段的子进程调用统一走这里。
+
+    三种模式：并发=捕获回放；串行+人类环境=直吐实时流；串行+AI 环境=捕获且
+    成功静默（退出码已含成败），失败时把捕获原文整段吐出——子进程内部自己的
+    ERROR: 行只在失败时才值得看。
+    """
     global _EXEC_PARALLEL
-    if _EXEC_PARALLEL:
+    from lib.ai_env import is_ai_shell_env
+    if _EXEC_PARALLEL or is_ai_shell_env():
         kw["capture_output"] = True
         p = _run(cmd, **kw)
         out = ((p.stdout or "") + (p.stderr or "")).strip()
-        if r is not None and out:
+        if r is not None and p.returncode != 0:
+            r.err(f"{label} 退出码 {p.returncode}:\n{out[:2000] or '(无输出)'}")
+        elif r is not None and out and _EXEC_PARALLEL and not is_ai_shell_env():
             r.output(out[:2000], prefix=f"  {label} | ")
         return p
     kw.setdefault("capture_output", False)

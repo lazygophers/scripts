@@ -120,7 +120,7 @@ def _debug_log(
     if p is not None:
         out = (p.stdout or "") + (p.stderr or "")
         if out.strip():
-            r.output(out)
+            r.output(out, force=True)  # --debug 显式开闸，AI 环境也要看
 
 
 def run_no_capture(

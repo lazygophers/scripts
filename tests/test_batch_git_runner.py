@@ -272,9 +272,10 @@ class TestBatchRunner(RunnerCase):
 
     def test_run_exec_parallel_captures_and_replays(self) -> None:
         """_EXEC_PARALLEL=True 时子进程输出捕获后整段回放（带仓库名前缀）。"""
-        p = mock.Mock(stdout="out", stderr="err")
+        p = mock.Mock(returncode=0, stdout="out", stderr="err")
         r = mock.MagicMock()
         with mock.patch.object(bg, "_EXEC_PARALLEL", True), \
+             mock.patch("lib.ai_env.is_ai_shell_env", return_value=False), \
              mock.patch.object(bg, "_run", return_value=p) as mrun:
             got = bg._run_exec(["git", "push"], label="repo1", r=r, cwd="/x", check=False)
         self.assertIs(got, p)
@@ -289,6 +290,32 @@ class TestBatchRunner(RunnerCase):
              mock.patch.object(bg, "_run", return_value=p) as mrun:
             bg._run_exec(["git", "switch"], label="repo1", r=mock.MagicMock(), cwd="/x")
         mrun.assert_called_once_with(["git", "switch"], cwd="/x", capture_output=False)
+
+    def test_run_exec_ai_env_captures_silent_on_success(self) -> None:
+        """AI 环境串行也捕获：rc=0 静默，不回放子进程输出。"""
+        p = mock.Mock(returncode=0, stdout="noise", stderr="")
+        r = mock.MagicMock()
+        with mock.patch.object(bg, "_EXEC_PARALLEL", False), \
+             mock.patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             mock.patch.object(bg, "_run", return_value=p) as mrun:
+            got = bg._run_exec(["git", "push"], label="repo1", r=r, cwd="/x", check=False)
+        self.assertIs(got, p)
+        mrun.assert_called_once_with(["git", "push"], cwd="/x", check=False, capture_output=True)
+        r.output.assert_not_called()
+        r.err.assert_not_called()
+
+    def test_run_exec_ai_env_dumps_output_on_failure(self) -> None:
+        """AI 环境失败：捕获原文整段经 err 吐出（子进程内部 ERROR 行只在失败时可见）。"""
+        p = mock.Mock(returncode=1, stdout="", stderr="ERROR: push 被拒\nfatal: rejected")
+        r = mock.MagicMock()
+        with mock.patch.object(bg, "_EXEC_PARALLEL", False), \
+             mock.patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             mock.patch.object(bg, "_run", return_value=p):
+            bg._run_exec(["git", "push"], label="repo1", r=r, cwd="/x", check=False)
+        r.err.assert_called_once()
+        msg = r.err.call_args[0][0]
+        self.assertIn("repo1", msg)
+        self.assertIn("push 被拒", msg)
 
     def test_concurrency_reads_the_env_var(self) -> None:
         with mock.patch.dict(os.environ, {"BATCH_CONCURRENCY": "7"}):

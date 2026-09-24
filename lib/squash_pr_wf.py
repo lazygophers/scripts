@@ -349,7 +349,7 @@ def run_squash_pr(
         res = SquashResult(returncode=1, conflict_files=files)
         r.err(f"合并冲突（{len(files)} 个文件）:")
         for f in files:
-            r.output(f)
+            r.output(f, force=True)
         try:
             notify(f"squash pr 检测到合并冲突: {len(files)} 个文件")
         except Exception:
@@ -433,7 +433,7 @@ def run_squash_pr(
     if has_conflict2:
         r.err(f"push 前检测到冲突（{len(files2)} 个文件）:")
         for f in files2:
-            r.output(f)
+            r.output(f, force=True)
         return _fail("push 前冲突预演失败，已回滚", state, r=r, cwd=cwd,
                      notify_msg=f"冲突预演失败: {len(files2)} 个文件")
 

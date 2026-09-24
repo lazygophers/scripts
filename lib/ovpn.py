@@ -668,7 +668,7 @@ def _connect_once(cfg: dict, reporter, *, verbose: bool = False,
                         reporter.info("VPN 下发的是公网 DNS，已改用默认 DNS: AdGuard、Cloudflare、阿里、腾讯")
             if quiet_log and not any(k in line for k in _LOG_KEEP):
                 continue  # 分流把 verb 提到了 3，非 verbose 时只留关键行，别刷屏
-            reporter.output(explain_openvpn_log(line), prefix="  openvpn | ")
+            reporter.output(explain_openvpn_log(line), prefix="  openvpn | ", force=True)
 
     threading.Thread(target=_pump_log, daemon=True).start()
 
@@ -759,7 +759,7 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
         if line is None:
             return (1 if reconnecting else 0), connected_ever, last_otp_counter
         if verbose and line.startswith(">"):
-            reporter.output(line, prefix="  mgmt | ")
+            reporter.output(line, prefix="  mgmt | ", force=True)
 
         need_auth, sc_flags = parse_need_auth(line)
         if need_auth:

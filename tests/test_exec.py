@@ -256,7 +256,7 @@ class TestDebugLog(unittest.TestCase):
         self.assertIn("cwd=/repo", msg)
         self.assertIn("rc=0", msg)
         self.assertIn("1.50s", msg)
-        r.output.assert_called_once_with("out")
+        r.output.assert_called_once_with("out", force=True)
 
     def test_no_proc_uses_explicit_rc(self):
         self._notify._DEBUG = True

@@ -322,7 +322,7 @@ class OvpnCli(BaseCli):
         else:
             self._r.ok(f"已连接  {len(procs)} 个 openvpn 进程")
             for pid, cmd in procs:
-                self._r.output(f"pid {pid}  {cmd}", prefix="  ")
+                self._r.output(f"pid {pid}  {cmd}", prefix="  ", force=True)
         self._r.kv("utun 网卡", {name: ip for name, ip in tuns} or {"(无)": "没有已配置 IP 的 utun"})
         return 0 if procs else 1
 
