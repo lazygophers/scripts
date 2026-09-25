@@ -67,6 +67,16 @@ class TestNeedRoot(CliCase):
     def test_returns_false_so_caller_continues(self) -> None:
         self.assertFalse(self.cli._need_root("show"))
 
+    def test_returns_true_when_root_is_unreachable(self) -> None:
+        # 提不了权（没有 sudo 之类）→ 返回 True，让调用点走退出码 13
+        self.require_root.side_effect = oc.NeedRoot("找不到 sudo")
+        self.assertTrue(self.cli._need_root("show"))
+        self.assertIn("找不到 sudo", self.cli._r.err.call_args[0][0])
+
+    def test_caller_exits_13_when_root_is_unreachable(self) -> None:
+        self.require_root.side_effect = oc.NeedRoot("找不到 sudo")
+        self.assertEqual(self.cli.show(), 13)
+
     def test_reports_when_legacy_config_is_secured(self) -> None:
         with mock.patch.object(oc, "secure_config", return_value=True):
             self.cli._need_root("show")
@@ -290,9 +300,15 @@ class TestRouteRemoveClear(CliCase):
         self.assertEqual(rc, 1)
         oc.save_config.assert_not_called()
 
-    def test_cidr_removal_matches_by_prefix(self) -> None:
-        # 现状：网段用 startswith 匹配，写个前缀就能删掉整条（见最终报告里的 bug 记录）
+    def test_cidr_removal_needs_the_whole_network(self) -> None:
+        # 写个前缀（10.8）不该删掉 10.8.0.0/16——删规则是不可逆操作，宁可没删中
         self.cli.route("remove", "10.8")
+        self.assertEqual(self.cfg["routes"]["cidrs"], ["10.8.0.0/16"])
+        self.cli._r.warn.assert_called_once()
+
+    def test_cidr_removal_normalizes_host_bits(self) -> None:
+        # 10.8.0.1/16 和 10.8.0.0/16 是同一个网段，写哪个都该删掉
+        self.cli.route("remove", "10.8.0.1/16")
         self.assertEqual(self.cfg["routes"]["cidrs"], [])
 
     def test_clear_empties_both_lists(self) -> None:
@@ -502,6 +518,14 @@ class TestDispatch(CliCase):
             self.cli(verbose=True, reconnect_max=5)
         self.assertEqual(c.call_args[1]["verbose"], True)
         self.assertEqual(c.call_args[1]["reconnect_max"], 5)
+
+    def test_private_method_is_not_a_subcommand(self) -> None:
+        # `ovpn _need_root` 不是子命令：以前 getattr 拿得到就调，参数对不上直接 TypeError
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = self.cli("_need_root")
+        self.assertEqual(rc, 1)
+        self.assertIn("未知子命令", buf.getvalue())
 
     def test_unknown_subcommand_is_rc_1(self) -> None:
         buf = io.StringIO()

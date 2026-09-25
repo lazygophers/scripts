@@ -32,7 +32,6 @@ import sys
 from functools import wraps
 
 from lib.archery import (
-    CONFIG_PATH,
     ArcheryClient,
     ArcheryError,
     client_for,
@@ -768,20 +767,23 @@ class ArcheryCli(BaseCli):
             "insecure": bool(insecure or old.get("insecure")),
             "token": {},
         }
+        previous = str(cfg.get("current") or "")
         put_profile(cfg, key, profile)
-        if current:
-            cfg["current"] = key
+        # put_profile 在 current 为空时会顺手把新站点设成默认（lib/profile_store.py），
+        # client.login() 落盘时（ArcheryClient._persist → put_profile）还会再来一次。
+        # --no-current 要的就是「别动 current」，所以两处都按原值写回去。
+        cfg["current"] = key if current else previous
 
         client = ArcheryClient(key, profile, cfg, reporter=self._r)
         client.login()  # 失败会抛 ArcheryError，配置不落盘；成功时它自己把 token 写好了
-        if current:
-            with config_lock():
-                cfg = load_config()
-                cfg["current"] = key
-                save_config(cfg)
-        self._r.ok(f"{key} 登录成功，已写入 {CONFIG_PATH}（权限 0600）")
+        with config_lock():
+            cfg = load_config()
+            cfg["current"] = key if current else previous
+            save_config(cfg)
+        self._r.ok(f"{key} 登录成功，已写入 {default_config_path()}（权限 0600）")
         if not current:
-            self._r.info(f"当前默认站点仍是 {cfg.get('current')}；切换用 `archery use {key}`")
+            self._r.info(f"当前默认站点仍是 {previous or '(没有默认站点)'}；"
+                         f"切换用 `archery use {key}`")
         return 0
 
     @cmd
@@ -793,7 +795,7 @@ class ArcheryCli(BaseCli):
         cfg = load_config()
         known = profiles(cfg)
         if not known:
-            self._r.warn(f"还没有配置任何站点（{CONFIG_PATH}）。跑 `archery login`")
+            self._r.warn(f"还没有配置任何站点（{default_config_path()}）。跑 `archery login`")
             return 1
         current = str(cfg.get("current") or "")
         self._r.kv("已配置站点", {

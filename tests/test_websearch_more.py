@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import json
 import pathlib
+import sys
 import tempfile
 import time
 import unittest
@@ -442,6 +443,61 @@ class TestCliEdges(unittest.TestCase):
             rc, out, _ = self._run(websearch.main, ["websearch", "q"])
         self.assertEqual(rc, 0)
         self.assertTrue(out.startswith("index\turl\ttitle\tsnippet"))
+
+
+
+class TestCacheShapeGuard(SearxCacheCase):
+    """缓存文件是 JSON 但形状不对（被别的程序写过、或旧格式）时也要能退回重新拉。"""
+
+    PAYLOAD = {"instances": {"https://ok.example/": {
+        "http": {"status_code": 200},
+        "timing": {"search": {"success_percentage": 99, "all": {"value": 1}}}}}}
+
+    def _load(self) -> list[str]:
+        with mock.patch.object(websearch, "_fetch_json", return_value=self.PAYLOAD):
+            return websearch.load_searx_instances()
+
+    def test_json_array_cache_falls_back_to_refresh(self) -> None:
+        self.cache.write_text("[]", encoding="utf-8")
+        self.assertEqual(self._load(), ["https://ok.example/"])
+
+    def test_dict_without_fetched_at_falls_back_to_refresh(self) -> None:
+        self.cache.write_text('{"instances": ["https://old.example/"]}', encoding="utf-8")
+        self.assertEqual(self._load(), ["https://ok.example/"])
+
+
+class TestMainErrorPaths(unittest.TestCase):
+    """main 的两条子命令分支也要接住 SearchError（配置里写错引擎名就会抛）。"""
+
+    def _run(self, argv: list[str]) -> tuple[int, str]:
+        err = io.StringIO()
+        with mock.patch.object(websearch, "load_config",
+                                        return_value={"engines": ["没这个引擎"]}), \
+             redirect_stdout(io.StringIO()), redirect_stderr(err):
+            rc = websearch.main(argv)
+        return rc, err.getvalue()
+
+    def test_engines_subcommand_reports_the_bad_config(self) -> None:
+        rc, err = self._run(["websearch", "engines"])
+        self.assertEqual(rc, 2)
+        self.assertIn("未知引擎", err)
+
+    def test_set_engines_without_args_reports_the_bad_config(self) -> None:
+        rc, err = self._run(["websearch", "set", "engines"])
+        self.assertEqual(rc, 2)
+        self.assertIn("未知引擎", err)
+
+
+class TestMainDefaultArgv(unittest.TestCase):
+    """main() 不传参数时要回落 sys.argv，而不是拿 None 去切片。"""
+
+    def test_none_argv_falls_back_to_sys_argv(self) -> None:
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["websearch"]), \
+             redirect_stdout(out):
+            rc = websearch.main()
+        self.assertEqual(rc, 0)
+        self.assertIn("websearch skills", out.getvalue())
 
 
 if __name__ == "__main__":

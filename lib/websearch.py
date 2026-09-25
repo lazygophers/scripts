@@ -378,6 +378,9 @@ def load_searx_instances(timeout: float = 15) -> list[str]:
             cache = json.loads(SEARX_CACHE.read_text())
         except ValueError:
             cache = None
+        # 文件是合法 JSON 不代表是我们写的那个形状（旧格式、被别的程序覆盖过）
+        if not isinstance(cache, dict) or "fetched_at" not in cache:
+            cache = None
     age_days = (time.time() - cache["fetched_at"]) / 86400 if cache else None
 
     def refresh() -> list[str]:
@@ -829,17 +832,25 @@ FORMATTERS = {"plain": _fmt_plain, "json": _fmt_json, "tsv": _fmt_tsv,
 
 
 def main(argv: list[str] | None = None) -> int:
-    rest = argv[1:] if argv is not None else None
+    argv = list(sys.argv if argv is None else argv)
+    rest = argv[1:]
     if not rest:
         # 裸跑默认打 AI 向 skills 说明(--skills 同款)
         from lib.skills_help import command_name, render_skills
         print(render_skills(command_name(argv[0]), __doc__))
         return 0
-    # engines / set 子命令直接处理,不进 argparse
-    if rest[0] == "engines":
-        return list_engines()
-    if rest[0] == "set":
-        return set_engines(rest[1:])
+    # engines / set 子命令直接处理,不进 argparse。两条都会读配置里的 engines:,
+    # 里面写错引擎名就是 SearchError——报一行人话,别甩 traceback
+    try:
+        if rest[0] == "engines":
+            return list_engines()
+        if rest[0] == "set":
+            return set_engines(rest[1:])
+    except SearchError as e:
+        from lib.ui import Reporter
+
+        Reporter().err(str(e))
+        return 2
     args = build_parser().parse_args(rest)
     try:
         results = search(" ".join(args.query), limit=args.limit,

@@ -982,7 +982,10 @@ def _push_heal(repo: Path, target: str, r: Reporter, *, force: bool = False, rou
                     cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
         if pull.returncode != 0:
             return "skip", _extract_error((pull.stderr or "") + (pull.stdout or ""), pull.returncode, "自动 merge 失败（需手动解决）")
-    return "fail", f"push {target} 失败（自愈 {rounds} 轮后仍被拒）"
+    # 循环跑满到不了这里（最后一轮命中上面的 `attempt >= rounds - 1` 就返回了）；
+    # 只有 rounds < 1 才会掉下来。这里必须显式失败——返回 None 的语义是「推成功」，
+    # 一次都没推就报成功是最坏的那种错。
+    return "fail", f"push {target} 没有执行（rounds={rounds}）"
 
 
 def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:

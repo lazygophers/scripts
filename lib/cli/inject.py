@@ -223,10 +223,15 @@ def _uninstall(r) -> int:
     if _COMPLETIONS_ZSH.exists():
         _COMPLETIONS_ZSH.unlink()
         r.ok(f"删除 {_COMPLETIONS_ZSH}")
-    if _FISH_CONFIG_DIR.exists():
-        for path in _FISH_COMPLETIONS_DIR.glob("*.fish"):
-            path.unlink()
-            r.ok(f"删除 {path}")
+    if _FISH_COMPLETIONS_DIR.exists():
+        # 这个目录是 fish 公用的，别人装的补全也在里面：只删我们自己写过的那些工具名
+        from lib.completions import completion_map
+
+        for tool in completion_map(_bin_dir()):
+            path = _FISH_COMPLETIONS_DIR / f"{tool}.fish"
+            if path.exists():
+                path.unlink()
+                r.ok(f"删除 {path}")
     r.kv("卸载完成", {"下一步": "重启 shell 或 `source` 你的 rc"})
     return 0
 

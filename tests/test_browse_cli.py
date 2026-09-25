@@ -39,6 +39,9 @@ from lib.browse_protocol import (  # noqa: E402
 from lib.cli import browse  # noqa: E402
 
 TIMEOUT = 5.0
+# 等「接管的 daemon 起来」的窗口。给得比 TIMEOUT 宽：整套并行跑时这一步要和
+# 另外七个 worker 抢 CPU，卡住的是调度不是逻辑。
+ADOPT_WAIT = 30.0
 
 
 class FakeBrowser:
@@ -730,8 +733,11 @@ class TestDaemonCommands(unittest.TestCase):
             stopped: list[int] = []
 
             def stop_when_ours():
-                # 占着的 Harness daemon 不写 pid 文件；看到 pid 文件 = 接管的那个起来了
-                for _ in range(200):
+                # 占着的 Harness daemon 不写 pid 文件；看到 pid 文件 = 接管的那个起来了。
+                # 按墙钟给窗口而不是固定轮数：整套并行跑时机器满载，固定 200 轮
+                # （4 秒）会等不到接管完成，变成一条假失败。
+                deadline = time.monotonic() + ADOPT_WAIT
+                while time.monotonic() < deadline:
                     if browse.pid_path(h.sock).exists() and browse.probe(h.sock):
                         with mock.patch("sys.stderr", io.StringIO()):
                             stopped.append(browse.daemon_stop(h.sock))
@@ -743,7 +749,7 @@ class TestDaemonCommands(unittest.TestCase):
             with mock.patch.object(browse, "ADOPT_GRACE", 0.5), \
                  mock.patch("sys.stderr", io.StringIO()):
                 self.assertEqual(browse.daemon_run(h.sock, 0.0), browse.EXIT_OK)
-            stopper.join(TIMEOUT)
+            stopper.join(ADOPT_WAIT + TIMEOUT)
             self.assertEqual(stopped, [browse.EXIT_OK])
 
     def test_adopt_socket_sigterms_a_stubborn_occupant(self):

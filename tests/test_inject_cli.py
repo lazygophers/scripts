@@ -255,6 +255,16 @@ class TestUninstall(InjectCase):
         self.assertFalse(self.inject._COMPLETIONS_ZSH.exists())
         self.assertEqual(list(self.inject._FISH_COMPLETIONS_DIR.glob("*.fish")), [])
 
+    def test_foreign_fish_completions_are_kept(self) -> None:
+        # fish 的 completions 目录是公用的，别人装的补全不能被我们连锅端
+        self.inject._write_completion_files(self.r)
+        foreign = self.inject._FISH_COMPLETIONS_DIR / "kubectl.fish"
+        foreign.write_text("# 别人的", encoding="utf-8")
+        ours = next(iter(self.inject._FISH_COMPLETIONS_DIR.glob("*.fish")))
+        self.inject._uninstall(mock.MagicMock())
+        self.assertTrue(foreign.exists())
+        self.assertFalse(ours.exists())
+
     def test_rc_without_block_is_untouched(self) -> None:
         rc = self.home / ".bashrc"
         rc.write_text("export FOO=1\n", encoding="utf-8")

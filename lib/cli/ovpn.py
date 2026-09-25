@@ -25,6 +25,7 @@ from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib import log as slog
 from lib.ovpn import (
     CONFIG_PATH,
+    NeedRoot,
     load_config,
     normalize_secret,
     require_root,
@@ -79,10 +80,16 @@ class OvpnCli(BaseCli):
     def _need_root(self, cmd: str) -> bool:
         """凭据文件是 root:0600，碰配置的子命令要 root：不是就用 sudo 重跑自己。
 
-        返回值永远是 False（重跑走 execvp 不返回），留着是为了调用点读起来直白。
+        提权成功这个函数不返回（execvp 换掉整个进程），所以正常路径永远是 False。
+        提不了权（机器上没有 sudo 之类）返回 True，调用点以退出码 13 收场——
+        比把 NeedRoot 的 traceback 甩给用户强。
         """
         del cmd
-        require_root(SCRIPT_PATH, ORIG_ARGV[1:])
+        try:
+            require_root(SCRIPT_PATH, ORIG_ARGV[1:])
+        except NeedRoot as e:
+            self._r.err(str(e))
+            return True
         if secure_config():
             self._r.info(f"已把 {CONFIG_PATH} 收归 root:0600")
         return False
@@ -219,8 +226,14 @@ class OvpnCli(BaseCli):
                 if d in domains:
                     domains.remove(d)
                     hit = True
+                # 网段要精确匹配：写 10.8 不能连坐 10.8.0.0/16。只放宽到「同一个
+                # 网段的不同写法」（10.8.0.1/16 == 10.8.0.0/16），解析不了就只认原样相等。
+                try:
+                    normalized = str(ipaddress.ip_network(raw, strict=False))
+                except ValueError:
+                    normalized = raw
                 for c in list(cidrs):
-                    if c == raw or (raw and c.startswith(raw)):
+                    if c == raw or c == normalized:
                         cidrs.remove(c)
                         hit = True
                 self._r.ok(f"已删 {raw}") if hit else self._r.warn(f"没有这条规则: {raw}")
@@ -386,7 +399,9 @@ class OvpnCli(BaseCli):
         targets = names or ("connect",)
         rc = 0
         for name in targets:
-            method = getattr(self, name, None)
+            # 下划线开头的是内部方法（_need_root 之类），不是子命令：getattr 拿得到，
+            # 直接调参数对不上就是一段 TypeError traceback
+            method = None if name.startswith("_") else getattr(self, name, None)
             if not callable(method):
                 print(f"未知子命令: {name}", file=sys.stderr)
                 return 1

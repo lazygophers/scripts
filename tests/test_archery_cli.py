@@ -554,6 +554,13 @@ class TestHosts(ConfigCase):
         self.assertEqual(rc, 1)
         self.assertIn("archery login", messages(self.cli._r, "warn")[0])
 
+    def test_empty_config_names_the_file_actually_read(self):
+        self.cfg = {}
+        with mock.patch.object(ac, "default_config_path",
+                               return_value=pathlib.Path("/tmp/somewhere/archery.yaml")):
+            run(self.cli.hosts)
+        self.assertIn("/tmp/somewhere/archery.yaml", messages(self.cli._r, "warn")[0])
+
     def test_marks_current_site(self):
         rc, _ = run(self.cli.hosts)
         self.assertEqual(rc, 0)
@@ -630,8 +637,23 @@ class TestLogin(ConfigCase):
     def test_no_current_keeps_old_default(self):
         rc, _ = run(self.cli.login, url="c.com", username="nico", password="pw", current=False)
         self.assertEqual(rc, 0)
-        self.assertEqual(self.saved, {})  # 没写 current 就不落这一步
-        self.assertTrue(messages(self.cli._r, "info"))
+        self.assertEqual(self.saved["current"], "a.com")  # 原来的默认站点原样留着
+        self.assertIn("当前默认站点仍是 a.com", messages(self.cli._r, "info")[0])
+
+    def test_no_current_on_empty_config_sets_no_default(self):
+        # 空配置时 put_profile 会顺手把新站点设成 current，--no-current 要把这一步按回去
+        self.cfg = {}
+        rc, _ = run(self.cli.login, url="c.com", username="nico", password="pw", current=False)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.saved["current"], "")
+        self.assertNotIn("当前默认站点仍是 c.com", messages(self.cli._r, "info")[0])
+
+    def test_success_message_names_the_file_actually_written(self):
+        # sudo 下 CONFIG_PATH（import 时按 Path.home() 算死）和真正读写的路径会对不上
+        with mock.patch.object(ac, "default_config_path",
+                               return_value=pathlib.Path("/tmp/somewhere/archery.yaml")):
+            run(self.cli.login, url="c.com", username="nico", password="pw")
+        self.assertIn("/tmp/somewhere/archery.yaml", messages(self.cli._r, "ok")[-1])
 
     def test_prompts_for_missing_fields(self):
         with mock.patch.object(ac, "ask_text", side_effect=["c.com", "nico", "pw"]), \
