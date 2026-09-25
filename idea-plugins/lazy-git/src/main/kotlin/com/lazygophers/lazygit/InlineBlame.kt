@@ -55,13 +55,17 @@ class InlineBlameService(private val project: Project) {
 
     fun blameFor(file: VirtualFile, line: Int, ready: (LineBlame?) -> Unit = {}) {
         val key = "${file.path}:${file.modificationStamp}"
-        cache[key]?.let { ready(it[line]); return }
+        cache[key]?.let {
+            LOG.info("[DEBUG-lg9f] cache hit line=$line blame=${it[line] != null}")
+            ready(it[line]); return
+        }
         if (!pending.add(key)) return
         ApplicationManager.getApplication().executeOnPooledThread {
             val map = try { annotateAll(file) } catch (e: Exception) {
-                LOG.warn("blame 失败: ${file.path}", e)
+                LOG.warn("[DEBUG-lg9f] blame 失败: ${file.path}", e)
                 emptyMap()
             }
+            LOG.info("[DEBUG-lg9f] annotated ${file.name}: ${map.size} lines blamed")
             cache[key] = map
             pending.remove(key)
             ApplicationManager.getApplication().invokeLater { ready(map[line]) }
@@ -69,22 +73,30 @@ class InlineBlameService(private val project: Project) {
     }
 
     private fun annotateAll(file: VirtualFile): Map<Int, LineBlame> {
-        val provider = GitVcs.getInstance(project)?.annotationProvider ?: return emptyMap()
+        val vcs = GitVcs.getInstance(project)
+        LOG.info("[DEBUG-lg9f] annotateAll: vcs=${vcs != null} file=${file.name}")
+        val provider = vcs?.annotationProvider ?: return emptyMap()
         val annotation = ReadAction.compute<FileAnnotation?, Exception> {
             try { provider.annotate(file) } catch (e: Exception) {
-                LOG.warn("annotate 失败: ${file.path}", e)
+                LOG.warn("[DEBUG-lg9f] annotate 失败: ${file.path}", e)
                 null
             }
-        } ?: return emptyMap()
-        val revisions = annotation.revisions ?: return emptyMap()
-        val details = revisions.associate {
-            it.revisionNumber.asString() to ((it.author ?: "") to it.commitMessage)
         }
+        if (annotation == null) return emptyMap()
+        // 新平台 Git 注解 getRevisions() 返回 null（日志已证），逐行数据从 aspects 取
+        val aspects = annotation.aspects ?: return emptyMap()
+        LOG.info("[DEBUG-lg9f] annotation lines=${annotation.lineCount} aspects=${aspects.map { it.id }}")
+        val authorAspect = aspects.firstOrNull { it.id == com.intellij.openapi.vcs.annotate.LineAnnotationAspect.AUTHOR }
+        val dateAspect = aspects.firstOrNull { it.id == com.intellij.openapi.vcs.annotate.LineAnnotationAspect.DATE }
         return buildMap {
             for (line in 0 until annotation.lineCount) {
-                val revision = annotation.getLineRevisionNumber(line) ?: continue
-                val (author, message) = details[revision.asString()] ?: continue
-                BlameFormatter.format(author, annotation.getLineDate(line), message)?.let { put(line, it) }
+                annotation.getLineRevisionNumber(line) ?: continue // 未提交行
+                val author = authorAspect?.getValue(line)?.takeIf { it.isNotBlank() } ?: continue
+                val time = dateAspect?.getValue(line)?.takeIf { it.isNotBlank() }
+                    ?: annotation.getLineDate(line)?.let { SimpleDateFormat("yyyy-MM-dd").format(it) } ?: continue
+                val message = authorAspect?.getTooltipText(line)?.lineSequence()?.firstOrNull()
+                    ?.takeIf { it.isNotBlank() } ?: continue
+                put(line, LineBlame(author, time, message))
             }
         }
     }
@@ -123,6 +135,7 @@ class InlineBlameTrigger(private val project: Project) {
         if (blame == null || editor.isDisposed) return
         val offset = editor.document.getLineEndOffset(line)
         val text = blame.display()
+        LOG.info("[DEBUG-lg9f] inlay: line=$line text=${text.take(60)}")
         val renderer = object : EditorCustomElementRenderer {
             override fun calcWidthInPixels(inlay: Inlay<*>): Int =
                 editor.contentComponent.getFontMetrics(BLAME_FONT).stringWidth(text)
