@@ -13,12 +13,16 @@ export async function downloadsStart(
   requireApi("downloads", "downloading files");
   const url = requireString(params.url, "url");
   const filename = optionalString(params.filename, "filename");
+  // 真假值判断会把 "yes" 静默变成 false：用户想弹「另存为」，文件却落进默认目录
+  if (params.saveAs !== undefined && typeof params.saveAs !== "boolean") {
+    throw new CommandError("invalid argument", "saveAs must be a boolean");
+  }
   await confirm({ action: "download", method: "lg:downloads.start", url });
 
   const id = await chrome.downloads.download({
     url,
     ...(filename === undefined ? {} : { filename }),
-    ...(params.saveAs === undefined ? {} : { saveAs: params.saveAs === true }),
+    ...(params.saveAs === undefined ? {} : { saveAs: params.saveAs }),
   });
   return { download: id };
 }

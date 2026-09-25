@@ -63,15 +63,33 @@ describe("downloadsStart", () => {
     assert.deepEqual(calls[0].arg, { url: "https://e.test/a.zip" });
   });
 
-  it("forwards filename and normalises saveAs to a boolean", async () => {
+  it("forwards filename and a boolean saveAs", async () => {
     const { calls, api } = downloadsApi();
     chromeWith({ downloads: api });
-    await downloadsStart({ url: "https://e.test/a.zip", filename: "a.zip", saveAs: "yes" });
+    await downloadsStart({ url: "https://e.test/a.zip", filename: "a.zip", saveAs: true });
     assert.deepEqual(calls[0].arg, {
       url: "https://e.test/a.zip",
       filename: "a.zip",
-      saveAs: false,
+      saveAs: true,
     });
+  });
+
+  it("forwards saveAs: false as given", async () => {
+    const { calls, api } = downloadsApi();
+    chromeWith({ downloads: api });
+    await downloadsStart({ url: "https://e.test/a.zip", saveAs: false });
+    assert.deepEqual(calls[0].arg, { url: "https://e.test/a.zip", saveAs: false });
+  });
+
+  it("rejects a non-boolean saveAs instead of silently downloading", async () => {
+    // "yes" 曾被静默当成 false：用户想弹「另存为」，文件却直接落进默认目录
+    const { calls, api } = downloadsApi();
+    chromeWith({ downloads: api });
+    await rejectsWith(
+      () => downloadsStart({ url: "https://e.test/a.zip", saveAs: "yes" }),
+      "invalid argument",
+    );
+    assert.equal(calls.length, 0);
   });
 
   it("rejects a non-string filename", async () => {

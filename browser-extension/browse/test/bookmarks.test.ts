@@ -78,6 +78,18 @@ describe("bookmarksSearch", () => {
     await rejectsWith(() => bookmarksSearch({ query: 7 }), "invalid argument");
   });
 
+  it("validates arguments before asking the user", async () => {
+    let asked = false;
+    const { api } = bookmarksApi();
+    chromeWith({ bookmarks: api }, { ...DEFAULTS, confirm_mode: "always" });
+    setConfirmHook(async () => {
+      asked = true;
+      return true;
+    });
+    await rejectsWith(() => bookmarksSearch({ query: 7 }), "invalid argument");
+    assert.equal(asked, false, "参数错就不该打扰用户");
+  });
+
   it("refuses when the user denies reading bookmarks", async () => {
     // 默认 confirm_mode 是 silent（直接放行），要测拒绝就得把模式调到 always
     const { calls, api } = bookmarksApi();

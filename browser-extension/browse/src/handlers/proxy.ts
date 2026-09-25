@@ -10,6 +10,13 @@ import { requireApi } from "./context.ts";
 const MODES = ["direct", "system", "fixed_servers", "pac_script"] as const;
 type Mode = (typeof MODES)[number];
 
+/**
+ * `ProxyServer.scheme` 的取值（chrome.proxy 文档的 Scheme 类型）。不给就是 http
+ * ——那是 Chrome 自己的默认值，不是这里的选择。
+ */
+const SCHEMES = ["http", "https", "quic", "socks4", "socks5"] as const;
+type Scheme = (typeof SCHEMES)[number];
+
 function proxyConfig(params: Record<string, unknown>): chrome.proxy.ProxyConfig {
   const mode = requireString(params.mode, "mode") as Mode;
   if (!(MODES as readonly string[]).includes(mode)) {
@@ -21,9 +28,13 @@ function proxyConfig(params: Record<string, unknown>): chrome.proxy.ProxyConfig 
     if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
       throw new CommandError("invalid argument", "port must be an integer in [1, 65535]");
     }
+    const scheme = optionalString(params.scheme, "scheme") ?? "http";
+    if (!(SCHEMES as readonly string[]).includes(scheme)) {
+      throw new CommandError("invalid argument", `scheme must be one of ${SCHEMES.join(", ")}`);
+    }
     return {
       mode,
-      rules: { singleProxy: { scheme: "http", host, port: port as number } },
+      rules: { singleProxy: { scheme: scheme as Scheme, host, port: port as number } },
     };
   }
   if (mode === "pac_script") {

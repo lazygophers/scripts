@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it, mock } from "node:test";
 
 import { setEventSink } from "../src/events.ts";
-import { listenPrinting, printingRespond } from "../src/handlers/printing.ts";
+import { PRINT_TIMEOUT_MS, listenPrinting, printingRespond } from "../src/handlers/printing.ts";
 import type { Event } from "../src/protocol.ts";
 import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
 
@@ -33,10 +33,23 @@ function printerProviderWith() {
   };
 }
 
+// 每条 pending 请求都挂着一个 5 分钟的超时定时器。全程用假定时器：既让超时可测，
+// 也不让没被回答的请求留下真定时器把 node --test 吊住五分钟。Date 一起冻住，
+// 撞号那条用例才能稳定复现「同一毫秒」。
+beforeEach(() => {
+  mock.timers.enable({ apis: ["Date", "setTimeout"] });
+});
+
 afterEach(() => {
   clearChrome();
   setEventSink(null);
+  mock.timers.reset();
 });
+
+/** 取一条事件里的 request id。 */
+function idOf(events: Event[], index: number): string {
+  return (events[index].params as Any).request as string;
+}
 
 describe("listenPrinting", () => {
   it("does nothing when the browser has no printerProvider", () => {
@@ -62,8 +75,50 @@ describe("listenPrinting", () => {
     listenPrinting();
     stub.fire();
     stub.fire();
-    const ids = stub.events.map((e) => (e.params as Any).request);
-    assert.notEqual(ids[0], ids[1]);
+    assert.notEqual(idOf(stub.events, 0), idOf(stub.events, 1));
+  });
+
+  it("keeps ids unique after one was answered in the same millisecond", async () => {
+    // 时钟冻住，复现旧写法（序号 = map.size + 1，会随 respond 回落）的撞号：
+    // A 进 → B 进 → 答 A → C 进，C 会拿到和 B 一样的 id 并把 B 顶掉
+    const stub = printerProviderWith();
+    listenPrinting();
+    stub.fire("A");
+    const bAnswers = stub.fire("B");
+    await printingRespond({ request: idOf(stub.events, 0), status: "OK" });
+    stub.fire("C");
+    const ids = [0, 1, 2].map((i) => idOf(stub.events, i));
+    assert.equal(new Set(ids).size, 3, "三条请求必须拿到三个不同的 id");
+    // B 还在等着，顶掉它就等于 Chrome 那边的对话框永远挂着
+    await printingRespond({ request: ids[1], status: "OK" });
+    assert.deepEqual(bAnswers, ["OK"]);
+  });
+
+  it("fails a request nobody answered instead of hanging Chrome's dialog", () => {
+    const stub = printerProviderWith();
+    listenPrinting();
+    const answers = stub.fire();
+    assert.deepEqual(answers, [], "超时之前不回调");
+    mock.timers.tick(PRINT_TIMEOUT_MS);
+    assert.deepEqual(answers, ["FAILED"]);
+  });
+
+  it("drops a timed-out request from the pending map", async () => {
+    const stub = printerProviderWith();
+    listenPrinting();
+    stub.fire();
+    const request = idOf(stub.events, 0);
+    mock.timers.tick(PRINT_TIMEOUT_MS);
+    await rejectsWith(() => printingRespond({ request, status: "OK" }), "invalid argument");
+  });
+
+  it("an answered request never fires its timeout", async () => {
+    const stub = printerProviderWith();
+    listenPrinting();
+    const answers = stub.fire();
+    await printingRespond({ request: idOf(stub.events, 0), status: "OK" });
+    mock.timers.tick(PRINT_TIMEOUT_MS);
+    assert.deepEqual(answers, ["OK"], "回调只能调一次，Chrome 第二次会抛");
   });
 });
 

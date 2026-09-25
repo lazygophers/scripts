@@ -1,4 +1,4 @@
-import { CommandError, optionalString, requireString } from "../protocol.ts";
+import { CommandError, optionalString } from "../protocol.ts";
 import { requireApi } from "./context.ts";
 
 /**

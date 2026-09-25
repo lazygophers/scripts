@@ -71,12 +71,28 @@ describe("clipboardRead", () => {
     await assert.rejects(() => clipboardRead(), /clipboard read failed/);
   });
 
-  it("现状：读剪贴板不过 confirm（见最终报告的 bug 记录）", async () => {
-    // policy.ts 的 RISKY_METHODS 把 lg:clipboard.read 标成 readClipboard 高危动作，
-    // 但 handlers/clipboard.ts 没有 confirm() 这一行，所以 always 模式下也不问。
-    chromeWith({ ok: true, text: "秘密" }, { config: { ...DEFAULTS, confirm_mode: "always" } });
+  it("refuses when the user denies reading the clipboard", async () => {
+    // 剪贴板里常是密码管理器刚复制的密码或 2FA 码，policy.ts 的 RISKY_METHODS
+    // 把 lg:clipboard.read 标成 readClipboard 高危动作，拦截点就在这里
+    const messages = chromeWith({ ok: true, text: "秘密" }, {
+      config: { ...DEFAULTS, confirm_mode: "always" },
+    });
     setConfirmHook(async () => false);
-    assert.deepEqual(await clipboardRead(), { text: "秘密" });
+    await rejectsWith(() => clipboardRead(), "lg:user rejected");
+    assert.equal(messages.length, 0, "拒绝要发生在真正读之前");
+  });
+
+  it("asks with the readClipboard action and no target url", async () => {
+    const seen: Any[] = [];
+    chromeWith({ ok: true, text: "x" }, { config: { ...DEFAULTS, confirm_mode: "always" } });
+    setConfirmHook(async (request) => {
+      seen.push(request as unknown as Any);
+      return true;
+    });
+    await clipboardRead();
+    assert.equal(seen[0].action, "readClipboard");
+    assert.equal(seen[0].method, "lg:clipboard.read");
+    assert.equal(seen[0].url, null);
   });
 });
 

@@ -69,6 +69,36 @@ describe("proxySet", () => {
     });
   });
 
+  it("forwards an explicit scheme so a SOCKS5 proxy stays SOCKS5", async () => {
+    // 出处：https://developer.chrome.com/docs/extensions/reference/api/proxy
+    // ProxyServer.scheme 可配，文档示例就是 scheme: "socks5"；不给才默认 http
+    const { calls, api } = proxyApi();
+    chromeWith({ proxy: api });
+    await proxySet({ mode: "fixed_servers", host: "127.0.0.1", port: 1080, scheme: "socks5" });
+    assert.deepEqual((calls[0].arg as Any).value, {
+      mode: "fixed_servers",
+      rules: { singleProxy: { scheme: "socks5", host: "127.0.0.1", port: 1080 } },
+    });
+  });
+
+  it("rejects a scheme Chrome does not accept", async () => {
+    const { api } = proxyApi();
+    chromeWith({ proxy: api });
+    await rejectsWith(
+      () => proxySet({ mode: "fixed_servers", host: "127.0.0.1", port: 1080, scheme: "socks6" }),
+      "invalid argument",
+    );
+  });
+
+  it("rejects a non-string scheme", async () => {
+    const { api } = proxyApi();
+    chromeWith({ proxy: api });
+    await rejectsWith(
+      () => proxySet({ mode: "fixed_servers", host: "127.0.0.1", port: 1080, scheme: 5 }),
+      "invalid argument",
+    );
+  });
+
   it("needs a host for fixed_servers", async () => {
     const { api } = proxyApi();
     chromeWith({ proxy: api });

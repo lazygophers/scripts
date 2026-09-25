@@ -7,10 +7,11 @@ export async function bookmarksSearch(
   params: Record<string, unknown>,
 ): Promise<{ nodes: chrome.bookmarks.BookmarkTreeNode[] }> {
   requireApi("bookmarks", "reading bookmarks");
+  const { url, title } = params;
+  // 先校验再问：参数写错就不该先弹一次确认框，用户点了同意才收到 invalid argument
+  const query = optionalString(params.query, "query");
   await confirm({ action: "readBookmarks", method: "lg:bookmarks.search", url: null });
 
-  const { url, title } = params;
-  const query = optionalString(params.query, "query");
   const nodes =
     query !== undefined
       ? await chrome.bookmarks.search(query)
