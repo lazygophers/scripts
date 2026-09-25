@@ -208,3 +208,48 @@ class TestMinimalOtherChannels(unittest.TestCase):
         from lib import fire_base
         src = inspect.getsource(fire_base._render_fire_help)
         self.assertIn("force_terminal=not is_ai_shell_env()", src)
+
+
+class TestMinimalRemainingChannels(unittest.TestCase):
+    """极简模式下还没被别处覆盖的几条出口。"""
+
+    def _minimal(self):
+        buf = io.StringIO()
+        with patch.dict(os.environ, {"CLAUDECODE": "1"}, clear=False):
+            return Reporter.from_buffer(buf), buf
+
+    def test_status_fail_prints_error_prefix(self):
+        r, buf = self._minimal()
+        r.status("fail", "编译失败")
+        self.assertEqual(buf.getvalue().strip(), "ERROR: 编译失败")
+
+    def test_status_ok_and_skip_stay_silent(self):
+        r, buf = self._minimal()
+        r.status("ok", "成功了")
+        r.status("skip", "跳过了")
+        self.assertEqual(buf.getvalue(), "")
+
+    def test_an_unknown_status_keeps_the_message_plain(self):
+        r, buf = self._minimal()
+        r.status("pending", "排队中")
+        self.assertEqual(buf.getvalue().strip(), "排队中")
+
+    def test_warn_keeps_the_original_text_behind_a_prefix(self):
+        r, buf = self._minimal()
+        r.warn("磁盘快满了")
+        self.assertEqual(buf.getvalue().strip(), "WARN: 磁盘快满了")
+
+    def test_status_footer_is_dropped(self):
+        r, buf = self._minimal()
+        r.status_footer([("成功 3", "green"), ("失败 1", "red")])
+        self.assertEqual(buf.getvalue(), "")
+
+    def test_empty_status_footer_is_a_no_op_in_either_mode(self):
+        r, buf = self._minimal()
+        r.status_footer([])
+        self.assertEqual(buf.getvalue(), "")
+
+    def test_summary_degrades_to_key_value_lines(self):
+        r, buf = self._minimal()
+        r.summary("汇总", [("仓库", "3", "bold"), ("失败", "0", None)])
+        self.assertEqual(buf.getvalue().split(), ["仓库:", "3", "失败:", "0"])
