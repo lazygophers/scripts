@@ -15,9 +15,16 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 from lib.cli.commit import CommitCli
+from lib.cli.fetch_all import FetchAllCli
+from lib.cli.issue import IssueCli
 from lib.cli.kk import KkCli
 from lib.cli.kkp import KkpCli
+from lib.cli.list_branch import ListBranchCli
 from lib.cli.n import NCli
+from lib.cli.switch_branch import SwitchBranchCli
+from lib.cli.sync_branch import SyncBranchCli
+from lib.cli.sync_master import SyncMasterCli
+from lib.cli.unsleep import UnsleepCli
 
 
 class TestKkCli(unittest.TestCase):
@@ -112,6 +119,90 @@ class TestCommitCli(unittest.TestCase):
                 patch("pathlib.Path.exists", return_value=True):
             CommitCli()("msg", settings="/tmp/settings.yaml")
         self.assertEqual(single.call_args.kwargs["settings_file"], "/tmp/settings.yaml")
+
+
+class TestBatchGitShells(unittest.TestCase):
+    """扫全目录的批量 Git 薄壳：裸调用等价于哪个子命令、--force 传没传。"""
+
+    def test_list_branch_bare_call_is_all(self):
+        with patch("lib.cli.list_branch.list_branch", return_value=0) as lister:
+            self.assertEqual(ListBranchCli()(), 0)
+        lister.assert_called_once_with()
+
+    def test_fetch_all_bare_call_is_all(self):
+        with patch("lib.cli.fetch_all.fetch_all", return_value=0) as fetcher:
+            self.assertEqual(FetchAllCli()(), 0)
+        fetcher.assert_called_once_with()
+
+    def test_sync_master_passes_force_through(self):
+        with patch("lib.cli.sync_master.sync_master_all", return_value=0) as syncer:
+            SyncMasterCli()(force=True)
+        syncer.assert_called_once_with(force=True)
+
+    def test_sync_branch_bare_call_syncs_the_current_branch(self):
+        with patch("lib.cli.sync_branch.sync_branch_all", return_value=0) as syncer:
+            SyncBranchCli()()
+        syncer.assert_called_once_with(branch=None, force=False)
+
+    def test_sync_branch_to_names_the_branch(self):
+        with patch("lib.cli.sync_branch.sync_branch_all", return_value=0) as syncer:
+            SyncBranchCli().to("canary", force=True)
+        syncer.assert_called_once_with(branch="canary", force=True)
+
+    def test_switch_branch_bare_call_takes_the_first_positional(self):
+        with patch("lib.cli.switch_branch.switch_branch_all", return_value=0) as switcher:
+            self.assertEqual(SwitchBranchCli()("topic"), 0)
+        switcher.assert_called_once_with("topic")
+
+    def test_switch_branch_without_a_branch_is_an_error(self):
+        with patch("lib.cli.switch_branch.switch_branch_all") as switcher:
+            self.assertEqual(SwitchBranchCli()(), 1)
+        switcher.assert_not_called()
+
+
+class TestIssueCli(unittest.TestCase):
+    def test_bare_call_joins_positionals_into_the_title(self):
+        with patch("lib.cli.issue.run_issue", return_value=0) as runner:
+            self.assertEqual(IssueCli()("登录", "报错"), 0)
+        self.assertEqual(runner.call_args.args[0], "登录 报错")
+
+    def test_no_title_stays_none_so_the_model_writes_one(self):
+        with patch("lib.cli.issue.run_issue", return_value=0) as runner:
+            IssueCli()()
+        self.assertIsNone(runner.call_args.args[0])
+
+    def test_every_flag_reaches_the_workflow(self):
+        with patch("lib.cli.issue.run_issue", return_value=0) as runner:
+            IssueCli()("t", dry_run=True, labels="bug", assignee="me",
+                       milestone="v1", settings="/tmp/s.yaml")
+        kwargs = runner.call_args.kwargs
+        self.assertEqual(
+            (kwargs["dry_run"], kwargs["labels"], kwargs["assignee"],
+             kwargs["milestone"], kwargs["settings_file"]),
+            (True, "bug", "me", "v1", "/tmp/s.yaml"),
+        )
+
+
+class TestUnsleepCli(unittest.TestCase):
+    def test_bare_call_is_forever(self):
+        with patch("lib.cli.unsleep.prevent_sleep", return_value=0) as keeper:
+            self.assertEqual(UnsleepCli()(), 0)
+        keeper.assert_called_once_with(duration=None, command=None)
+
+    def test_timed_passes_the_seconds(self):
+        with patch("lib.cli.unsleep.prevent_sleep", return_value=0) as keeper:
+            UnsleepCli().timed(30)
+        keeper.assert_called_once_with(duration=30, command=None)
+
+    def test_with_command_wraps_the_whole_argv(self):
+        with patch("lib.cli.unsleep.prevent_sleep", return_value=0) as keeper:
+            UnsleepCli().with_command("make", "build")
+        keeper.assert_called_once_with(duration=None, command=["make", "build"])
+
+    def test_with_command_without_a_command_is_an_error(self):
+        with patch("lib.cli.unsleep.prevent_sleep") as keeper:
+            self.assertEqual(UnsleepCli().with_command(), 1)
+        keeper.assert_not_called()
 
 
 if __name__ == "__main__":
