@@ -230,12 +230,20 @@ class TestDeleteBranchRemoteDispatch(DeleteBranchRemoteCase):
             self.assertEqual(c("feat", yes=True), 0)
         all_.assert_called_once_with("feat", remote="origin", yes=True)
 
-    def test_extra_args_ignored(self):
+    def test_every_branch_is_deleted_not_just_the_first(self):
+        """和本地版 delete_branch 对齐：多给几个分支名就删几个，不能默默丢掉。"""
         c = self.cli()
         with mock.patch.object(c, "here", return_value=0) as here, \
              self.fake_cwd(is_repo=True):
             c("a", "b")
-        here.assert_called_once_with("a", remote="origin")
+        here.assert_called_once_with("a", "b", remote="origin")
+
+    def test_several_branches_reach_the_batch_path_too(self):
+        c = self.cli()
+        with mock.patch.object(c, "all", return_value=0) as batch, \
+             self.fake_cwd(is_repo=False):
+            c("a", "b", yes=True)
+        batch.assert_called_once_with("a", "b", remote="origin", yes=True)
 
 
 class TestDeleteBranchRemoteAll(DeleteBranchRemoteCase):

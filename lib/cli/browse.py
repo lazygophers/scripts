@@ -1170,8 +1170,10 @@ async def _cmd_open(params: dict, opts: dict, sock: pathlib.Path, browser: str) 
     context = _outcome_or_die(
         await execute("browsingContext.create", {"url": url, **extra}, sock, browser=browser)
     )["context"]
-    if params.get("noGroup") is True:
-        params.pop("noGroup")
+    # `--no-group` 被 split_tokens 统一折成 opts["group"] = False（所有 --no-x 都走这条），
+    # 所以判的是 opts 而不是某个 noGroup 参数。
+    if opts.get("group") is False:
+        params.pop("noGroup", None)
         # 扩展会自动把新开的页收进它自己的 "browse" 组；--no-group 就是把这一步退掉
         _outcome_or_die(await execute("lg:tabs.ungroup", {"context": context}, sock, browser=browser))
         print_result({"context": context, "group": None}, table=_want_table(opts))
@@ -1285,7 +1287,7 @@ async def _cmd_eval_wrapped(verb: str, params: dict, opts: dict, sock: pathlib.P
     if verb in ("text", "html"):
         sys.stdout.write(f"{value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)}\n")
     else:
-        print_result(result)
+        print_result(result, table=_want_table(opts))
 
 
 def _snapshot_hit(entries: list[dict], target: str) -> bool:
@@ -1311,8 +1313,11 @@ async def _cmd_wait(params: dict, opts: dict, sock: pathlib.Path, browser: str) 
         gone_value = True
     modes = [m for m, on in (("target", params.get("target")),
                              ("text", params.get("text")),
-                             ("url", opts.get("url")),
-                             ("idle", params.get("idle"))) if on not in (None, True, False)]
+                             ("url", opts.get("url"))) if on not in (None, True, False)]
+    # --idle 是开关不是取值：裸写就是 True，不能跟上面三个「要有值」的条件同一套判定
+    # （`--idle 1` 也躲不开，Python 里 1 == True）。
+    if params.get("idle") not in (None, False):
+        modes.append("idle")
     if len(modes) != 1:
         raise UsageError("`wait` 要正好给一个条件：默认元素 / --text 文字 / --url 通配 / --idle 网络安静")
     mode = modes[0]

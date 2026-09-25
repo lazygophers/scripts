@@ -30,7 +30,8 @@ class TestSplitCountCmd(unittest.TestCase):
     def test_no_number_means_infinite(self):
         self.assertEqual(lc._split_count_cmd(("ls", "-l")), (None, ["ls", "-l"]))
 
-    def test_negative_number_is_count(self):
+    def test_a_negative_number_is_still_parsed_as_a_count(self):
+        """切分只管认数字；「次数必须是正整数」由子命令自己拦（见下面的用例）。"""
         self.assertEqual(lc._split_count_cmd(("-2", "ls")), (-2, ["ls"]))
 
     def test_empty_args(self):
@@ -148,3 +149,46 @@ class TestMain(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCountMustBePositive(unittest.TestCase):
+    """非正次数必须当场报错，不能「一次都没跑」还报成功。
+
+    `loop -2 ls` 原来会走 range(1, -1) 这个空循环：一条命令都没执行，
+    failure_count 是 0，于是打印「全部完成」、退出码 0——CI 里就是一条假绿。
+    """
+
+    def _rejects(self, method_name: str, args: tuple[str, ...]) -> int:
+        c = cli()
+        with mock.patch.object(lc, "run_loop") as runner:
+            rc = getattr(c, method_name)(*args)
+        runner.assert_not_called()
+        return rc
+
+    def test_run_rejects_a_negative_count(self):
+        self.assertEqual(self._rejects("run", ("-2", "ls")), 2)
+
+    def test_run_rejects_zero(self):
+        self.assertEqual(self._rejects("run", ("0", "ls")), 2)
+
+    def test_force_rejects_a_negative_count(self):
+        self.assertEqual(self._rejects("force", ("-1", "ls")), 2)
+
+    def test_bare_call_rejects_it_too(self):
+        c = cli()
+        with mock.patch.object(lc, "run_loop") as runner:
+            rc = c("-2", "ls")
+        runner.assert_not_called()
+        self.assertEqual(rc, 2)
+
+    def test_a_positive_count_still_runs(self):
+        c = cli()
+        with mock.patch.object(lc, "run_loop", return_value=0) as runner:
+            self.assertEqual(c.run("2", "ls"), 0)
+        self.assertEqual(runner.call_args.kwargs["count"], 2)
+
+    def test_no_count_still_means_unlimited(self):
+        c = cli()
+        with mock.patch.object(lc, "run_loop", return_value=0) as runner:
+            c.run("ls")
+        self.assertIsNone(runner.call_args.kwargs["count"])

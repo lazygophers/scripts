@@ -187,7 +187,9 @@ class GrafanaCli(_Group):
         rows = self._client(host).loki_logs(
             selector, limit=n,
             since_ns=_parse_since(since),
-            filters=tuple(filter) if isinstance(filter, str) else tuple(filter),
+            # 只传一次 `--filter keep` 时 fire 给的是 str，直接 tuple() 会拆成
+            # ('k','e','e','p') 四个过滤条件，查询结果悄悄变少还不报错。
+            filters=(filter,) if isinstance(filter, str) else tuple(filter),
             datasource_uid=datasource)
         if not rows:
             self._r.warn("没有匹配的日志")

@@ -208,3 +208,29 @@ class TestHelpers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLogsFilterArity(unittest.TestCase):
+    """`--filter` 传一次和传多次都要当成「整个词」，不能被拆成单个字母。
+
+    fire 在只传一次 `--filter keep` 时给的是 str，`tuple("keep")` 会变成
+    ('k','e','e','p') 四个过滤条件，Loki 查询结果悄悄变少且不报错。
+    """
+
+    def _filters_seen(self, filter_value):
+        from lib.cli import grafana as gcli
+        cli = gcli.GrafanaCli(MagicMock())
+        client = MagicMock()
+        client.loki_logs.return_value = [(1, "a", "line")]
+        with patch.object(cli, "_client", return_value=client):
+            cli.logs('{app="x"}', filter=filter_value)
+        return client.loki_logs.call_args.kwargs["filters"]
+
+    def test_a_single_filter_stays_one_word(self):
+        self.assertEqual(self._filters_seen("keep"), ("keep",))
+
+    def test_several_filters_are_kept_in_order(self):
+        self.assertEqual(self._filters_seen(["boom", "panic"]), ("boom", "panic"))
+
+    def test_no_filter_means_no_line_matcher(self):
+        self.assertEqual(self._filters_seen(()), ())

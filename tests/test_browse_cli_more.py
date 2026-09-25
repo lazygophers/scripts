@@ -344,25 +344,22 @@ class TestOpenAndClose(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("要给网址", err)
 
-    def test_no_group_param_ungroups_the_new_tab(self):
-        """noGroup=True 时新页要退出自动分组。
+    def test_no_group_flag_ungroups_the_new_tab(self):
+        """命令行的 `--no-group` 必须真的退出自动分组。
 
-        只能直接调 `_cmd_open`：命令行的 `--no-group` 被 split_tokens 折成
-        opts['group']=False，到不了这个分支（见交付说明里的 bug 记录）。
+        split_tokens 把 `--no-x` 统一折成 opts['x']=False，所以这里判的是
+        opts['group'] is False。
         """
-        calls = []
-
-        async def fake_execute(method, params, sock, duration=None, browser=""):
-            calls.append((method, dict(params)))
-            result = {"context": "42"} if method == "browsingContext.create" else {}
-            return {"status": "ok", "result": result}
-
-        out = io.StringIO()
-        with mock.patch.object(browse, "execute", fake_execute), mock.patch("sys.stdout", out):
-            asyncio.run(browse._cmd_open({"url": "https://a.com", "noGroup": True}, {},
-                                         pathlib.Path("/tmp/s.sock"), ""))
+        handler = lambda m, p: {"context": "42"} if m == "browsingContext.create" else {}
+        rc, out, _, calls = call(["open", "https://a.com", "--no-group"], handler)
+        self.assertEqual(rc, 0)
         self.assertEqual([m for m, _ in calls], ["browsingContext.create", "lg:tabs.ungroup"])
-        self.assertIsNone(json.loads(out.getvalue())["group"])
+        self.assertIsNone(json.loads(out)["group"])
+
+    def test_without_no_group_the_tab_joins_the_default_group(self):
+        handler = lambda m, p: {"context": "42"} if m == "browsingContext.create" else {}
+        _rc, _out, _err, calls = call(["open", "https://a.com"], handler)
+        self.assertNotIn("lg:tabs.ungroup", [m for m, _ in calls])
 
     def test_duplicate_target_groups_block_the_open(self):
         def handler(method, params):
@@ -490,11 +487,14 @@ class TestEvalWrappers(unittest.TestCase):
         rc, out, _, _ = call(["eval", "x"], lambda m, p: {"result": {"value": "你好"}})
         self.assertEqual(out, "你好\n")
 
-    def test_back_uses_the_hardcoded_js(self):
-        """back/forward 会在 print_result 上抛 TypeError（缺 table 关键字），
-        这里只验包的 JS 对不对——修好之前跑不到打印那步。"""
-        with self.assertRaises(TypeError):
-            call(["back"], lambda m, p: {"result": {"value": None}})
+    def test_back_and_forward_run_the_hardcoded_js_and_print(self):
+        for verb, js in (("back", "history.back()"), ("forward", "history.forward()")):
+            with self.subTest(verb=verb):
+                rc, out, _, calls = call([verb], lambda m, p: {"result": {"value": None}})
+                self.assertEqual(rc, 0)
+                self.assertEqual(calls[0][0], "script.evaluate")
+                self.assertEqual(calls[0][1]["expression"], js)
+                self.assertTrue(out.strip(), "结果要打出来，不能崩在打印那一步")
 
 
 class TestSnapshotHit(unittest.TestCase):
@@ -550,18 +550,18 @@ class TestWaitMore(unittest.TestCase):
                                               pathlib.Path("/tmp/s.sock"), ""))
         self.assertEqual(rc, browse.EXIT_OK)  # 元素本来就不在 = 已经消失
 
-    def test_idle_mode_delegates_to_the_idle_waiter(self):
-        """idle 条件转给 _cmd_wait_idle，超时按 --timeout 折算成秒。
-
-        只能直接调：裸 `--idle` 在 split_tokens 那层变成 True，而条件判定把 True
-        排除掉了（`--idle 1` 也不行，Python 里 1 == True），命令行走不进这条路。
-        """
+    def test_bare_idle_flag_delegates_to_the_idle_waiter(self):
+        """帮助里写的就是裸 `--idle`：它在 split_tokens 那层是 True，必须认。"""
         with mock.patch.object(browse, "_cmd_wait_idle",
                                mock.AsyncMock(return_value=browse.EXIT_OK)) as idle:
-            rc = asyncio.run(browse._cmd_wait({"idle": "on"}, {"timeout": "2s"},
-                                              pathlib.Path("/tmp/s.sock"), ""))
+            rc, _out, _err, _calls = call(["wait", "--idle", "--timeout", "2s"])
         self.assertEqual(rc, browse.EXIT_OK)
         self.assertEqual(idle.call_args.args[2], 2.0)
+
+    def test_idle_cannot_be_combined_with_another_condition(self):
+        rc, _out, err, _calls = call(["wait", "--idle", "--text", "完成"])
+        self.assertEqual(rc, 2)
+        self.assertIn("正好给一个条件", flat(err))
 
     def test_url_mode_matches_the_active_tab(self):
         handler = lambda m, p: tabs(("1", "https://a.com/ok", True))

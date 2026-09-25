@@ -19,6 +19,11 @@ def _split_count_cmd(args: tuple[str, ...]) -> tuple[int | None, list[str]]:
     return None, list(args)
 
 
+def _bad_count(count: int | None) -> bool:
+    """次数给了但不是正整数。range(1, count+1) 会是空循环——一次都不跑却报成功。"""
+    return count is not None and count < 1
+
+
 def _normalize_cmd(cmd: list[str]) -> list[str]:
     """单元素含空格时拆 argv；含 shell 特殊字符则 sh -c 包裹。"""
     if len(cmd) == 1 and " " in cmd[0]:
@@ -43,6 +48,9 @@ class LoopCli(BaseCli):
         用法: loop run [count] <cmd...> [--force] [--timeout N]
         """
         count, cmd = _split_count_cmd(args)
+        if _bad_count(count):
+            self._r.err(f"loop: 次数要是正整数，给的是 {count}")
+            return 2
         if not cmd:
             self._r.err("loop: 缺少命令")
             return 1
@@ -66,6 +74,9 @@ class LoopCli(BaseCli):
         用法: loop force [count] <cmd...> [--timeout N]
         """
         count, cmd = _split_count_cmd(args)
+        if _bad_count(count):
+            self._r.err(f"loop: 次数要是正整数，给的是 {count}")
+            return 2
         if not cmd:
             self._r.err("loop: 缺少命令")
             return 1

@@ -22,31 +22,46 @@ class DeleteBranchRemoteCli(BaseCli):
     """删除远端分支（单仓或批量）"""
 
     def __call__(self, *args: str, remote: str = "origin", yes: bool = False):
-        """裸调用 `delete_branch_remote <branch>` 等同 `delete_branch_remote here <branch>`（cwd 是 git 仓库时），
-        否则自动转发到 `delete_branch_remote all <branch>`。
+        """裸调用 `delete_branch_remote <branch...>` 等同 `delete_branch_remote here <branch...>`（cwd 是 git 仓库时），
+        否则自动转发到 `delete_branch_remote all <branch...>`。
         """
         if not args:
             self._r.err("delete_branch_remote: 缺少分支名")
             return 1
-        branch = args[0]
+        branches = list(args)
         if (pathlib.Path.cwd() / ".git").exists():
-            return self.here(branch, remote=remote)
-        return self.all(branch, remote=remote, yes=yes)
+            return self.here(*branches, remote=remote)
+        return self.all(*branches, remote=remote, yes=yes)
 
     @timed_cli
-    def here(self, branch: str, remote: str = "origin"):
-        """仅在当前仓库删除远端分支"""
-        return self._delete_one(branch, remote)
+    def here(self, *branches: str, remote: str = "origin"):
+        """仅在当前仓库删除远端分支
+
+        用法: delete_branch_remote here <branch...> [--remote <name>]
+        """
+        if not branches:
+            self._r.err("delete_branch_remote: 缺少分支名")
+            return 1
+        rc = 0
+        for branch in branches:
+            rc |= self._delete_one(branch, remote)
+        return rc
 
     @timed_cli
-    def all(self, branch: str, remote: str = "origin", yes: bool = False):
+    def all(self, *branches: str, remote: str = "origin", yes: bool = False):
         """批量扫描所有 Git 仓库删除远端分支
 
-        用法: delete_branch_remote all <branch> [--remote <name>] [-y]
+        用法: delete_branch_remote all <branch...> [--remote <name>] [-y]
         """
+        if not branches:
+            self._r.err("delete_branch_remote: 缺少分支名")
+            return 1
         if yes:
             os.environ["BATCH_NO_CONFIRM"] = "1"
-        return delete_branch_remote_all(branch, remote=remote)
+        rc = 0
+        for branch in branches:
+            rc |= delete_branch_remote_all(branch, remote=remote)
+        return rc
 
     def _delete_one(self, branch: str, remote: str) -> int:
         # 容忍带远端前缀的写法 (origin/feature/x → feature/x)
