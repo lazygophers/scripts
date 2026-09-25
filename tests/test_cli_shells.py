@@ -14,6 +14,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
+from lib.cli.check_ai import CheckAiCli
+from lib.cli.checkwork import CheckworkCli
 from lib.cli.commit import CommitCli
 from lib.cli.fetch_all import FetchAllCli
 from lib.cli.issue import IssueCli
@@ -203,6 +205,105 @@ class TestUnsleepCli(unittest.TestCase):
         with patch("lib.cli.unsleep.prevent_sleep") as keeper:
             self.assertEqual(UnsleepCli().with_command(), 1)
         keeper.assert_not_called()
+
+
+class TestCheckAiCli(unittest.TestCase):
+    def test_bare_call_probes_the_first_positional(self):
+        with patch("lib.cli.check_ai.check", return_value=0) as probe, \
+                patch("lib.cli.check_ai.default_proxy", return_value=None):
+            self.assertEqual(CheckAiCli()("claude"), 0)
+        self.assertEqual(probe.call_args.args[0], "claude")
+
+    def test_flags_reach_the_probe(self):
+        with patch("lib.cli.check_ai.check", return_value=0) as probe, \
+                patch("lib.cli.check_ai.default_proxy", return_value=None):
+            CheckAiCli()("openai", count=2, infinite=True, timeout=1.5, interval=0.5)
+        kwargs = probe.call_args.kwargs
+        self.assertEqual((kwargs["count"], kwargs["infinite"], kwargs["timeout"], kwargs["interval"]),
+                         (2, True, 1.5, 0.5))
+
+    def test_explicit_proxy_wins_over_the_environment_default(self):
+        with patch("lib.cli.check_ai.check", return_value=0) as probe, \
+                patch("lib.cli.check_ai.default_proxy", return_value="http://env:1") as fallback:
+            CheckAiCli()("claude", proxy="http://explicit:2")
+        self.assertEqual(probe.call_args.kwargs["proxy"], "http://explicit:2")
+        fallback.assert_not_called()
+
+    def test_without_a_proxy_the_environment_default_is_used(self):
+        with patch("lib.cli.check_ai.check", return_value=0) as probe, \
+                patch("lib.cli.check_ai.default_proxy", return_value="http://env:1"):
+            CheckAiCli()("claude")
+        self.assertEqual(probe.call_args.kwargs["proxy"], "http://env:1")
+
+    def test_no_target_is_an_error_without_probing(self):
+        with patch("lib.cli.check_ai.check") as probe:
+            self.assertEqual(CheckAiCli()(), 1)
+        probe.assert_not_called()
+
+
+class TestCheckworkCli(unittest.TestCase):
+    def test_bare_call_runs_the_check(self):
+        with patch("lib.cli.checkwork.run_checkwork", return_value=0) as runner:
+            self.assertEqual(CheckworkCli()(), 0)
+        runner.assert_called_once_with()
+
+    def test_exit_code_comes_straight_from_the_check(self):
+        with patch("lib.cli.checkwork.run_checkwork", return_value=2):
+            self.assertEqual(CheckworkCli().run(), 2)
+
+
+class TestStdoutShells(unittest.TestCase):
+    """cpd / webgrab / websearch 是 argparse 式薄壳：main() 只负责剥全局开关再转发。"""
+
+    def _run_main(self, module, argv: list[str]):
+        """跑薄壳的 main()，返回 (SystemExit 的码, 转发给底层的 argv)。"""
+        seen: list[list[str]] = []
+        with patch.object(module, "_run" if hasattr(module, "_run") else "copy",
+                          side_effect=lambda argv: (seen.append(list(argv)), 0)[1]) as _fn, \
+                patch.object(sys, "argv", argv):
+            with self.assertRaises(SystemExit) as caught:
+                module.main()
+        return caught.exception.code, seen[0]
+
+    def test_cpd_strips_global_flags_before_forwarding(self):
+        import lib.cli.cpd as mod
+        code, forwarded = self._run_main(mod, ["cpd", "--no-say", "--debug", "src", "dst"])
+        self.assertEqual(code, 0)
+        self.assertEqual(forwarded, ["cpd", "src", "dst"])
+
+    def test_webgrab_strips_global_flags_before_forwarding(self):
+        import lib.cli.webgrab as mod
+        code, forwarded = self._run_main(mod, ["webgrab", "--no-say", "https://example.test"])
+        self.assertEqual(code, 0)
+        self.assertEqual(forwarded, ["webgrab", "https://example.test"])
+
+    def test_websearch_leaves_help_to_its_own_argparse(self):
+        import lib.cli.websearch as mod
+        code, forwarded = self._run_main(mod, ["websearch", "--debug", "--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("--help", forwarded, "-h/--help 要留给 websearch 自己的 argparse")
+
+    def test_exit_code_is_the_one_the_worker_returned(self):
+        import lib.cli.webgrab as mod
+        with patch.object(mod, "_run", return_value=3), patch.object(sys, "argv", ["webgrab", "u"]):
+            with self.assertRaises(SystemExit) as caught:
+                mod.main()
+        self.assertEqual(caught.exception.code, 3)
+
+
+class TestGraphwatchShell(unittest.TestCase):
+    def test_bare_call_shows_the_skills_help_instead_of_doing_nothing(self):
+        import lib.cli.graphwatch as mod
+        with patch.object(mod, "run_cli") as runner, patch.object(sys, "argv", ["graphwatch"]):
+            mod.main()
+            self.assertEqual(sys.argv, ["graphwatch", "--skills"])
+            runner.assert_called_once()
+
+    def test_a_real_subcommand_is_left_alone(self):
+        import lib.cli.graphwatch as mod
+        with patch.object(mod, "run_cli"), patch.object(sys, "argv", ["graphwatch", "list"]):
+            mod.main()
+            self.assertEqual(sys.argv, ["graphwatch", "list"])
 
 
 if __name__ == "__main__":
