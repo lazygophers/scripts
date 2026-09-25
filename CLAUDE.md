@@ -111,9 +111,9 @@ python3 -m unittest discover -s tests -q
 
 新增测试类必须继承 `unittest.TestCase`——pytest 风格的裸类会被 `unittest` 静默跳过（2026-09-25 发现 `tests/test_kk.py` 的 18 个用例这样躺了很久）。`tests/test_meta.py` 守着这条，以及「每个 `bin/*` 都注册进 `pyproject.toml` 的 `[project.scripts]`」。
 
-`tests/test_perf.py` 是性能回归守卫：不碰网络的命令不许把 HTTP 栈拖进导入图（`import requests` 实测约 200ms），`bin/<name> --help` 的启动时间有墙钟预算。
+`tests/test_perf.py` 是性能回归守卫，两条都不掐表：不碰网络的命令不许把 HTTP 栈拖进导入图（`import requests` 实测约 200ms），以及启动要 import 多少个模块有预算（`list_branch` 实测 258 个，加一行 `import requests` 变 443）。掐表的版本试过两次都因为机器负载假失败，别改回去。
 
-另外两套测试（CI 三个 job 各跑一套）：
+另外三套测试（CI 各有一个 job）：
 
 ```bash
 npm --prefix browser-extension/browse test   # browse 扩展，410 用例
