@@ -93,7 +93,7 @@ Run scripts from the repository root (`./bin/<name>`; `chmod +x bin/*` once). Ea
 
 ### Testing Scripts
 
-默认用并行跑测器，全套实测 55s（串行 `unittest discover` 同机 838s，其中 CPU 只占 131s，其余都在等子进程和 sleep）：
+默认用并行跑测器，3041 个用例全套实测约 100s（串行 `unittest discover` 同机 266s；2026-09-25 做并行化之前是 838s，其中 CPU 只占 131s，其余都在等子进程和 sleep）。`lib/` 覆盖率 98%：
 
 ```bash
 python3 tests/run.py                 # 全量并行
@@ -116,8 +116,10 @@ python3 -m unittest discover -s tests -q
 另外两套测试（CI 三个 job 各跑一套）：
 
 ```bash
-npm --prefix browser-extension/browse test          # 扩展，235 用例
-./idea-plugins/lazy-git/gradlew -p idea-plugins/lazy-git test   # IDEA 插件，20 用例
+npm --prefix browser-extension/browse test   # browse 扩展，410 用例
+npm --prefix browser-extension/viewer test   # viewer 扩展，258 用例
+npm --prefix browser-extension/shared test   # 公共层，13 用例
+./idea-plugins/lazy-git/gradlew -p idea-plugins/lazy-git test   # IDEA 插件，26 用例
 ```
 
 Redirect full-suite output to a file and grep it (`> /tmp/test.log 2>&1`, then `grep -n "^FAIL:\|^ERROR:\|^OK$"`); piping through `tail` drops earlier failures when later ones follow, and a truncated run reads as a false pass. When checking a command's exit code, don't put it in a pipeline: `cmd | grep; echo $?` prints grep's exit status — redirect to a file first, then inspect.
