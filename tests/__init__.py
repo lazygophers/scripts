@@ -21,12 +21,10 @@ if "SCRIPTS_LOG" not in os.environ:  # 已被上层指定（spawn 的子进程�
     _suite_log.close()
     os.environ["SCRIPTS_LOG"] = _suite_log.name
 
+    def _cleanup_suite_log(path: str = _suite_log.name) -> None:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
-def _cleanup_suite_log() -> None:
-    try:
-        os.unlink(_suite_log.name)
-    except OSError:
-        pass
-
-
-atexit.register(_cleanup_suite_log)
+    atexit.register(_cleanup_suite_log)

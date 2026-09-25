@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -196,14 +197,29 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
     bare 远端模拟 origin。
     """
 
-    def _make_repo(self) -> tuple[tempfile.TemporaryDirectory, str, str]:
-        td = tempfile.TemporaryDirectory()
-        root = Path(td.name)
-        # work 仓库 + bare origin
+    # 每个用例都从零 git init + 十几次 git 子进程，这个类一个人跑 40s，是整套
+    # 并行后的关键路径。改成 setUpClass 建两份模板仓库、用例只做目录拷贝
+    # （拷贝出来的仓库 commit SHA 与模板完全一致，merge-base 可以跟着缓存）。
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._tpl = tempfile.TemporaryDirectory(prefix="squash_tpl_")
+        tpl = Path(cls._tpl.name)
+        cls._tpl_base = cls._build_base(tpl / "base")
+        full = tpl / "full"
+        cls._tpl_full = cls._build_base(full)
+        cls._tpl_full_mb = cls._build_branches(str(full / "work"))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tpl.cleanup()
+
+    @staticmethod
+    def _build_base(root: Path) -> Path:
+        """work 仓库 + bare origin（master 已推），返回 root。"""
         work = root / "work"
         origin = root / "origin.git"
-        work.mkdir()
-        origin.mkdir()
+        work.mkdir(parents=True)
+        origin.mkdir(parents=True)
         subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
         subprocess.run(["git", "init", "-q"], cwd=work, check=True)
         subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=work, check=True)
@@ -215,7 +231,25 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
         subprocess.run(["git", "commit", "-qm", "base"], cwd=work, check=True)
         subprocess.run(["git", "branch", "-M", "master"], cwd=work, check=True)
         subprocess.run(["git", "push", "-q", "origin", "master"], cwd=work, check=True)
+        return root
+
+    def _copy_template(self, template: Path) -> tuple[tempfile.TemporaryDirectory, str, str]:
+        td = tempfile.TemporaryDirectory()
+        root = Path(td.name) / "repo"
+        shutil.copytree(template, root, symlinks=True)
+        work, origin = root / "work", root / "origin.git"
+        # 远端 URL 是模板里的绝对路径，拷贝后必须指回这一份
+        subprocess.run(["git", "remote", "set-url", "origin", str(origin)],
+                       cwd=work, check=True)
         return td, str(work), str(origin)
+
+    def _make_repo(self) -> tuple[tempfile.TemporaryDirectory, str, str]:
+        return self._copy_template(self._tpl_base)
+
+    def _make_repo_with_branches(self) -> tuple[tempfile.TemporaryDirectory, str, str, str]:
+        """带 source/target 分叉的仓库，外加缓存好的 merge-base。"""
+        td, work, origin = self._copy_template(self._tpl_full)
+        return td, work, origin, self._tpl_full_mb
 
     def _chdir(self, work: str) -> None:
         """check_bit_clean/get_current_branch 无 cwd 参数，脚本须在仓库内运行。"""
@@ -227,34 +261,37 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
         if hasattr(self, "_saved_cwd"):
             os.chdir(self._saved_cwd)
 
-    def _git(self, work: str, *args: str) -> str:
+    @staticmethod
+    def _git(work: str, *args: str) -> str:
         p = subprocess.run(["git", *args], cwd=work, capture_output=True, text=True)
         if p.returncode != 0:
             raise RuntimeError(f"git {args} failed: {p.stderr}")
         return p.stdout
 
-    def _commit(self, work: str, msg: str, fname: str, content: str) -> None:
+    @staticmethod
+    def _commit(work: str, msg: str, fname: str, content: str) -> None:
         Path(work, fname).write_text(content)
         subprocess.run(["git", "add", "-A"], cwd=work, check=True)
         subprocess.run(["git", "commit", "-qm", msg], cwd=work, check=True)
 
-    def _build_source_target(self, work: str) -> str:
+    @classmethod
+    def _build_branches(cls, work: str) -> str:
         """构造 source（含 merge commit + 噪声）+ target 分叉。返回 merge-base。"""
         # master 上已有 base commit
         # target 分支：从 master 分叉，加 t.txt
-        self._git(work, "checkout", "-b", "target", "master")
-        self._commit(work, "target: add t.txt", "t.txt", "t")
-        self._git(work, "push", "-q", "origin", "target")
+        cls._git(work, "checkout", "-b", "target", "master")
+        cls._commit(work, "target: add t.txt", "t.txt", "t")
+        cls._git(work, "push", "-q", "origin", "target")
         # source 分支：从 master 分叉，多个 commit
-        self._git(work, "checkout", "-b", "source", "master")
-        self._commit(work, "feat: add login", "login.txt", "login")
-        self._commit(work, "feat: add logout", "logout.txt", "logout")
+        cls._git(work, "checkout", "-b", "source", "master")
+        cls._commit(work, "feat: add login", "login.txt", "login")
+        cls._commit(work, "feat: add logout", "logout.txt", "logout")
         # 制造一个 merge commit（噪声）—— 把 target merge 进 source
-        self._git(work, "merge", "--no-ff", "--no-edit", "-m",
+        cls._git(work, "merge", "--no-ff", "--no-edit", "-m",
                   "Merge branch 'target' into source", "target")
-        self._git(work, "push", "-q", "origin", "source")
+        cls._git(work, "push", "-q", "origin", "source")
         # 回 master
-        self._git(work, "checkout", "master")
+        cls._git(work, "checkout", "master")
         # 计算 merge-base
         mb = subprocess.run(["git", "merge-base", "source", "origin/target"],
                             cwd=work, capture_output=True, text=True, check=True).stdout.strip()
@@ -262,10 +299,9 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
 
     def test_custom_pr_branch_is_created_and_pushed(self):
         """显式 pr_branch：单 commit 落在这个名字上，<source>_pr 不出现。"""
-        td, work, origin = self._make_repo()
+        td, work, origin, mb = self._make_repo_with_branches()
         with td:
             self._chdir(work)
-            mb = self._build_source_target(work)
             res = run_squash_pr("source", "target", pr_branch="release/x",
                                 no_mr=True, r=MagicMock(), cwd=work)
             self.assertEqual(res.returncode, 0, f"应成功，实返回 {res.returncode}")
@@ -282,29 +318,26 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
 
     def test_pr_branch_equal_to_source_is_rejected(self):
         """PR 分支 = source：会改写源分支历史，必须拒绝。"""
-        td, work, _origin = self._make_repo()
+        td, work, _origin, _mb = self._make_repo_with_branches()
         with td:
             self._chdir(work)
-            self._build_source_target(work)
             res = run_squash_pr("source", "target", pr_branch="source",
                                 no_mr=True, r=MagicMock(), cwd=work)
             self.assertEqual(res.returncode, 1)
 
     def test_pr_branch_equal_to_target_is_rejected(self):
         """PR 分支 = target：force push 会覆盖目标分支，必须拒绝。"""
-        td, work, _origin = self._make_repo()
+        td, work, _origin, _mb = self._make_repo_with_branches()
         with td:
             self._chdir(work)
-            self._build_source_target(work)
             res = run_squash_pr("source", "target", pr_branch="target",
                                 no_mr=True, r=MagicMock(), cwd=work)
             self.assertEqual(res.returncode, 1)
 
     def test_normal_path_produces_single_commit_pr_branch(self):
-        td, work, origin = self._make_repo()
+        td, work, origin, mb = self._make_repo_with_branches()
         with td:
             self._chdir(work)
-            mb = self._build_source_target(work)
             # 当前在 master；source / target 已推
             res = run_squash_pr("source", "target", no_mr=True,
                                 r=MagicMock(), cwd=work)
@@ -345,10 +378,9 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
             self.assertEqual(src_sha, src_remote)
 
     def test_dirty_workspace_aborts(self):
-        td, work, origin = self._make_repo()
+        td, work, origin, _mb = self._make_repo_with_branches()
         with td:
             self._chdir(work)
-            self._build_source_target(work)
             # 弄脏工作区
             Path(work, "dirty.txt").write_text("dirty")
             res = run_squash_pr("source", "target", no_mr=True,
@@ -362,10 +394,9 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
             self.assertNotEqual(lb.returncode, 0)
 
     def test_source_behind_remote_aborts(self):
-        td, work, origin = self._make_repo()
+        td, work, origin, _mb = self._make_repo_with_branches()
         with td:
             self._chdir(work)
-            self._build_source_target(work)
             # 让本地 source 落后 origin/source：reset 本地 source 到 master
             self._git(work, "checkout", "source")
             self._git(work, "reset", "--hard", "master")
@@ -417,10 +448,9 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
 
     def test_existing_local_pr_branch_reused(self):
         """本地已有 source_pr → 复用重置到 source，不再询问/删除。"""
-        td, work, origin = self._make_repo()
+        td, work, origin, _mb = self._make_repo_with_branches()
         with td:
             self._chdir(work)
-            self._build_source_target(work)
             # 预先创建本地 source_pr 分支（旧 PR 分支残留）
             self._git(work, "branch", "source_pr", "master")
             res = run_squash_pr("source", "target", no_mr=True,
@@ -436,10 +466,9 @@ class TestRunSquashPrEndToEnd(unittest.TestCase):
 
     def test_existing_remote_pr_branch_force_pushed_keeps_branch(self):
         """远端已有 source_pr（即已有 PR 的 head）→ force push 更新，不删分支。"""
-        td, work, origin = self._make_repo()
+        td, work, origin, _mb = self._make_repo_with_branches()
         with td:
             self._chdir(work)
-            self._build_source_target(work)
             mb = subprocess.run(
                 ["git", "merge-base", "source", "origin/target"],
                 cwd=work, capture_output=True, text=True, check=True,

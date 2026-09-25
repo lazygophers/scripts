@@ -3,6 +3,7 @@
 import os
 import sys
 from pathlib import Path
+import unittest
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -10,7 +11,7 @@ from lib.process import _pgrep, kill_by_name
 from lib.process import ps_info as _ps_info_fn
 
 
-class TestPgrep:
+class TestPgrep(unittest.TestCase):
     @patch("lib.process.run")
     def test_pgrep_find_processes(self, mock_run):
         mock_result = MagicMock()
@@ -48,7 +49,7 @@ class TestPgrep:
         assert _pgrep("test") == [1234, 5678]
 
 
-class TestPsInfo:
+class TestPsInfo(unittest.TestCase):
     @patch("lib.process.run")
     def test_ps_info(self, mock_run):
         mock_result = MagicMock()
@@ -79,7 +80,7 @@ class TestPsInfo:
         assert 9999 not in _ps_info_fn([9999])
 
 
-class TestKillByName:
+class TestKillByName(unittest.TestCase):
     """Test lib.process.kill_by_name functionality."""
 
     def test_invalid_process_name_characters(self):

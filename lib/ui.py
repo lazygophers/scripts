@@ -15,14 +15,6 @@ try:
     from rich.box import ROUNDED
     from rich.console import Console
     from rich.panel import Panel
-    from rich.progress import (
-        BarColumn,
-        Progress,
-        SpinnerColumn,
-        TaskProgressColumn,
-        TextColumn,
-        TimeElapsedColumn,
-    )
     from rich.rule import Rule
     from rich.style import Style
     from rich.table import Table
@@ -83,7 +75,18 @@ def print_tsv(headers: Sequence[str], rows, *, file=None) -> None:
         print("\t".join(esc(c) for c in row), file=out)
 
 
-def progress(console_obj: Console | None) -> Progress:
+def progress(console_obj: Console | None):
+    # rich.progress 是 rich 里最重的一块（实测单独 import 约 30ms），而进度条只有
+    # 批量命令用得上，AI 环境更是直接关掉。放到函数里，别让每个 CLI 启动都付这笔钱。
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TaskProgressColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+
     if console_obj is None:
         raise ValueError("progress() 需要 console_obj")
     return Progress(

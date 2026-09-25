@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -29,48 +30,67 @@ def _all_shells() -> list[str]:
 
 
 class TestShellCommonFlags(unittest.TestCase):
-    """所有薄壳通用参数必须正常退出。"""
+    """所有薄壳通用参数必须正常退出。
 
-    def _run_shell(self, name: str, *flags: str) -> subprocess.CompletedProcess:
-        # 隔离: 临时 HOME 防止任何 rc 副作用; PYTHONPATH 指向 repo root
-        env = {
+    45 个薄壳 × 4 种参数 = 180 次进程启动，串行要 100s 以上且是全套的关键路径。
+    进程启动是 IO 等待，用线程池并发跑；HOME/cwd 全类共用一份临时目录
+    （原来每次调用 mkdtemp 一个、从不清理，180 个目录留在 /tmp）。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._tmp = tempfile.TemporaryDirectory(prefix="shelltest_")
+        home = Path(cls._tmp.name) / "home"
+        cls._cwd = Path(cls._tmp.name) / "cwd"
+        home.mkdir()
+        cls._cwd.mkdir()
+        cls._env = {
             "PATH": os.environ.get("PATH", ""),
-            "HOME": tempfile.mkdtemp(prefix="shelltest_home_"),
+            "HOME": str(home),
             "PYTHONPATH": str(REPO_ROOT),
             "LC_ALL": "en_US.UTF-8",
             "TERM": "dumb",
         }
-        cwd = tempfile.mkdtemp(prefix="shelltest_cwd_")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def _run_shell(self, name: str, *flags: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(BIN_DIR / name), *flags],
-            capture_output=True, text=True, env=env, cwd=cwd, timeout=10,
+            capture_output=True, text=True, env=self._env, cwd=self._cwd,
+            # 30s 而非 10s：整套并行跑时机器负载高，10s 会假失败（switch_branch -h 实测）
+            timeout=30,
         )
+
+    def _run_all(self, cases: list[tuple[str, ...]]) -> list[tuple]:
+        """并发跑 cases（每项是 (薄壳名, *参数)），返回失败列表。"""
+        failures = []
+        with ThreadPoolExecutor(max_workers=min(16, (os.cpu_count() or 4) * 2)) as pool:
+            futures = {pool.submit(self._run_shell, *case): case for case in cases}
+            for fut in as_completed(futures):
+                case = futures[fut]
+                p = fut.result()
+                if p.returncode != 0:
+                    failures.append((case, p.returncode, p.stderr[:200]))
+        return failures
 
     def test_all_shells_common_flags_exit_zero(self):
         shells = _all_shells()
         self.assertGreater(len(shells), 10, "应检测到多个薄壳")
-        failures = []
-        for name in shells:
-            for flag in ("--help", "-h", "--dry-run"):
-                with self.subTest(shell=name, flag=flag):
-                    p = self._run_shell(name, flag)
-                    if p.returncode != 0:
-                        failures.append((name, flag, p.returncode, p.stderr[:200]))
+        cases = [(name, flag) for name in shells
+                 for flag in ("--help", "-h", "--dry-run")]
+        failures = self._run_all(cases)
         if failures:
-            msg = "\n".join(f"{n} {flag}: exit={rc} stderr={e}" for n, flag, rc, e in failures)
+            msg = "\n".join(f"{' '.join(c)}: exit={rc} stderr={e}" for c, rc, e in failures)
             self.fail(f"薄壳通用参数失败:\n{msg}")
 
     def test_debug_flag_combines_with_help(self):
         """--debug 必须被剥掉而不是挡住后面的 --help（每个 bin 都支持 --debug）。"""
-        shells = _all_shells()
-        failures = []
-        for name in shells:
-            with self.subTest(shell=name):
-                p = self._run_shell(name, "--debug", "--help")
-                if p.returncode != 0:
-                    failures.append((name, p.returncode, p.stderr[:200]))
+        failures = self._run_all([(name, "--debug", "--help") for name in _all_shells()])
         if failures:
-            msg = "\n".join(f"{n}: exit={rc} stderr={e}" for n, rc, e in failures)
+            msg = "\n".join(f"{' '.join(c)}: exit={rc} stderr={e}" for c, rc, e in failures)
             self.fail(f"--debug --help 失败:\n{msg}")
 
 

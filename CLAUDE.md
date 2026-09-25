@@ -93,10 +93,31 @@ Run scripts from the repository root (`./bin/<name>`; `chmod +x bin/*` once). Ea
 
 ### Testing Scripts
 
-For `cpd`, a Python `unittest` suite exists:
+默认用并行跑测器，全套实测 55s（串行 `unittest discover` 同机 838s，其中 CPU 只占 131s，其余都在等子进程和 sleep）：
+
+```bash
+python3 tests/run.py                 # 全量并行
+python3 tests/run.py test_git_core   # 只跑一个模块
+python3 tests/run.py --timings       # 附带每个调度单元的耗时（找慢用例）
+```
+
+`tests/run.py` 把测试切成「模块」或「模块.测试类」的调度单元，每个单元一个子进程，各自拿独立的 `TMPDIR` / `SCRIPTS_LOG`（browse daemon 的 unix socket 在 macOS 上限 104 字节，临时目录路径必须短，所以建在 `/tmp` 下）。CI 走同一条命令。
+
+串行入口仍然可用，调试单个用例时更直观：
 
 ```bash
 python3 -m unittest discover -s tests -q
+```
+
+新增测试类必须继承 `unittest.TestCase`——pytest 风格的裸类会被 `unittest` 静默跳过（2026-09-25 发现 `tests/test_kk.py` 的 18 个用例这样躺了很久）。`tests/test_meta.py` 守着这条，以及「每个 `bin/*` 都注册进 `pyproject.toml` 的 `[project.scripts]`」。
+
+`tests/test_perf.py` 是性能回归守卫：不碰网络的命令不许把 HTTP 栈拖进导入图（`import requests` 实测约 200ms），`bin/<name> --help` 的启动时间有墙钟预算。
+
+另外两套测试（CI 三个 job 各跑一套）：
+
+```bash
+npm --prefix browser-extension/browse test          # 扩展，235 用例
+./idea-plugins/lazy-git/gradlew -p idea-plugins/lazy-git test   # IDEA 插件，20 用例
 ```
 
 Redirect full-suite output to a file and grep it (`> /tmp/test.log 2>&1`, then `grep -n "^FAIL:\|^ERROR:\|^OK$"`); piping through `tail` drops earlier failures when later ones follow, and a truncated run reads as a false pass. When checking a command's exit code, don't put it in a pipeline: `cmd | grep; echo $?` prints grep's exit status — redirect to a file first, then inspect.
