@@ -47,6 +47,41 @@ class LazyhelpCli(BaseCli):
         return show_full(name, extra_args=list(extra))
 
     @timed_cli
+    def ignore(self, path: str = "."):
+        """生成/补齐 .lazyscriptsignore 忽略清单样例
+
+        用法: lazyhelp ignore [路径]
+
+        文件不存在则生成全部 key 的空样例（带注释说明）；已存在则补齐缺失的
+        key（空列表），已有条目和注释不动。已存在的文件本身非法时报错退出。
+        """
+        from lib.ignore import IGNORE_FILENAME, IGNORE_KEYS, IgnoreError, SAMPLE, load_ignore_file
+
+        target_dir = pathlib.Path(path).expanduser()
+        target = target_dir / IGNORE_FILENAME
+        if target.exists():
+            try:
+                data = load_ignore_file(target)
+            except IgnoreError as e:
+                self._r.err(str(e))
+                return 1
+            missing = [k for k in IGNORE_KEYS if k not in data]
+            if not missing:
+                self._r.kv("已齐全", {"文件": str(target)})
+                return 0
+            text = target.read_text(encoding="utf-8")
+            if text and not text.endswith("\n"):
+                text += "\n"
+            text += "".join(f"{k}: []\n" for k in missing)
+            target.write_text(text, encoding="utf-8")
+            self._r.kv("补齐缺失 key", {"文件": str(target), "新增": ", ".join(missing)})
+            return 0
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target.write_text(SAMPLE, encoding="utf-8")
+        self._r.kv("已生成样例", {"文件": str(target)})
+        return 0
+
+    @timed_cli
     def list(self):
         """按字母排序输出所有 bin/ 工具名"""
         names = _all_bins()

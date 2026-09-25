@@ -17,6 +17,10 @@ _SAY_DISABLED = os.environ.get("SCRIPTS_NO_SAY", "") == "1"
 # stdout/stderr（默认仅失败时打）。子进程经 env 透传，全链路生效。
 _DEBUG = os.environ.get("SCRIPTS_DEBUG", "") == "1"
 
+# 批量 git 命令忽略清单开关：--no-ignore 或 SCRIPTS_NO_IGNORE=1 置 True 后，
+# 批量扫描不再过滤 .lazyscriptsignore（lib/ignore.py）。
+_NO_IGNORE = os.environ.get("SCRIPTS_NO_IGNORE", "") == "1"
+
 
 def set_say_disabled(disabled: bool) -> None:
     """运行时切换语音禁用状态（由 bin 层 --no-say 调用）。"""
@@ -73,6 +77,29 @@ def consume_debug(argv: list[str]) -> list[str]:
         _DEBUG = True
         argv = [argv[0]] + [a for a in argv[1:] if a != "--debug"]
     return argv
+
+
+def consume_no_ignore(argv: list[str]) -> list[str]:
+    """剥离 argv 中所有 --no-ignore 并禁用批量忽略清单，返回剩余 argv。
+
+    与 consume_no_say 同构：run_cli / 薄壳 argparse 前调用。
+    只对走批量扫描的 git 命令（merge/push/sync/switch/delete 族）有意义，
+    其他命令剥了也无害。
+    """
+    global _NO_IGNORE
+    if "--no-ignore" in argv[1:]:
+        _NO_IGNORE = True
+        argv = [argv[0]] + [a for a in argv[1:] if a != "--no-ignore"]
+    return argv
+
+
+def set_ignore_disabled(disabled: bool) -> None:
+    global _NO_IGNORE
+    _NO_IGNORE = disabled
+
+
+def is_ignore_disabled() -> bool:
+    return _NO_IGNORE
 
 
 def consume_dry_run(argv: list[str], description: str = "") -> list[str]:

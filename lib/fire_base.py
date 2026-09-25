@@ -49,6 +49,7 @@ def timed_cli(method: Callable[..., Any]) -> Callable[..., Any]:
 
 def run_cli(cli: BaseCli) -> None:
     """fire 入口：把 sys.argv 喂给 fire.Fire(cli)，并把方法返回值转成 exit code。"""
+    from lib.cli_flags import consume_no_ignore
     from lib.notify import consume_debug, consume_dry_run, consume_no_say
     from lib.skills_help import consume_skills
 
@@ -57,6 +58,7 @@ def run_cli(cli: BaseCli) -> None:
     argv = consume_dry_run(argv, description=cli.__class__.__doc__ or "")
     argv = consume_debug(argv)
     argv = consume_no_say(argv)
+    argv = consume_no_ignore(argv)
     sys.argv = argv
     os.environ.setdefault("PAGER", "-")
 

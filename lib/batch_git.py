@@ -88,6 +88,9 @@ class BatchOperation(ABC):
     confirm: bool = False
     folder_name: str | None = None
     script_dir: Path | None = None
+    # 忽略清单操作类型（lib/ignore.py 的 IGNORE_KEYS）：None = 不过滤。
+    # 仅批量层生效；单仓手动命令不受清单约束。
+    ignore_op: str | None = None
 
     def __post_init__(self) -> None:
         self.root = Path(self.root).resolve()
@@ -253,6 +256,25 @@ class BatchRunner:
 
         r.rule(operation.title, style="blue")
         repos = operation.scan()
+        ignored: list[tuple[Path, Path]] = []
+        if operation.ignore_op:
+            from lib.cli_flags import is_ignore_disabled
+            from lib.ignore import IgnoreError, find_ignore
+            if not is_ignore_disabled():
+                kept: list[Path] = []
+                for repo in repos:
+                    try:
+                        src = find_ignore(repo, operation.ignore_op, root)
+                    except IgnoreError as e:
+                        r.err(str(e))
+                        raise SystemExit(2)
+                    if src is not None:
+                        ignored.append((repo, src))
+                    else:
+                        kept.append(repo)
+                repos = kept
+                if ignored:
+                    r.info(f"忽略 {len(ignored)} 个仓库（.lazyscriptsignore, {operation.ignore_op}）")
         from lib.notify import debug_concurrency
         concurrency = debug_concurrency(int(os.environ.get("BATCH_CONCURRENCY", "4")))
         r.info(f"扫描 {len(repos)} 个仓库（检测并发 {concurrency}，执行串行）")
@@ -269,7 +291,11 @@ class BatchRunner:
                 r.warn("已取消")
                 raise SystemExit(0)
 
-        result = BatchResult(total=len(repos))
+        result = BatchResult(total=len(repos) + len(ignored))
+        for repo, src in ignored:
+            result.skipped.append(RepoResult(
+                name=str(repo.relative_to(root)), path=str(repo),
+                status="skip", detail=f"ignored by .lazyscriptsignore ({src})"))
 
         def _detect_one(idx: int, repo: Path) -> tuple[int, str, RepoPlan, RepoResult]:
             rel = repo.relative_to(root)
@@ -679,6 +705,7 @@ def push_all(
         root=Path(".").resolve(),
         confirm=False,
         detect_fn=_push_one_factory(target, parsed.dry_run, parsed.auto_commit, extra),
+        ignore_op="push",
     ))
     return 1 if result.failed else 0
 
@@ -777,6 +804,7 @@ def merge_all(
         root=Path(".").resolve(),
         confirm=False,
         detect_fn=_merge_one_factory(target, parsed.dry_run, parsed.auto_commit, extra),
+        ignore_op="merge",
     ))
     return 1 if result.failed else 0
 
@@ -877,6 +905,7 @@ def switch_branch_all(target: str) -> int:
         root=Path(".").resolve(),
         confirm=False,
         detect_fn=_switch_one_factory(target),
+        ignore_op="switch",
     ))
     return 1 if result.failed else 0
 
@@ -1139,6 +1168,7 @@ def sync_branch_all(branch: str | None = None, *, force: bool = False) -> int:
         root=Path(".").resolve(),
         confirm=False,
         detect_fn=_sync_one_factory(branch, force),
+        ignore_op="sync",
     ))
     return 1 if result.failed else 0
 
@@ -1303,6 +1333,7 @@ def push_branch_all(branch: str | None = None, *, force: bool = False) -> int:
         root=root,
         confirm=False,
         detect_fn=_push_branch_one_factory(branch, force, single=single),
+        ignore_op="push",
     ))
     return 1 if result.failed else 0
 
@@ -1366,6 +1397,7 @@ def delete_branch_all(target: str, *, force: bool = False) -> int:
         root=Path(".").resolve(),
         confirm=True,
         detect_fn=_delete_branch_one_factory(target, force),
+        ignore_op="delete",
     ))
     return 1 if result.failed else 0
 
@@ -1406,5 +1438,6 @@ def delete_branch_remote_all(target: str, *, remote: str = "origin") -> int:
         root=Path(".").resolve(),
         confirm=True,
         detect_fn=_delete_branch_remote_one_factory(target, remote),
+        ignore_op="delete",
     ))
     return 1 if result.failed else 0
