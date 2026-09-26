@@ -32,7 +32,7 @@ class FakeRunner:
 
 class UnitTextCase(unittest.TestCase):
     def test_macos_plist_runs_the_bridge_and_never_idles_out(self) -> None:
-        text = browse_service.unit_text("darwin", "/usr/local/bin/browse", "/tmp/b.sock")
+        text = browse_service.unit_text("darwin", "/usr/local/bin/browse", "/run/b.sock")
         self.assertIn("<string>/usr/local/bin/browse</string>", text)
         self.assertIn("<string>bridge</string>", text)
         # 常驻服务必须关掉空闲自退，否则 launchd 只会一遍遍把它拉起来
@@ -72,7 +72,7 @@ class InstallCase(unittest.TestCase):
         self.home = pathlib.Path(self._tmp.name)
 
     def install(self, plat: str, runner=None):
-        return browse_service.install(self.home, plat, "/usr/bin/browse", "/tmp/b.sock",
+        return browse_service.install(self.home, plat, "/usr/bin/browse", "/run/b.sock",
                                       runner=runner or FakeRunner())
 
     def test_linux_writes_the_unit_then_enables_it(self) -> None:
@@ -118,7 +118,7 @@ class UninstallCase(unittest.TestCase):
         self.home = pathlib.Path(self._tmp.name)
 
     def test_uninstall_disables_then_deletes(self) -> None:
-        browse_service.install(self.home, "linux", "/usr/bin/browse", "/tmp/b.sock",
+        browse_service.install(self.home, "linux", "/usr/bin/browse", "/run/b.sock",
                                runner=FakeRunner())
         runner = FakeRunner()
         path, results = browse_service.uninstall(self.home, "linux", runner=runner)
@@ -136,7 +136,7 @@ class UninstallCase(unittest.TestCase):
 
     def test_status_reports_the_file_and_the_path(self) -> None:
         self.assertFalse(browse_service.status(self.home, "linux")["installed"])
-        browse_service.install(self.home, "linux", "/usr/bin/browse", "/tmp/b.sock",
+        browse_service.install(self.home, "linux", "/usr/bin/browse", "/run/b.sock",
                                runner=FakeRunner())
         state = browse_service.status(self.home, "linux")
         self.assertTrue(state["installed"])
@@ -145,3 +145,39 @@ class UninstallCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VolatileSocketCase(unittest.TestCase):
+    """socket 落在临时目录：必须拒装（2026-09-26 事故护栏），一个字节都不写盘。
+
+    那次事故：测试环境的临时 HOME 真跑了 `launchctl bootstrap`，装出一个 socket 指向
+    /tmp 的常驻任务，占着 WS 端口把正常 daemon 的自动拉起全部挤死。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.home = pathlib.Path(self._tmp.name)
+
+    def test_tmp_socket_is_refused_without_writing(self):
+        runner = FakeRunner()
+        with self.assertRaises(ValueError):
+            browse_service.install(self.home, "darwin", "/usr/bin/browse",
+                                   "/tmp/x/.local/state/lazygophers/scripts/browse.sock",
+                                   runner=runner)
+        self.assertFalse(browse_service.unit_path(self.home, "darwin").exists())
+        self.assertEqual(runner.calls, [])
+
+    def test_var_folders_socket_is_refused_too(self):
+        # macOS 的 $TMPDIR（/var/folders/...）同样是重启即清空的位置
+        with self.assertRaises(ValueError):
+            browse_service.install(self.home, "linux", "/usr/bin/browse",
+                                   "/var/folders/aa/bb/T/browse.sock",
+                                   runner=FakeRunner())
+
+    def test_real_home_socket_still_installs(self):
+        runner = FakeRunner()
+        path, _ = browse_service.install(self.home, "linux", "/usr/bin/browse",
+                                         "/home/u/.local/state/lazygophers/scripts/browse.sock",
+                                         runner=runner)
+        self.assertTrue(path.is_file())
+        self.assertTrue(runner.calls)

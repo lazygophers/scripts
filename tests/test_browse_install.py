@@ -271,9 +271,12 @@ class TestManualToggles(TempHome):
                 return True
 
         self.touch_dir("Library/Application Support/Google/Chrome")
+        # install_service 必须 mock：真跑会 launchctl bootstrap，把用户机器上
+        # 正在跑的 browse-bridge 服务顶掉（2026-09-26 实测复现，就是这么泄漏的）
         with mock.patch.object(nh.pathlib.Path, "home", staticmethod(lambda: self.home)), \
                 mock.patch.object(nh, "platform_key", lambda *a: "darwin"), \
                 mock.patch.object(nh, "copy_to_clipboard", lambda text: False), \
+                mock.patch.object(nh, "install_service", return_value=True), \
                 mock.patch("sys.stderr", new=Tty()) as err:
             nh.main(["browse install", "--no-build", "--no-wait", *args])
         return err.getvalue()

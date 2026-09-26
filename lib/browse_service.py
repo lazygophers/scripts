@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import pathlib
 import subprocess
+import tempfile
 
 LABEL = "com.lazygophers.browse.bridge"
 UNIT_NAME = "browse-bridge.service"
@@ -114,9 +115,36 @@ def _run(commands: list[list[str]], runner) -> list[tuple[list[str], int]]:
     return out
 
 
+_VOLATILE_ROOTS = tuple({
+    pathlib.Path("/tmp"),
+    pathlib.Path("/private/tmp"),
+    pathlib.Path("/var/folders"),  # macOS 的 $TMPDIR 都在这下面，重启清空
+    pathlib.Path(tempfile.gettempdir()),
+})
+
+
+def _socket_is_volatile(socket: str) -> bool:
+    """socket 落在临时目录里 = 服务重启即失效。2026-09-26 事故：测试环境用临时 HOME
+    真跑了 `launchctl bootstrap`，装出一个 socket 指向 /tmp 的常驻 launchd 任务，
+    占着 WS 端口把正常的 daemon 挤死了一整天。装之前先在这里拦住。"""
+    try:
+        resolved = pathlib.Path(socket).resolve()
+    except OSError:
+        return True
+    return any(
+        resolved == root.resolve() or root.resolve() in resolved.parents
+        for root in _VOLATILE_ROOTS)
+
+
 def install(home: pathlib.Path, plat: str, exe: str, socket: str,
             runner=subprocess.run) -> tuple[pathlib.Path, list[tuple[list[str], int]]]:
-    """写服务描述文件并启用。返回落点和每条命令的退出码。"""
+    """写服务描述文件并启用。返回落点和每条命令的退出码。
+
+    socket 在临时目录里时直接 ValueError：那种服务装出来重启即失效，只会留僵尸。"""
+    if _socket_is_volatile(socket):
+        raise ValueError(
+            f"socket 在临时目录里（{socket}），装成开机自启服务重启即失效；"
+            "像是测试或临时 HOME 误装，拒绝写入")
     path = unit_path(home, plat)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(unit_text(plat, exe, socket), encoding="utf-8")
