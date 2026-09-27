@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -23,6 +24,13 @@ DEFAULTS: dict = {
     "model": "",
     "debounce": DEFAULT_DEBOUNCE,
     "rebuild_concurrency": 1,
+    # 扫描 + 监听排除（gitignore 语法，传给 graphify 的 extra_excludes）。.scratch 下的生成物
+    # （progress.html 等）占文档 LLM 字节 80%+，只留 research / memory 给图谱检索；
+    # agent worktree（aidog 7.8 GB）和 ask-ui 数据目录是别处代码的副本/临时件。
+    "excludes": ["**/.scratch/*", "!**/.scratch/research/", "!**/.scratch/memory/",
+                 "**/.claude/worktrees/", "**/.ask-ui/"],
+    # 每日重算图的时刻（本地时间 HH:MM）：只重新聚类和重写报告，不调 LLM
+    "regraph_at": "03:00",
 }
 
 
@@ -80,6 +88,11 @@ def load_config() -> dict:
         raise GraphwatchError(f"rebuild_concurrency 应是整数: {p}") from e
     if cfg["rebuild_concurrency"] < 1:
         raise GraphwatchError(f"rebuild_concurrency 最小为 1: {p}")
+    excludes = cfg["excludes"]
+    if not isinstance(excludes, list) or not all(isinstance(e, str) for e in excludes):
+        raise GraphwatchError(f"excludes 应是 gitignore 规则字符串列表: {p}")
+    if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(cfg["regraph_at"])):
+        raise GraphwatchError(f"regraph_at 应是两位小时的 HH:MM，如 '03:00'（写成 3:00 会被 YAML 读成数字）: {p}")
     return cfg
 
 

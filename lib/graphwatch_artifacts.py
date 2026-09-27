@@ -190,8 +190,8 @@ def _llm_labels(G, communities: dict, root: Path) -> dict[int, str]:
         return {}
 
 
-def resolve_labels(G, communities: dict, saved: dict[int, str], root: Path) -> dict[int, str]:
-    """只给没名字的社区起名，已有名字原样保留。
+def resolve_labels(G, communities: dict, saved: dict[int, str], root: Path, *, llm: bool = True) -> dict[int, str]:
+    """只给没名字的社区起名，已有名字原样保留。llm=False 只用 hub 名（0 token）。
 
     `Community N` 视同没名字（那是 graphify 的占位名，不是谁起的），所以它会被
     hub 名和 LLM 名替换掉，不会永远卡在占位符上。
@@ -212,6 +212,8 @@ def resolve_labels(G, communities: dict, saved: dict[int, str], root: Path) -> d
     hub = label_communities_by_hub(G, communities)
     for cid in missing:
         labels[cid] = hub[cid]
+    if not llm:
+        return labels
 
     fresh = _llm_labels(G, {cid: communities[cid] for cid in missing}, root)
     # LLM 没起出真名字时会回 "Community N" 占位符，或把 id 原样吐回来（graphify #2534）；
@@ -288,8 +290,11 @@ def _write_obsidian(G, communities, cohesion, labels, out: Path) -> None:
 
 def write_artifacts(G, communities: dict, cohesion: dict, labels: dict[int, str],
                     gods: list, out: Path, root: Path, changed: int,
-                    tokens: dict, stage=None) -> list[str]:
+                    tokens: dict, stage=None, *, obsidian: bool = True) -> list[str]:
     """刷新 daemon 每轮要产的全部导出物，返回失败的产出物名。
+
+    obsidian=False 跳过 obsidian 导出：它是单轮最重的一步（aidog 5.4s CPU、2 万多个
+    文件），用户 2026-09-27 定为只在每日重算图时写。
 
     每个产出物独立 try：graph.json 已经落盘，一个导出挂掉不该带走其它的。
     `stage` 是 rebuild 的阶段打点函数，传进来就每步报一次耗时。
@@ -306,8 +311,9 @@ def write_artifacts(G, communities: dict, cohesion: dict, labels: dict[int, str]
         # 而 source_file 存的是仓库相对路径——传绝对路径会匹配 0 个文件直接 ValueError。
         ("GRAPH_TREE.html", lambda: write_tree_html(out / "graph.json", out / "GRAPH_TREE.html",
                                                     project_label=root.name)),
-        ("obsidian", lambda: _write_obsidian(G, communities, cohesion, labels, out)),
     ]
+    if obsidian:
+        steps.append(("obsidian", lambda: _write_obsidian(G, communities, cohesion, labels, out)))
     failed: list[str] = []
     for name, fn in steps:
         try:

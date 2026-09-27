@@ -185,6 +185,21 @@ def _watched_extensions() -> frozenset[str]:
                           ".c", ".h", ".cpp", ".hpp", ".md", ".txt", ".yaml", ".yml", ".json"})
 
 
+def _ignore_matcher(root: Path):
+    """监听侧用和扫描侧（detect_incremental）同一套忽略规则：.graphifyignore / .gitignore
+    + 配置 excludes。不这样的话被排除的文件（.scratch 生成物、agent worktree）一改就
+    触发一轮「无变更，跳过」的空重建，白白做一次全目录 md5 扫描。
+
+    ponytail: 规则在监听启动时读一次；改 .gitignore / excludes 后要 graphwatch restart 才生效。
+    """
+    from graphify.detect import _is_ignored, _load_graphifyignore, _parse_gitignore_line
+
+    patterns = list(_load_graphifyignore(root))
+    patterns += [(root, line) for line in map(_parse_gitignore_line, load_config()["excludes"]) if line]
+    cache: dict = {}
+    return lambda path: _is_ignored(path, root, patterns, _cache=cache)
+
+
 def _watchdog_listener(folder: str, debounce: float, on_change) -> object:
     """单目录监听器：watchdog 观察文件事件，防抖后回调 on_change。
 
@@ -196,6 +211,7 @@ def _watchdog_listener(folder: str, debounce: float, on_change) -> object:
 
     watched = _watched_extensions()
     root_parts = Path(folder).parts
+    ignored = _ignore_matcher(Path(folder))
 
     class _Handler(FileSystemEventHandler):
         def __init__(self):
@@ -221,6 +237,8 @@ def _watchdog_listener(folder: str, debounce: float, on_change) -> object:
                 return
             if p.suffix.lower() not in watched:
                 return
+            if ignored(p):
+                return
             self._schedule()
 
     obs = Observer()
@@ -236,8 +254,28 @@ def _run_update(folder: str) -> int:
     return rebuild(folder)
 
 
+def _run_regraph(folder: str) -> int:
+    """每日重算图（不调 LLM，见 graphwatch_rebuild.regraph）。
+
+    图落后于源码时跳过：马上会有一轮重建（它自己会重新聚类），而且重算会刷新
+    graph.json 的 mtime，把「落后」伪装成「新鲜」，让启动补课漏掉这个目录。
+    """
+    if stale_trigger(folder) is not None:
+        return 0
+    from lib.graphwatch_rebuild import regraph
+
+    return regraph(folder)
+
+
+def regraph_due(now, regraph_at: str, last_day) -> bool:
+    """到了每日重算时刻且今天还没跑过。错过（睡眠/关机）就在之后第一次检查时补跑。"""
+    hh, mm = (int(x) for x in regraph_at.split(":"))
+    return now.date() != last_day and (now.hour, now.minute) >= (hh, mm)
+
+
 def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_factory=None,
-               poll_interval: float = 2.0, on_started=None, notifier=None) -> None:
+               poll_interval: float = 2.0, on_started=None, notifier=None,
+               regraph_runner=None, clock=None) -> None:
     """前台守护进程：每目录一个监听线程，重建全局排队，全局单例锁防双开。
 
     监听（watchdog，轻量）与重建（graphify update 子进程，重）分离：
@@ -246,6 +284,9 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
     取活不按入队顺序，按各目录「最后变化时间」：越久没变的越先重建——
     串行时新鲜项目不至于插队饿死老项目。主循环每 poll_interval 醒一次
     热加载配置；stop_event 停一切。
+
+    每日 regraph_at 之后把所有目录标记为待重算图；worker 只在重建队列空闲时
+    才做重算（不和重建抢 CPU），重算中来的变更照常标 dirty、做完再重建。
     """
     import threading
 
@@ -273,6 +314,12 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
         listener_factory = _watchdog_listener
     if notifier is None:
         notifier = Notifier()
+    if regraph_runner is None:
+        regraph_runner = _run_regraph
+    if clock is None:
+        import datetime
+
+        clock = datetime.datetime.now
 
     _log.install_excepthook("graphwatch-daemon")
 
@@ -291,6 +338,9 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
     in_flight: set[str] = set()
     dirty: set[str] = set()
     change_time: dict[str, float] = {}
+    regraph_pending: set[str] = set()
+    debounce_now = [float(load_config()["debounce"])]
+    last_regraph_day = None
     work_cv = threading.Condition()
 
     def _enqueue(folder: str, changed_at: float | None = None) -> None:
@@ -311,32 +361,42 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
     def _worker() -> None:
         while not stop_event.is_set():
             with work_cv:
-                while not queued and not stop_event.is_set():
+                while not queued and not (regraph_pending - in_flight) and not stop_event.is_set():
                     work_cv.wait(timeout=0.5)
-                if not queued:
+                if queued:
+                    folder = min(queued, key=lambda f: change_time.get(f, 0.0))
+                    queued.discard(folder)
+                    runner, kind = rebuild_runner, "重建"
+                elif regraph_pending - in_flight:
+                    folder = min(regraph_pending - in_flight)
+                    regraph_pending.discard(folder)
+                    runner, kind = regraph_runner, "重算图"
+                else:
                     continue  # stop_event 触发退出
-                folder = min(queued, key=lambda f: change_time.get(f, 0.0))
-                queued.discard(folder)
                 in_flight.add(folder)
-            _dlog(f"重建开始: {folder}")
+            _dlog(f"{kind}开始: {folder}")
             try:
-                rc = rebuild_runner(folder)
+                rc = runner(folder)
             except Exception as e:  # noqa: BLE001
                 # 带堆栈：上游 graphify 抛的 KeyError 之类只有类型+消息定位不到行
-                _dlog(f"重建异常: {folder}: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+                _dlog(f"{kind}异常: {folder}: {type(e).__name__}: {e}\n{traceback.format_exc()}")
                 rc = 1
             with work_cv:
                 in_flight.discard(folder)
                 redo = folder in dirty
                 dirty.discard(folder)
             if rc != 0:
-                _dlog(f"重建失败（rc={rc}）: {folder}")
-                sent = notifier.fire(folder, "graphwatch 重建失败", f"{folder}\n重建退出码 {rc}，稍后变更会重试")
+                _dlog(f"{kind}失败（rc={rc}）: {folder}")
+                sent = notifier.fire(folder, f"graphwatch {kind}失败", f"{folder}\n{kind}退出码 {rc}，稍后变更会重试")
                 _dlog(f"失败通知{'已发送' if sent else '发送失败（系统通知不可用）'}: {folder}")
             else:
-                _dlog(f"重建完成: {folder}")
+                _dlog(f"{kind}完成: {folder}")
             if redo and not stop_event.is_set():
-                _enqueue(folder)
+                # 重建中又变了：再等一个防抖窗口才重跑，连续编辑合并成一轮
+                # （不等的话 agent 持续写文件时重建一轮接一轮，实测 aidog 49% 的重建由此而来）
+                t = threading.Timer(debounce_now[0], _enqueue, (folder,))
+                t.daemon = True
+                t.start()
 
     def _spawn_workers(n: int) -> None:
         for _ in range(n):
@@ -374,10 +434,23 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
 
     last_sig: tuple[tuple[str, ...], float, int] | None = None
 
+    def _schedule_regraph(cfg: dict) -> None:
+        nonlocal last_regraph_day
+        now = clock()
+        if not regraph_due(now, cfg["regraph_at"], last_regraph_day):
+            return
+        last_regraph_day = now.date()
+        with work_cv:
+            regraph_pending.update(str(f) for f in cfg["folders"])
+            work_cv.notify_all()
+        _dlog(f"每日重算图：{len(cfg['folders'])} 个目录排队（重建队列空闲时执行）")
+
     def _reconcile() -> None:
         nonlocal last_sig
         cfg = load_config()
+        _schedule_regraph(cfg)
         debounce = float(cfg["debounce"])
+        debounce_now[0] = debounce
         concurrency = int(cfg["rebuild_concurrency"])
         folders = [str(f) for f in cfg["folders"]]
         sig = (tuple(folders), debounce, concurrency)

@@ -1975,3 +1975,116 @@ class TestWizardEdges(GraphwatchCase):
     def test_backend_nonnumeric_reasks(self):
         cfg = graphwatch.run_wizard(input_fn=self._feed("abc", "2", "", "", "", "", ""))
         self.assertEqual(cfg["backend"], "kimi")
+
+
+class TestExcludesConfig(GraphwatchCase):
+    def test_default_excludes_keep_research_and_memory(self):
+        self.assertEqual(graphwatch.load_config()["excludes"],
+                         ["**/.scratch/*", "!**/.scratch/research/", "!**/.scratch/memory/",
+                          "**/.claude/worktrees/", "**/.ask-ui/"])
+
+    def test_excludes_must_be_string_list(self):
+        graphwatch.config_path().write_text("excludes: .scratch\n", encoding="utf-8")
+        with self.assertRaises(GraphwatchError):
+            graphwatch.load_config()
+
+
+class TestOldestFirst(GraphwatchCase):
+    def _touch(self, rel: str, mtime: float) -> Path:
+        p = self.home / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x", encoding="utf-8")
+        os.utime(p, (mtime, mtime))
+        return p
+
+    def test_cold_folder_before_hot_folder_and_old_file_first(self):
+        from lib.graphwatch_rebuild import _oldest_first
+
+        hot_new = self._touch("hot/new.md", 300)
+        hot_old = self._touch("hot/old.md", 100)
+        cold = self._touch("cold/a.md", 200)
+        self.assertEqual(_oldest_first([hot_new, cold, hot_old]), [cold, hot_old, hot_new])
+
+    def test_missing_file_sorts_first(self):
+        from lib.graphwatch_rebuild import _oldest_first
+
+        live = self._touch("d/live.md", 100)
+        gone = self.home / "d" / "gone.md"
+        self.assertEqual(_oldest_first([live, gone]), [gone, live])
+
+
+class TestRegraphConfig(GraphwatchCase):
+    def test_default_regraph_at(self):
+        self.assertEqual(graphwatch.load_config()["regraph_at"], "03:00")
+
+    def test_unquoted_time_is_rejected(self):
+        # YAML 1.1 把不加引号的 3:00 读成 180（六十进制），必须报错而不是静默错时
+        graphwatch.config_path().write_text("regraph_at: 3:00\n", encoding="utf-8")
+        with self.assertRaises(GraphwatchError):
+            graphwatch.load_config()
+
+
+class TestRegraphDue(unittest.TestCase):
+    def test_before_time_not_due(self):
+        import datetime
+
+        self.assertFalse(graphwatch_daemon.regraph_due(datetime.datetime(2026, 9, 27, 2, 59), "03:00", None))
+
+    def test_after_time_due_once_per_day(self):
+        import datetime
+
+        now = datetime.datetime(2026, 9, 27, 3, 0)
+        self.assertTrue(graphwatch_daemon.regraph_due(now, "03:00", None))
+        self.assertFalse(graphwatch_daemon.regraph_due(now, "03:00", now.date()))
+
+    def test_missed_run_catches_up_later_same_day(self):
+        import datetime
+
+        self.assertTrue(graphwatch_daemon.regraph_due(
+            datetime.datetime(2026, 9, 27, 15, 0), "03:00", datetime.date(2026, 9, 26)))
+
+
+class TestDaemonRegraph(GraphwatchCase):
+    def _run(self, clock, step=None):
+        stop = threading.Event()
+        rebuilds, regraphs = FakeRunner(), FakeRunner()
+        thread = threading.Thread(target=lambda: graphwatch.run_daemon(
+            stop_event=stop, ensure=lambda: None, listener_factory=FakeListenerFactory(),
+            rebuild_runner=rebuilds, regraph_runner=regraphs, clock=clock, poll_interval=0.05), daemon=True)
+        thread.start()
+        time.sleep(0.4)
+        stop.set()
+        thread.join(timeout=5)
+        return rebuilds, regraphs
+
+    def test_regraph_runs_after_scheduled_time_once(self):
+        import datetime
+
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        _, regraphs = self._run(lambda: datetime.datetime(2026, 9, 27, 3, 5))
+        self.assertEqual(regraphs.calls, [str(repo.resolve())], "每天只跑一次")
+
+    def test_no_regraph_before_scheduled_time(self):
+        import datetime
+
+        graphwatch.add_folder(self.mkdir())
+        _, regraphs = self._run(lambda: datetime.datetime(2026, 9, 27, 2, 0))
+        self.assertEqual(regraphs.calls, [])
+
+
+class TestPruneBackups(GraphwatchCase):
+    def test_keeps_last_seven_days_and_non_backup_entries(self):
+        import datetime
+
+        from lib.graphwatch_rebuild import prune_backups
+
+        out = self.mkdir("graphify-out")
+        for name in ("2026-09-20", "2026-09-21", "2026-09-27", "wiki", "cache"):
+            (out / name).mkdir()
+            (out / name / "graph.json").write_text("{}", encoding="utf-8")
+        (out / "2026-09-01").write_text("不是目录，不动", encoding="utf-8")
+        removed = prune_backups(out, today=datetime.date(2026, 9, 27))
+        self.assertEqual(removed, ["2026-09-20"])
+        self.assertEqual(sorted(p.name for p in out.iterdir()),
+                         ["2026-09-01", "2026-09-21", "2026-09-27", "cache", "wiki"])

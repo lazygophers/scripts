@@ -161,6 +161,14 @@ class TestResolveLabels(unittest.TestCase):
         self.assertNotEqual(labels[0], "Community 0")
         self.assertNotEqual(labels[1], "1")
 
+    def test_llm_off_uses_hub_names_only(self):
+        called = []
+        art._llm_labels = lambda *a, **k: called.append(1) or {0: "LLM 名"}
+        labels = art.resolve_labels(self.G, self.communities, {}, self.root, llm=False)
+        self.assertEqual(called, [], "每日重算图不许花 LLM 的钱")
+        self.assertNotEqual(labels[0], "LLM 名")
+        self.assertEqual(set(labels), {0, 1})
+
     def test_llm_cannot_rename_an_already_named_community(self):
         art._llm_labels = lambda G, comms, root: {0: "偷改的名字", 1: "新社区"}
         labels = art.resolve_labels(self.G, self.communities, {0: "人工命名"}, self.root)
