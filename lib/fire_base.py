@@ -89,7 +89,8 @@ def _render_fire_info(args, kwargs) -> None:
     """替代 fire.core 内部的 print('INFO: Showing help ...')：改成一行 dim 提示。"""
     from rich.console import Console
     if is_ai_shell_env():
-        print(args[0].rstrip(), file=sys.stderr)
+        # 不能用 print：run_cli 把 builtins.print 换成了转到本函数的 lambda，INFO 行会无限递归
+        sys.stderr.write(args[0].rstrip() + "\n")
         return
     c = Console(stderr=True, force_terminal=True, highlight=False)
     c.print(f"[dim]{args[0].rstrip()}[/dim]")

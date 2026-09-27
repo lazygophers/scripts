@@ -209,6 +209,19 @@ class TestMinimalOtherChannels(unittest.TestCase):
         src = inspect.getsource(fire_base._render_fire_help)
         self.assertIn("force_terminal=not is_ai_shell_env()", src)
 
+    def test_fire_help_in_ai_env_does_not_recurse(self):
+        """run_cli 劫持了 builtins.print；AI 环境的 INFO 行再调 print 会 RecursionError。"""
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        proc = subprocess.run([sys.executable, str(root / "bin" / "graphwatch"), "--help"],
+                              capture_output=True, text=True, timeout=30,
+                              env={**os.environ, "CLAUDECODE": "1"})
+        self.assertEqual(proc.returncode, 0, proc.stderr[-500:])
+        self.assertNotIn("RecursionError", proc.stderr)
+
 
 class TestMinimalRemainingChannels(unittest.TestCase):
     """极简模式下还没被别处覆盖的几条出口。"""
