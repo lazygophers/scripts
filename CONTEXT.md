@@ -22,9 +22,9 @@
 - **command（指令）**：一条 WebDriver BiDi 形状的请求信封 `{id, method, params}`，`method` 写成 `<module>.<action>`（私有能力带 `lg:` 前缀，如 `lg:history.search`）。回包只有 Success / Error 两种，错误码用 BiDi 标准枚举或带冒号的扩展码。
 - **策略目标（policy target）**：一条指令真正作用到的页面地址，由 context / match-url / 当前标签页解析而来。dispatch 在执行前解析一次，拒绝名单、功能开关、确认、执行、审计共用同一份；读不到地址即拒绝（fail closed）。没有页面目标的全局动作（如 history.search）没有策略目标。
 - **归属（ownership）**：一个页面「是不是 browse 自己的」的状态。硬规则：页面方法只许落在自己的页面上，无开关。判定永远懒做——命令到达时查该标签页当前在不 在自己的组里，不监听任何事件。
-- **专属组（dedicated group）**：browse 在普通 Chrome 窗口里维护的一个 `browse` 组，自己开的页面全部进入此组。组的存在本身就是归属标记和视觉隔离；browse 不创建独立窗口。
+- **专属组（dedicated group）**：browse 在普通 Chrome 窗口里维护的 `browse/<用途>` 组，自己开的页面全部进入对应组。组名表达项目或任务用途（例如 `browse/a.com`、`browse/research`）；组的存在本身就是归属标记和视觉隔离；用完用 `browse group dissolve <用途>` 回收。
 - **组成员身份真源（group membership as the source of truth）**：在专属组里 = 自己的页面，是唯一判据。用户把标签拖进组即接管、拖出即放走；拖动就是授权/撤权的手。
-- **收编（adopt）**：把 browse 没开过的已有页面变为自己的动作（`lg:tabs.adopt`）。matchUrl 在全浏览器里找，收编即加入 `browse` 组，并过确认策略。
+- **收编（adopt）**：把 browse 没开过的已有页面变为自己的动作（`lg:tabs.adopt`）。matchUrl 在全浏览器里找，收编即加入指定的 `browse/<用途>` 组（默认 `browse/default`），并过确认策略。
 - **登记表（ownership registry）**：自己开过/收编过的页面的 origin+path 清单（LRU 上限 50，存 chrome.storage.local）。唯一用途：浏览器重启后按 URL 把现存标签页认领回组。
 - **页面缓存（page cache）**：text/html 正文读取结果在扩展端的留存（每页最近 5 份、全局 100 份，导航/关页即失效）。读命令永远现读；缓存只由 `browse page cache [index]` 显式取回，0 = 最新。
 - **认领（reclaim）**：重启后第一条命令触发 ensureOwn 重建组时，顺手把登记表匹配的现存标签页收回组的动作。没有启动事件，纯懒触发。

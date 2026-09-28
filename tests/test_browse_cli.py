@@ -1126,7 +1126,7 @@ class TestGroupNaming(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual([m for m, _ in calls],
                          ["browsingContext.create", "lg:tabs.groups", "lg:tabs.group"])
-        self.assertEqual(calls[-1][1]["title"], "browse/default")
+        self.assertEqual(calls[-1][1]["title"], "browse/a.com")
         self.assertEqual(calls[-1][1]["context"], "42")
 
     def test_open_with_named_group_reuses_an_existing_one(self):

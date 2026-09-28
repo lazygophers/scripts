@@ -1,6 +1,6 @@
 import { CommandError, optionalString, requireString } from "../protocol.ts";
 import { formatContext, requireApi, resolveContextOnce, type Target } from "./context.ts";
-import { ensureOwn, peekOwnGroupId, recordVisit } from "./ownership.ts";
+import { ownGroupIds } from "./ownership.ts";
 
 interface ContextInfo {
   context: string;
@@ -23,12 +23,12 @@ export async function browsingContextGetTree(
 ): Promise<{ contexts: ContextInfo[] }> {
   const root = optionalString(params.root, "root", ", a context id");
 
-  // 归属（票 02）：默认只列自己的组里的 tab；all: true 才列全浏览器。用
-  // peekOwnGroupId 只看不建——列个 tab 不该顺手新建分组。
+  // 归属（票 02）：默认只列 browse/* 组里的 tab；all: true 才列全浏览器。
+  // 只读判定，不建任何组。
   let tabs = await chrome.tabs.query({});
   if (params.all !== true) {
-    const groupId = await peekOwnGroupId();
-    tabs = groupId === null ? [] : tabs.filter((t) => t.groupId === groupId);
+    const groups = await ownGroupIds();
+    tabs = groups.size === 0 ? [] : tabs.filter((t) => t.groupId !== undefined && groups.has(t.groupId));
   }
   const wanted = root === undefined ? tabs : tabs.filter((t) => String(t.id) === root);
   if (root !== undefined && wanted.length === 0) {
@@ -40,52 +40,23 @@ export async function browsingContextGetTree(
 }
 
 /**
- * `browsingContext.create`. 开出来的页面一律进 browse 自己创建的组（票 02）：
- * 组就是归属标记，不在组里的页面所有页面方法都拒。已有组就在组所在窗口开；首次
- * 使用就在当前窗口开目标页，并以它创建 `browse` 组——不创建独立窗口。
+ * `browsingContext.create`. 在当前窗口开页面并返回 context id。**不负责成组**：
+ * CLI 用 `browse open --group <用途>` 把页面放进 `browse/<用途>` 组；不传时按 URL
+ * 主机名命名（例如 `browse/a.com`）。页面进了 browse/* 组才取得归属（票 02）。
  */
 export async function browsingContextCreate(
   params: Record<string, unknown>,
 ): Promise<{ context: string }> {
   const url = optionalString(params.url, "url");
   const background = params.background === true;
-
-  const existing = await peekOwnGroupId();
-  let tab: chrome.tabs.Tab;
-  if (existing === null) {
-    tab = await chrome.tabs.create({
-      ...(url === undefined ? {} : { url }),
-      active: !background,
-    });
-    if (tab.id === undefined) {
-      throw new CommandError("unknown error", "tab opened without an id");
-    }
-    await ensureOwn(tab.id);
-  } else {
-    const own = await ensureOwn();
-    tab = await chrome.tabs.create({
-      ...(url === undefined ? {} : { url }),
-      windowId: own.windowId,
-      active: !background,
-    });
-    if (tab.id === undefined) {
-      throw new CommandError("unknown error", "tab opened without an id");
-    }
-    await groupOwn(tab.id);
+  const tab = await chrome.tabs.create({
+    ...(url === undefined ? {} : { url }),
+    active: !background,
+  });
+  if (tab.id === undefined) {
+    throw new CommandError("unknown error", "tab opened without an id");
   }
-  await recordVisit(tab.url ?? url);
   return { context: String(tab.id) };
-}
-
-/** 收进自己的组。组在中途没了（用户刚关掉）就 ensureOwn 重建一次再试。 */
-async function groupOwn(tabId: number): Promise<void> {
-  const first = await ensureOwn();
-  try {
-    await chrome.tabs.group({ tabIds: [tabId], groupId: first.groupId });
-  } catch {
-    const again = await ensureOwn();
-    await chrome.tabs.group({ tabIds: [tabId], groupId: again.groupId });
-  }
 }
 
 /** `browsingContext.close`. Closes the tab; a frame id is rejected. */

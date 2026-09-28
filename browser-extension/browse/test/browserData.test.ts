@@ -15,7 +15,7 @@ function setup(): { calls: Any[]; asked: ConfirmRequest[] } {
   const calls: Any[] = [];
   const asked: ConfirmRequest[] = [];
   // 归属（票 02）：history 只回自己页面的记录，夹具项要在登记表里
-  storageMock({ "browse:ownership": ["https://a.test"] });
+  storageMock({ "browse:ownership": [{ u: "https://a.test", g: "default" }] });
   installChrome({
     history: {
       search: async (query: Any) => {

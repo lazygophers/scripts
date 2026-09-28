@@ -47,6 +47,7 @@ import signal
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
 import zlib
 
 from lib.ai_env import json_dumps
@@ -198,7 +199,6 @@ _DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)(ms|s|m|h)?$")
 
 # ---------------------------------------------------------------- 友好层（spec：.scratch/browse-cli-redesign/spec.md）
 GROUP_PREFIX = "browse/"
-DEFAULT_GROUP_NAME = "default"
 # Chrome 的标签组只认这固定一套色（handlers/tabs.ts 的 COLORS）
 GROUP_COLORS = ("grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange")
 
@@ -437,6 +437,9 @@ def route(tokens: list[str]) -> tuple[str, dict, dict]:
             raise UsageError(f"没有这条指令: {head} {action}（{head} 组有: {known}）")
         method, names = entry
         params, opts = _bind_params(method, *split_tokens(tokens[2:]))
+        if method == "lg:tabs.adopt" and isinstance(opts.get("group"), str):
+            # --group 被 CLI_FLAGS 吸进 opts；adopt 要用它指定 browse/<name> 组
+            params["group"] = opts.pop("group")
         return f"{head} {action}", params, opts
 
     if head in FLAT_SPECIAL:
@@ -1072,6 +1075,11 @@ def _full_group_name(name: str) -> str:
     return name if name.startswith(GROUP_PREFIX) else GROUP_PREFIX + name
 
 
+
+def _default_group_name(url: str) -> str:
+    """无 --group 时用域名表达用途；file:// 等没有 hostname 就叫 local。"""
+    return urlsplit(url).hostname or "local"
+
 def _group_color(name: str) -> str:
     """组名哈希取色：同名组永远同色，跨会话稳定（spec 5.2）。"""
     return GROUP_COLORS[zlib.crc32(name.encode("utf-8")) % len(GROUP_COLORS)]
@@ -1174,11 +1182,11 @@ async def _cmd_open(params: dict, opts: dict, sock: pathlib.Path, browser: str) 
     # 所以判的是 opts 而不是某个 noGroup 参数。
     if opts.get("group") is False:
         params.pop("noGroup", None)
-        # 扩展会自动把新开的页收进它自己的 "browse" 组；--no-group 就是把这一步退掉
-        _outcome_or_die(await execute("lg:tabs.ungroup", {"context": context}, sock, browser=browser))
+        # --no-group = 不成组。注意：没有 browse/* 组的页面没有归属，页面方法会被拒
         print_result({"context": context, "group": None}, table=_want_table(opts))
         return
-    full = _full_group_name(str(opts.get("group") or DEFAULT_GROUP_NAME))
+    # 创建只开 tab；默认用 URL 主机名命名并加入 browse/<host> 组。
+    full = _full_group_name(str(opts.get("group") or _default_group_name(url)))
     color = params.pop("color", None) or _group_color(full)
     params_g = {"context": context, "title": full, "color": color}
     hits = [g for g in await _tab_groups(sock, browser) if g.get("title") == full]

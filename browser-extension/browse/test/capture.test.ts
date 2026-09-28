@@ -37,10 +37,13 @@ function chromeWith(extra: Any, contexts: Any[] = [], config: Any = DEFAULTS): A
     tabGroups: {
       get: async (id: number) => {
         if (id !== 500) throw new Error(`no group ${id}`);
-        return { id: 500, windowId: 20, title: "browse" };
+        return { id: 500, windowId: 20, title: "browse/default" };
       },
-      query: async () => [],
-      update: async () => ({ id: 500 }),
+      query: async (q: { title?: string }) =>
+        (q?.title === undefined || q.title === "browse/default")
+          ? [{ id: 500, windowId: 20, title: "browse/default" }]
+          : [],
+      update: async () => ({ id: 500, title: "browse/default" }),
     },
     windows: {
       create: async () => ({ id: 21, tabs: [{ id: 901 }] }),

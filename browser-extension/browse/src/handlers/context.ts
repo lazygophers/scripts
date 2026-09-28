@@ -1,5 +1,5 @@
 import { CommandError, asString } from "../protocol.ts";
-import { ensureOwn } from "./ownership.ts";
+import { ownGroupIds } from "./ownership.ts";
 
 /** A resolved target: a tab, optionally narrowed to one of its frames. */
 export interface Target {
@@ -54,8 +54,7 @@ export function globToRegExp(glob: string): RegExp {
  *
  * Accepts the params object of any command, so every handler shares one rule.
  * 归属（票 02）之后这条规则长出 `scope`：own scope 里 matchUrl 的匹配集和活动页
- * 兜底都只看自己的组——ensureOwn 会借机重建组并做重启认领，所以重启后第一条
- * 无参命令就能把登记表里的页面接回来。
+ * 兜底都只看 `browse/*` 组里的页面（多组：browse/<用途>）。
  */
 export async function resolveContext(
   params: Record<string, unknown>,
@@ -71,8 +70,8 @@ export async function resolveContext(
   const every = await chrome.tabs.query({});
   let tabs = every;
   if (scope === "own") {
-    const { groupId } = await ensureOwn();
-    tabs = every.filter((tab) => tab.groupId === groupId);
+    const groups = await ownGroupIds();
+    tabs = every.filter((tab) => tab.groupId !== undefined && groups.has(tab.groupId));
   }
 
   if (matchUrl !== undefined) {

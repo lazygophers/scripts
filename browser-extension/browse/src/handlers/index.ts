@@ -4,7 +4,7 @@ import { CommandError } from "../protocol.ts";
 import { auditClear, auditRead } from "./audit.ts";
 import { dropContextCache, resolveContextOnce, targetUrl } from "./context.ts";
 import { cacheGet, cacheList, cachePut } from "./cache.ts";
-import { enforceOwnTab } from "./ownership.ts";
+import { enforceOwnTab, ensureReclaimed } from "./ownership.ts";
 import {
   browsingContextActivate,
   browsingContextCaptureScreenshot,
@@ -238,7 +238,10 @@ function wantsContext(method: string, params: Record<string, unknown>): boolean 
  * `browsingContext.create` 不在 PAGE_METHODS 里也不带 context/matchUrl，
  * wantsContext 自然放行。判定本身在 ownership.ts。
  */
-const OWNERSHIP_EXEMPT = new Set(["lg:tabs.adopt"]);
+// lg:tabs.group 是命名的原语（CLI 的 browse open --group / group add 靠它把页面
+// 放进 browse/<name> 组）——第一次成组时目标页必然还没有归属，拦它就是死锁。
+// 它等同于用户手动拖标签进组，是授权动作本身。
+const OWNERSHIP_EXEMPT = new Set(["lg:tabs.adopt", "lg:tabs.group"]);
 
 async function enforceOwnership(
   method: string,
@@ -247,6 +250,7 @@ async function enforceOwnership(
   if (OWNERSHIP_EXEMPT.has(method) || !wantsContext(method, params)) {
     return;
   }
+  await ensureReclaimed(); // 重启后第一条页面命令顺手把登记表里的页面接回组
   const target = await resolveContextOnce(params, "own");
   await enforceOwnTab(target.tabId);
 }

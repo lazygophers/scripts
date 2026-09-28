@@ -344,16 +344,12 @@ class TestOpenAndClose(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("要给网址", err)
 
-    def test_no_group_flag_ungroups_the_new_tab(self):
-        """命令行的 `--no-group` 必须真的退出自动分组。
-
-        split_tokens 把 `--no-x` 统一折成 opts['x']=False，所以这里判的是
-        opts['group'] is False。
-        """
+    def test_no_group_flag_leaves_the_new_tab_ungrouped(self):
+        """`--no-group` 不调用成组 API；新 tab 没有 browse/* 归属。"""
         handler = lambda m, p: {"context": "42"} if m == "browsingContext.create" else {}
         rc, out, _, calls = call(["open", "https://a.com", "--no-group"], handler)
         self.assertEqual(rc, 0)
-        self.assertEqual([m for m, _ in calls], ["browsingContext.create", "lg:tabs.ungroup"])
+        self.assertEqual([m for m, _ in calls], ["browsingContext.create"])
         self.assertIsNone(json.loads(out)["group"])
 
     def test_without_no_group_the_tab_joins_the_default_group(self):
@@ -365,7 +361,7 @@ class TestOpenAndClose(unittest.TestCase):
         def handler(method, params):
             if method == "browsingContext.create":
                 return {"context": "42"}
-            return groups(("9", "browse/default", 1, []), ("10", "browse/default", 2, []))
+            return groups(("9", "browse/a.com", 1, []), ("10", "browse/a.com", 2, []))
 
         rc, _, err, _ = call(["open", "https://a.com"], handler)
         self.assertEqual(rc, 2)

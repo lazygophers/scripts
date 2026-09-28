@@ -56,7 +56,7 @@ export function ownWorld(
   tabs: Tab[];
 } {
   const group: Record<string, unknown> = {
-    id: 500, windowId: 20, title: "browse", color: "blue", collapsed: false,
+    id: 500, windowId: 20, title: "browse/default", color: "blue", collapsed: false,
   };
   const session: Record<string, unknown> = {};
   // 确认模式默认 always：确认钩子必须被问到。老世界里 storage 缺席 = 最严模式，
@@ -64,7 +64,8 @@ export function ownWorld(
   const store: Record<string, unknown> = {
     "browse:config": { confirm_mode: "always" },
     ...(opts.local ?? {}),
-    "browse:ownership": opts.registry ?? [],
+    "browse:ownership": (opts.registry ?? []).map((u) =>
+      typeof u === "string" ? { u, g: "default" } : u),
   };
   const all = tabs.map((t) => ({ windowId: 20, ...t }));
   installChrome({
@@ -88,7 +89,8 @@ export function ownWorld(
         if (id !== group.id) throw new Error(`no group ${id}`);
         return group;
       },
-      query: async (q: { title?: string }) => (q?.title === group.title ? [group] : []),
+      query: async (q: { title?: string }) =>
+        (q?.title === undefined || q.title === group.title) ? [group] : [],
       update: async (id: number, delta: Record<string, unknown>) => {
         if (id !== group.id) throw new Error(`no group ${id}`);
         return Object.assign(group, delta);
@@ -123,10 +125,13 @@ export function ownSession(extra: Record<string, unknown> = {}): Record<string, 
     tabGroups: {
       get: async (id: number) => {
         if (id !== 500) throw new Error(`no group ${id}`);
-        return { id: 500, windowId: 20, title: "browse" };
+        return { id: 500, windowId: 20, title: "browse/default" };
       },
-      query: async () => [],
-      update: async () => ({ id: 500 }),
+      query: async (q: { title?: string }) =>
+        (q?.title === undefined || q.title === "browse/default")
+          ? [{ id: 500, windowId: 20, title: "browse/default" }]
+          : [],
+      update: async () => ({ id: 500, title: "browse/default" }),
     },
     windows: { create: async () => ({ id: 21, tabs: [{ id: 901 }] }) },
     storage: {
