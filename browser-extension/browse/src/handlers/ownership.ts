@@ -14,6 +14,9 @@ import { CommandError } from "../protocol.ts";
  *   SW 睡醒不丢；浏览器重启清零 → 走重建路径。
  * - `chrome.storage.local["browse:ownership"]` = origin+path 数组（LRU 上限
  *   50），唯一用途是浏览器重启后按 URL 把现存 tab 认领回组。
+ *
+ * 当前窗口 + 单组：没有 `browse` 组时，调用方先在当前窗口创建目标 tab，
+ * 再以该 tab 创建组；不创建独立窗口。已有组时，目标 tab 在组所在窗口创建。
  */
 
 const GROUP_TITLE = "browse";
@@ -98,21 +101,35 @@ async function remember(group: OwnGroup): Promise<OwnGroup> {
   return group;
 }
 
-/** 找一个现存的 `browse` 组当自己的（优先记过的窗口），没有就建窗口+组。 */
-async function findOrCreate(): Promise<OwnGroup> {
+/** 找一个现存的 `browse` 组当自己的，没有就用 seedTabId 在其当前窗口建组。 */
+async function findOrCreate(seedTabId?: number): Promise<OwnGroup> {
   const found = await chrome.tabGroups.query({ title: GROUP_TITLE });
   if (found.length > 0) {
     const group = found[0]!;
     return { groupId: group.id, windowId: group.windowId };
   }
-  const win = await chrome.windows.create({ focused: true });
-  const tabId = win?.tabs?.[0]?.id;
-  if (win === undefined || tabId === undefined) {
-    throw new CommandError("unknown error", "dedicated window opened without a tab");
+  let tabId = seedTabId;
+  if (tabId === undefined) {
+    const owned = await registrySet();
+    const tabs = await chrome.tabs.query({});
+    tabId = tabs.find((tab) => {
+      const url = canonical(tab.url);
+      return tab.id !== undefined && url !== null && owned.has(url);
+    })?.id;
+  }
+  if (tabId === undefined) {
+    throw new CommandError(
+      "no such frame",
+      "no browse group; open a page with `browse tab open` or adopt one with `browse tab adopt`",
+    );
+  }
+  const tab = await chrome.tabs.get(tabId);
+  if (tab.windowId === undefined) {
+    throw new CommandError("unknown error", `tab ${seedTabId} has no window`);
   }
   const groupId = await chrome.tabs.group({ tabIds: [tabId] });
   await chrome.tabGroups.update(groupId, { title: GROUP_TITLE, color: "blue" });
-  return { groupId, windowId: win.id ?? -1 };
+  return { groupId, windowId: tab.windowId };
 }
 
 /**
@@ -120,7 +137,7 @@ async function findOrCreate(): Promise<OwnGroup> {
  * origin+path 对上的收进组（`tabs.group` 会把别的窗口的 tab 搬过来）。组没丢
  * （SW 睡醒、session 还在）就跳过认领——那是重启场景才需要的重活。
  */
-export async function ensureOwn(): Promise<OwnGroup> {
+export async function ensureOwn(seedTabId?: number): Promise<OwnGroup> {
   if (cached !== null) {
     const alive = await chrome.tabGroups.get(cached.groupId).catch(() => null);
     if (alive !== null && alive.windowId === cached.windowId) {
@@ -141,7 +158,7 @@ export async function ensureOwn(): Promise<OwnGroup> {
       } catch {
         // 记着的组没了（用户关组/关窗口）或 session 空：走重建。
       }
-      const own = await findOrCreate();
+      const own = await findOrCreate(seedTabId);
       await reclaim(own.groupId);
       return remember(own);
     })().finally(() => {

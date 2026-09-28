@@ -1,7 +1,7 @@
 import { CommandError, optionalString } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
 import { requireApi, resolveContextOnce, type Target } from "./context.ts";
-import { ensureOwn, recordVisit } from "./ownership.ts";
+import { ensureOwn, peekOwnGroupId, recordVisit } from "./ownership.ts";
 
 /** `chrome.tabGroups` 接受的颜色是固定的一套，不是任意 CSS 色。 */
 const COLORS = new Set(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]);
@@ -155,6 +155,7 @@ async function requireTabOnly(params: Record<string, unknown>): Promise<Target> 
  *
  * 确认门槛（第 3 轮拍板）：adopt 是授权动作，过确认策略——deny 域名在 dispatch
  * 的域名裁决处已经拒了，这里的 confirm 管的是 per_domain / always 下的弹窗。
+ * 收编只把 tab 加入 browse 组，不创建或搬到别的窗口。
  */
 export async function tabsAdopt(
   params: Record<string, unknown>,
@@ -171,9 +172,14 @@ export async function tabsAdopt(
     );
   }
   const tab = await chrome.tabs.get(target.tabId);
-  const { groupId } = await ensureOwn();
+  const existingGroupId = await peekOwnGroupId();
+  if (existingGroupId !== null && tab.groupId === existingGroupId) {
+    await recordVisit(tab.url);
+    return { context: String(target.tabId), group: String(existingGroupId), url: tab.url ?? "" };
+  }
+  await confirm({ action: "adoptTab", method: "lg:tabs.adopt", url: tab.url ?? null });
+  const { groupId } = await ensureOwn(target.tabId);
   if (tab.groupId !== groupId) {
-    await confirm({ action: "adoptTab", method: "lg:tabs.adopt", url: tab.url ?? null });
     await chrome.tabs.group({ tabIds: [target.tabId], groupId });
   }
   await recordVisit(tab.url);

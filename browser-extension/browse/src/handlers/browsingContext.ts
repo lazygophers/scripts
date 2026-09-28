@@ -24,7 +24,7 @@ export async function browsingContextGetTree(
   const root = optionalString(params.root, "root", ", a context id");
 
   // 归属（票 02）：默认只列自己的组里的 tab；all: true 才列全浏览器。用
-  // peekOwnGroupId 只看不建——列个清单不该顺手弹出专属窗口。
+  // peekOwnGroupId 只看不建——列个 tab 不该顺手新建分组。
   let tabs = await chrome.tabs.query({});
   if (params.all !== true) {
     const groupId = await peekOwnGroupId();
@@ -40,9 +40,9 @@ export async function browsingContextGetTree(
 }
 
 /**
- * `browsingContext.create`. 开出来的页面一律进 browse 的**专属窗口 + 组**（票
- * 02）：组就是归属标记，不在组里的页面所有页面方法都拒。`type` 参数仍收（向后
- * 兼容）但不再区分——没有「开在别的窗口」这个选项了。
+ * `browsingContext.create`. 开出来的页面一律进 browse 自己创建的组（票 02）：
+ * 组就是归属标记，不在组里的页面所有页面方法都拒。已有组就在组所在窗口开；首次
+ * 使用就在当前窗口开目标页，并以它创建 `browse` 组——不创建独立窗口。
  */
 export async function browsingContextCreate(
   params: Record<string, unknown>,
@@ -50,16 +50,29 @@ export async function browsingContextCreate(
   const url = optionalString(params.url, "url");
   const background = params.background === true;
 
-  const own = await ensureOwn();
-  const tab = await chrome.tabs.create({
-    ...(url === undefined ? {} : { url }),
-    windowId: own.windowId,
-    active: !background,
-  });
-  if (tab.id === undefined) {
-    throw new CommandError("unknown error", "tab opened without an id");
+  const existing = await peekOwnGroupId();
+  let tab: chrome.tabs.Tab;
+  if (existing === null) {
+    tab = await chrome.tabs.create({
+      ...(url === undefined ? {} : { url }),
+      active: !background,
+    });
+    if (tab.id === undefined) {
+      throw new CommandError("unknown error", "tab opened without an id");
+    }
+    await ensureOwn(tab.id);
+  } else {
+    const own = await ensureOwn();
+    tab = await chrome.tabs.create({
+      ...(url === undefined ? {} : { url }),
+      windowId: own.windowId,
+      active: !background,
+    });
+    if (tab.id === undefined) {
+      throw new CommandError("unknown error", "tab opened without an id");
+    }
+    await groupOwn(tab.id);
   }
-  await groupOwn(tab.id);
   await recordVisit(tab.url ?? url);
   return { context: String(tab.id) };
 }
