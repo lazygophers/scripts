@@ -109,17 +109,19 @@ METHODS: dict[str, tuple[str, ...]] = {
     "network.unsubscribe": ("subscription",),
     "lg:history.search": ("text",),
     "lg:history.delete": ("url",),
-    "lg:bookmarks.search": ("query",),
-    "lg:bookmarks.create": ("url",),
-    "lg:bookmarks.remove": ("id",),
     "lg:downloads.start": ("url",),
     "lg:downloads.list": (),
     "lg:downloads.cancel": ("id",),
     "lg:tabs.group": (),
+    "lg:tabs.adopt": ("matchUrl",),
     "lg:tabs.ungroup": (),
     "lg:tabs.groups": (),
     "lg:tabs.updateGroup": ("group",),
     "lg:page.snapshot": (),
+    # 页面缓存（票 05）：put 是 text/html 包装的顺手写，get 走 `browse page cache`
+    "lg:cache.put": ("kind", "body"),
+    "lg:cache.get": (),
+    "lg:cache.list": (),
     # 审计存在插件的 chrome.storage.local 里，这两条是把它捞出来的唯一一条路
     # （`browse audit`）。2026-09-14 的架构反转之后 Python 侧不再有审计文件。
     "lg:audit.read": (),
@@ -133,11 +135,6 @@ METHODS: dict[str, tuple[str, ...]] = {
     "lg:offscreen.documents": (),
     "lg:clipboard.read": (),
     "lg:clipboard.write": ("text",),
-    "lg:readingList.list": (),
-    "lg:readingList.add": ("url", "title"),
-    "lg:readingList.update": ("id",),
-    "lg:readingList.remove": ("id",),
-    "lg:topSites.list": (),
     "lg:search.query": ("text",),
     "lg:idle.state": (),
     "lg:system.info": (),
@@ -176,7 +173,6 @@ METHODS: dict[str, tuple[str, ...]] = {
 # 线上要求 string 的 id 类参数（同名参数在别的方法上可能是 number，如
 # lg:downloads.cancel 的 id）：裸数字会被 _coerce 解析成 JSON 数字、扩展端拒收。
 STRING_NUMERIC_PARAMS: dict[str, tuple[str, ...]] = {
-    "lg:bookmarks.remove": ("id",),
     "lg:tabs.group": ("group",),
     "lg:tabs.ungroup": ("group",),
     "lg:tabs.updateGroup": ("group",),
@@ -186,7 +182,7 @@ STRING_NUMERIC_PARAMS: dict[str, tuple[str, ...]] = {
     "lg:printing.respond": ("request",),
 }
 
-CLI_FLAGS = frozenset({"table", "json", "socket", "concurrency", "failFast", "duration",
+CLI_FLAGS = frozenset({"table", "json", "socket", "concurrency", "failFast", "duration", "all",
                        "idleTimeout", "limit", "browser", "timeout", "url", "group",
                        "context"})
 
@@ -225,8 +221,8 @@ API_ONLY = frozenset({
     "lg:omnibox.setDefault",
     "lg:wauth.attach", "lg:wauth.detach", "lg:wauth.complete",
     "lg:printing.respond",
+    "lg:cache.list",
     "lg:permissions.contains",
-    "lg:readingList.update",
     "lg:audit.read", "lg:audit.clear",
 })
 
@@ -253,10 +249,12 @@ NOUN_GROUPS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
         "save": ("lg:pageCapture.saveMhtml", ("filename",)),
         "list": ("browsingContext.getTree", ()),
         "close": ("browsingContext.close", ()),
+        "adopt": ("lg:tabs.adopt", ("matchUrl",)),
     },
     "page": {
         "key": ("input.key", ("key",)),
         "scroll": ("input.scroll", ()),
+        "cache": ("lg:cache.get", ("index",)),
     },
     # group 组的五条（list/add/rename/color/dissolve）是多步命令，见 GROUP_SPECIAL
     "group": {},
@@ -268,17 +266,10 @@ NOUN_GROUPS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
         "local-set": ("storage.setLocalStorage", ("key", "value")),
         "history": ("lg:history.search", ("text",)),
         "history-del": ("lg:history.delete", ("url",)),
-        "bookmarks": ("lg:bookmarks.search", ("query",)),
-        "bookmark-add": ("lg:bookmarks.create", ("url",)),
-        "bookmark-del": ("lg:bookmarks.remove", ("id",)),
         "downloads": ("lg:downloads.list", ()),
         "download": ("lg:downloads.start", ("url",)),
         "download-cancel": ("lg:downloads.cancel", ("id",)),
         "download-open": ("lg:downloads.open", ("id",)),
-        "reading-list": ("lg:readingList.list", ()),
-        "reading-add": ("lg:readingList.add", ("url", "title")),
-        "reading-del": ("lg:readingList.remove", ("id",)),
-        "top-sites": ("lg:topSites.list", ()),
     },
     "net": {
         "watch": ("network.subscribe", ()),
@@ -399,6 +390,11 @@ def _bind_params(method: str, positional: list[str], flags: dict) -> tuple[dict,
     for key in ("context", "root", *STRING_NUMERIC_PARAMS.get(method, ())):
         if isinstance(params.get(key), (int, float)):
             params[key] = str(params[key])
+    # `browse tab adopt 42` 里的 42 是 tab id（=context），不是 glob；纯数字才转，
+    # 带 * 或 / 的 matchUrl 原样透传。
+    if method == "lg:tabs.adopt" and isinstance(params.get("matchUrl"), str) \
+            and params["matchUrl"].isdigit():
+        params["context"] = params.pop("matchUrl")
     return params, opts
 
 
@@ -1105,9 +1101,13 @@ class _CommandFailed(Exception):
         self.code = code
 
 
-async def _tabs(sock: pathlib.Path, browser: str) -> list[dict]:
-    """getTree 的顶层 context（= 标签页；children 是 frame，这里不看）。"""
-    result = _outcome_or_die(await execute("browsingContext.getTree", {}, sock, browser=browser))
+async def _tabs(sock: pathlib.Path, browser: str, all_: bool = False) -> list[dict]:
+    """getTree 的顶层 context（= 标签页；children 是 frame，这里不看）。
+
+    默认只列 browse 自己的页面（归属规则，票 02）；`--all` 才看全浏览器。
+    """
+    result = _outcome_or_die(await execute(
+        "browsingContext.getTree", {"all": True} if all_ else {}, sock, browser=browser))
     return [c for c in result.get("contexts", []) if not c.get("parent")]
 
 async def _tab_groups(sock: pathlib.Path, browser: str) -> list[dict]:
@@ -1221,7 +1221,9 @@ async def _close_contexts(params: dict, opts: dict, sock: pathlib.Path, browser:
 
 
 async def _cmd_list(opts: dict, sock: pathlib.Path, browser: str) -> None:
-    tree = await execute("browsingContext.getTree", {}, sock, browser=browser)
+    # 默认只列 browse 自己的页面（归属规则）；--all 才看全浏览器
+    tree = await execute("browsingContext.getTree", {"all": True} if opts.get("all") is True else {},
+                         sock, browser=browser)
     if tree["status"] != "ok":
         print_error(tree)
         raise _CommandFailed(exit_code_for(tree))
@@ -1286,6 +1288,11 @@ async def _cmd_eval_wrapped(verb: str, params: dict, opts: dict, sock: pathlib.P
     value = result.get("result", {}).get("value")
     if verb in ("text", "html"):
         sys.stdout.write(f"{value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)}\n")
+        # 页面缓存（票 05）：读成功顺手落一份；失败不影响本次读（结果已在 stdout）
+        if isinstance(value, str):
+            await execute("lg:cache.put", {"kind": verb, "body": value,
+                                           **{k: v for k, v in params.items() if k == "context"}},
+                          sock, browser=browser)
     else:
         print_result(result, table=_want_table(opts))
 

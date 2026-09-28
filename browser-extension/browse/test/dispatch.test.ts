@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { read } from "../src/audit.ts";
-import { confirm, setConfirmHook } from "../src/handlers/confirm.ts";
+import { confirm, setConfirmHook, type ConfirmRequest } from "../src/handlers/confirm.ts";
 import { HANDLERS, dispatch } from "../src/handlers/index.ts";
 import { FEATURE_OF, riskyAction } from "../src/policy.ts";
-import { clearChrome, installChrome, rejectsWith, storageMock } from "./mock.ts";
+import { resetOwnership } from "../src/handlers/ownership.ts";
+import { clearChrome, installChrome, ownWorld, rejectsWith, storageMock } from "./mock.ts";
+
+test.afterEach(() => resetOwnership());
 
 /** Spec 5.1, verbatim. If this list and HANDLERS disagree, one of them is wrong. */
 const V1 = [
@@ -30,13 +33,14 @@ const V1 = [
   "network.unsubscribe",
   "lg:history.search",
   "lg:history.delete",
-  "lg:bookmarks.search",
-  "lg:bookmarks.create",
-  "lg:bookmarks.remove",
   "lg:downloads.start",
   "lg:downloads.list",
   "lg:downloads.cancel",
   "lg:tabs.group",
+  "lg:cache.put",
+  "lg:cache.get",
+  "lg:cache.list",
+  "lg:tabs.adopt",
   "lg:tabs.ungroup",
   "lg:tabs.groups",
   "lg:tabs.updateGroup",
@@ -52,11 +56,6 @@ const V1 = [
   "lg:offscreen.documents",
   "lg:clipboard.read",
   "lg:clipboard.write",
-  "lg:readingList.list",
-  "lg:readingList.add",
-  "lg:readingList.update",
-  "lg:readingList.remove",
-  "lg:topSites.list",
   "lg:search.query",
   "lg:idle.state",
   "lg:system.info",
@@ -183,9 +182,10 @@ test("被拒的指令记成 denied，带上域名和原因", async () => {
 });
 
 test("失败的指令记成 error，成功的记成 success", async () => {
-  storageMock();
-  // 没装 chrome.tabs，handler 会炸；炸出来的东西必须被记成一条 error
-  await assert.rejects(() => dispatch("browsingContext.navigate", { url: "https://a.test/" }));
+  // 页面 7 在自己的组里；handler 走到 chrome.tabs.update 时炸（没装这个方法）
+  ownWorld([{ id: 7, url: "https://a.test/", groupId: 500 }]);
+  await assert.rejects(() =>
+    dispatch("browsingContext.navigate", { context: "7", url: "https://a.test/" }));
   const entries = await read();
   assert.equal(entries.at(-1)?.result, "error");
   assert.equal(entries.at(-1)?.domain, "a.test");
@@ -203,8 +203,8 @@ test("读审计这件事本身不记审计 —— 否则越读越长", async () 
 test("审计写不进去也不能把指令搞挂", async () => {
   const store = storageMock();
   store.failNext = 999;
-  // 这条指令该失败的原因是「没有 chrome.tabs」，不该变成「审计写不进去」
-  const err = await dispatch("browsingContext.navigate", { url: "https://a.test/" })
+  // 这条指令该失败的原因是「没有 chrome.downloads」，不该变成「审计写不进去」
+  const err = await dispatch("lg:downloads.start", { url: "https://a.test/f" })
     .then(() => null, (e: Error) => e);
   assert.ok(err instanceof Error);
   assert.doesNotMatch(err.message, /QUOTA/, "失败原因不该是审计");
@@ -214,13 +214,10 @@ test("审计写不进去也不能把指令搞挂", async () => {
 // ------------------------------------------------ 策略目标（CONTEXT.md）：隐式页面目标也算数
 
 test("deny_domains 拦得住隐式页面目标：context / matchUrl / 当前标签页", async () => {
-  installChrome({
-    tabs: {
-      query: async () => [{ id: 3, url: "https://bank.test/x" }],
-      get: async (id: number) => ({ id, url: "https://bank.test/x" }),
-    },
+  // 归属规则下活动页兜底只看自己的组，所以 bank.test 也得是组里的页面
+  ownWorld([{ id: 3, url: "https://bank.test/x", groupId: 500, active: true }], {
+    local: { "browse:config": { deny_domains: ["bank.test"] } },
   });
-  storageMock({ "browse:config": { deny_domains: ["bank.test"] } });
   // input.click 的 params 没有 url/domain —— 2026-09-21 之前它绕得过拒绝名单
   const err = await rejectsWith(
     () => dispatch("input.click", { selector: "css=a" }),
@@ -233,13 +230,14 @@ test("deny_domains 拦得住隐式页面目标：context / matchUrl / 当前标�
 });
 
 test("页面方法读不到目标 URL 就 fail closed 拒绝，不带着 null 放行", async () => {
-  installChrome({
-    tabs: {
-      query: async () => [{ id: 3, url: "https://a.test/x" }],
-      get: async () => null, // 标签页在解析 context 和读 URL 之间消失
+  ownWorld([], {
+    extra: {
+      tabs: {
+        query: async () => [{ id: 3, url: "https://a.test/x", groupId: 500, active: true }],
+        get: async () => null, // 标签页在解析 context 和读 URL 之间消失
+      },
     },
   });
-  storageMock();
   await rejectsWith(() => dispatch("input.click", { selector: "css=a" }), "no such frame");
   const [entry] = await read();
   assert.equal(entry?.result, "denied");
@@ -249,8 +247,8 @@ test("页面方法读不到目标 URL 就 fail closed 拒绝，不带着 null �
 test("全局动作没有策略目标：deny 的域名维度管不到，也不去解析 context", async () => {
   storageMock({ "browse:config": { deny_domains: ["bank.test"] } });
   // 故意不装 chrome.tabs：这条要是去解析 context 就会当场炸
-  installChrome({ topSites: { get: async () => [] } });
-  await dispatch("lg:topSites.list", {});
+  installChrome({ proxy: { settings: { get: async () => ({ value: {} }) } } });
+  await dispatch("lg:proxy.get", {});
   clearChrome();
 });
 
@@ -260,4 +258,39 @@ test("riskyAction：只有 input.* 的 js= 定位器才标 evalMainWorld", async
   // 别的方法带 js= selector 也不进 MAIN world，旧口径会把审计动作标错
   assert.equal(riskyAction("lg:page.snapshot", { selector: "js=1" }), null);
   assert.equal(riskyAction("input.click", { selector: "css=a" }), null);
+});
+
+// ------------------------------------------------ 归属（票 02）：choke point 上拦住别人的页面
+
+test("落到别人页面的指令被拒，错误指向 open / adopt", async () => {
+  ownWorld([
+    { id: 7, url: "https://a.test/", groupId: 500 },
+    { id: 9, url: "https://b.test/", groupId: undefined },
+  ]);
+  const err = await rejectsWith(
+    () => dispatch("input.click", { selector: "css=a", context: "9" }),
+    "no such frame",
+  );
+  assert.match(err.message, /not your page/);
+  assert.match(err.message, /browse tab adopt/);
+  const [entry] = await read();
+  assert.equal(entry?.result, "denied");
+  clearChrome();
+});
+
+test("adopt 的目标本来就是别人的页面，豁免归属判定", async () => {
+  const asked: ConfirmRequest[] = [];
+  ownWorld(
+    [{ id: 9, url: "https://a.test/", groupId: undefined }],
+    { registry: ["https://a.test"] },
+  );
+  setConfirmHook(async (request) => {
+    asked.push(request);
+    return true;
+  });
+  const adopted = await dispatch("lg:tabs.adopt", { context: "9" }) as Record<string, unknown>;
+  assert.equal(adopted.context, "9");
+  assert.deepEqual(asked.map((a) => a.action), ["adoptTab"]);
+  setConfirmHook(async () => true);
+  clearChrome();
 });

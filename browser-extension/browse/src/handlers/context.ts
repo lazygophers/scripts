@@ -1,10 +1,17 @@
 import { CommandError, asString } from "../protocol.ts";
+import { ensureOwn } from "./ownership.ts";
 
 /** A resolved target: a tab, optionally narrowed to one of its frames. */
 export interface Target {
   tabId: number;
   frameId: number | undefined;
 }
+
+/**
+ * 匹配范围（票 02）：`own`（默认）只看自己的组——matchUrl 和活动页兜底都
+ * 不再碰别人的标签页；`all` 只有 adopt 用，收编本来就得找得到别人的页面。
+ */
+export type Scope = "own" | "all";
 
 /**
  * Context ids are `<tabId>` for a tab and `<tabId>.<frameId>` for a frame.
@@ -46,20 +53,39 @@ export function globToRegExp(glob: string): RegExp {
  * matches is an error, not a coin flip) > the active tab of the current window.
  *
  * Accepts the params object of any command, so every handler shares one rule.
+ * 归属（票 02）之后这条规则长出 `scope`：own scope 里 matchUrl 的匹配集和活动页
+ * 兜底都只看自己的组——ensureOwn 会借机重建组并做重启认领，所以重启后第一条
+ * 无参命令就能把登记表里的页面接回来。
  */
-export async function resolveContext(params: Record<string, unknown>): Promise<Target> {
+export async function resolveContext(
+  params: Record<string, unknown>,
+  scope: Scope = "own",
+): Promise<Target> {
   const { context, matchUrl } = params as { context?: unknown; matchUrl?: unknown };
 
   if (context !== undefined) {
     return parseContext(asString(context, "context", ", a context id"));
   }
 
+  // own scope 只看自己的组：先拿组 id（ensureOwn 借机重建组+重启认领），再过滤。
+  const every = await chrome.tabs.query({});
+  let tabs = every;
+  if (scope === "own") {
+    const { groupId } = await ensureOwn();
+    tabs = every.filter((tab) => tab.groupId === groupId);
+  }
+
   if (matchUrl !== undefined) {
     const glob = asString(matchUrl, "matchUrl", ", a shell-style glob");
     const pattern = globToRegExp(glob);
-    const hits = (await chrome.tabs.query({})).filter((tab) => pattern.test(tab.url ?? ""));
+    const hits = tabs.filter((tab) => pattern.test(tab.url ?? ""));
     if (hits.length === 0) {
-      throw new CommandError("no such frame", `no browsing context matches ${glob}`);
+      throw new CommandError(
+        "no such frame",
+        scope === "own"
+          ? `no owned page matches ${glob}; open one with \`browse tab open\` or adopt it with \`browse tab adopt\``
+          : `no browsing context matches ${glob}`,
+      );
     }
     if (hits.length > 1) {
       const urls = hits.map((tab) => `${tab.id}=${tab.url ?? ""}`).join(", ");
@@ -75,11 +101,23 @@ export async function resolveContext(params: Record<string, unknown>): Promise<T
     return { tabId: only.id, frameId: undefined };
   }
 
-  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (active?.id === undefined) {
-    throw new CommandError("no such frame", "no active tab");
+  if (scope === "all") {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (active?.id === undefined) {
+      throw new CommandError("no such frame", "no active tab");
+    }
+    return { tabId: active.id, frameId: undefined };
   }
-  return { tabId: active.id, frameId: undefined };
+  // own：活动页 = 自己组里 active 的那个；没有活动的就唯一那个；再没有就拒。
+  const active = tabs.find((tab) => tab.active);
+  const picked = active ?? (tabs.length === 1 ? tabs[0] : undefined);
+  if (picked === undefined || picked.id === undefined) {
+    throw new CommandError(
+      "no such frame",
+      "no active page of browse's own; open one with `browse tab open` or adopt it with `browse tab adopt`",
+    );
+  }
+  return { tabId: picked.id, frameId: undefined };
 }
 
 /**
@@ -117,25 +155,28 @@ export function flattenTarget(params: Record<string, unknown>): Record<string, u
 
 const contextCache = new Map<string, Promise<Target>>();
 
-function contextCacheKey(params: Record<string, unknown>): string {
+function contextCacheKey(params: Record<string, unknown>, scope: Scope): string {
   const flat = flattenTarget(params);
   const c = typeof flat.context === "string" ? flat.context : "";
   const m = typeof flat.matchUrl === "string" ? flat.matchUrl : "";
-  return `${c}\u0000${m}`;
+  return `${scope}\u0000${c}\u0000${m}`;
 }
 
 /**
  * 一条指令只解析一次 context：dispatch 先解析（做 deny/feature 的域名裁决），
  * handler 再调用拿到的是**同一份缓存** —— 回调式共享，handler 签名不变。
  *
- * 缓存键是 context/matchUrl 的取值，空键代表「当前活动标签页」，指令结束
+ * 缓存键是 scope + context/matchUrl 的取值，空键代表「当前活动标签页」，指令结束
  * （`dropContextCache`）就删，绝不跨指令复用。
  */
-export function resolveContextOnce(params: Record<string, unknown>): Promise<Target> {
-  const key = contextCacheKey(params);
+export function resolveContextOnce(
+  params: Record<string, unknown>,
+  scope: Scope = "own",
+): Promise<Target> {
+  const key = contextCacheKey(params, scope);
   let hit = contextCache.get(key);
   if (hit === undefined) {
-    hit = resolveContext(flattenTarget(params));
+    hit = resolveContext(flattenTarget(params), scope);
     contextCache.set(key, hit);
     void hit.catch(() => contextCache.delete(key)); // 失败不缓存，下次重跑拿真错误
   }
@@ -144,7 +185,13 @@ export function resolveContextOnce(params: Record<string, unknown>): Promise<Tar
 
 /** 指令收尾（dispatch 的 finally）：context 缓存不活得比一条指令长。 */
 export function dropContextCache(params: Record<string, unknown>): void {
-  contextCache.delete(contextCacheKey(params));
+  contextCache.delete(contextCacheKey(params, "own"));
+  contextCache.delete(contextCacheKey(params, "all"));
+}
+
+/** 测试钩子：整张缓存清空，让每个用例从「没解析过」开始。 */
+export function clearContextCache(): void {
+  contextCache.clear();
 }
 
 /**

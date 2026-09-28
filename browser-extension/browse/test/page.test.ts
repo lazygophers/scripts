@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { pageSnapshot, type SnapshotEntry } from "../src/handlers/page.ts";
-import { clearChrome, installChrome, page, scriptingMock } from "./mock.ts";
+import { clearChrome, installChrome, ownSession, page, scriptingMock } from "./mock.ts";
 
 const HTML = `
   <a href="/login" id="go">Log in</a>
@@ -28,7 +28,8 @@ async function snapshot(html: string, params: Record<string, unknown> = {}): Pro
     (dom.window as unknown as { getComputedStyle: (e: Element) => CSSStyleDeclaration })
       .getComputedStyle(el);
   installChrome({
-    tabs: { query: async () => [{ id: 1, url: "https://example.test/page", active: true }] },
+    ...ownSession(),
+    tabs: { query: async () => [{ id: 1, url: "https://example.test/page", active: true, groupId: 500 }] },
     scripting: scriptingMock(),
   });
   try {

@@ -25,11 +25,10 @@ export type RiskyAction =
   | "download"
   | "readHistory"
   | "writeHistory"
-  | "readBookmarks"
-  | "writeBookmarks"
   | "readPage"
   | "captureMedia"
   | "readClipboard"
+  | "adoptTab"
   | "setProxy"
   | "registerUserScript";
 

@@ -2,16 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setConfirmHook, type ConfirmRequest } from "../src/handlers/confirm.ts";
 import { scriptCallFunction, scriptEvaluate } from "../src/handlers/script.ts";
-import { clearChrome, installChrome, rejectsWith, scriptingMock } from "./mock.ts";
+import { clearChrome, installChrome, ownSession, rejectsWith, scriptingMock } from "./mock.ts";
 
 type Any = Record<string, unknown>;
 
 function setup(): { calls: Any[]; asked: ConfirmRequest[] } {
   const scripting = scriptingMock();
   installChrome({
+    ...ownSession(),
     tabs: {
-      query: async () => [{ id: 7, url: "https://a.test/", active: true }],
-      get: async () => ({ id: 7, url: "https://a.test/" }),
+      query: async () => [{ id: 7, url: "https://a.test/", active: true, groupId: 500 }],
+      get: async () => ({ id: 7, url: "https://a.test/", groupId: 500 }),
     },
     scripting,
   });

@@ -5,17 +5,18 @@ import {
   browsingContextCaptureScreenshot,
   browsingContextClose,
   browsingContextCreate,
+  browsingContextGetTree,
   browsingContextNavigate,
   browsingContextReload,
-  forgetGroups,
 } from "../src/handlers/browsingContext.ts";
-import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
+import { resetOwnership } from "../src/handlers/ownership.ts";
+import { clearChrome, installChrome, ownWorld, rejectsWith } from "./mock.ts";
 
 type Any = Record<string, unknown>;
 
 function tabsMock(tab: Any = {}): { calls: Any[]; chrome: Any } {
   const calls: Any[] = [];
-  const state = { id: 7, url: "https://a.test/", active: true, windowId: 3, ...tab };
+  const state = { id: 7, url: "https://a.test/", active: true, windowId: 3, groupId: 500, ...tab };
   const listeners: ((id: number, info: Any) => void)[] = [];
   const chrome = installChrome({
     tabs: {
@@ -56,10 +57,20 @@ function tabsMock(tab: Any = {}): { calls: Any[]; chrome: Any } {
       },
     },
     tabGroups: {
+      get: async () => ({ id: 500, windowId: 3, title: "browse" }),
+      query: async () => [],
       update: async (id: number, opts: Any) => {
         calls.push({ groupUpdate: [id, opts] });
         return { id, ...opts };
       },
+    },
+    storage: {
+      // session 里记着自己的组：ensureOwn 不用建窗口，calls 里的断言才不被污染
+      session: {
+        get: async () => ({ "browse:own": { groupId: 500 } }),
+        set: async () => {},
+      },
+      local: { get: async () => ({}), set: async () => {} },
     },
     windows: {
       create: async (opts: Any) => {
@@ -74,21 +85,20 @@ function tabsMock(tab: Any = {}): { calls: Any[]; chrome: Any } {
   return { calls, chrome };
 }
 
-test("create opens a tab and returns its context id", async () => {
+test("create opens a tab in the dedicated window and groups it", async () => {
   const { calls } = tabsMock();
   assert.deepEqual(await browsingContextCreate({ url: "https://x.test/" }), {
     context: "99",
   });
-  assert.deepEqual(calls[0], { create: { url: "https://x.test/", active: true } });
+  assert.deepEqual(calls[0], { create: { url: "https://x.test/", windowId: 3, active: true } });
+  assert.deepEqual(calls[1], { group: { tabIds: [99], groupId: 500 } });
   clearChrome();
 });
 
-test("create type=window goes through windows.create and background unfocuses", async () => {
+test("create background opens without focusing, still in the dedicated window", async () => {
   const { calls } = tabsMock();
-  assert.deepEqual(await browsingContextCreate({ type: "window", background: true }), {
-    context: "42",
-  });
-  assert.deepEqual(calls[0], { windowCreate: { focused: false } });
+  await browsingContextCreate({ url: "https://x.test/", background: true });
+  assert.deepEqual(calls[0], { create: { url: "https://x.test/", windowId: 3, active: false } });
   clearChrome();
 });
 
@@ -162,26 +172,23 @@ test("a full-page screenshot is refused, not silently answered with the viewport
   clearChrome();
 });
 
-test("a tab browse opened lands in its own group, so one click closes them all", async () => {
-  forgetGroups();
-  const { calls } = tabsMock();
-  try {
-    await browsingContextCreate({ url: "https://a.test/" });
-    assert.deepEqual(calls[1], { group: { tabIds: [99] } });
-    // 第一次建组时给它起名上色，用户在标签栏上认得出这是谁开的
-    assert.deepEqual(calls[2], { groupUpdate: [11, { title: "browse", color: "blue" }] });
-
-    await browsingContextCreate({ url: "https://b.test/" });
-    // 第二个标签页进同一组，而不是每次新开一组
-    assert.deepEqual(calls[4], { group: { tabIds: [99], groupId: 11 } });
-    assert.equal(calls.filter((call) => "groupUpdate" in call).length, 1);
-  } finally {
-    clearChrome();
-  }
+test("getTree lists only owned tabs by default, all: true for the whole browser", async () => {
+  resetOwnership();
+  ownWorld(
+    [
+      { id: 1, url: "https://a.test/", groupId: 500 },
+      { id: 2, url: "https://b.test/" },
+    ],
+    { extra: { webNavigation: { getAllFrames: async () => [] } } },
+  );
+  const own = await browsingContextGetTree({});
+  assert.deepEqual(own.contexts.map((c) => c.url), ["https://a.test/"]);
+  const every = await browsingContextGetTree({ all: true });
+  assert.deepEqual(every.contexts.map((c) => c.url), ["https://a.test/", "https://b.test/"]);
+  clearChrome();
 });
 
 test("operating on an existing tab never moves it into a group", async () => {
-  forgetGroups();
   const { calls } = tabsMock();
   try {
     await browsingContextNavigate({ context: "7", url: "https://a.test/" });
@@ -194,53 +201,50 @@ test("operating on an existing tab never moves it into a group", async () => {
   }
 });
 
-test("a group the user has closed is forgotten, and the next tab starts a fresh one", async () => {
-  forgetGroups();
-  const calls: Any[] = [];
-  let alive = true;
-  installChrome({
-    tabs: {
-      create: async () => ({ id: 99, windowId: 3 }),
-      group: async (opts: Any) => {
-        calls.push({ group: opts });
-        if (opts.groupId !== undefined && !alive) {
-          // 用户把整组关掉之后，Chrome 就是这么报的
-          throw new Error(`No group with id: ${String(opts.groupId)}.`);
-        }
-        return (opts.groupId as number | undefined) ?? 11;
-      },
-    },
-    tabGroups: { update: async () => ({}) },
-  });
-  try {
-    await browsingContextCreate({});
-    alive = false;
-    // 这一个分不进去了，但标签页照样开出来 —— 分组失败不该让 create 失败
-    assert.deepEqual(await browsingContextCreate({}), { context: "99" });
-    assert.deepEqual(calls[1], { group: { tabIds: [99], groupId: 11 } });
-    // 忘掉那一组之后，下一个标签页重新建一组，而不是一直撞同一个死 id
-    alive = true;
-    await browsingContextCreate({});
-    assert.deepEqual(calls[2], { group: { tabIds: [99] } });
-  } finally {
-    clearChrome();
-  }
-});
-
-test("without tabs.group the tab still opens — grouping is a nicety, not the job", async () => {
-  forgetGroups();
+test("create rebuilds the dedicated window+group when the remembered group is gone", async () => {
+  resetOwnership();
   const calls: Any[] = [];
   installChrome({
     tabs: {
+      query: async () => [],
       create: async (opts: Any) => {
         calls.push({ create: opts });
-        return { id: 99, windowId: 3 };
+        return { id: 99, windowId: opts.windowId, url: opts.url };
       },
+      group: async (opts: Any) => {
+        calls.push({ group: opts });
+        return opts.groupId ?? 11;
+      },
+    },
+    tabGroups: {
+      // session 里记的 500 已经死了（用户关组）：get 抛，query 空 → 走重建
+      get: async (id: number) => {
+        if (id === 500) throw new Error("No group with id: 500.");
+        return { id, windowId: 21, title: "browse" };
+      },
+      query: async () => [],
+      update: async (id: number, opts: Any) => ({ id, ...opts }),
+    },
+    windows: {
+      create: async (opts: Any) => {
+        calls.push({ windowCreate: opts });
+        return { id: 21, tabs: [{ id: 901, url: "about:blank" }] };
+      },
+    },
+    storage: {
+      session: {
+        get: async () => ({ "browse:own": { groupId: 500 } }),
+        set: async () => {},
+      },
+      local: { get: async () => ({}), set: async () => {} },
     },
   });
   try {
-    assert.deepEqual(await browsingContextCreate({ url: "https://a.test/" }), { context: "99" });
-    assert.equal(calls.length, 1);
+    assert.deepEqual(await browsingContextCreate({ url: "https://x.test/" }), { context: "99" });
+    // 重建：先建窗口、把新窗口的 tab 收成组，然后开的页面才进这个组
+    assert.deepEqual(calls[0], { windowCreate: { focused: true } });
+    assert.deepEqual(calls[1], { group: { tabIds: [901] } });
+    assert.deepEqual(calls[3], { group: { tabIds: [99], groupId: 11 } });
   } finally {
     clearChrome();
   }

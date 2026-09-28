@@ -1,27 +1,13 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 
-import { idleState, searchQuery, systemInfo, topSitesList } from "../src/handlers/info.ts";
+import { idleState, searchQuery, systemInfo } from "../src/handlers/info.ts";
 import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
 
 type Any = Record<string, unknown>;
 
 /** 只读信息类：不写状态、不碰页面，所以不需要 storage / confirm 的桩。 */
 afterEach(clearChrome);
-
-describe("topSitesList", () => {
-  it("refuses when the browser has no topSites API", async () => {
-    installChrome({});
-    await rejectsWith(() => topSitesList(), "unsupported operation");
-  });
-
-  it("wraps the list under sites", async () => {
-    installChrome({ topSites: { get: async () => [{ url: "https://e.test/", title: "E" }] } });
-    assert.deepEqual(await topSitesList(), {
-      sites: [{ url: "https://e.test/", title: "E" }],
-    });
-  });
-});
 
 describe("searchQuery", () => {
   function searchApi() {

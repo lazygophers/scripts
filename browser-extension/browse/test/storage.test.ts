@@ -8,7 +8,7 @@ import {
   storageSetCookie,
   storageSetLocalStorage,
 } from "../src/handlers/storage.ts";
-import { clearChrome, installChrome, page, rejectsWith, scriptingMock } from "./mock.ts";
+import { clearChrome, installChrome, ownSession, page, rejectsWith, scriptingMock } from "./mock.ts";
 
 type Any = Record<string, unknown>;
 
@@ -22,9 +22,10 @@ function setup(): { calls: Any[]; asked: ConfirmRequest[] } {
   const calls: Any[] = [];
   const asked: ConfirmRequest[] = [];
   installChrome({
+    ...ownSession(),
     tabs: {
-      query: async () => [{ id: 7, url: "https://a.test/", active: true }],
-      get: async () => ({ id: 7, url: "https://a.test/" }),
+      query: async () => [{ id: 7, url: "https://a.test/", active: true, groupId: 500 }],
+      get: async () => ({ id: 7, url: "https://a.test/", groupId: 500 }),
     },
     scripting: scriptingMock(),
     cookies: {

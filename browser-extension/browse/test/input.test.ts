@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { inputClick, inputKey, inputScroll, inputType } from "../src/handlers/input.ts";
 import { setConfirmHook, type ConfirmRequest } from "../src/handlers/confirm.ts";
-import { clearChrome, installChrome, page, rejectsWith, scriptingMock } from "./mock.ts";
+import { clearChrome, installChrome, ownSession, page, rejectsWith, scriptingMock } from "./mock.ts";
 import type { JSDOM } from "jsdom";
 
 type Any = Record<string, unknown>;
@@ -11,9 +11,10 @@ function setup(html: string): { dom: JSDOM; calls: Any[] } {
   const dom = page(html);
   const scripting = scriptingMock();
   installChrome({
+    ...ownSession(),
     tabs: {
-      query: async () => [{ id: 7, url: "https://a.test/", active: true }],
-      get: async () => ({ id: 7, url: "https://a.test/" }),
+      query: async () => [{ id: 7, url: "https://a.test/", active: true, groupId: 500 }],
+      get: async () => ({ id: 7, url: "https://a.test/", groupId: 500 }),
     },
     scripting,
   });

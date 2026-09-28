@@ -1,6 +1,7 @@
 import { answerConfirm, askUser, windowClosed } from "./confirm-ui.ts";
 import { setEventSink } from "./events.ts";
 import { setConfirmHook } from "./handlers/confirm.ts";
+import { invalidateTab } from "./handlers/cache.ts";
 import { desktopSourcePicked } from "./handlers/capture.ts";
 import { listenGcm } from "./handlers/gcm.ts";
 import { listenNotifications } from "./handlers/notify.ts";
@@ -107,6 +108,12 @@ listenPrinting();
 // Closing the dialog without choosing is a refusal — the daemon must not be
 // left waiting out its full timeout for a window that no longer exists.
 chrome.windows?.onRemoved.addListener(windowClosed);
+
+// 页面缓存（票 05）：导航/刷新（status=loading）清该页，tab 关了整页清。
+chrome.tabs?.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "loading") void invalidateTab(tabId);
+});
+chrome.tabs?.onRemoved.addListener((tabId) => void invalidateTab(tabId));
 
 // A service worker restart (install, browser start, idle eviction) re-runs this
 // file, so connecting at module scope is the whole lifecycle handling needed.

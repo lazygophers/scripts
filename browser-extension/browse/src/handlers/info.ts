@@ -2,15 +2,11 @@ import { CommandError, optionalString } from "../protocol.ts";
 import { requireApi } from "./context.ts";
 
 /**
- * 只读信息类：topSites / search / idle / system。（dns / processes 是 Dev 渠道限定
- * API，stable 上不可用，2026-09-21 随权限一起移除。）
+ * 只读信息类：search / idle / system。（dns / processes 是 Dev 渠道限定 API，
+ * stable 上不可用，2026-09-21 随权限一起移除；topSites 是全浏览器浏览画像，
+ * 2026-09-28 随归属规则一起砍——只留自己页面的能力面。）
  * 共同点：不写任何状态、不碰页面内容，出错就是 API 缺失或参数非法。
  */
-
-export async function topSitesList(): Promise<{ sites: chrome.topSites.MostVisitedURL[] }> {
-  requireApi("topSites", "listing the most visited sites");
-  return { sites: await chrome.topSites.get() };
-}
 
 const DISPOSITIONS = ["CURRENT_TAB", "NEW_TAB", "NEW_WINDOW"] as const;
 

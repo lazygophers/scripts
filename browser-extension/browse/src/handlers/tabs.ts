@@ -1,5 +1,7 @@
 import { CommandError, optionalString } from "../protocol.ts";
+import { confirm } from "./confirm.ts";
 import { requireApi, resolveContextOnce, type Target } from "./context.ts";
+import { ensureOwn, recordVisit } from "./ownership.ts";
 
 /** `chrome.tabGroups` 接受的颜色是固定的一套，不是任意 CSS 色。 */
 const COLORS = new Set(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]);
@@ -144,4 +146,36 @@ async function requireTabOnly(params: Record<string, unknown>): Promise<Target> 
     );
   }
   return target;
+}
+
+/**
+ * `lg:tabs.adopt`（票 02）：把已有标签页收编为自己的。matchUrl 在**全浏览器**
+ * 里找（收编本来就得找得到别人的页面），或 context 直接点 tabId。收编即搬进
+ * 专属窗口+组，登记表补记。已在组里的幂等成功。
+ *
+ * 确认门槛（第 3 轮拍板）：adopt 是授权动作，过确认策略——deny 域名在 dispatch
+ * 的域名裁决处已经拒了，这里的 confirm 管的是 per_domain / always 下的弹窗。
+ */
+export async function tabsAdopt(
+  params: Record<string, unknown>,
+): Promise<{ context: string; group: string; url: string }> {
+  requireApi("tabs.group", "adopting a tab");
+  if (params.matchUrl === undefined && params.context === undefined) {
+    throw new CommandError("invalid argument", "adopt needs matchUrl or context");
+  }
+  const target = await resolveContextOnce(params, "all");
+  if (target.frameId !== undefined) {
+    throw new CommandError(
+      "unsupported operation",
+      `adoption works on a tab, not a frame; drop the .${target.frameId} suffix`,
+    );
+  }
+  const tab = await chrome.tabs.get(target.tabId);
+  const { groupId } = await ensureOwn();
+  if (tab.groupId !== groupId) {
+    await confirm({ action: "adoptTab", method: "lg:tabs.adopt", url: tab.url ?? null });
+    await chrome.tabs.group({ tabIds: [target.tabId], groupId });
+  }
+  await recordVisit(tab.url);
+  return { context: String(target.tabId), group: String(groupId), url: tab.url ?? "" };
 }

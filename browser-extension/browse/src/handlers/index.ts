@@ -3,7 +3,8 @@ import { domainOf, enforceDenyList, enforceFeatureToggles, policyUrlFromParams, 
 import { CommandError } from "../protocol.ts";
 import { auditClear, auditRead } from "./audit.ts";
 import { dropContextCache, resolveContextOnce, targetUrl } from "./context.ts";
-import { bookmarksCreate, bookmarksRemove, bookmarksSearch } from "./bookmarks.ts";
+import { cacheGet, cacheList, cachePut } from "./cache.ts";
+import { enforceOwnTab } from "./ownership.ts";
 import {
   browsingContextActivate,
   browsingContextCaptureScreenshot,
@@ -29,12 +30,7 @@ import {
 } from "./downloads.ts";
 import { gcmDeleteToken, gcmId, gcmToken } from "./gcm.ts";
 import { historyDelete, historySearch } from "./history.ts";
-import {
-  idleState,
-  searchQuery,
-  systemInfo,
-  topSitesList,
-} from "./info.ts";
+import { idleState, searchQuery, systemInfo } from "./info.ts";
 import { inputClick, inputKey, inputScroll, inputType } from "./input.ts";
 import { networkSubscribe, networkUnsubscribe } from "./network.ts";
 import {
@@ -52,12 +48,6 @@ import {
   printingRespond,
 } from "./printing.ts";
 import { proxyClear, proxyGet, proxySet } from "./proxy.ts";
-import {
-  readingListAdd,
-  readingListList,
-  readingListRemove,
-  readingListUpdate,
-} from "./readingList.ts";
 import { scriptCallFunction, scriptEvaluate } from "./script.ts";
 import {
   declContentClear,
@@ -68,7 +58,7 @@ import {
   userScriptsUnregister,
   userScriptsWorld,
 } from "./scripts.ts";
-import { tabsGroup, tabsGroups, tabsUngroup, tabsUpdateGroup } from "./tabs.ts";
+import { tabsAdopt, tabsGroup, tabsGroups, tabsUngroup, tabsUpdateGroup } from "./tabs.ts";
 import {
   storageDeleteCookies,
   storageGetCookies,
@@ -127,11 +117,12 @@ export const HANDLERS: Record<string, Handler> = {
   "lg:history.search": historySearch,
   "lg:history.delete": historyDelete,
 
-  "lg:bookmarks.search": bookmarksSearch,
-  "lg:bookmarks.create": bookmarksCreate,
-  "lg:bookmarks.remove": bookmarksRemove,
-
   "lg:page.snapshot": pageSnapshot,
+
+  // 页面缓存（票 05）：dumb storage，语义在 CLI 的 text/html 包装侧
+  "lg:cache.put": cachePut,
+  "lg:cache.get": cacheGet,
+  "lg:cache.list": cacheList,
 
   // 审计的出口（spec 4.6）。日志存在 chrome.storage.local 里，命令行读不到那个存储，
   // 这两条就是 `browse audit` 唯一的取数路径。
@@ -144,6 +135,7 @@ export const HANDLERS: Record<string, Handler> = {
   "lg:downloads.open": downloadsOpen,
 
   "lg:tabs.group": tabsGroup,
+  "lg:tabs.adopt": tabsAdopt,
   "lg:tabs.ungroup": tabsUngroup,
   "lg:tabs.groups": tabsGroups,
   "lg:tabs.updateGroup": tabsUpdateGroup,
@@ -158,12 +150,6 @@ export const HANDLERS: Record<string, Handler> = {
   "lg:clipboard.read": clipboardRead,
   "lg:clipboard.write": clipboardWrite,
 
-  "lg:readingList.list": readingListList,
-  "lg:readingList.add": readingListAdd,
-  "lg:readingList.update": readingListUpdate,
-  "lg:readingList.remove": readingListRemove,
-
-  "lg:topSites.list": topSitesList,
   "lg:search.query": searchQuery,
   "lg:idle.state": idleState,
   "lg:system.info": systemInfo,
@@ -247,6 +233,25 @@ function wantsContext(method: string, params: Record<string, unknown>): boolean 
 }
 
 /**
+ * 归属判定（票 02）：凡是落到页面上的指令，目标 tab 必须在自己的组里，否则
+ * 拒绝。豁免 `lg:tabs.adopt`——它的目标本来就是别人的页面，它是收编的入口。
+ * `browsingContext.create` 不在 PAGE_METHODS 里也不带 context/matchUrl，
+ * wantsContext 自然放行。判定本身在 ownership.ts。
+ */
+const OWNERSHIP_EXEMPT = new Set(["lg:tabs.adopt"]);
+
+async function enforceOwnership(
+  method: string,
+  params: Record<string, unknown>,
+): Promise<void> {
+  if (OWNERSHIP_EXEMPT.has(method) || !wantsContext(method, params)) {
+    return;
+  }
+  const target = await resolveContextOnce(params, "own");
+  await enforceOwnTab(target.tabId);
+}
+
+/**
  * 策略目标（CONTEXT.md）：这条指令真正作用到的页面地址。显式 `url` / `domain`
  * 直接用；页面方法解析 context 拿真实 tab URL —— deny / feature / 确认 / 审计
  * 共用这一份。读不到（标签页没了）就 fail closed 拒绝，绝不带着 null 放行。
@@ -262,7 +267,8 @@ async function resolvePolicyTarget(
   if (!wantsContext(method, params)) {
     return null; // 全局动作：没有目标域，只有全局禁用管得到
   }
-  const target = await resolveContextOnce(params); // 解析失败本身就是拒绝（fail closed）
+  // adopt 的目标是别人的页面，解析范围必须是全浏览器（票 02）；其余一律 own。
+  const target = await resolveContextOnce(params, method === "lg:tabs.adopt" ? "all" : "own"); // 解析失败本身就是拒绝（fail closed）
   const url = await targetUrl(target);
   if (url === null) {
     throw new CommandError(
@@ -332,6 +338,7 @@ export async function dispatch(
       domain = domainOf(url);
       await enforceDenyList(method, url);
       await enforceFeatureToggles(method, url);
+      await enforceOwnership(method, params);
     } catch (err) {
       await recordOutcome("denied", method, params, domain, started, err);
       throw err;

@@ -8,62 +8,82 @@ import {
   requireApi,
   resolveContext,
 } from "../src/handlers/context.ts";
-import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
+import { resetOwnership } from "../src/handlers/ownership.ts";
+import { clearChrome, installChrome, ownWorld, rejectsWith } from "./mock.ts";
 
-const TABS = [
-  { id: 1, url: "https://a.test/login", active: false, windowId: 10 },
-  { id: 2, url: "https://b.test/orders/7", active: true, windowId: 10 },
-  { id: 3, url: "https://b.test/orders/8", active: false, windowId: 10 },
-];
-
-function withTabs(): void {
-  installChrome({
-    tabs: {
-      query: async (q: { active?: boolean }) =>
-        q.active === true ? TABS.filter((t) => t.active) : TABS,
-    },
-  });
+/** 自己的组（500）里的三个 tab + 组外一个别人的 tab（9）。 */
+function withOwnTabs(): void {
+  ownWorld([
+    { id: 1, url: "https://a.test/login", active: false, groupId: 500 },
+    { id: 2, url: "https://b.test/orders/7", active: true, groupId: 500 },
+    { id: 3, url: "https://b.test/orders/8", active: false, groupId: 500 },
+    { id: 9, url: "https://c.test/private", active: false },
+  ]);
 }
 
+test.afterEach(() => {
+  resetOwnership();
+  clearChrome();
+});
+
 test("context id wins over matchUrl and over the active tab", async () => {
-  withTabs();
+  withOwnTabs();
   assert.deepEqual(await resolveContext({ context: "3", matchUrl: "*a.test*" }), {
     tabId: 3,
     frameId: undefined,
   });
-  clearChrome();
 });
 
 test("matchUrl wins over the active tab when it hits exactly one", async () => {
-  withTabs();
+  withOwnTabs();
   assert.deepEqual(await resolveContext({ matchUrl: "https://a.test/*" }), {
     tabId: 1,
     frameId: undefined,
   });
-  clearChrome();
+});
+
+test("own scope: a glob that only matches a foreign tab is no hit, naming the two entrances", async () => {
+  withOwnTabs();
+  const err = await rejectsWith(
+    () => resolveContext({ matchUrl: "*c.test*" }),
+    "no such frame",
+  );
+  assert.match(err.message, /no owned page matches/);
+  assert.match(err.message, /browse tab adopt/);
+});
+
+test("all scope (adopt) still searches every tab in the browser", async () => {
+  withOwnTabs();
+  assert.deepEqual(await resolveContext({ matchUrl: "*c.test*" }, "all"), {
+    tabId: 9,
+    frameId: undefined,
+  });
 });
 
 test("an ambiguous matchUrl is an error naming every hit, not a coin flip", async () => {
-  withTabs();
+  withOwnTabs();
   const err = await rejectsWith(
     () => resolveContext({ matchUrl: "https://b.test/orders/*" }),
     "invalid argument",
   );
   assert.match(err.message, /matches 2 contexts/);
   assert.match(err.message, /2=https:\/\/b.test\/orders\/7/);
-  clearChrome();
 });
 
-test("matchUrl with no hit is no such frame", async () => {
-  withTabs();
-  await rejectsWith(() => resolveContext({ matchUrl: "https://c.test/*" }), "no such frame");
-  clearChrome();
-});
-
-test("no context and no matchUrl falls back to the active tab", async () => {
-  withTabs();
+test("own active fallback picks the active owned tab", async () => {
+  withOwnTabs();
   assert.deepEqual(await resolveContext({}), { tabId: 2, frameId: undefined });
-  clearChrome();
+});
+
+test("no active owned tab but exactly one owned tab resolves to it", async () => {
+  ownWorld([{ id: 4, url: "https://a.test/x", active: false, groupId: 500 }]);
+  assert.deepEqual(await resolveContext({}), { tabId: 4, frameId: undefined });
+});
+
+test("no owned tabs at all is an error pointing at tab open / adopt", async () => {
+  ownWorld([]);
+  const err = await rejectsWith(() => resolveContext({}), "no such frame");
+  assert.match(err.message, /browse tab open/);
 });
 
 test("frame context ids keep the frame id", () => {
@@ -80,18 +100,11 @@ test("formatContext is the inverse of parseContext, and frame 0 is the tab", () 
 });
 
 test("lg:context.url answers with the page the command would land on", async () => {
-  installChrome({
-    tabs: {
-      query: async (q: { active?: boolean }) =>
-        q.active === true ? TABS.filter((t) => t.active) : TABS,
-      get: async (id: number) => TABS.find((t) => t.id === id),
-    },
-  });
+  withOwnTabs();
   // This is what the daemon asks before applying deny_domains to input.* /
   // script.*, whose params carry no url at all.
   assert.deepEqual(await contextUrl({}), { url: "https://b.test/orders/7" });
   assert.deepEqual(await contextUrl({ context: "1" }), { url: "https://a.test/login" });
-  clearChrome();
 });
 
 test("glob is anchored and only * and ? are special", () => {
@@ -110,5 +123,4 @@ test("a missing chrome namespace is an explicit unsupported operation", async ()
   );
   assert.match(err.message, /chrome.downloads is not available/);
   assert.doesNotThrow(() => requireApi("tabs", "listing tabs"));
-  clearChrome();
 });

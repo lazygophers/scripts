@@ -76,6 +76,7 @@ export const FEATURES: Feature[] = [
       "browsingContext.reload",
       "browsingContext.captureScreenshot",
       "lg:tabs.group",
+      "lg:tabs.adopt",
       "lg:tabs.ungroup",
       "lg:tabs.groups",
       "lg:tabs.updateGroup",
@@ -98,16 +99,14 @@ export const FEATURES: Feature[] = [
   },
   { id: "network", methods: ["network.subscribe", "network.unsubscribe"] },
   { id: "history", methods: ["lg:history.search", "lg:history.delete"] },
-  {
-    id: "bookmarks",
-    methods: ["lg:bookmarks.search", "lg:bookmarks.create", "lg:bookmarks.remove"],
-  },
   { id: "snapshot", methods: ["lg:page.snapshot"] },
+  { id: "cache", methods: ["lg:cache.put", "lg:cache.get", "lg:cache.list"] },
   {
     id: "downloads",
     methods: ["lg:downloads.start", "lg:downloads.list", "lg:downloads.cancel", "lg:downloads.open"],
   },
-  // 2026-09-16 扩容的能力面（capture/clipboard/readingList/.../printing）。
+  // 2026-09-16 扩容的能力面（capture/clipboard/.../printing）。bookmarks/readingList/
+  // topSites 三类纯浏览画像 2026-09-28 随归属规则一起砍。
   {
     id: "capture",
     methods: [
@@ -119,11 +118,6 @@ export const FEATURES: Feature[] = [
     ],
   },
   { id: "clipboard", methods: ["lg:clipboard.read", "lg:clipboard.write"] },
-  {
-    id: "readingList",
-    methods: ["lg:readingList.list", "lg:readingList.add", "lg:readingList.update", "lg:readingList.remove"],
-  },
-  { id: "topSites", methods: ["lg:topSites.list"] },
   { id: "search", methods: ["lg:search.query"] },
   { id: "wauth", methods: ["lg:wauth.attach", "lg:wauth.detach", "lg:wauth.complete"] },
   {
@@ -417,11 +411,9 @@ export const RISKY_METHODS: Record<string, string> = {
   "script.evaluate": "evalMainWorld",
   "script.callFunction": "evalMainWorld",
   "lg:downloads.start": "download",
+  "lg:tabs.adopt": "adoptTab",
   "lg:history.search": "readHistory",
   "lg:history.delete": "writeHistory",
-  "lg:bookmarks.search": "readBookmarks",
-  "lg:bookmarks.create": "writeBookmarks",
-  "lg:bookmarks.remove": "writeBookmarks",
   "lg:pageCapture.saveMhtml": "readPage",
   "lg:capture.recordTab": "captureMedia",
   "lg:capture.recordDesktop": "captureMedia",

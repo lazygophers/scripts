@@ -7,12 +7,6 @@ import {
   powerKeepAwake,
   powerRelease,
 } from "../src/handlers/notify.ts";
-import {
-  readingListAdd,
-  readingListList,
-  readingListRemove,
-  readingListUpdate,
-} from "../src/handlers/readingList.ts";
 import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
 
 type Any = Record<string, unknown>;
@@ -105,66 +99,3 @@ describe("power", () => {
   });
 });
 
-describe("readingList", () => {
-  function listChrome(): { calls: Any[] } {
-    const calls: Any[] = [];
-    installChrome({
-      runtime: {},
-      readingList: {
-        query: async (q: Any) => (calls.push({ query: q }), [{ url: "https://a.test/", title: "a" }]),
-        add: async (entry: Any) => (calls.push({ add: entry }), entry),
-        update: async (patch: Any) => (calls.push({ update: patch }), patch),
-        remove: async (target: Any) => void calls.push({ remove: target }),
-      },
-    });
-    return { calls };
-  }
-
-  it("lists everything, or filters by url", async () => {
-    const { calls } = listChrome();
-    await readingListList({});
-    await readingListList({ url: "https://a.test/" });
-    assert.deepEqual(calls.map((c) => c["query"]), [{}, { url: "https://a.test/" }]);
-  });
-
-  it("adding needs both url and title", async () => {
-    listChrome();
-    await rejectsWith(() => readingListAdd({ url: "https://a.test/" }), "invalid argument");
-    await rejectsWith(() => readingListAdd({ title: "a" }), "invalid argument");
-  });
-
-  it("only forwards hasBeenRead when the caller set it", async () => {
-    const { calls } = listChrome();
-    await readingListAdd({ url: "https://a.test/", title: "a" });
-    assert.deepEqual(calls[0]?.["add"], { url: "https://a.test/", title: "a" });
-
-    await readingListAdd({ url: "https://b.test/", title: "b", hasBeenRead: true });
-    assert.deepEqual(calls[1]?.["add"], { url: "https://b.test/", title: "b", hasBeenRead: true });
-  });
-
-  it("updating needs a numeric id and at least one field", async () => {
-    listChrome();
-    await rejectsWith(() => readingListUpdate({ title: "x" }), "invalid argument");
-    await rejectsWith(() => readingListUpdate({ id: "3", title: "x" }), "invalid argument");
-    const error = await rejectsWith(() => readingListUpdate({ id: 3 }), "invalid argument");
-    assert.match(error.message, /url \/ title \/ hasBeenRead/);
-  });
-
-  it("updating forwards only the fields that were given", async () => {
-    const { calls } = listChrome();
-    await readingListUpdate({ id: 3, title: "新标题" });
-    assert.deepEqual(calls[0]?.["update"], { id: 3, title: "新标题" });
-  });
-
-  it("removing needs a numeric id and echoes it back", async () => {
-    const { calls } = listChrome();
-    await rejectsWith(() => readingListRemove({}), "invalid argument");
-    assert.deepEqual(await readingListRemove({ id: 7 }), { removed: 7 });
-    assert.deepEqual(calls[0]?.["remove"], { id: 7 });
-  });
-
-  it("refuses when the browser has no readingList API", async () => {
-    installChrome({ runtime: {} });
-    await rejectsWith(() => readingListList({}), "unsupported operation");
-  });
-});

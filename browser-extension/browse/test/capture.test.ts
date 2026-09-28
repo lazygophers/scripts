@@ -30,6 +30,28 @@ function chromeWith(extra: Any, contexts: Any[] = [], config: Any = DEFAULTS): A
     ...extra,
   });
   storageMock({ [CONFIG_KEY]: config });
+  // 归属（票 02）：own scope 解析前要拿得到自己的组。storageMock 只装了 local，
+  // 这里把 session 补回去，配置那份 local 原样保留。
+  installChrome({
+    ...((globalThis as Any).chrome as Any),
+    tabGroups: {
+      get: async (id: number) => {
+        if (id !== 500) throw new Error(`no group ${id}`);
+        return { id: 500, windowId: 20, title: "browse" };
+      },
+      query: async () => [],
+      update: async () => ({ id: 500 }),
+    },
+    windows: {
+      create: async () => ({ id: 21, tabs: [{ id: 901 }] }),
+      remove: async () => {},
+      update: async () => {},
+    },
+    storage: {
+      ...(((globalThis as Any).chrome as Any)?.storage ?? {}),
+      session: { get: async () => ({ "browse:own": { groupId: 500 } }), set: async () => {} },
+    },
+  });
   // 目标标签页的解析结果有模块级缓存，跨用例会把上一个用例的 tabId 带过来
   dropContextCache({});
   // 策略裁决单独有 policy.test.ts 覆盖，这里只关心 capture 自己的逻辑
@@ -100,8 +122,8 @@ describe("pageCaptureSaveMhtml", () => {
   function tabContext(extra: Any, config: Any = DEFAULTS): void {
     chromeWith({
       tabs: {
-        query: async () => [{ id: 7, url: "https://example.test/page", active: true }],
-        get: async () => ({ id: 7, url: "https://example.test/page" }),
+        query: async () => [{ id: 7, url: "https://example.test/page", active: true, groupId: 500 }],
+        get: async () => ({ id: 7, url: "https://example.test/page", groupId: 500 }),
       },
       ...extra,
     }, [], config);
@@ -201,8 +223,8 @@ describe("the record lifecycle", () => {
       offscreen: { Reason: OFFSCREEN_REASONS, createDocument: async () => {} },
       tabCapture: { getMediaStreamId: async () => "stream-1" },
       tabs: {
-        query: async () => [{ id: 3, url: "https://example.test/page", active: true }],
-        get: async () => ({ id: 3, url: "https://example.test/page" }),
+        query: async () => [{ id: 3, url: "https://example.test/page", active: true, groupId: 500 }],
+        get: async () => ({ id: 3, url: "https://example.test/page", groupId: 500 }),
       },
       downloads: { download: async () => 1 },
       runtime: {

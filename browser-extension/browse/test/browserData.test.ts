@@ -1,10 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  bookmarksCreate,
-  bookmarksRemove,
-  bookmarksSearch,
-} from "../src/handlers/bookmarks.ts";
 import { setConfirmHook, type ConfirmRequest } from "../src/handlers/confirm.ts";
 import {
   downloadsCancel,
@@ -12,13 +7,15 @@ import {
   downloadsStart,
 } from "../src/handlers/downloads.ts";
 import { historyDelete, historySearch } from "../src/handlers/history.ts";
-import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
+import { clearChrome, installChrome, rejectsWith, storageMock } from "./mock.ts";
 
 type Any = Record<string, unknown>;
 
 function setup(): { calls: Any[]; asked: ConfirmRequest[] } {
   const calls: Any[] = [];
   const asked: ConfirmRequest[] = [];
+  // 归属（票 02）：history 只回自己页面的记录，夹具项要在登记表里
+  storageMock({ "browse:ownership": ["https://a.test"] });
   installChrome({
     history: {
       search: async (query: Any) => {
@@ -27,18 +24,6 @@ function setup(): { calls: Any[]; asked: ConfirmRequest[] } {
       },
       deleteUrl: async (details: Any) => calls.push({ deleteUrl: details }),
       deleteRange: async (range: Any) => calls.push({ deleteRange: range }),
-    },
-    bookmarks: {
-      search: async (query: unknown) => {
-        calls.push({ bookmarkSearch: query });
-        return [{ id: "1", title: "A" }];
-      },
-      create: async (node: Any) => {
-        calls.push({ bookmarkCreate: node });
-        return { id: "2", ...node };
-      },
-      remove: async (id: string) => calls.push({ bookmarkRemove: id }),
-      removeTree: async (id: string) => calls.push({ bookmarkRemoveTree: id }),
     },
     downloads: {
       download: async (options: Any) => {
@@ -97,42 +82,6 @@ test("history delete takes a url or a full range, and never everything", async (
   teardown();
 });
 
-test("bookmark search takes a free-text query or a structured one", async () => {
-  const { calls } = setup();
-  await bookmarksSearch({ query: "docs" });
-  assert.deepEqual(calls[0], { bookmarkSearch: "docs" });
-  await bookmarksSearch({ url: "https://a.test/" });
-  assert.deepEqual(calls[1], { bookmarkSearch: { url: "https://a.test/" } });
-  teardown();
-});
-
-test("bookmark create keeps a folder (no url) distinct from a bookmark", async () => {
-  const { calls, asked } = setup();
-  await bookmarksCreate({ title: "folder" });
-  assert.deepEqual(calls[0], { bookmarkCreate: { title: "folder" } });
-  assert.deepEqual(asked[0], {
-    action: "writeBookmarks",
-    method: "lg:bookmarks.create",
-    url: null,
-  });
-
-  await bookmarksCreate({ title: "A", url: "https://a.test/", parentId: "1" });
-  assert.deepEqual(calls[1], {
-    bookmarkCreate: { url: "https://a.test/", title: "A", parentId: "1" },
-  });
-  teardown();
-});
-
-test("bookmark remove needs recursive: true before it deletes children", async () => {
-  const { calls } = setup();
-  await bookmarksRemove({ id: "9" });
-  assert.deepEqual(calls[0], { bookmarkRemove: "9" });
-  await bookmarksRemove({ id: "9", recursive: true });
-  assert.deepEqual(calls[1], { bookmarkRemoveTree: "9" });
-  await rejectsWith(() => bookmarksRemove({}), "invalid argument");
-  teardown();
-});
-
 test("download start confirms with the target url and returns the download id", async () => {
   const { calls, asked } = setup();
   assert.deepEqual(await downloadsStart({ url: "https://a.test/f.zip" }), { download: 11 });
@@ -167,7 +116,6 @@ test("download list and cancel pass their arguments through", async () => {
 test("a browser without these namespaces refuses explicitly instead of degrading", async () => {
   installChrome({});
   await rejectsWith(() => historySearch({}), "unsupported operation");
-  await rejectsWith(() => bookmarksSearch({}), "unsupported operation");
   await rejectsWith(
     () => downloadsStart({ url: "https://a.test/f" }),
     "unsupported operation",

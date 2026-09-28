@@ -209,8 +209,8 @@ class TestParsing(unittest.TestCase):
         _, params = browse.parse_run_item("eval 1 --context 1163532091")
         self.assertEqual(params["context"], "1163532091")
         # 线上要求 string 的 id 类参数（STRING_NUMERIC_PARAMS）不被 JSON 数字化
-        _, params, _ = browse.route(["data", "bookmark-del", "--id", "1691"])
-        self.assertEqual(params["id"], "1691")
+        _, params, _ = browse.route(["api", "wauth", "complete", "--request", "1691"])
+        self.assertEqual(params["request"], "1691")
         _, params, _ = browse.route(["rec", "stop", "rec-3"])
         self.assertEqual(params["recording"], "rec-3")
         _, params, _ = browse.route(
@@ -401,10 +401,10 @@ class TestSingleCommand(unittest.TestCase):
         self.assertEqual(h.browser.seen, [])
 
     def test_lg_prefix_is_added(self):
-        with Harness(lambda m, p: {"nodes": []}) as h:
+        with Harness(lambda m, p: {"items": []}) as h:
             with mock.patch("sys.stdout", io.StringIO()):
-                h.cli("data", "bookmarks", "python")
-        self.assertEqual(h.browser.seen, ["lg:bookmarks.search"])
+                h.cli("data", "history", "python")
+        self.assertEqual(h.browser.seen, ["lg:history.search"])
 
     def test_daemon_not_running_exits_3(self):
         """socket 指向一个不存在的路径且禁止自举 → 报浏览器未连接，不是崩掉。"""
@@ -1060,7 +1060,7 @@ class TestFriendlyMapping(unittest.TestCase):
         "browsingContext.create", "browsingContext.close", "browsingContext.getTree",
         "browsingContext.captureScreenshot", "script.evaluate",
         "lg:page.snapshot", "lg:tabs.group", "lg:tabs.ungroup", "lg:tabs.groups",
-        "lg:tabs.updateGroup",
+        "lg:tabs.updateGroup", "lg:cache.put",
         "network.subscribe", "network.unsubscribe", "lg:pageCapture.saveMhtml",
     })
 
@@ -1317,7 +1317,8 @@ class TestOutputFormat(unittest.TestCase):
                 code = h.cli("text")
         self.assertEqual(code, 0)
         self.assertEqual(out.getvalue().strip(), "页面正文")
-        self.assertEqual(h.browser.seen, ["script.evaluate"])
+        # text 读成功后顺手落缓存（票 05）：evaluate 在前，cache.put 在后
+        self.assertEqual(h.browser.seen, ["script.evaluate", "lg:cache.put"])
 
     def test_screenshot_writes_the_file_and_prints_the_path(self):
         png = base64.b64encode(b"\x89PNG-fake").decode()

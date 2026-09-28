@@ -21,6 +21,13 @@
 - **native host（本机宿主）**：浏览器按 native messaging 协议 fork 起来的那个进程，实为 `browse --native-host`。一头是浏览器给的 stdin/stdout 管道，一头是 daemon 的 socket，只搬运不解释。
 - **command（指令）**：一条 WebDriver BiDi 形状的请求信封 `{id, method, params}`，`method` 写成 `<module>.<action>`（私有能力带 `lg:` 前缀，如 `lg:history.search`）。回包只有 Success / Error 两种，错误码用 BiDi 标准枚举或带冒号的扩展码。
 - **策略目标（policy target）**：一条指令真正作用到的页面地址，由 context / match-url / 当前标签页解析而来。dispatch 在执行前解析一次，拒绝名单、功能开关、确认、执行、审计共用同一份；读不到地址即拒绝（fail closed）。没有页面目标的全局动作（如 history.search）没有策略目标。
+- **归属（ownership）**：一个页面「是不是 browse 自己的」的状态。硬规则：页面方法只许落在自己的页面上，无开关。判定永远懒做——命令到达时查该标签页当前在不 在自己的组里，不监听任何事件。
+- **专属窗口与专属组（dedicated window & group）**：browse 维护的一个独立窗口加其中一个 `browse` 组，自己开的页面全部住在这里。组的存在本身就是归属的标记，顺带提供视觉隔离。
+- **组成员身份真源（group membership as the source of truth）**：在专属组里 = 自己的页面，是唯一判据。用户把标签拖进组即接管、拖出即放走；拖动就是授权/撤权的手。
+- **收编（adopt）**：把 browse 没开过的已有页面变为自己的动作（`lg:tabs.adopt`）。matchUrl 在全浏览器里找，收编即搬进专属窗口+组，并过确认策略。
+- **登记表（ownership registry）**：自己开过/收编过的页面的 origin+path 清单（LRU 上限 50，存 chrome.storage.local）。唯一用途：浏览器重启后按 URL 把现存标签页认领回组。
+- **页面缓存（page cache）**：text/html 正文读取结果在扩展端的留存（每页最近 5 份、全局 100 份，导航/关页即失效）。读命令永远现读；缓存只由 `browse page cache [index]` 显式取回，0 = 最新。
+- **认领（reclaim）**：重启后第一条命令触发 ensureOwn 重建窗口+组时，顺手把登记表匹配的现存标签页收回组的动作。没有启动事件，纯懒触发。
 - **停止（stopped）**：连接生命周期的单一状态，表达「用户不要自动重连」。持久化，跨 Service Worker 重启保持；用户 connect 或浏览器完整启动才解除。
 
 ## viewer（本地文件展示）
