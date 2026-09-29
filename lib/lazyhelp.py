@@ -18,7 +18,7 @@ from lib.ui import Reporter, reporter
 # 分类按「拿它做什么」划分；新增工具在此追加即可。
 TOOLS: dict[str, tuple[str, str]] = {
     "claude_session": ("文件与系统", "列出本机全部 Claude Code 会话（名称/项目/状态/起止时间）"),
-    "live_server": ("数据与网络", "把目录当网站服务：美化列表/上传/Markdown/SPA 回退/SSE 变化流/OpenLayers 地图"),
+    "live_server": ("数据与网络", "把目录当网站服务：美化列表/上传/Markdown/SPA 回退/SSE 变化流"),
     # Git 工作流: 分支合并 / 推送 / 切换 / 删除 / 同步
     "merge_canary": ("Git 工作流", "合并当前分支到 canary（单仓 / 批量自动识别）"),
     "merge_dev": ("Git 工作流", "合并当前分支到 dev（单仓 / 批量自动识别）"),

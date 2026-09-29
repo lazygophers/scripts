@@ -2,10 +2,9 @@
 
 spec: .scratch/live-server/spec.md。核心 = stdlib http.server，叠加：
 SPA 回退、Basic Auth、PUT 上传（越界 403）、目录美化页、marked.js
-Markdown 渲染、SSE 变化流、HTTPS（mkcert/openssl 自签/透传）、
-`map` 子命令（OpenLayers 渲染 GeoJSON）。
+Markdown 渲染、SSE 变化流、HTTPS（mkcert/openssl 自签/透传）。
 
-外部前端依赖（marked.js、OpenLayers）一律「远端 CDN 取 + 本地固定
+外部前端依赖（marked.js）一律「远端 CDN 取 + 本地固定
 路径缓存」，代码不内嵌第三方 JS（用户 2026-09-29 常设偏好）。
 """
 from __future__ import annotations
@@ -27,31 +26,16 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 
-def _load_json_file(path: Path):
-    return json.loads(path.read_text(encoding="utf-8"))
 
 from lib.notify import is_debug
 
 # CDN 缓存：首次从远端取，落本地固定路径，之后离线可用
 CDN_CACHE_ROOT = Path.home() / ".cache" / "lazygophers" / "live-server"
 CDN_ASSETS = {
-    # 名称 -> 备用远端地址链；serve 于 /_assets/<名称>。
-    # ol v10 的 dist 没有 ol.css（样式由 JS 注入），别加回来
+    # 名称 -> 备用远端地址链；serve 于 /_assets/<名称>
     "marked.min.js": (
         "https://cdn.jsdelivr.net/npm/marked/marked.min.js",
         "https://unpkg.com/marked/marked.min.js",
-    ),
-    "ol.js": (
-        "https://cdn.jsdelivr.net/npm/ol@10/dist/ol.js",
-        "https://unpkg.com/ol@10/dist/ol.js",
-    ),
-    "leaflet.js": (
-        "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js",
-        "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
-    ),
-    "leaflet.css": (
-        "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css",
-        "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css",
     ),
 }
 
@@ -176,8 +160,7 @@ td.num{color:var(--dim);font-variant-numeric:tabular-nums}
 .md-body h1{font-size:24px;border-bottom:1px solid var(--line);padding-bottom:8px}
 .md-body code{background:#eff1f3;border-radius:4px;padding:2px 5px;font-size:85%}
 .md-body pre{background:#f6f8fa;border-radius:8px;padding:12px;overflow:auto}
-.md-body blockquote{margin:0;padding:0 12px;color:var(--dim);border-left:3px solid var(--line)}
-#map{width:100%;height:88vh;border-radius:8px} """
+.md-body blockquote{margin:0;padding:0 12px;color:var(--dim);border-left:3px solid var(--line)}"""
 
 _DIR_ICON = ('<svg width="16" height="16" viewBox="0 0 16 16" fill="#54aeff">'
              '<path d="M1.5 3A1.5 1.5 0 013 1.5h3.2c.4 0 .8.16 1.06.44l.94.94H13'
@@ -248,161 +231,6 @@ def render_markdown_page(title: str) -> str:
     return _page(title, body)
 
 
-# ---------------------------------------------------------------- Leaflet 页面
-# 数据只认标准 GeoJSON。要素属性里认三个约定（都可选）：
-#   name  名字，悬停显示；面的名字常驻显示，面在屏幕上装不下时自动藏
-#   style Leaflet Path 选项（color/weight/fillColor/fillOpacity/dashArray），直接交给 L.geoJSON 的 style
-#   floor 楼层（1F/3F/B2）：出一排楼层按钮，带 floor 的只在同层显示，不带的是地面、只在 1F 显示
-# 地图文件旁边有同名 .tilejson（TileJSON 3.0.0）就把它当底图，没有就用 OSM。
-# 插件都按 Leaflet 标准写法：L.Map.addInitHook 挂上，等主脚本发 geojsonload / tilejsonload 事件。
-LEAFLET_CSS = (
-    ".ls-label{background:none;border:0;box-shadow:none;padding:0;"
-    "font-size:11px;color:#3b3428;text-shadow:0 0 2px #fff,0 0 2px #fff}"
-    ".ls-label:before{display:none}"
-    ".ls-road{background:#fffdf6;border:1px solid #c9bfae;border-radius:3px;padding:0 3px;text-shadow:none}"
-    ".ls-floors a{width:auto!important;padding:0 7px}"
-    ".ls-floors a.on{background:#ffe6a8;font-weight:700}")
-
-LEAFLET_PLUGINS = r"""
-// 瓦片缺图时退回上一级瓦片放大（Leaflet.TileLayer.Fallback 的做法）：稀疏金字塔只有局部出到高缩放级
-L.TileLayer.Fallback=L.TileLayer.extend({
-  createTile:function(c,done){var t=L.TileLayer.prototype.createTile.call(this,c,done);t._c0=c;t._up=0;return t;},
-  _tileOnError:function(done,t,e){var c=t._c0,S=this.getTileSize().x;t._up++;
-    if(c.z-t._up<(this.options.minNativeZoom||0))return done(e,t);
-    var k=1<<t._up,ox=c.x%k,oy=c.y%k;
-    // 上一级瓦片放大 k 倍、挪到本格位置，只露出本格那一块
-    t.style.width=t.style.height=S*k+'px';t.style.marginLeft=-ox*S+'px';t.style.marginTop=-oy*S+'px';
-    t.style.clipPath='inset('+oy*S+'px '+(k-1-ox)*S+'px '+(k-1-oy)*S+'px '+ox*S+'px)';
-    t.src=L.Util.template(this._url,L.extend({},this.options,{x:Math.floor(c.x/k),y:Math.floor(c.y/k),z:c.z-t._up,s:'a',r:''}));}});
-// 底图：同名 TileJSON
-L.Map.addInitHook(function(){var map=this,lay=null,url0='';
-  var make=function(tj,base){var b=tj.bounds;url0=/^([a-z]+:)?\/\//.test(tj.tiles[0])?tj.tiles[0]:base+tj.tiles[0];
-    return new L.TileLayer.Fallback(url0,{minNativeZoom:tj.minzoom||0,maxNativeZoom:tj.maxzoom||18,maxZoom:24,
-      bounds:b?L.latLngBounds([b[1],b[0]],[b[3],b[2]]):undefined,attribution:tj.attribution||''});};
-  map.on('tilejsonload',function(e){var tj=e.tilejson;if(!tj||!tj.tiles||!tj.tiles.length)return;
-    lay=make(tj,e.base);map.layersControl.addBaseLayer(lay,tj.name||'底图');map.eachLayer(function(l){if(l instanceof L.TileLayer)map.removeLayer(l);});lay.addTo(map);});
-  map.on('tilejsonupdate',function(e){var tj=e.tilejson;if(!tj||!tj.tiles||!tj.tiles.length)return;
-    var on=lay&&map.hasLayer(lay);if(lay){map.layersControl.removeLayer(lay);map.removeLayer(lay);}
-    lay=make(tj,e.base);map.layersControl.addBaseLayer(lay,tj.name||'底图');if(on||!lay)lay.addTo(map);});
-  // 瓦片文件变了：网址加版本号绕过浏览器缓存，setUrl 只重画这一层
-  map.on('tilesupdate',function(){if(lay)lay.setUrl(url0+(url0.indexOf('?')<0?'?':'&')+'v='+Date.now());});});
-// 快捷键：WASD 平移四分之一屏，Q 放大、E 缩小（Z / X 换层在楼层插件里）
-L.Map.addInitHook(function(){var map=this;document.addEventListener('keydown',function(e){
-  if(e.ctrlKey||e.metaKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)||e.target.isContentEditable)return;
-  var k=e.key.toLowerCase(),sz=map.getSize(),mv={w:[0,-sz.y/4],a:[-sz.x/4,0],s:[0,sz.y/4],d:[sz.x/4,0]}[k];
-  if(mv)map.panBy(mv);else if(k==='q')map.zoomIn();else if(k==='e')map.zoomOut();else return;e.preventDefault();});});
-// 楼层：properties.floor
-L.Map.addInitHook(function(){var map=this;map.on('geojsonload',function(ev){
-  var g=ev.layer,all=[];g.eachLayer(function(l){all.push(l);});
-  var rank=function(n){var b=/^B(\d+)$/.exec(n),f=/^(\d+)F$/.exec(n);return b?-b[1]:f?+f[1]:0;};
-  var floors=[],cur='1F',box=null,ctl=null;
-  var apply=function(){all.forEach(function(l){var f=l.feature.properties&&l.feature.properties.floor,on=f?f===cur:cur==='1F';
-    if(on!==g.hasLayer(l))on?g.addLayer(l):g.removeLayer(l);});
-    if(box)Array.prototype.forEach.call(box.children,function(b){b.className=b.textContent===cur?'on':'';});map.fire('floorchange',{floor:cur});};
-  var go=function(n){if(n&&n!==cur){cur=n;apply();}};
-  var Ctl=L.Control.extend({onAdd:function(){box=L.DomUtil.create('div','leaflet-bar ls-floors');
-    floors.forEach(function(n){var b=L.DomUtil.create('a','',box);b.href='#';b.textContent=n;L.DomEvent.on(b,'click',function(e){L.DomEvent.preventDefault(e);go(n);});});
-    L.DomEvent.disableClickPropagation(box);return box;}});
-  // 楼层表跟着数据走：增删要素后可能多出或少掉一层，按钮条重建，当前层不在了就回 1F
-  var rebuild=function(){var set={};all.forEach(function(l){var f=l.feature&&l.feature.properties&&l.feature.properties.floor;if(f)set[f]=1;});
-    if(ctl){ctl.remove();ctl=null;box=null;}
-    if(!Object.keys(set).length){floors=[];cur='1F';return;}
-    set['1F']=1;floors=Object.keys(set).sort(function(a,b){return rank(b)-rank(a);});if(floors.indexOf(cur)<0)cur='1F';
-    ctl=new Ctl({position:'topright'}).addTo(map);};
-  document.addEventListener('keydown',function(e){if(e.ctrlKey||e.metaKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;
-    var k=e.key.toLowerCase();if((k!=='z'&&k!=='x')||!floors.length)return;go(floors[floors.indexOf(cur)+(k==='z'?1:-1)]);e.preventDefault();});
-  map.on('geojsonupdate',function(u){var gone=new Set(u.removed);all=all.filter(function(l){return !gone.has(l);}).concat(u.added);rebuild();apply();});
-  rebuild();apply();});});
-// 面和路的名字常驻：面装不下名字就藏；路在屏幕上比名字短就藏；放大到装得下再出来
-L.Map.addInitHook(function(){var map=this;map.on('geojsonload',function(ev){
-  var boxed=[],take=function(l){var p=l.feature&&l.feature.properties;
-    if(!p||p.name==null||!l.getBounds||!/Polygon|LineString/.test(l.feature.geometry.type))return;
-    l.unbindTooltip();l.bindTooltip(String(p.name),{permanent:true,direction:'center',className:'ls-label'+(/LineString/.test(l.feature.geometry.type)?' ls-road':'')});boxed.push(l);};
-  ev.layer.eachLayer(take);
-  map.on('geojsonupdate',function(u){var gone=new Set(u.removed);boxed=boxed.filter(function(l){return !gone.has(l);});u.added.forEach(take);fit();});
-  var fit=function(){boxed.forEach(function(l){if(!l._map)return;var b=l.getBounds(),p1=map.latLngToContainerPoint(b.getNorthWest()),p2=map.latLngToContainerPoint(b.getSouthEast());
-    var w=Math.abs(p2.x-p1.x),h=Math.abs(p2.y-p1.y),need=String(l.feature.properties.name).length*12+6;
-    var ok=/LineString/.test(l.feature.geometry.type)?Math.hypot(w,h)>need:w>need&&h>14;ok?l.openTooltip():l.closeTooltip();});};
-  map.on('zoomend moveend floorchange',fit);fit();});});
-"""
-
-LEAFLET_MAIN = r"""
-const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]);
-const getData=()=>fetch('/data.geojson',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();});
-const getTj=()=>fetch('/_map/'+encodeURIComponent(STEM)+'.tilejson',{cache:'no-store'}).then(r=>r.ok?r.json():null).catch(()=>null);
-Promise.all([getData(),getTj()]).then(([gj,tj])=>{
-  const n=(gj.features||[]).length,map=L.map('map',{maxZoom:24,preferCanvas:n>2000});
-  const osm=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxNativeZoom:19,maxZoom:24,attribution:'&copy; OpenStreetMap'}).addTo(map);
-  map.layersControl=L.control.layers({'OSM':osm},{},{collapsed:true}).addTo(map);
-  map.fire('tilejsonload',{tilejson:tj,base:'/_map/'});
-  const st=f=>(f&&f.properties&&f.properties.style)||{};
-  let made=[];
-  const layer=L.geoJSON(null,{style:st,pointToLayer:(f,ll)=>L.circleMarker(ll,Object.assign({radius:4},st(f))),
-    onEachFeature:(f,l)=>{const p=f.properties||{};if(p.name!=null)l.bindTooltip(esc(p.name));
-      l.bindPopup('<pre>'+esc(JSON.stringify(p,(k,v)=>k==='style'?undefined:v,2))+'</pre>');made.push(l);}}).addTo(map);
-  // 每条要素按整条 JSON 记一个键：文件变了只增删变过的要素，没变的原样留在图上
-  // 同一条 JSON 可能出现多次（重复要素），键下挂一个图层数组
-  const keyed=new Map();
-  const add=fs=>{const out=[];fs.forEach(f=>{made=[];layer.addData(f);const k=JSON.stringify(f);
-    if(!keyed.has(k))keyed.set(k,[]);keyed.get(k).push(made[0]||null);if(made[0])out.push(made[0]);});return out;};
-  add(gj.features||[]);
-  map.layersControl.addOverlay(layer,'数据');
-  try{map.fitBounds(layer.getBounds(),{padding:[20,20]});}catch(e){map.setView([0,0],2);}
-  map.fire('geojsonload',{layer:layer,data:gj});
-  const sync=()=>getData().then(g=>{
-    const fs=g.features||[],want=new Map(),removed=[],fresh=[];
-    fs.forEach(f=>{const k=JSON.stringify(f);want.set(k,(want.get(k)||0)+1);});
-    // 多出来的份数删掉，缺的份数补上
-    keyed.forEach((ls,k)=>{const keep=want.get(k)||0;while(ls.length>keep){const l=ls.pop();if(l){layer.removeLayer(l);removed.push(l);}}if(!ls.length)keyed.delete(k);});
-    fs.forEach(f=>{const k=JSON.stringify(f),have=(keyed.get(k)||[]).length,need=want.get(k);if(have<need){want.set(k,need-1);fresh.push(f);}else want.set(k,need);});
-    const added=add(fresh);
-    if(added.length||removed.length)map.fire('geojsonupdate',{layer:layer,data:g,added:added,removed:removed});
-  }).catch(err=>console.warn('增量刷新失败',err));
-  // 监听 live_server 的变化流：地图文件变了只换变过的要素；TileJSON / 瓦片变了只重画底图。视图、楼层、底图选择都不动
-  const wait={},later=(k,ms,fn)=>{clearTimeout(wait[k]);wait[k]=setTimeout(fn,ms);};
-  const es=new EventSource('/__changes/stream');
-  es.addEventListener('change',e=>{const p=JSON.parse(e.data).path;
-    if(p===FILE)later('data',250,sync);
-    else if(p===STEM+'.tilejson')later('tj',250,()=>getTj().then(t=>map.fire('tilejsonupdate',{tilejson:t,base:'/_map/'})));
-    else if(/^tiles\//.test(p))later('tiles',800,()=>map.fire('tilesupdate'));});
-}).catch(err=>{document.getElementById('map').textContent='加载失败: '+err.message;});
-"""
-
-
-def render_map_page(title: str, lib: str = "ol") -> str:
-    """OpenLayers（默认）或 Leaflet 渲染 /data.geojson；两者都吃规范 GeoJSON。"""
-    # 地图页铺满整个窗口：去掉 main 的居中版心和内边距，地图容器固定占满视口
-    head = ('<style>main{max-width:none;margin:0;padding:0}'
-            '#map{position:fixed;inset:0;width:100vw;height:100vh;border-radius:0}</style>'
-            '<div id="map"></div>')
-    if lib == "leaflet":
-        stem = json.dumps(Path(title).stem)
-        body = (head
-            + '<link rel="stylesheet" href="/_assets/leaflet.css">'
-            + '<style>' + LEAFLET_CSS + '</style>'
-            + '<script src="/_assets/leaflet.js"></script>'
-            + '<script>' + LEAFLET_PLUGINS + '</script>'
-            + '<script>const STEM=' + stem + ',FILE=' + json.dumps(title) + ';'
-            + LEAFLET_MAIN + '</script>')
-        return _page(title, body)
-    body = (head
-            + '<script src="/_assets/ol.js"></script>'
-            + '<script>fetch("/data.geojson").then(r=>{if(!r.ok)throw new Error('
-            '"HTTP "+r.status);return r.json()}).then(gj=>{'
-            'const fmt=new ol.format.GeoJSON();'
-            'const vector=new ol.layer.Vector({source:new ol.source.Vector({'
-            'features:fmt.readFeatures(gj,{featureProjection:"EPSG:3857"})})});'
-            'const map=new ol.Map({target:"map",layers:['
-            'new ol.layer.Tile({source:new ol.source.OSM()}),vector],'
-            'view:new ol.View({center:ol.proj.fromLonLat([116.4,39.9]),zoom:4})});'
-            'map.on("click",e=>{const f=map.forEachFeatureAtPixel(e.pixel,'
-            'f=>f);const el=document.getElementById("map");'
-            'el.title=f?JSON.stringify(f.getProperties(),(k,v)=>k==="geometry"?undefined:v):"";});'
-            '}).catch(err=>{document.getElementById("map").textContent='
-            '"加载失败: "+err.message;});</script>')
-    return _page(title, body)
-
-
 # ---------------------------------------------------------------- 服务端
 @dataclass
 class Config:
@@ -414,8 +242,6 @@ class Config:
     key: Path | None = None
     auth: tuple[str, str] | None = None
     spa: bool = False
-    map_file: Path | None = None
-    render_lib: str = "ol"
     open_browser: bool = True
     hub: ChangeHub = field(default_factory=ChangeHub, repr=False)
 
@@ -549,28 +375,6 @@ def _handler_class(cfg: Config, say):
             if path.startswith("/_assets/"):
                 return self._asset(path[len("/_assets/"):])
 
-            if cfg.map_file:  # map 子命令：单页 + 数据端点
-                if path == "/":
-                    return self._reply_html(
-                        200, render_map_page(cfg.map_file.name,
-                                             lib=cfg.render_lib))
-                if path == "/data.geojson":
-                    data = _load_json_file(cfg.map_file)
-                    if cfg.render_lib == "leaflet":
-                        data = normalize_geojson(data)
-                    return self._reply(
-                        200, json.dumps(data, ensure_ascii=False).encode(),
-                        "application/geo+json")
-                if path.startswith("/_map/"):  # 地图文件同目录的旁挂文件：TileJSON、瓦片
-                    target = self._resolve(path[len("/_map/"):])
-                    if target is None:
-                        return self._reply(403, b"forbidden", "text/plain")
-                    if target.is_file():
-                        ctype = mimetypes.guess_type(target.name)[0] or \
-                            "application/octet-stream"
-                        return self._reply(200, target.read_bytes(), ctype)
-                return self._reply(404, b"not found", "text/plain")
-
             rel = path.lstrip("/")
             target = self._resolve(rel)
             if target is None:
@@ -646,7 +450,7 @@ def run(cfg: Config, say) -> int:
     port = srv.server_address[1]
     proto = "https" if cfg.tls else "http"
     say(f"{proto}://{cfg.host}:{port}/")
-    if cfg.open_browser and not cfg.map_file:
+    if cfg.open_browser:
         import webbrowser
 
         webbrowser.open(f"{proto}://127.0.0.1:{port}/")
@@ -664,151 +468,4 @@ def run(cfg: Config, say) -> int:
         srv.server_close()
     return 0
 
-
-# ---------------------------------------------------------------- GeoJSON lint
-_POSITION_TYPES = {"Point", "MultiPoint", "LineString", "MultiLineString",
-                   "Polygon", "MultiPolygon"}
-_GEOMETRY_TYPES = _POSITION_TYPES | {"GeometryCollection"}
-
-
-def _check_position(pos, at: str, errors: list[str]) -> bool:
-    if (not isinstance(pos, list) or len(pos) < 2
-            or not all(isinstance(n, (int, float)) and not isinstance(n, bool)
-                       for n in pos)):
-        errors.append(f"{at}: 位置必须是 [数字, 数字(, 高程)]，实际 "
-                      f"{json.dumps(pos, ensure_ascii=False)}")
-        return False
-    return True
-
-
-def _check_geometry(geom, at: str, errors: list[str]) -> None:
-    if geom is None:  # null geometry 合法（RFC 7946 §3.1）
-        return
-    if not isinstance(geom, dict) or "type" not in geom:
-        errors.append(f"{at}: 缺 type 或不是对象")
-        return
-    gtype = geom["type"]
-    if gtype == "GeometryCollection":
-        geoms = geom.get("geometries")
-        if not isinstance(geoms, list):
-            errors.append(f"{at}.geometries: 必须是数组")
-            return
-        for i, g in enumerate(geoms):
-            _check_geometry(g, f"{at}.geometries[{i}]", errors)
-        return
-    if gtype not in _POSITION_TYPES:
-        errors.append(f"{at}.type: 未知几何类型 {gtype!r}")
-        return
-    coords = geom.get("coordinates")
-    label = f"{at}.coordinates"
-
-    def position(p, a):
-        return _check_position(p, a, errors)
-
-    def ring(r, a):
-        if (not isinstance(r, list) or len(r) < 4
-                or r[0] != r[-1]):
-            errors.append(f"{a}: 线环必须 ≥4 个位置且首尾相同（闭合）")
-            return
-        for i, p in enumerate(r):
-            position(p, f"{a}[{i}]")
-
-    def line(ls, a, minimum=2):
-        if not isinstance(ls, list) or len(ls) < minimum:
-            errors.append(f"{a}: 至少 {minimum} 个位置")
-            return
-        for i, p in enumerate(ls):
-            position(p, f"{a}[{i}]")
-
-    if gtype == "Point":
-        position(coords, label)
-    elif gtype == "MultiPoint":
-        line(coords, label, minimum=1)
-    elif gtype == "LineString":
-        line(coords, label)
-    elif gtype == "MultiLineString":
-        if not isinstance(coords, list):
-            errors.append(f"{label}: 必须是数组")
-            return
-        for i, ls in enumerate(coords):
-            line(ls, f"{label}[{i}]")
-    elif gtype == "Polygon":
-        if not isinstance(coords, list):
-            errors.append(f"{label}: 必须是数组")
-            return
-        for i, r in enumerate(coords):
-            ring(r, f"{label}[{i}]")
-    elif gtype == "MultiPolygon":
-        if not isinstance(coords, list):
-            errors.append(f"{label}: 必须是数组")
-            return
-        for i, poly in enumerate(coords):
-            if not isinstance(poly, list):
-                errors.append(f"{label}[{i}]: 必须是线环数组")
-                continue
-            for j, r in enumerate(poly):
-                ring(r, f"{label}[{i}][{j}]")
-
-
-def geojson_errors(data) -> list[str]:
-    """按 RFC 7946 校验 GeoJSON，返回错误列表（空 = 合法）。"""
-    errors: list[str] = []
-    if not isinstance(data, dict):
-        return ["根不是 JSON 对象"]
-    rtype = data.get("type")
-    if not rtype:
-        return ['根缺 "type" 字段（OpenLayers 报 "Unsupported GeoJSON type: '
-                'undefined" 就是这个）']
-    if "crs" in data:
-        errors.append("根.crs: RFC 7946 已废除 crs 字段，一律按 WGS84；"
-                      "OpenLayers 会忽略它")
-    bbox = data.get("bbox")
-    if bbox is not None and (not isinstance(bbox, list)
-                             or len(bbox) % 2
-                             or not all(isinstance(n, (int, float))
-                                        for n in bbox)):
-        errors.append("根.bbox: 必须是偶数长度的数字数组")
-
-    def feature(f, at):
-        if not isinstance(f, dict):
-            errors.append(f"{at}: 必须是对象")
-            return
-        if f.get("type") != "Feature":
-            errors.append(f'{at}.type: 必须是 "Feature"，实际 '
-                          f'{f.get("type")!r}')
-        if "id" not in f and "geometry" not in f and "properties" not in f:
-            errors.append(f"{at}: 没有 geometry 也没有 properties，疑似非要素对象")
-            return
-        _check_geometry(f.get("geometry"), f"{at}.geometry", errors)
-        props = f.get("properties")
-        if props is not None and not isinstance(props, dict):
-            errors.append(f"{at}.properties: 必须是对象或 null")
-
-    if rtype == "FeatureCollection":
-        feats = data.get("features")
-        if not isinstance(feats, list):
-            errors.append('根.features: FeatureCollection 必须有 features 数组')
-        else:
-            for i, f in enumerate(feats):
-                feature(f, f"features[{i}]")
-    elif rtype == "Feature":
-        feature(data, "根")
-    elif rtype in _GEOMETRY_TYPES:
-        _check_geometry(data, "根", errors)
-    else:
-        errors.append(f"根.type: 未知类型 {rtype!r}")
-    return errors
-
-
-def normalize_geojson(data):
-    """宽容归一化：要素数组/裸几何 → FeatureCollection。
-
-    Leaflet 的 L.geoJSON 两样都能吃，OpenLayers 不行；--leaflet 模式
-    在 /data.geojson 出口统一归一，页面端永远拿到规范形状。
-    """
-    if isinstance(data, list):
-        return {"type": "FeatureCollection", "features": data}
-    if isinstance(data, dict) and data.get("type") in _GEOMETRY_TYPES:
-        return {"type": "Feature", "geometry": data, "properties": None}
-    return data
 
