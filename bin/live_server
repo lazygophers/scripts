@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""live_server — 把目录当静态网站服务（前台驻留，Ctrl-C 停）"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.live_server import main
+
+raise SystemExit(main())

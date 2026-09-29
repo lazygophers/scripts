@@ -78,9 +78,13 @@ def _emit(sessions: list[dict], fmt: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     from lib.claude_session import filter_sessions, list_sessions
-    from lib.notify import consume_debug, consume_no_say
+    from lib.notify import consume_debug, consume_no_say, consume_dry_run
+    from lib.skills_help import consume_skills
 
-    argv = consume_debug(consume_no_say(list(sys.argv if argv is None else argv)))
+    argv = consume_dry_run(
+        consume_skills(
+            consume_debug(consume_no_say(list(sys.argv if argv is None else argv))),
+            __doc__))
     args = _parse_args(argv[1:])
     sessions = timed(list_sessions, label="claude_session")()
     sessions = filter_sessions(sessions, session_kw=args.session,
