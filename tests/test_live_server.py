@@ -285,6 +285,26 @@ class LeafletTest(ServerCase):
         self.assertEqual(self.get("/_map/t/9/9/9.png")[0], 404)
         self.assertEqual(self.get("/_map/%2e%2e/%2e%2e/etc/passwd")[0], 403)
 
+    def test_leaflet_incremental_refresh(self):
+        """地图文件变了只增删变过的要素（含重复要素），数据没变不触发，瓦片变了发 tilesupdate。"""
+        import shutil
+        import subprocess
+
+        from lib.live_server import LEAFLET_MAIN
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("没有 node")
+        main = Path(tempfile.mkdtemp()) / "main.js"
+        main.write_text(LEAFLET_MAIN, encoding="utf-8")
+        rc = subprocess.run([node, str(Path(__file__).with_name("leaflet_main_harness.js")), str(main)],
+                            capture_output=True, text=True, timeout=30)
+        self.assertEqual(rc.returncode, 0, rc.stderr)
+        self.assertIn("初始 4", rc.stdout)
+        self.assertIn("更新 加 1 删 2 现有 3", rc.stdout)
+        self.assertIn("数据没变时 geojsonupdate 次数 1", rc.stdout)
+        self.assertIn("瓦片变化事件 true", rc.stdout)
+
     def test_leaflet_page_plugins(self):
         """页面自带插件：style / name / floor / TileJSON 底图 / 快捷键，脚本语法可解析。"""
         import shutil
@@ -294,6 +314,7 @@ class LeafletTest(ServerCase):
 
         html = render_map_page("地图.geojson", lib="leaflet")
         for key in ("addInitHook", "tilejsonload", "geojsonload", "floorchange",
+                    "geojsonupdate", "tilesupdate", "tilejsonupdate", "/__changes/stream",
                     "properties.style", "TileLayer.Fallback", "'q'", "'z'"):
             self.assertIn(key, html)
         self.assertIn('const STEM=' + json.dumps('地图'), html)

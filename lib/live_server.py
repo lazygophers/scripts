@@ -274,11 +274,17 @@ L.TileLayer.Fallback=L.TileLayer.extend({
     t.style.clipPath='inset('+oy*S+'px '+(k-1-ox)*S+'px '+(k-1-oy)*S+'px '+ox*S+'px)';
     t.src=L.Util.template(this._url,L.extend({},this.options,{x:Math.floor(c.x/k),y:Math.floor(c.y/k),z:c.z-t._up,s:'a',r:''}));}});
 // 底图：同名 TileJSON
-L.Map.addInitHook(function(){var map=this;map.on('tilejsonload',function(e){var tj=e.tilejson;if(!tj||!tj.tiles||!tj.tiles.length)return;
-  var url=/^([a-z]+:)?\/\//.test(tj.tiles[0])?tj.tiles[0]:e.base+tj.tiles[0],b=tj.bounds;
-  var lay=new L.TileLayer.Fallback(url,{minNativeZoom:tj.minzoom||0,maxNativeZoom:tj.maxzoom||18,maxZoom:24,
-    bounds:b?L.latLngBounds([b[1],b[0]],[b[3],b[2]]):undefined,attribution:tj.attribution||''});
-  map.layersControl.addBaseLayer(lay,tj.name||'底图');map.eachLayer(function(l){if(l instanceof L.TileLayer)map.removeLayer(l);});lay.addTo(map);});});
+L.Map.addInitHook(function(){var map=this,lay=null,url0='';
+  var make=function(tj,base){var b=tj.bounds;url0=/^([a-z]+:)?\/\//.test(tj.tiles[0])?tj.tiles[0]:base+tj.tiles[0];
+    return new L.TileLayer.Fallback(url0,{minNativeZoom:tj.minzoom||0,maxNativeZoom:tj.maxzoom||18,maxZoom:24,
+      bounds:b?L.latLngBounds([b[1],b[0]],[b[3],b[2]]):undefined,attribution:tj.attribution||''});};
+  map.on('tilejsonload',function(e){var tj=e.tilejson;if(!tj||!tj.tiles||!tj.tiles.length)return;
+    lay=make(tj,e.base);map.layersControl.addBaseLayer(lay,tj.name||'底图');map.eachLayer(function(l){if(l instanceof L.TileLayer)map.removeLayer(l);});lay.addTo(map);});
+  map.on('tilejsonupdate',function(e){var tj=e.tilejson;if(!tj||!tj.tiles||!tj.tiles.length)return;
+    var on=lay&&map.hasLayer(lay);if(lay){map.layersControl.removeLayer(lay);map.removeLayer(lay);}
+    lay=make(tj,e.base);map.layersControl.addBaseLayer(lay,tj.name||'底图');if(on||!lay)lay.addTo(map);});
+  // 瓦片文件变了：网址加版本号绕过浏览器缓存，setUrl 只重画这一层
+  map.on('tilesupdate',function(){if(lay)lay.setUrl(url0+(url0.indexOf('?')<0?'?':'&')+'v='+Date.now());});});
 // 快捷键：WASD 平移四分之一屏，Q 放大、E 缩小（Z / X 换层在楼层插件里）
 L.Map.addInitHook(function(){var map=this;document.addEventListener('keydown',function(e){
   if(e.ctrlKey||e.metaKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)||e.target.isContentEditable)return;
@@ -288,9 +294,7 @@ L.Map.addInitHook(function(){var map=this;document.addEventListener('keydown',fu
 L.Map.addInitHook(function(){var map=this;map.on('geojsonload',function(ev){
   var g=ev.layer,all=[];g.eachLayer(function(l){all.push(l);});
   var rank=function(n){var b=/^B(\d+)$/.exec(n),f=/^(\d+)F$/.exec(n);return b?-b[1]:f?+f[1]:0;};
-  var set={};all.forEach(function(l){var f=l.feature&&l.feature.properties&&l.feature.properties.floor;if(f)set[f]=1;});
-  if(!Object.keys(set).length)return;set['1F']=1;
-  var floors=Object.keys(set).sort(function(a,b){return rank(b)-rank(a);}),cur='1F',box;
+  var floors=[],cur='1F',box=null,ctl=null;
   var apply=function(){all.forEach(function(l){var f=l.feature.properties&&l.feature.properties.floor,on=f?f===cur:cur==='1F';
     if(on!==g.hasLayer(l))on?g.addLayer(l):g.removeLayer(l);});
     if(box)Array.prototype.forEach.call(box.children,function(b){b.className=b.textContent===cur?'on':'';});map.fire('floorchange',{floor:cur});};
@@ -298,15 +302,23 @@ L.Map.addInitHook(function(){var map=this;map.on('geojsonload',function(ev){
   var Ctl=L.Control.extend({onAdd:function(){box=L.DomUtil.create('div','leaflet-bar ls-floors');
     floors.forEach(function(n){var b=L.DomUtil.create('a','',box);b.href='#';b.textContent=n;L.DomEvent.on(b,'click',function(e){L.DomEvent.preventDefault(e);go(n);});});
     L.DomEvent.disableClickPropagation(box);return box;}});
-  new Ctl({position:'topright'}).addTo(map);
+  // 楼层表跟着数据走：增删要素后可能多出或少掉一层，按钮条重建，当前层不在了就回 1F
+  var rebuild=function(){var set={};all.forEach(function(l){var f=l.feature&&l.feature.properties&&l.feature.properties.floor;if(f)set[f]=1;});
+    if(ctl){ctl.remove();ctl=null;box=null;}
+    if(!Object.keys(set).length){floors=[];cur='1F';return;}
+    set['1F']=1;floors=Object.keys(set).sort(function(a,b){return rank(b)-rank(a);});if(floors.indexOf(cur)<0)cur='1F';
+    ctl=new Ctl({position:'topright'}).addTo(map);};
   document.addEventListener('keydown',function(e){if(e.ctrlKey||e.metaKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;
-    var k=e.key.toLowerCase();if(k!=='z'&&k!=='x')return;go(floors[floors.indexOf(cur)+(k==='z'?1:-1)]);e.preventDefault();});
-  apply();});});
+    var k=e.key.toLowerCase();if((k!=='z'&&k!=='x')||!floors.length)return;go(floors[floors.indexOf(cur)+(k==='z'?1:-1)]);e.preventDefault();});
+  map.on('geojsonupdate',function(u){var gone=new Set(u.removed);all=all.filter(function(l){return !gone.has(l);}).concat(u.added);rebuild();apply();});
+  rebuild();apply();});});
 // 面的名字常驻：装不下就藏，放大到装得下再出来
 L.Map.addInitHook(function(){var map=this;map.on('geojsonload',function(ev){
-  var boxed=[];ev.layer.eachLayer(function(l){var p=l.feature&&l.feature.properties;
+  var boxed=[],take=function(l){var p=l.feature&&l.feature.properties;
     if(!p||p.name==null||!l.getBounds||!/Polygon/.test(l.feature.geometry.type))return;
-    l.unbindTooltip();l.bindTooltip(String(p.name),{permanent:true,direction:'center',className:'ls-label'});boxed.push(l);});
+    l.unbindTooltip();l.bindTooltip(String(p.name),{permanent:true,direction:'center',className:'ls-label'});boxed.push(l);};
+  ev.layer.eachLayer(take);
+  map.on('geojsonupdate',function(u){var gone=new Set(u.removed);boxed=boxed.filter(function(l){return !gone.has(l);});u.added.forEach(take);fit();});
   var fit=function(){boxed.forEach(function(l){if(!l._map)return;var b=l.getBounds(),p1=map.latLngToContainerPoint(b.getNorthWest()),p2=map.latLngToContainerPoint(b.getSouthEast());
     var ok=Math.abs(p2.x-p1.x)>String(l.feature.properties.name).length*12+6&&Math.abs(p2.y-p1.y)>14;ok?l.openTooltip():l.closeTooltip();});};
   map.on('zoomend moveend floorchange',fit);fit();});});
@@ -314,19 +326,43 @@ L.Map.addInitHook(function(){var map=this;map.on('geojsonload',function(ev){
 
 LEAFLET_MAIN = r"""
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]);
-Promise.all([fetch('/data.geojson').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}),
-  fetch('/_map/'+encodeURIComponent(STEM)+'.tilejson').then(r=>r.ok?r.json():null).catch(()=>null)]).then(([gj,tj])=>{
+const getData=()=>fetch('/data.geojson',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();});
+const getTj=()=>fetch('/_map/'+encodeURIComponent(STEM)+'.tilejson',{cache:'no-store'}).then(r=>r.ok?r.json():null).catch(()=>null);
+Promise.all([getData(),getTj()]).then(([gj,tj])=>{
   const n=(gj.features||[]).length,map=L.map('map',{maxZoom:24,preferCanvas:n>2000});
   const osm=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxNativeZoom:19,maxZoom:24,attribution:'&copy; OpenStreetMap'}).addTo(map);
   map.layersControl=L.control.layers({'OSM':osm},{},{collapsed:true}).addTo(map);
   map.fire('tilejsonload',{tilejson:tj,base:'/_map/'});
   const st=f=>(f&&f.properties&&f.properties.style)||{};
-  const layer=L.geoJSON(gj,{style:st,pointToLayer:(f,ll)=>L.circleMarker(ll,Object.assign({radius:4},st(f))),
+  let made=[];
+  const layer=L.geoJSON(null,{style:st,pointToLayer:(f,ll)=>L.circleMarker(ll,Object.assign({radius:4},st(f))),
     onEachFeature:(f,l)=>{const p=f.properties||{};if(p.name!=null)l.bindTooltip(esc(p.name));
-      l.bindPopup('<pre>'+esc(JSON.stringify(p,(k,v)=>k==='style'?undefined:v,2))+'</pre>');}}).addTo(map);
+      l.bindPopup('<pre>'+esc(JSON.stringify(p,(k,v)=>k==='style'?undefined:v,2))+'</pre>');made.push(l);}}).addTo(map);
+  // 每条要素按整条 JSON 记一个键：文件变了只增删变过的要素，没变的原样留在图上
+  // 同一条 JSON 可能出现多次（重复要素），键下挂一个图层数组
+  const keyed=new Map();
+  const add=fs=>{const out=[];fs.forEach(f=>{made=[];layer.addData(f);const k=JSON.stringify(f);
+    if(!keyed.has(k))keyed.set(k,[]);keyed.get(k).push(made[0]||null);if(made[0])out.push(made[0]);});return out;};
+  add(gj.features||[]);
   map.layersControl.addOverlay(layer,'数据');
   try{map.fitBounds(layer.getBounds(),{padding:[20,20]});}catch(e){map.setView([0,0],2);}
   map.fire('geojsonload',{layer:layer,data:gj});
+  const sync=()=>getData().then(g=>{
+    const fs=g.features||[],want=new Map(),removed=[],fresh=[];
+    fs.forEach(f=>{const k=JSON.stringify(f);want.set(k,(want.get(k)||0)+1);});
+    // 多出来的份数删掉，缺的份数补上
+    keyed.forEach((ls,k)=>{const keep=want.get(k)||0;while(ls.length>keep){const l=ls.pop();if(l){layer.removeLayer(l);removed.push(l);}}if(!ls.length)keyed.delete(k);});
+    fs.forEach(f=>{const k=JSON.stringify(f),have=(keyed.get(k)||[]).length,need=want.get(k);if(have<need){want.set(k,need-1);fresh.push(f);}else want.set(k,need);});
+    const added=add(fresh);
+    if(added.length||removed.length)map.fire('geojsonupdate',{layer:layer,data:g,added:added,removed:removed});
+  }).catch(err=>console.warn('增量刷新失败',err));
+  // 监听 live_server 的变化流：地图文件变了只换变过的要素；TileJSON / 瓦片变了只重画底图。视图、楼层、底图选择都不动
+  const wait={},later=(k,ms,fn)=>{clearTimeout(wait[k]);wait[k]=setTimeout(fn,ms);};
+  const es=new EventSource('/__changes/stream');
+  es.addEventListener('change',e=>{const p=JSON.parse(e.data).path;
+    if(p===FILE)later('data',250,sync);
+    else if(p===STEM+'.tilejson')later('tj',250,()=>getTj().then(t=>map.fire('tilejsonupdate',{tilejson:t,base:'/_map/'})));
+    else if(/^tiles\//.test(p))later('tiles',800,()=>map.fire('tilesupdate'));});
 }).catch(err=>{document.getElementById('map').textContent='加载失败: '+err.message;});
 """
 
@@ -344,7 +380,8 @@ def render_map_page(title: str, lib: str = "ol") -> str:
             + '<style>' + LEAFLET_CSS + '</style>'
             + '<script src="/_assets/leaflet.js"></script>'
             + '<script>' + LEAFLET_PLUGINS + '</script>'
-            + '<script>const STEM=' + stem + ';' + LEAFLET_MAIN + '</script>')
+            + '<script>const STEM=' + stem + ',FILE=' + json.dumps(title) + ';'
+            + LEAFLET_MAIN + '</script>')
         return _page(title, body)
     body = (head
             + '<script src="/_assets/ol.js"></script>'
