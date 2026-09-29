@@ -269,3 +269,19 @@ class LeafletTest(ServerCase):
         self.assertEqual(code, 200)
         self.assertIn(b"leaflet.js", body)
         self.assertNotIn(b"ol.js", body)
+
+
+class NormalizeTest(unittest.TestCase):
+    def test_normalize_geojson(self):
+        from lib.live_server import normalize_geojson
+
+        # 裸要素数组 → FeatureCollection
+        norm = normalize_geojson([{"geometry": None, "properties": {}}])
+        self.assertEqual(norm["type"], "FeatureCollection")
+        # 裸几何 → Feature
+        norm = normalize_geojson({"type": "Point", "coordinates": [1, 2]})
+        self.assertEqual(norm["type"], "Feature")
+        self.assertEqual(norm["geometry"]["type"], "Point")
+        # 规范文件原样
+        good = {"type": "FeatureCollection", "features": []}
+        self.assertIs(normalize_geojson(good), good)

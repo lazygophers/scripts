@@ -26,6 +26,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+
+def _load_json_file(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
 from lib.notify import is_debug
 
 # CDN 缓存：首次从远端取，落本地固定路径，之后离线可用
@@ -432,8 +436,12 @@ def _handler_class(cfg: Config, say):
                         200, render_map_page(cfg.map_file.name,
                                              lib=cfg.render_lib))
                 if path == "/data.geojson":
-                    return self._reply(200, cfg.map_file.read_bytes(),
-                                       "application/geo+json")
+                    data = _load_json_file(cfg.map_file)
+                    if cfg.render_lib == "leaflet":
+                        data = normalize_geojson(data)
+                    return self._reply(
+                        200, json.dumps(data, ensure_ascii=False).encode(),
+                        "application/geo+json")
                 return self._reply(404, b"not found", "text/plain")
 
             rel = path.lstrip("/")
@@ -663,3 +671,16 @@ def geojson_errors(data) -> list[str]:
     else:
         errors.append(f"根.type: 未知类型 {rtype!r}")
     return errors
+
+
+def normalize_geojson(data):
+    """宽容归一化：要素数组/裸几何 → FeatureCollection。
+
+    Leaflet 的 L.geoJSON 两样都能吃，OpenLayers 不行；--leaflet 模式
+    在 /data.geojson 出口统一归一，页面端永远拿到规范形状。
+    """
+    if isinstance(data, list):
+        return {"type": "FeatureCollection", "features": data}
+    if isinstance(data, dict) and data.get("type") in _GEOMETRY_TYPES:
+        return {"type": "Feature", "geometry": data, "properties": None}
+    return data
