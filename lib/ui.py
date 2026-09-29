@@ -121,11 +121,18 @@ class Reporter:
         # 只留结论行。tests/__init__.py 会清掉标记变量保证套件确定性。
         self.minimal = is_ai_shell_env()
         if file is not None:
-            self.console = Console(file=file, stderr=False, no_color=self.minimal)
+            # Rich 15 起对 StringIO 等非 tty 也按 TERM 决定出码（14 按 isatty），
+            # 且 no_color=True 仍漏加粗：极简与显式 file 一律显式接管 force_terminal
+            is_tty = bool(getattr(file, "isatty", None) and file.isatty())
+            self.console = Console(file=file, stderr=False, no_color=self.minimal,
+                                   force_terminal=False if self.minimal else is_tty)
         elif console is not None:
             self.console = console
         else:
-            self.console = Console(stderr=stderr, no_color=self.minimal)
+            target = sys.stderr if stderr else sys.stdout
+            self.console = Console(stderr=stderr, no_color=self.minimal,
+                                   force_terminal=False if self.minimal
+                                   else target.isatty())
         self.stderr = stderr
         self._file = file
 

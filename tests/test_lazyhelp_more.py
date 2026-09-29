@@ -163,8 +163,7 @@ class TestRenderSkills(unittest.TestCase):
 
     def test_description_is_used_when_no_curated_skills(self):
         got = skills_help.render_skills("没这个命令", "做某件事")
-        self.assertIn("概述：", got)
-        self.assertIn("- 做某件事", got)
+        self.assertIn("概述：\n做某件事", got)
 
     def test_lazyhelp_appends_the_tool_catalog(self):
         with mock.patch("lib.lazyhelp.TOOLS", FAKE_TOOLS), \
