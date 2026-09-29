@@ -969,8 +969,16 @@ class ArcheryCli(BaseCli):
     def mcp(self):
         """作为 MCP server 在 stdio 上跑（由 Claude / Cursor 等 AI 客户端拉起）
 
-        凭据不读 archery.yaml，只认环境变量：ARCHERY_URL / ARCHERY_USERNAME /
-        ARCHERY_PASSWORD 必填，ARCHERY_TOTP_SECRET、ARCHERY_INSECURE=1 可选。
+        凭据不读 archery.yaml，只认环境变量：
+
+        | 环境变量             | 必填 | 说明                                        |
+        |---------------------|------|---------------------------------------------|
+        | ARCHERY_URL         | 是   | 站点地址，archery.example.com 或完整 URL    |
+        | ARCHERY_USERNAME    | 是   | 用户名                                      |
+        | ARCHERY_PASSWORD    | 是   | 密码                                        |
+        | ARCHERY_TOTP_SECRET | 否   | 2FA 密钥（base32 或 otpauth:// 整串）       |
+        | ARCHERY_INSECURE    | 否   | =1 跳过 TLS 证书校验（自签证书内网）        |
+
         token 只存内存，不落盘。
 
         Claude Code 里接入：
