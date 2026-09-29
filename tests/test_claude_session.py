@@ -81,5 +81,31 @@ class ClaudeSessionTest(unittest.TestCase):
         self.assertEqual(len(list_sessions(self.dir)), 1)
 
 
+class EmitFormatTest(unittest.TestCase):
+    """cli._emit 三种显式格式 + 默认分流"""
+
+    ROW = ["n1", "sid1", "proj", "忙碌", "09-29 10:00", "09-29 11:00"]
+
+    def _run(self, fmt):
+        import io
+        from contextlib import redirect_stdout
+        from unittest.mock import patch
+
+        from lib.cli.claude_session import COLUMNS, _emit
+
+        row = dict(zip((k for _, k in COLUMNS), self.ROW))
+        buf = io.StringIO()
+        with patch("lib.ai_env.is_ai_shell_env", return_value=False),              redirect_stdout(buf):
+            _emit([row], fmt)
+        return buf.getvalue()
+
+    def test_json_tsv_csv(self):
+        self.assertIn('"name":"n1"', self._run("json").replace(" ", ""))
+        self.assertIn("\nn1\tsid1\t", self._run("tsv"))
+        out = self._run("csv")
+        self.assertTrue(out.startswith("名称,"))
+        self.assertIn("sid1", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,13 +10,13 @@
   claude_session -s 1907          sessionId 模糊过滤
   claude_session -p               只看当前目录所属项目
   claude_session -p sexy          只看项目名为 sexy 的会话
+  claude_session --format json    输出 JSON（另可选 tsv / csv）
 """
 from __future__ import annotations
 
 import argparse
 import sys
 
-from lib.ai_env import is_ai_shell_env
 from lib.ui import print_tsv, timed
 
 # 渲染列 → lib/claude_session.py 里的字段名
@@ -50,7 +50,30 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("-p", "--project", nargs="?", const="", default=None,
                    metavar="项目名",
                    help="精准匹配项目名；省略值 = 当前目录所属项目")
+    p.add_argument("-f", "--format", choices=["json", "tsv", "csv"],
+                   default=None, help="输出格式；默认 AI 环境 TSV，人类环境表格")
     return p.parse_args(argv)
+
+
+def _emit(sessions: list[dict], fmt: str) -> None:
+    import csv
+    import io
+
+    from lib.ai_env import json_dumps
+
+    headers = [label for label, _ in COLUMNS]
+    rows = [[str(s[key]) for _, key in COLUMNS] for s in sessions]
+    if fmt == "json":
+        print(json_dumps([dict(zip((k for _, k in COLUMNS), r))
+                          for r in rows]))
+    elif fmt == "csv":
+        buf = io.StringIO()
+        csv.writer(buf, lineterminator="\n").writerows([headers, *rows])
+        print(buf.getvalue(), end="")
+    elif fmt == "tsv":
+        print_tsv(headers, rows)
+    else:
+        _print_table(sessions)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -62,9 +85,10 @@ def main(argv: list[str] | None = None) -> int:
     sessions = timed(list_sessions, label="claude_session")()
     sessions = filter_sessions(sessions, session_kw=args.session,
                                project=args.project)
-    if is_ai_shell_env():
-        print_tsv([label for label, _ in COLUMNS],
-                  [[s[key] for _, key in COLUMNS] for s in sessions])
-    else:
-        _print_table(sessions)
+    fmt = args.format
+    if fmt is None:
+        from lib.ai_env import is_ai_shell_env
+
+        fmt = "tsv" if is_ai_shell_env() else "table"
+    _emit(sessions, fmt)
     return 0
