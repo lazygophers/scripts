@@ -2,11 +2,12 @@
 
 用法:
   live_server [目录] [--host H] [--port P] [--tls] [--cert C --key K]
-              [--auth USER:PASS] [--spa]
-  live_server map <file.geojson> [--host H] [--port P] [--tls] ...
+              [--auth USER:PASS] [--spa] [--leaflet 只影响 map]
+  live_server map <file.geojson> [--leaflet] [...同上 flags]
+  live_server map check <file.geojson>     # RFC 7946 lint
 
-默认 127.0.0.1、随机空闲端口；启动后把完整 URL 打到 stderr。
-`--skills` 输出面向 AI 的用法与变化流协议。
+默认 127.0.0.1、随机空闲端口；起服务后自动开浏览器（--no-open 关），
+完整 URL 打到 stderr。`--skills` 输出面向 AI 的用法与变化流协议。
 """
 from __future__ import annotations
 
@@ -20,11 +21,11 @@ SKILLS = """live_server — 把目录当静态网站服务（前台驻留，Ctrl
 
 - 起服务: `live_server [目录]`；默认 127.0.0.1 + 随机空闲端口，URL 打在 stderr
 - 固定端口: `live_server --port 8000`；换绑定: `--host 0.0.0.0`
-- 上传: `curl -T file.txt http://127.0.0.1:<port>/file.txt`（PUT，需路径在服务根内）
+- 上传: `curl -T file.txt http://127.0.0.1:<port>/file.txt`（PUT，越界 403）
 - 鉴权: `--auth user:pass`（Basic Auth，全路径生效；无 TLS 时为明文）
 - HTTPS: `--tls`（mkcert 优先，openssl 自签兜底）；自有证书 `--cert C --key K`
 - SPA 回退: `--spa` 时仅无扩展名的 404 回退 index.html（状态码 200）
-- 地图: `live_server map x.geojson` 用 OpenLayers 渲染 GeoJSON（起服务前先 lint，坏文件直接给原因不服务）
+- 地图: `live_server map x.geojson` 用 OpenLayers 渲染；`--leaflet` 换 Leaflet
 - lint: `live_server map check x.geojson` 按 RFC 7946 校验并逐条输出原因，退出码 0/1
 - 起服务后自动打开系统默认浏览器；`--no-open` 不开
 - 变化流协议（SSE，GET /__changes/stream）:
@@ -43,8 +44,8 @@ def _say(msg: str) -> None:
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="live_server", description="把目录当静态网站服务")
-    p.add_argument("directory", nargs="?", default=".",
-                   help="服务根目录（默认当前目录）")
+    p.add_argument("path", nargs="?", default=".",
+                   help="目录（serve）/ GeoJSON 文件（map）")
     p.add_argument("--host", default="127.0.0.1",
                    help="绑定地址（默认 127.0.0.1）")
     p.add_argument("--port", type=int, default=0, help="端口（默认随机空闲）")
@@ -56,7 +57,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
                    help="无扩展名的 404 回退 index.html（状态码 200）")
     p.add_argument("--no-open", action="store_true",
                    help="不起浏览器（默认自动打开）")
+    p.add_argument("--leaflet", action="store_true",
+                   help="map 模式用 Leaflet 渲染（默认 OpenLayers）")
     return p.parse_args(args=argv)
+
+
+def _load_json(path: Path):
+    import json
+
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _cmd_check(map_file: Path) -> int:
@@ -82,12 +91,6 @@ def _cmd_check(map_file: Path) -> int:
     return 1
 
 
-def _load_json(path: Path):
-    import json
-
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def main(argv: list[str] | None = None) -> int:
     from lib.live_server import Config, geojson_errors, run
     from lib.notify import consume_debug, consume_dry_run, consume_no_say
@@ -99,23 +102,30 @@ def main(argv: list[str] | None = None) -> int:
             SKILLS))
     args = argv[1:]
 
+    # map [check] 前缀先剥掉，其余 flags 只解析一次——解析两次会互相
+    # 覆盖（--port 丢失就是这么来的）
+    map_mode = bool(args) and args[0] == "map"
+    check = map_mode and "check" in args
+    if map_mode:
+        args = ["map"] + [a for a in args[1:] if a != "check"]
+
+    if map_mode and len(args) > 1:
+        parsed = _parse_args([args[1]] + args[2:])  # "map" → path 位置
+    else:
+        parsed = _parse_args(args[1:] if map_mode else args)
+
     map_file = None
-    if args and args[0] == "map":
-        if len(args) >= 2 and args[1] == "check":
-            # lint 模式: live_server map check <file.geojson>
-            if len(args) < 3:
-                _say("ERROR: 用法: live_server map check <file.geojson>")
-                return 2
-            return _cmd_check(Path(args[2]).expanduser().resolve())
-        if len(args) < 2:
-            _say("ERROR: 用法: live_server map <file.geojson> | "
-                 "live_server map check <file.geojson>")
-            return 2
-        map_file = Path(args[1]).expanduser().resolve()
+    render_lib = "ol"
+    root = Path(parsed.path).expanduser().resolve()
+    if map_mode:
+        map_file = root
+        if check:
+            return _cmd_check(map_file)
         if not map_file.is_file():
             _say(f"ERROR: 找不到 {map_file}")
             return 2
-        args = ["."] + args[2:]  # map 模式 root = 文件所在目录
+        root = map_file.parent
+        render_lib = "leaflet" if parsed.leaflet else "ol"
         errors = geojson_errors(_load_json(map_file))
         if errors:
             for e in errors:
@@ -123,12 +133,10 @@ def main(argv: list[str] | None = None) -> int:
             _say(f"共 {len(errors)} 处不符合规范；跑 `live_server map check "
                  f"{map_file}` 看完整说明")
             return 2
-
-    parsed = _parse_args(args)
-    root = Path(parsed.directory).expanduser().resolve()
-    if not root.is_dir():
-        _say(f"ERROR: 找不到目录: {parsed.directory}")
+    elif not root.is_dir():
+        _say(f"ERROR: 找不到目录: {parsed.path}")
         return 2
+
     if bool(parsed.cert) != bool(parsed.key):
         _say("ERROR: --cert 和 --key 必须一起给")
         return 2
@@ -142,5 +150,5 @@ def main(argv: list[str] | None = None) -> int:
     cfg = Config(root=root, host=parsed.host, port=parsed.port,
                  tls=parsed.tls, cert=parsed.cert, key=parsed.key,
                  auth=auth, spa=parsed.spa, map_file=map_file,
-                 open_browser=not parsed.no_open)
+                 render_lib=render_lib, open_browser=not parsed.no_open)
     return timed(run, label="live_server")(cfg, _say)

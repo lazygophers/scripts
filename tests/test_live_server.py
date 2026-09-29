@@ -244,3 +244,28 @@ class CheckCliTest(unittest.TestCase):
             capture_output=True, text=True, timeout=30)
         self.assertEqual(rc.returncode, 1)
         self.assertIn("ERROR:", rc.stderr)
+
+
+class LeafletTest(ServerCase):
+    def test_leaflet_template_and_assets_whitelist(self):
+        from lib.live_server import CDN_ASSETS, render_map_page
+
+        html = render_map_page("t", lib="leaflet")
+        self.assertIn("leaflet.js", html)
+        self.assertIn("L.geoJSON", html)
+        self.assertNotIn("ol.js", html)
+        html = render_map_page("t", lib="ol")
+        self.assertIn("ol.js", html)
+        self.assertIn("leaflet.js", CDN_ASSETS)
+        self.assertIn("leaflet.css", CDN_ASSETS)
+
+    def test_map_mode_leaflet(self):
+        gj = self.dir / "p.geojson"
+        gj.write_text('{"type":"Point","coordinates":[116.4,39.9]}',
+                      encoding="utf-8")
+        self.cfg.map_file = gj
+        self.cfg.render_lib = "leaflet"
+        code, body = self.get("/")
+        self.assertEqual(code, 200)
+        self.assertIn(b"leaflet.js", body)
+        self.assertNotIn(b"ol.js", body)

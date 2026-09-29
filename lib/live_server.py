@@ -41,6 +41,14 @@ CDN_ASSETS = {
         "https://cdn.jsdelivr.net/npm/ol@10/dist/ol.js",
         "https://unpkg.com/ol@10/dist/ol.js",
     ),
+    "leaflet.js": (
+        "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js",
+        "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
+    ),
+    "leaflet.css": (
+        "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css",
+        "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css",
+    ),
 }
 
 CONFIG_DIR = Path.home() / ".config" / "lazygophers" / "scripts" / "live-server"
@@ -236,11 +244,27 @@ def render_markdown_page(title: str) -> str:
     return _page(title, body)
 
 
-def render_map_page(title: str) -> str:
-    """OpenLayers 渲染 /data.geojson。"""
-    body = ('<div id="map"></div>'
-            '<script src="/_assets/ol.js"></script>'
-            '<script>fetch("/data.geojson").then(r=>{if(!r.ok)throw new Error('
+def render_map_page(title: str, lib: str = "ol") -> str:
+    """OpenLayers（默认）或 Leaflet 渲染 /data.geojson；两者都吃规范 GeoJSON。"""
+    head = '<div id="map"></div>'
+    if lib == "leaflet":
+        body = (head
+            + '<link rel="stylesheet" href="/_assets/leaflet.css">'
+            + '<script src="/_assets/leaflet.js"></script>'
+            + '<script>fetch("/data.geojson").then(r=>{if(!r.ok)'
+            'throw new Error("HTTP "+r.status);return r.json()}).then(gj=>{'
+            'const map=L.map("map");'
+            'L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",'
+            '{attribution:"&copy; OpenStreetMap"}).addTo(map);'
+            'const layer=L.geoJSON(gj,{onEachFeature:(f,l)=>l.bindPopup('
+            '"<pre>"+JSON.stringify(f.properties,null,2)+"</pre>")}).addTo(map);'
+            'try{map.fitBounds(layer.getBounds(),{padding:[20,20]})}catch(e){}'
+            '}).catch(err=>{document.getElementById("map").textContent='
+            '"加载失败: "+err.message;});</script>')
+        return _page(title, body)
+    body = (head
+            + '<script src="/_assets/ol.js"></script>'
+            + '<script>fetch("/data.geojson").then(r=>{if(!r.ok)throw new Error('
             '"HTTP "+r.status);return r.json()}).then(gj=>{'
             'const fmt=new ol.format.GeoJSON();'
             'const vector=new ol.layer.Vector({source:new ol.source.Vector({'
@@ -268,6 +292,7 @@ class Config:
     auth: tuple[str, str] | None = None
     spa: bool = False
     map_file: Path | None = None
+    render_lib: str = "ol"
     open_browser: bool = True
     hub: ChangeHub = field(default_factory=ChangeHub, repr=False)
 
@@ -404,7 +429,8 @@ def _handler_class(cfg: Config, say):
             if cfg.map_file:  # map 子命令：单页 + 数据端点
                 if path == "/":
                     return self._reply_html(
-                        200, render_map_page(cfg.map_file.name))
+                        200, render_map_page(cfg.map_file.name,
+                                             lib=cfg.render_lib))
                 if path == "/data.geojson":
                     return self._reply(200, cfg.map_file.read_bytes(),
                                        "application/geo+json")
