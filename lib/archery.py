@@ -475,6 +475,19 @@ class ArcheryClient:
         return self.request("DELETE", path)
 
 
+def api_or_web(api, web):
+    """先走 REST API；老版本 Archery（1.9.x）没有 sqlquery 那组端点，404 时回落网页端。
+
+    CLI 和 MCP server 共用（两边都拿 sqlquery 命令面），所以放这里不放命令层。
+    """
+    try:
+        return api()
+    except ArcheryError as e:
+        if "HTTP 404" not in str(e):
+            raise
+        return web()
+
+
 def client_for(host: str = "", *, reporter=None,
                config_path: pathlib.Path | None = None,
                timeout: int = DEFAULT_TIMEOUT) -> ArcheryClient:

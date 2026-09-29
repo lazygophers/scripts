@@ -36,6 +36,7 @@ from lib import archery_mcp
 from lib.archery import (
     ArcheryClient,
     ArcheryError,
+    api_or_web,
     client_for,
     config_lock,
     default_config_path,
@@ -439,14 +440,8 @@ class InstanceCli(_Group):
 
 # ---------------------------------------------------------------- sqlquery
 
-def _api_or_web(api, web):
-    """先走 REST API；老版本 Archery（1.9.x）没有 sqlquery 那组端点，404 时回落到网页端。"""
-    try:
-        return api()
-    except ArcheryError as e:
-        if "HTTP 404" not in str(e):
-            raise
-        return web()
+# 404 回落逻辑在 lib/archery.py（MCP server 共用）；旧名保留给测试和上面的调用点。
+_api_or_web = api_or_web
 
 
 class QueryCli(_Group):

@@ -20,7 +20,7 @@ import os
 import sys
 from typing import Callable
 
-from lib.archery import ArcheryClient, ArcheryError, host_key, normalize_url
+from lib.archery import ArcheryClient, ArcheryError, api_or_web, host_key, normalize_url
 from lib.ovpn import normalize_secret
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -67,21 +67,11 @@ def _i(desc: str = "") -> dict:
     return {"type": "integer", "description": desc} if desc else {"type": "integer"}
 
 
-def _api_or_web(api, web):
-    """先走 REST API；老版本 Archery（1.9.x）没有 sqlquery 那组端点，404 时回落网页端。"""
-    try:
-        return api()
-    except ArcheryError as e:
-        if "HTTP 404" not in str(e):
-            raise
-        return web()
-
-
 def _t_query_execute(client: ArcheryClient, args: dict):
     body = {"instance_name": args["instance_name"], "db_name": args["db_name"],
             "schema_name": str(args.get("schema_name") or ""), "tb_name": str(args.get("tb_name") or ""),
             "sql_content": args["sql"], "limit_num": int(args.get("limit_num") or 0)}
-    return _api_or_web(
+    return api_or_web(
         lambda: client.post("v1/sqlquery/execute/", body),
         lambda: client.web("POST", "/query/", form=body),
     )
@@ -89,7 +79,7 @@ def _t_query_execute(client: ArcheryClient, args: dict):
 
 def _t_query_instances(client: ArcheryClient, args: dict):
     params = {k: v for k, v in (args.get("params") or {}).items()}
-    return _api_or_web(
+    return api_or_web(
         lambda: client.get("v1/sqlquery/instances/", **params),
         lambda: client.web("POST", "/group/user_all_instances/", form=params),
     )
@@ -98,7 +88,7 @@ def _t_query_instances(client: ArcheryClient, args: dict):
 def _t_query_describe(client: ArcheryClient, args: dict):
     body = {"instance_name": args["instance_name"], "db_name": args["db_name"],
             "tb_name": args["tb_name"], "schema_name": str(args.get("schema_name") or "")}
-    return _api_or_web(
+    return api_or_web(
         lambda: client.post("v1/sqlquery/describetable/", body),
         lambda: client.web("POST", "/instance/describetable/", form=body),
     )
@@ -106,7 +96,7 @@ def _t_query_describe(client: ArcheryClient, args: dict):
 
 def _t_query_logs(client: ArcheryClient, args: dict):
     params = {k: v for k, v in (args.get("params") or {}).items()}
-    return _api_or_web(
+    return api_or_web(
         lambda: client.get("v1/sqlquery/logs/", **params),
         lambda: client.web("GET", "/query/querylog/", params=params),
     )
@@ -144,7 +134,7 @@ def _t_workflow_execute(client: ArcheryClient, args: dict):
 def _t_schema_list(client: ArcheryClient, args: dict):
     data = client.request("GET", "/api/schema/", params={"format": "json"})
     if isinstance(data, str):
-        import yaml
+        import yaml  # 延迟导入：pyyaml 只在这一个工具用到，不该进启动导入图
 
         data = yaml.safe_load(data)
     rows = []

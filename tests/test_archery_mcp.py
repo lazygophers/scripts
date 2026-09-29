@@ -149,9 +149,12 @@ class TestServe(unittest.TestCase):
         self.assertTrue(replies[0]["result"]["isError"])
 
     def test_bad_line_ignored(self):
-        _, replies = self._roundtrip(
-            {"jsonrpc": "2.0", "id": 1, "method": "ping"},
-        )
+        lines = io.StringIO("not json\n\n" + json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n")
+        out = io.StringIO()
+        serve(lines, out)
+        replies = [json.loads(l) for l in out.getvalue().splitlines()]
+        self.assertEqual(len(replies), 1)  # 坏行和空行都不回包，只有 ping 回
         self.assertEqual(replies[0]["result"], {})
 
 
