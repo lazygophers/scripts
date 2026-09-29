@@ -333,7 +333,10 @@ Promise.all([fetch('/data.geojson').then(r=>{if(!r.ok)throw new Error('HTTP '+r.
 
 def render_map_page(title: str, lib: str = "ol") -> str:
     """OpenLayers（默认）或 Leaflet 渲染 /data.geojson；两者都吃规范 GeoJSON。"""
-    head = '<div id="map"></div>'
+    # 地图页铺满整个窗口：去掉 main 的居中版心和内边距，地图容器固定占满视口
+    head = ('<style>main{max-width:none;margin:0;padding:0}'
+            '#map{position:fixed;inset:0;width:100vw;height:100vh;border-radius:0}</style>'
+            '<div id="map"></div>')
     if lib == "leaflet":
         stem = json.dumps(Path(title).stem)
         body = (head

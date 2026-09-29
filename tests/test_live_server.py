@@ -297,6 +297,8 @@ class LeafletTest(ServerCase):
                     "properties.style", "TileLayer.Fallback", "'q'", "'z'"):
             self.assertIn(key, html)
         self.assertIn('const STEM=' + json.dumps('地图'), html)
+        self.assertIn('#map{position:fixed;inset:0', html)  # 铺满窗口
+        self.assertIn('#map{position:fixed;inset:0', render_map_page("x", lib="ol"))
         node = shutil.which("node")
         if node:
             for js in (LEAFLET_PLUGINS, "const STEM='x';" + LEAFLET_MAIN):
