@@ -6,6 +6,7 @@
   live_server openlayers <file.geojson> [...同上 flags]
   live_server leaflet <file.geojson> [...同上 flags]   # 宽容：非规范 GeoJSON 归一化后渲染
   live_server map check <file.geojson>     # RFC 7946 严格 lint
+  live_server leaflet check <file.geojson> # 先按 leaflet 模式归一化再 lint
 
 默认 127.0.0.1、随机空闲端口；起服务后自动开浏览器（--no-open 关），
 完整 URL 打到 stderr。`--skills` 输出面向 AI 的用法与变化流协议。
@@ -26,8 +27,8 @@ SKILLS = """live_server — 把目录当静态网站服务（前台驻留，Ctrl
 - 鉴权: `--auth user:pass`（Basic Auth，全路径生效；无 TLS 时为明文）
 - HTTPS: `--tls`（mkcert 优先，openssl 自签兜底）；自有证书 `--cert C --key K`
 - SPA 回退: `--spa` 时仅无扩展名的 404 回退 index.html（状态码 200）
-- 地图: `live_server openlayers x.geojson`（OpenLayers）或 `live_server leaflet x.geojson`（Leaflet，宽容模式：文件非规范时自动归一化渲染）
-- lint: `live_server map check x.geojson` 按 RFC 7946 严格校验并逐条输出原因，退出码 0/1；serve 模式 lint 不过只打 WARN 不拦
+- 地图: `live_server openlayers x.geojson`（OpenLayers）或 `live_server leaflet x.geojson`（Leaflet，宽容模式：文件非规范时自动归一化渲染；认要素数组、裸几何，以及 `items[].map` 各是一张像素坐标 FeatureCollection 的文档形容器——按 placement/terrain 的 from/origin/scale 链合到根图像素、CRS.Simple 渲染、每张图每层一个图层开关）
+- lint: `live_server map check x.geojson` 按 RFC 7946 严格校验并逐条输出原因，退出码 0/1；`live_server leaflet check x.geojson` 先归一化再校验（校验 leaflet 页面实际拿到的数据）；serve 模式 lint 不过只打 WARN 不拦
 - 起服务后自动打开系统默认浏览器；`--no-open` 不开
 - 变化流协议（SSE，GET /__changes/stream）:
   - Content-Type: text/event-stream；每条事件:
@@ -67,18 +68,28 @@ def _load_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _cmd_check(map_file: Path) -> int:
-    """geojson lint：逐条打 ERROR 行，合法静默（AI 环境约定）。"""
+def _cmd_check(map_file: Path, lenient: bool = False) -> int:
+    """geojson lint：逐条打 ERROR 行，合法静默（AI 环境约定）。
+
+    lenient（`leaflet check`）：先按 leaflet 模式归一化（要素数组、裸几何、
+    items[].map 容器）再校验——校验的是 leaflet 页面实际拿到的数据。
+    """
     import json
 
     from lib.ai_env import is_ai_shell_env
-    from lib.live_server import geojson_errors
+    from lib.live_server import geojson_errors, normalize_geojson
 
     try:
         data = json.loads(map_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         _say(f"ERROR: 不是合法 JSON: {e}")
         return 2
+    if lenient:
+        try:
+            data = normalize_geojson(data)
+        except (ValueError, KeyError, TypeError) as e:
+            _say(f"ERROR: 归一化失败: {e}")
+            return 1
     errors = geojson_errors(data)
     if not errors:
         if not is_ai_shell_env():
@@ -91,7 +102,7 @@ def _cmd_check(map_file: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from lib.live_server import Config, geojson_errors, run
+    from lib.live_server import Config, geojson_errors, normalize_geojson, run
     from lib.notify import consume_debug, consume_dry_run, consume_no_say
     from lib.skills_help import consume_skills
 
@@ -121,15 +132,22 @@ def main(argv: list[str] | None = None) -> int:
                  "live_server leaflet <file.geojson> | "
                  "live_server map check <file.geojson>")
             return 2
-        if check:  # map check <file>：严格 lint
-            return _cmd_check(root)
+        if check:  # map/openlayers check 严格 lint；leaflet check 先归一化
+            return _cmd_check(root, lenient=lib == "leaflet")
         map_file = root
         if not map_file.is_file():
             _say(f"ERROR: 找不到 {map_file}")
             return 2
         root = map_file.parent
         render_lib = "ol" if lib == "openlayers" else "leaflet"
-        errors = geojson_errors(_load_json(map_file))
+        data = _load_json(map_file)
+        if render_lib == "leaflet":
+            try:
+                data = normalize_geojson(data)
+            except (ValueError, KeyError, TypeError) as e:
+                _say(f"ERROR: 归一化失败: {e}")
+                return 2
+        errors = geojson_errors(data)
         if errors:
             for e in errors:
                 _say(f"WARN: {e}")

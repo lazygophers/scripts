@@ -257,12 +257,32 @@ def render_map_page(title: str, lib: str = "ol") -> str:
             + '<script src="/_assets/leaflet.js"></script>'
             + '<script>fetch("/data.geojson").then(r=>{if(!r.ok)'
             'throw new Error("HTTP "+r.status);return r.json()}).then(gj=>{'
-            'const map=L.map("map");'
-            'L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",'
+            # pixel=true（items[].map 容器归一后）：坐标是像素、y 向下，
+            # 用 CRS.Simple 翻转 y，不叠 OSM；每张图、每个楼层一个可开关的图层
+            'const px=!!gj.pixel;'
+            'const map=L.map("map",px?{crs:L.extend({},L.CRS.Simple,'
+            '{transformation:new L.Transformation(1,0,1,0)}),minZoom:-6,'
+            'maxZoom:18,zoomSnap:0.25,preferCanvas:true}:{});'
+            'if(!px)L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",'
             '{attribution:"&copy; OpenStreetMap"}).addTo(map);'
-            'const layer=L.geoJSON(gj,{onEachFeature:(f,l)=>l.bindPopup('
-            '"<pre>"+JSON.stringify(f.properties,null,2)+"</pre>")}).addTo(map);'
-            'try{map.fitBounds(layer.getBounds(),{padding:[20,20]})}catch(e){}'
+            'const opt={pointToLayer:(f,ll)=>L.circleMarker(ll,{radius:4}),'
+            'onEachFeature:(f,l)=>l.bindPopup("<pre>"+JSON.stringify('
+            'f.properties,null,2).replace(/</g,"&lt;")+"</pre>")};'
+            'const all=L.featureGroup().addTo(map);'
+            'if(px){const groups={},defs=gj.defaultBases||{};'
+            'for(const f of gj.features){const p=f.properties||{},'
+            'k=p._map+(p.base?" · "+p.base:"");'
+            '(groups[k]=groups[k]||{on:!p.base||defs[p._map]===p.base,fs:[]})'
+            '.fs.push(f);}'
+            'const over={};for(const [k,g] of Object.entries(groups)){'
+            'const l=L.geoJSON({type:"FeatureCollection",features:g.fs},opt);'
+            'over[k]=l;if(g.on)l.addTo(all);}'
+            'L.control.layers(null,over,{collapsed:true}).addTo(map);'
+            'map.on("overlayadd",e=>all.addLayer(e.layer));'
+            'map.on("overlayremove",e=>all.removeLayer(e.layer));'
+            '}else L.geoJSON(gj,opt).addTo(all);'
+            'try{map.fitBounds(all.getBounds(),{padding:[20,20]})}catch(e){'
+            'map.setView([0,0],0)}'
             '}).catch(err=>{document.getElementById("map").textContent='
             '"加载失败: "+err.message;});</script>')
         return _page(title, body)
@@ -683,4 +703,75 @@ def normalize_geojson(data):
         return {"type": "FeatureCollection", "features": data}
     if isinstance(data, dict) and data.get("type") in _GEOMETRY_TYPES:
         return {"type": "Feature", "geometry": data, "properties": None}
+    if _is_map_container(data):
+        return _merge_map_container(data)
     return data
+
+
+def _is_map_container(data) -> bool:
+    """文档形容器：根没有 type，items[].map 各是一张 FeatureCollection。"""
+    return (isinstance(data, dict) and "type" not in data
+            and isinstance(data.get("items"), list)
+            and any(isinstance(it, dict) and isinstance(it.get("map"), dict)
+                    and it["map"].get("type") == "FeatureCollection"
+                    for it in data["items"]))
+
+
+def _merge_map_container(data) -> dict:
+    """把 items[].map 合成一张 FeatureCollection，坐标统一换到根图像素。
+
+    每张图的像素经 placement / terrain 的 {from, origin, scale} 链接到上一级：
+    上一级像素 = origin + 本级像素 / scale，一直换到没有 from 的根图。
+    输出带外来成员 pixel=true（坐标是像素、y 向下，不是经纬度）、
+    metersPerPixel（根图的）和 defaultBases（分楼层的图默认显示哪层），
+    每条要素带 properties._map 标明出自哪张图。
+    """
+    maps = {it["id"]: it["map"] for it in data["items"]
+            if isinstance(it, dict) and isinstance(it.get("map"), dict)
+            and it["map"].get("type") == "FeatureCollection" and "id" in it}
+
+    def link(m):
+        for key in ("placement", "terrain"):
+            up = m.get(key)
+            if isinstance(up, dict) and "from" in up:
+                return up
+        return None
+
+    def to_root(mid, depth=0):
+        if depth > len(maps):
+            raise ValueError(f"地图 {mid} 的 from 链成环")
+        up = link(maps[mid])
+        if up is None:
+            return lambda p: p
+        if up["from"] not in maps:
+            raise ValueError(f"地图 {mid} 的上一级 {up['from']} 不存在")
+        parent = to_root(up["from"], depth + 1)
+        ox, oy = up["origin"]
+        k = up["scale"]
+        return lambda p: parent([ox + p[0] / k, oy + p[1] / k])
+
+    def conv(c, fn):
+        if c and isinstance(c[0], (int, float)):
+            return [*fn(c[:2]), *c[2:]]
+        return [conv(x, fn) for x in c]
+
+    roots = [mid for mid, m in maps.items() if link(m) is None]
+    features, default_bases = [], {}
+    for mid, m in maps.items():
+        fn = to_root(mid)
+        bases = m.get("bases") or []
+        if bases:
+            default_bases[mid] = next(
+                (b["name"] for b in bases if b.get("default")), bases[0]["name"])
+        for f in m.get("features") or []:
+            geom = f.get("geometry")
+            features.append({
+                "type": "Feature",
+                "geometry": geom and {**geom, "coordinates": conv(
+                    geom.get("coordinates") or [], fn)},
+                "properties": {**(f.get("properties") or {}), "_map": mid},
+            })
+    root = maps[roots[0]] if roots else {}
+    return {"type": "FeatureCollection", "pixel": True,
+            "metersPerPixel": root.get("metersPerPixel", 1),
+            "defaultBases": default_bases, "features": features}
