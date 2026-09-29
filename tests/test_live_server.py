@@ -228,7 +228,7 @@ class CheckCliTest(unittest.TestCase):
             [sys.executable, "-c",
              "import sys; sys.path.insert(0, '.');"
              "from lib.cli.live_server import main;"
-             "sys.argv=['live_server','check',%r];"
+             "sys.argv=['live_server','map','check',%r];"
              "raise SystemExit(main(sys.argv))" % str(good)],
             capture_output=True, text=True, timeout=30)
         self.assertEqual(rc.returncode, 0, rc.stderr)
@@ -239,7 +239,7 @@ class CheckCliTest(unittest.TestCase):
             [sys.executable, "-c",
              "import sys; sys.path.insert(0, '.');"
              "from lib.cli.live_server import main;"
-             "sys.argv=['live_server','check',%r];"
+             "sys.argv=['live_server','map','check',%r];"
              "raise SystemExit(main(sys.argv))" % str(bad)],
             capture_output=True, text=True, timeout=30)
         self.assertEqual(rc.returncode, 1)

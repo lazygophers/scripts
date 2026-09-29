@@ -25,7 +25,7 @@ SKILLS = """live_server — 把目录当静态网站服务（前台驻留，Ctrl
 - HTTPS: `--tls`（mkcert 优先，openssl 自签兜底）；自有证书 `--cert C --key K`
 - SPA 回退: `--spa` 时仅无扩展名的 404 回退 index.html（状态码 200）
 - 地图: `live_server map x.geojson` 用 OpenLayers 渲染 GeoJSON（起服务前先 lint，坏文件直接给原因不服务）
-- lint: `live_server check x.geojson` 按 RFC 7946 校验并逐条输出原因，退出码 0/1
+- lint: `live_server map check x.geojson` 按 RFC 7946 校验并逐条输出原因，退出码 0/1
 - 起服务后自动打开系统默认浏览器；`--no-open` 不开
 - 变化流协议（SSE，GET /__changes/stream）:
   - Content-Type: text/event-stream；每条事件:
@@ -101,8 +101,15 @@ def main(argv: list[str] | None = None) -> int:
 
     map_file = None
     if args and args[0] == "map":
+        if len(args) >= 2 and args[1] == "check":
+            # lint 模式: live_server map check <file.geojson>
+            if len(args) < 3:
+                _say("ERROR: 用法: live_server map check <file.geojson>")
+                return 2
+            return _cmd_check(Path(args[2]).expanduser().resolve())
         if len(args) < 2:
-            _say("ERROR: 用法: live_server map <file.geojson>")
+            _say("ERROR: 用法: live_server map <file.geojson> | "
+                 "live_server map check <file.geojson>")
             return 2
         map_file = Path(args[1]).expanduser().resolve()
         if not map_file.is_file():
@@ -113,14 +120,9 @@ def main(argv: list[str] | None = None) -> int:
         if errors:
             for e in errors:
                 _say(f"ERROR: {e}")
-            _say(f"共 {len(errors)} 处不符合规范；跑 `live_server check "
+            _say(f"共 {len(errors)} 处不符合规范；跑 `live_server map check "
                  f"{map_file}` 看完整说明")
             return 2
-    elif args and args[0] == "check":
-        if len(args) < 2:
-            _say("ERROR: 用法: live_server check <file.geojson>")
-            return 2
-        return _cmd_check(Path(args[1]).expanduser().resolve())
 
     parsed = _parse_args(args)
     root = Path(parsed.directory).expanduser().resolve()
