@@ -270,19 +270,39 @@ class LeafletTest(ServerCase):
         self.assertIn(b"leaflet.js", body)
         self.assertNotIn(b"ol.js", body)
 
-    def test_map_mode_leaflet_container(self):
-        f = self.dir / "地图.json"
-        f.write_text(json.dumps(NormalizeTest()._container(), ensure_ascii=False),
-                     encoding="utf-8")
-        self.cfg.map_file = f
+    def test_leaflet_sidecar_files(self):
+        """/_map/ 只读地图文件同目录的文件（TileJSON、瓦片），越界 403。"""
+        gj = self.dir / "m.geojson"
+        gj.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+        (self.dir / "m.tilejson").write_text('{"tilejson":"3.0.0","tiles":["t/{z}/{x}/{y}.png"]}', encoding="utf-8")
+        (self.dir / "t" / "1" / "0").mkdir(parents=True)
+        (self.dir / "t" / "1" / "0" / "0.png").write_bytes(b"\x89PNG")
+        self.cfg.map_file = gj
         self.cfg.render_lib = "leaflet"
-        code, body = self.get("/")
-        self.assertIn(b"CRS.Simple", body)
-        code, body = self.get("/data.geojson")
-        self.assertEqual(code, 200)
-        data = json.loads(body)
-        self.assertTrue(data["pixel"])
-        self.assertEqual(len(data["features"]), 3)
+        code, body = self.get("/_map/m.tilejson")
+        self.assertEqual((code, json.loads(body)["tilejson"]), (200, "3.0.0"))
+        self.assertEqual(self.get("/_map/t/1/0/0.png"), (200, b"\x89PNG"))
+        self.assertEqual(self.get("/_map/t/9/9/9.png")[0], 404)
+        self.assertEqual(self.get("/_map/%2e%2e/%2e%2e/etc/passwd")[0], 403)
+
+    def test_leaflet_page_plugins(self):
+        """页面自带插件：style / name / floor / TileJSON 底图 / 快捷键，脚本语法可解析。"""
+        import shutil
+        import subprocess
+
+        from lib.live_server import LEAFLET_MAIN, LEAFLET_PLUGINS
+
+        html = render_map_page("地图.geojson", lib="leaflet")
+        for key in ("addInitHook", "tilejsonload", "geojsonload", "floorchange",
+                    "properties.style", "TileLayer.Fallback", "'q'", "'z'"):
+            self.assertIn(key, html)
+        self.assertIn('const STEM=' + json.dumps('地图'), html)
+        node = shutil.which("node")
+        if node:
+            for js in (LEAFLET_PLUGINS, "const STEM='x';" + LEAFLET_MAIN):
+                rc = subprocess.run([node, "--check", "-"], input=js, text=True,
+                                    capture_output=True, timeout=30)
+                self.assertEqual(rc.returncode, 0, rc.stderr)
 
 
 class NormalizeTest(unittest.TestCase):
@@ -300,63 +320,3 @@ class NormalizeTest(unittest.TestCase):
         good = {"type": "FeatureCollection", "features": []}
         self.assertIs(normalize_geojson(good), good)
 
-    def _container(self):
-        sq = lambda x, y, w: {"type": "Polygon", "coordinates": [[
-            [x, y], [x + w, y], [x + w, y + w], [x, y + w], [x, y]]]}
-        feat = lambda g, **p: {"type": "Feature", "geometry": g, "properties": p}
-        return {"id": "地图", "items": [
-            {"id": "世界", "map": {"type": "FeatureCollection", "metersPerPixel": 250,
-                                 "features": [feat({"type": "Point", "coordinates": [10, 20]}, id="城")]}},
-            {"id": "园", "map": {"type": "FeatureCollection", "metersPerPixel": 1,
-                                "terrain": {"from": "世界", "origin": [100, 200], "scale": 250},
-                                "features": [feat(sq(0, 0, 250), kind="草坪")]}},
-            {"id": "屋", "map": {"type": "FeatureCollection", "metersPerPixel": 0.05,
-                                "bases": [{"name": "2F"}, {"name": "1F", "default": True}],
-                                "placement": {"from": "园", "origin": [50, 50], "scale": 20},
-                                "features": [feat(sq(0, 0, 20), kind="卧室", base="1F")]}},
-            {"id": "无图"},
-        ]}
-
-    def test_normalize_map_container(self):
-        from lib.live_server import geojson_errors, normalize_geojson
-
-        norm = normalize_geojson(self._container())
-        self.assertEqual(norm["type"], "FeatureCollection")
-        self.assertTrue(norm["pixel"])
-        self.assertEqual(norm["metersPerPixel"], 250)
-        self.assertEqual(norm["defaultBases"], {"屋": "1F"})
-        self.assertEqual(geojson_errors(norm), [])
-        by = {f["properties"]["_map"]: f for f in norm["features"]}
-        # 根图原样；子图 origin + p/scale 一级级换到根图像素
-        self.assertEqual(by["世界"]["geometry"]["coordinates"], [10, 20])
-        self.assertEqual(by["园"]["geometry"]["coordinates"][0][2], [101, 201])
-        self.assertEqual(by["屋"]["geometry"]["coordinates"][0][0], [100.2, 200.2])
-        self.assertAlmostEqual(by["屋"]["geometry"]["coordinates"][0][2][0], 100.204)
-        self.assertEqual(by["屋"]["properties"]["base"], "1F")
-
-    def test_normalize_map_container_bad_chain(self):
-        from lib.live_server import normalize_geojson
-
-        data = self._container()
-        data["items"][1]["map"]["terrain"]["from"] = "不存在"
-        with self.assertRaises(ValueError):
-            normalize_geojson(data)
-
-    def test_check_cli_leaflet_lenient(self):
-        import subprocess
-        import sys
-
-        f = Path(tempfile.mkdtemp()) / "地图.json"
-        f.write_text(json.dumps(self._container(), ensure_ascii=False), encoding="utf-8")
-        run = lambda lib: subprocess.run(
-            [sys.executable, "-c",
-             "import sys; sys.path.insert(0, '.');"
-             "from lib.cli.live_server import main;"
-             "sys.argv=['live_server',%r,'check',%r];"
-             "raise SystemExit(main(sys.argv))" % (lib, str(f))],
-            capture_output=True, text=True, timeout=30)
-        rc = run("leaflet")
-        self.assertEqual(rc.returncode, 0, rc.stderr)
-        rc = run("map")  # 严格模式照旧拦下文档形容器
-        self.assertEqual(rc.returncode, 1)
-        self.assertIn('根缺 "type"', rc.stderr)

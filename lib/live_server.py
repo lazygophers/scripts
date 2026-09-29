@@ -248,43 +248,100 @@ def render_markdown_page(title: str) -> str:
     return _page(title, body)
 
 
+# ---------------------------------------------------------------- Leaflet 页面
+# 数据只认标准 GeoJSON。要素属性里认三个约定（都可选）：
+#   name  名字，悬停显示；面的名字常驻显示，面在屏幕上装不下时自动藏
+#   style Leaflet Path 选项（color/weight/fillColor/fillOpacity/dashArray），直接交给 L.geoJSON 的 style
+#   floor 楼层（1F/3F/B2）：出一排楼层按钮，带 floor 的只在同层显示，不带的是地面、只在 1F 显示
+# 地图文件旁边有同名 .tilejson（TileJSON 3.0.0）就把它当底图，没有就用 OSM。
+# 插件都按 Leaflet 标准写法：L.Map.addInitHook 挂上，等主脚本发 geojsonload / tilejsonload 事件。
+LEAFLET_CSS = (
+    ".ls-label{background:none;border:0;box-shadow:none;padding:0;"
+    "font-size:11px;color:#3b3428;text-shadow:0 0 2px #fff,0 0 2px #fff}"
+    ".ls-label:before{display:none}"
+    ".ls-floors a{width:auto!important;padding:0 7px}"
+    ".ls-floors a.on{background:#ffe6a8;font-weight:700}")
+
+LEAFLET_PLUGINS = r"""
+// 瓦片缺图时退回上一级瓦片放大（Leaflet.TileLayer.Fallback 的做法）：稀疏金字塔只有局部出到高缩放级
+L.TileLayer.Fallback=L.TileLayer.extend({
+  createTile:function(c,done){var t=L.TileLayer.prototype.createTile.call(this,c,done);t._c0=c;t._up=0;return t;},
+  _tileOnError:function(done,t,e){var c=t._c0,S=this.getTileSize().x;t._up++;
+    if(c.z-t._up<(this.options.minNativeZoom||0))return done(e,t);
+    var k=1<<t._up,ox=c.x%k,oy=c.y%k;
+    // 上一级瓦片放大 k 倍、挪到本格位置，只露出本格那一块
+    t.style.width=t.style.height=S*k+'px';t.style.marginLeft=-ox*S+'px';t.style.marginTop=-oy*S+'px';
+    t.style.clipPath='inset('+oy*S+'px '+(k-1-ox)*S+'px '+(k-1-oy)*S+'px '+ox*S+'px)';
+    t.src=L.Util.template(this._url,L.extend({},this.options,{x:Math.floor(c.x/k),y:Math.floor(c.y/k),z:c.z-t._up,s:'a',r:''}));}});
+// 底图：同名 TileJSON
+L.Map.addInitHook(function(){var map=this;map.on('tilejsonload',function(e){var tj=e.tilejson;if(!tj||!tj.tiles||!tj.tiles.length)return;
+  var url=/^([a-z]+:)?\/\//.test(tj.tiles[0])?tj.tiles[0]:e.base+tj.tiles[0],b=tj.bounds;
+  var lay=new L.TileLayer.Fallback(url,{minNativeZoom:tj.minzoom||0,maxNativeZoom:tj.maxzoom||18,maxZoom:24,
+    bounds:b?L.latLngBounds([b[1],b[0]],[b[3],b[2]]):undefined,attribution:tj.attribution||''});
+  map.layersControl.addBaseLayer(lay,tj.name||'底图');map.eachLayer(function(l){if(l instanceof L.TileLayer)map.removeLayer(l);});lay.addTo(map);});});
+// 快捷键：WASD 平移四分之一屏，Q 放大、E 缩小（Z / X 换层在楼层插件里）
+L.Map.addInitHook(function(){var map=this;document.addEventListener('keydown',function(e){
+  if(e.ctrlKey||e.metaKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)||e.target.isContentEditable)return;
+  var k=e.key.toLowerCase(),sz=map.getSize(),mv={w:[0,-sz.y/4],a:[-sz.x/4,0],s:[0,sz.y/4],d:[sz.x/4,0]}[k];
+  if(mv)map.panBy(mv);else if(k==='q')map.zoomIn();else if(k==='e')map.zoomOut();else return;e.preventDefault();});});
+// 楼层：properties.floor
+L.Map.addInitHook(function(){var map=this;map.on('geojsonload',function(ev){
+  var g=ev.layer,all=[];g.eachLayer(function(l){all.push(l);});
+  var rank=function(n){var b=/^B(\d+)$/.exec(n),f=/^(\d+)F$/.exec(n);return b?-b[1]:f?+f[1]:0;};
+  var set={};all.forEach(function(l){var f=l.feature&&l.feature.properties&&l.feature.properties.floor;if(f)set[f]=1;});
+  if(!Object.keys(set).length)return;set['1F']=1;
+  var floors=Object.keys(set).sort(function(a,b){return rank(b)-rank(a);}),cur='1F',box;
+  var apply=function(){all.forEach(function(l){var f=l.feature.properties&&l.feature.properties.floor,on=f?f===cur:cur==='1F';
+    if(on!==g.hasLayer(l))on?g.addLayer(l):g.removeLayer(l);});
+    if(box)Array.prototype.forEach.call(box.children,function(b){b.className=b.textContent===cur?'on':'';});map.fire('floorchange',{floor:cur});};
+  var go=function(n){if(n&&n!==cur){cur=n;apply();}};
+  var Ctl=L.Control.extend({onAdd:function(){box=L.DomUtil.create('div','leaflet-bar ls-floors');
+    floors.forEach(function(n){var b=L.DomUtil.create('a','',box);b.href='#';b.textContent=n;L.DomEvent.on(b,'click',function(e){L.DomEvent.preventDefault(e);go(n);});});
+    L.DomEvent.disableClickPropagation(box);return box;}});
+  new Ctl({position:'topright'}).addTo(map);
+  document.addEventListener('keydown',function(e){if(e.ctrlKey||e.metaKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;
+    var k=e.key.toLowerCase();if(k!=='z'&&k!=='x')return;go(floors[floors.indexOf(cur)+(k==='z'?1:-1)]);e.preventDefault();});
+  apply();});});
+// 面的名字常驻：装不下就藏，放大到装得下再出来
+L.Map.addInitHook(function(){var map=this;map.on('geojsonload',function(ev){
+  var boxed=[];ev.layer.eachLayer(function(l){var p=l.feature&&l.feature.properties;
+    if(!p||p.name==null||!l.getBounds||!/Polygon/.test(l.feature.geometry.type))return;
+    l.unbindTooltip();l.bindTooltip(String(p.name),{permanent:true,direction:'center',className:'ls-label'});boxed.push(l);});
+  var fit=function(){boxed.forEach(function(l){if(!l._map)return;var b=l.getBounds(),p1=map.latLngToContainerPoint(b.getNorthWest()),p2=map.latLngToContainerPoint(b.getSouthEast());
+    var ok=Math.abs(p2.x-p1.x)>String(l.feature.properties.name).length*12+6&&Math.abs(p2.y-p1.y)>14;ok?l.openTooltip():l.closeTooltip();});};
+  map.on('zoomend moveend floorchange',fit);fit();});});
+"""
+
+LEAFLET_MAIN = r"""
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]);
+Promise.all([fetch('/data.geojson').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}),
+  fetch('/_map/'+encodeURIComponent(STEM)+'.tilejson').then(r=>r.ok?r.json():null).catch(()=>null)]).then(([gj,tj])=>{
+  const n=(gj.features||[]).length,map=L.map('map',{maxZoom:24,preferCanvas:n>2000});
+  const osm=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxNativeZoom:19,maxZoom:24,attribution:'&copy; OpenStreetMap'}).addTo(map);
+  map.layersControl=L.control.layers({'OSM':osm},{},{collapsed:true}).addTo(map);
+  map.fire('tilejsonload',{tilejson:tj,base:'/_map/'});
+  const st=f=>(f&&f.properties&&f.properties.style)||{};
+  const layer=L.geoJSON(gj,{style:st,pointToLayer:(f,ll)=>L.circleMarker(ll,Object.assign({radius:4},st(f))),
+    onEachFeature:(f,l)=>{const p=f.properties||{};if(p.name!=null)l.bindTooltip(esc(p.name));
+      l.bindPopup('<pre>'+esc(JSON.stringify(p,(k,v)=>k==='style'?undefined:v,2))+'</pre>');}}).addTo(map);
+  map.layersControl.addOverlay(layer,'数据');
+  try{map.fitBounds(layer.getBounds(),{padding:[20,20]});}catch(e){map.setView([0,0],2);}
+  map.fire('geojsonload',{layer:layer,data:gj});
+}).catch(err=>{document.getElementById('map').textContent='加载失败: '+err.message;});
+"""
+
+
 def render_map_page(title: str, lib: str = "ol") -> str:
     """OpenLayers（默认）或 Leaflet 渲染 /data.geojson；两者都吃规范 GeoJSON。"""
     head = '<div id="map"></div>'
     if lib == "leaflet":
+        stem = json.dumps(Path(title).stem)
         body = (head
             + '<link rel="stylesheet" href="/_assets/leaflet.css">'
+            + '<style>' + LEAFLET_CSS + '</style>'
             + '<script src="/_assets/leaflet.js"></script>'
-            + '<script>fetch("/data.geojson").then(r=>{if(!r.ok)'
-            'throw new Error("HTTP "+r.status);return r.json()}).then(gj=>{'
-            # pixel=true（items[].map 容器归一后）：坐标是像素、y 向下，
-            # 用 CRS.Simple 翻转 y，不叠 OSM；每张图、每个楼层一个可开关的图层
-            'const px=!!gj.pixel;'
-            'const map=L.map("map",px?{crs:L.extend({},L.CRS.Simple,'
-            '{transformation:new L.Transformation(1,0,1,0)}),minZoom:-6,'
-            'maxZoom:18,zoomSnap:0.25,preferCanvas:true}:{});'
-            'if(!px)L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",'
-            '{attribution:"&copy; OpenStreetMap"}).addTo(map);'
-            'const opt={pointToLayer:(f,ll)=>L.circleMarker(ll,{radius:4}),'
-            'onEachFeature:(f,l)=>l.bindPopup("<pre>"+JSON.stringify('
-            'f.properties,null,2).replace(/</g,"&lt;")+"</pre>")};'
-            'const all=L.featureGroup().addTo(map);'
-            'if(px){const groups={},defs=gj.defaultBases||{};'
-            'for(const f of gj.features){const p=f.properties||{},'
-            'k=p._map+(p.base?" · "+p.base:"");'
-            '(groups[k]=groups[k]||{on:!p.base||defs[p._map]===p.base,fs:[]})'
-            '.fs.push(f);}'
-            'const over={};for(const [k,g] of Object.entries(groups)){'
-            'const l=L.geoJSON({type:"FeatureCollection",features:g.fs},opt);'
-            'over[k]=l;if(g.on)l.addTo(all);}'
-            'L.control.layers(null,over,{collapsed:true}).addTo(map);'
-            'map.on("overlayadd",e=>all.addLayer(e.layer));'
-            'map.on("overlayremove",e=>all.removeLayer(e.layer));'
-            '}else L.geoJSON(gj,opt).addTo(all);'
-            'try{map.fitBounds(all.getBounds(),{padding:[20,20]})}catch(e){'
-            'map.setView([0,0],0)}'
-            '}).catch(err=>{document.getElementById("map").textContent='
-            '"加载失败: "+err.message;});</script>')
+            + '<script>' + LEAFLET_PLUGINS + '</script>'
+            + '<script>const STEM=' + stem + ';' + LEAFLET_MAIN + '</script>')
         return _page(title, body)
     body = (head
             + '<script src="/_assets/ol.js"></script>'
@@ -462,6 +519,14 @@ def _handler_class(cfg: Config, say):
                     return self._reply(
                         200, json.dumps(data, ensure_ascii=False).encode(),
                         "application/geo+json")
+                if path.startswith("/_map/"):  # 地图文件同目录的旁挂文件：TileJSON、瓦片
+                    target = self._resolve(path[len("/_map/"):])
+                    if target is None:
+                        return self._reply(403, b"forbidden", "text/plain")
+                    if target.is_file():
+                        ctype = mimetypes.guess_type(target.name)[0] or \
+                            "application/octet-stream"
+                        return self._reply(200, target.read_bytes(), ctype)
                 return self._reply(404, b"not found", "text/plain")
 
             rel = path.lstrip("/")
@@ -703,75 +768,5 @@ def normalize_geojson(data):
         return {"type": "FeatureCollection", "features": data}
     if isinstance(data, dict) and data.get("type") in _GEOMETRY_TYPES:
         return {"type": "Feature", "geometry": data, "properties": None}
-    if _is_map_container(data):
-        return _merge_map_container(data)
     return data
 
-
-def _is_map_container(data) -> bool:
-    """文档形容器：根没有 type，items[].map 各是一张 FeatureCollection。"""
-    return (isinstance(data, dict) and "type" not in data
-            and isinstance(data.get("items"), list)
-            and any(isinstance(it, dict) and isinstance(it.get("map"), dict)
-                    and it["map"].get("type") == "FeatureCollection"
-                    for it in data["items"]))
-
-
-def _merge_map_container(data) -> dict:
-    """把 items[].map 合成一张 FeatureCollection，坐标统一换到根图像素。
-
-    每张图的像素经 placement / terrain 的 {from, origin, scale} 链接到上一级：
-    上一级像素 = origin + 本级像素 / scale，一直换到没有 from 的根图。
-    输出带外来成员 pixel=true（坐标是像素、y 向下，不是经纬度）、
-    metersPerPixel（根图的）和 defaultBases（分楼层的图默认显示哪层），
-    每条要素带 properties._map 标明出自哪张图。
-    """
-    maps = {it["id"]: it["map"] for it in data["items"]
-            if isinstance(it, dict) and isinstance(it.get("map"), dict)
-            and it["map"].get("type") == "FeatureCollection" and "id" in it}
-
-    def link(m):
-        for key in ("placement", "terrain"):
-            up = m.get(key)
-            if isinstance(up, dict) and "from" in up:
-                return up
-        return None
-
-    def to_root(mid, depth=0):
-        if depth > len(maps):
-            raise ValueError(f"地图 {mid} 的 from 链成环")
-        up = link(maps[mid])
-        if up is None:
-            return lambda p: p
-        if up["from"] not in maps:
-            raise ValueError(f"地图 {mid} 的上一级 {up['from']} 不存在")
-        parent = to_root(up["from"], depth + 1)
-        ox, oy = up["origin"]
-        k = up["scale"]
-        return lambda p: parent([ox + p[0] / k, oy + p[1] / k])
-
-    def conv(c, fn):
-        if c and isinstance(c[0], (int, float)):
-            return [*fn(c[:2]), *c[2:]]
-        return [conv(x, fn) for x in c]
-
-    roots = [mid for mid, m in maps.items() if link(m) is None]
-    features, default_bases = [], {}
-    for mid, m in maps.items():
-        fn = to_root(mid)
-        bases = m.get("bases") or []
-        if bases:
-            default_bases[mid] = next(
-                (b["name"] for b in bases if b.get("default")), bases[0]["name"])
-        for f in m.get("features") or []:
-            geom = f.get("geometry")
-            features.append({
-                "type": "Feature",
-                "geometry": geom and {**geom, "coordinates": conv(
-                    geom.get("coordinates") or [], fn)},
-                "properties": {**(f.get("properties") or {}), "_map": mid},
-            })
-    root = maps[roots[0]] if roots else {}
-    return {"type": "FeatureCollection", "pixel": True,
-            "metersPerPixel": root.get("metersPerPixel", 1),
-            "defaultBases": default_bases, "features": features}
