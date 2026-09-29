@@ -259,6 +259,7 @@ LEAFLET_CSS = (
     ".ls-label{background:none;border:0;box-shadow:none;padding:0;"
     "font-size:11px;color:#3b3428;text-shadow:0 0 2px #fff,0 0 2px #fff}"
     ".ls-label:before{display:none}"
+    ".ls-road{background:#fffdf6;border:1px solid #c9bfae;border-radius:3px;padding:0 3px;text-shadow:none}"
     ".ls-floors a{width:auto!important;padding:0 7px}"
     ".ls-floors a.on{background:#ffe6a8;font-weight:700}")
 
@@ -312,15 +313,16 @@ L.Map.addInitHook(function(){var map=this;map.on('geojsonload',function(ev){
     var k=e.key.toLowerCase();if((k!=='z'&&k!=='x')||!floors.length)return;go(floors[floors.indexOf(cur)+(k==='z'?1:-1)]);e.preventDefault();});
   map.on('geojsonupdate',function(u){var gone=new Set(u.removed);all=all.filter(function(l){return !gone.has(l);}).concat(u.added);rebuild();apply();});
   rebuild();apply();});});
-// 面的名字常驻：装不下就藏，放大到装得下再出来
+// 面和路的名字常驻：面装不下名字就藏；路在屏幕上比名字短就藏；放大到装得下再出来
 L.Map.addInitHook(function(){var map=this;map.on('geojsonload',function(ev){
   var boxed=[],take=function(l){var p=l.feature&&l.feature.properties;
-    if(!p||p.name==null||!l.getBounds||!/Polygon/.test(l.feature.geometry.type))return;
-    l.unbindTooltip();l.bindTooltip(String(p.name),{permanent:true,direction:'center',className:'ls-label'});boxed.push(l);};
+    if(!p||p.name==null||!l.getBounds||!/Polygon|LineString/.test(l.feature.geometry.type))return;
+    l.unbindTooltip();l.bindTooltip(String(p.name),{permanent:true,direction:'center',className:'ls-label'+(/LineString/.test(l.feature.geometry.type)?' ls-road':'')});boxed.push(l);};
   ev.layer.eachLayer(take);
   map.on('geojsonupdate',function(u){var gone=new Set(u.removed);boxed=boxed.filter(function(l){return !gone.has(l);});u.added.forEach(take);fit();});
   var fit=function(){boxed.forEach(function(l){if(!l._map)return;var b=l.getBounds(),p1=map.latLngToContainerPoint(b.getNorthWest()),p2=map.latLngToContainerPoint(b.getSouthEast());
-    var ok=Math.abs(p2.x-p1.x)>String(l.feature.properties.name).length*12+6&&Math.abs(p2.y-p1.y)>14;ok?l.openTooltip():l.closeTooltip();});};
+    var w=Math.abs(p2.x-p1.x),h=Math.abs(p2.y-p1.y),need=String(l.feature.properties.name).length*12+6;
+    var ok=/LineString/.test(l.feature.geometry.type)?Math.hypot(w,h)>need:w>need&&h>14;ok?l.openTooltip():l.closeTooltip();});};
   map.on('zoomend moveend floorchange',fit);fit();});});
 """
 
