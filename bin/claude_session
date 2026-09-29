@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""claude_session — 列出本机 Claude Code 会话（name/project/status/时间）"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.claude_session import main
+
+raise SystemExit(main())
