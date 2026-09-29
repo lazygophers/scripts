@@ -190,13 +190,15 @@ class ArcheryClient:
 
     def __init__(self, key: str, profile: dict, cfg: dict | None = None, *,
                  config_path: pathlib.Path | None = None,
-                 timeout: int = DEFAULT_TIMEOUT, reporter=None) -> None:
+                 timeout: int = DEFAULT_TIMEOUT, reporter=None,
+                 persist: bool = True) -> None:
         self.key = key
         self.profile = dict(profile)
         self.cfg = cfg if cfg is not None else {}
         self.config_path = config_path or default_config_path()
         self.timeout = timeout
         self._r = reporter
+        self._persist_on = persist
         self.base_url = normalize_url(str(self.profile.get("url") or key))
         self._session = None
         self._web_ready = False
@@ -234,7 +236,13 @@ class ArcheryClient:
         拿锁 → 重读磁盘上的配置 → 盖上本进程的固定字段（地址 / 账号密码）和这次要改的
         字段 → 写回。token 和 web_cookies 这两个会被并发进程改的字段，除非正是这次要
         改的内容，否则一律以磁盘上的为准，免得把别的进程刚续到的凭据覆盖掉。
+
+        persist=False（MCP 环境变量模式）：完全不碰磁盘，token 只写内存——
+        凭据来自环境变量，去改用户的 archery.yaml 反而是越权。
         """
+        if not self._persist_on:
+            self.profile = {**self.profile, **changes}
+            return
         with config_lock(self.config_path):
             disk = load_config(self.config_path)
             merged = dict(profiles(disk).get(self.key) or {})

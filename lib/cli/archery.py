@@ -10,6 +10,7 @@
   info        站点版本信息（GET /api/info）
   schema      列出这个站点支持的全部 API 端点（读 /api/schema/）
   api         直接发任意请求，覆盖 schema 里所有端点
+  mcp         作为 MCP server 在 stdio 上跑（给 AI 客户端用），凭据走环境变量
 
 子命令组:
   user        用户 / 用户组 / 资源组 / 2FA
@@ -31,6 +32,7 @@ import pathlib
 import sys
 from functools import wraps
 
+from lib import archery_mcp
 from lib.archery import (
     ArcheryClient,
     ArcheryError,
@@ -967,6 +969,23 @@ class ArcheryCli(BaseCli):
 
     def _client(self, host: str = ""):
         return client_for(host, reporter=self._r)
+
+    @cmd
+    def mcp(self):
+        """作为 MCP server 在 stdio 上跑（由 Claude / Cursor 等 AI 客户端拉起）
+
+        凭据不读 archery.yaml，只认环境变量：ARCHERY_URL / ARCHERY_USERNAME /
+        ARCHERY_PASSWORD 必填，ARCHERY_TOTP_SECRET、ARCHERY_INSECURE=1 可选。
+        token 只存内存，不落盘。
+
+        Claude Code 里接入：
+          claude mcp add archery \\
+            --env ARCHERY_URL=archery.example.com --env ARCHERY_USERNAME=nico \\
+            --env ARCHERY_PASSWORD=... -- <archery 的绝对路径> mcp
+
+        用法: archery mcp   （不直接给人手敲）
+        """
+        return archery_mcp.serve()
 
 
 def main():
