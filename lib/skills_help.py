@@ -217,8 +217,13 @@ def render_skills(name: str, description: str = "") -> str:
     """Return AI-facing guidance for one command."""
 
     skills = COMMAND_SKILLS.get(name, [])
-    if not skills and description:
-        skills = [description.strip()]
+    if not skills and description.strip():
+        # 未注册命令的 description 本身就是完整清单：
+        # 首行当概述，其余行拆成何时用 bullet，不再整段重复
+        dlines = [ln.strip() for ln in description.strip().splitlines() if ln.strip()]
+        description = dlines[0]
+        if len(dlines) > 1:
+            skills = [ln.lstrip("- ").strip() for ln in dlines[1:]]
     lines = [f"# {name} skills", "", "受众：使用本命令的 AI agent。"]
     if description.strip():
         lines.extend(["", "概述：", description.strip()])

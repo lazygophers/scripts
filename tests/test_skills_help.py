@@ -31,6 +31,19 @@ class TestRenderSkills(unittest.TestCase):
         self.assertIn("archery workflow check", out)
         self.assertIn("archery workflow submit", out)
 
+    def test_unregistered_description_split_not_duplicated(self) -> None:
+        # 未注册 COMMAND_SKILLS 的命令：首行当概述，其余行拆 bullet，
+        # 不再整段重复（live_server/claude_session 的 SKILLS/__doc__ 形状）
+        desc = "把目录当网站服务。\n\n- 起服务: `live_server`\n- 上传: `curl -T f http://...`"
+        out = render_skills("__no_such__", desc)
+        self.assertEqual(out.count("把目录当网站服务。"), 1)
+        self.assertIn("何时用：\n- 起服务:", out)
+
+    def test_unregistered_single_line_description_keeps_fallback_hint(self) -> None:
+        out = render_skills("__no_such__", "单行描述。")
+        self.assertIn("概述：\n单行描述。", out)
+        self.assertIn("需要本命令的文档化行为", out)
+
 
 class TestConsumeSkills(unittest.TestCase):
     def test_passthrough_without_flag(self) -> None:
