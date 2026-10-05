@@ -20,7 +20,8 @@ coverage.json
 .serena/
 
 # Temporary scripts
-.claude/
+.claude/*
+!.claude/rules/
 bandit_report.json
 T*_*.md
 T*_*.txt
