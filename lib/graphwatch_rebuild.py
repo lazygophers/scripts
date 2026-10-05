@@ -142,20 +142,20 @@ def _oldest_first(files: list[Path]) -> list[Path]:
     return sorted(files, key=lambda f: (newest_in_dir[f.parent], own[f]))
 
 
-def rebuild(folder: str) -> int:
-    """立即重建一个目录；已在构建则不等待，返回失败。"""
+def rebuild(folder: str, force: bool = False) -> int:
+    """立即重建一个目录；已在构建则不等待，返回失败。force=True 跳过「无变更」短路。"""
     root = Path(folder).expanduser().resolve()
     lock = _acquire_rebuild_lock(root)
     if lock is None:
         print(f"[graphwatch] {root}: 已在构建，不排队等待", file=sys.stderr)
         return 1
     try:
-        return _rebuild_unlocked(root)
+        return _rebuild_unlocked(root, force=force)
     finally:
         _release_rebuild_lock(lock)
 
 
-def _rebuild_unlocked(root: Path) -> int:
+def _rebuild_unlocked(root: Path, force: bool = False) -> int:
     """按 /graphify --update --mode deep --wiki 的 runbook 重建一个目录。"""
     from graphify.build import build_merge
     from graphify.cluster import cluster
@@ -182,8 +182,8 @@ def _rebuild_unlocked(root: Path) -> int:
     new_files = inc.get("new_files") or {}
     deleted = list(inc.get("deleted_files") or [])
     changed = [f for fl in new_files.values() for f in fl]
-    if not changed and not deleted:
-        print(f"[graphwatch] {root}: 无变更，跳过", file=sys.stderr)
+    if not changed and not deleted and not force:
+        print(f"[graphwatch] {root}: 无变更，跳过（--force 强制重建）", file=sys.stderr)
         return 0
 
     code = _oldest_first([Path(f) for f in new_files.get("code", [])])

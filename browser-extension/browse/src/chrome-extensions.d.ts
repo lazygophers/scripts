@@ -1,8 +1,10 @@
 /**
  * `@types/chrome` 0.3.0 仍缺的一批命名空间/成员（readingList、
- * webAuthenticationProxy 等，都是 2026-09-16 扩容用到的；2026-09-21 复核 0.3.0
- * 依旧缺，typecheck 全靠本文件）。就地把缺的形状补在这里；类型包追上后
- * 本文件应随冲突一起清掉。
+ * webAuthenticationProxy 等，都是 2026-09-16 扩容用到的；2026-10-05 复核 0.3.4
+ * readingList/webAuthenticationProxy 已有但签名不合——onRequest 拆成
+ * onGetRequest/onCreateRequest，userScripts.reset、declarativeContent.PageUrlMatcher、
+ * printing.getJobs 依旧缺，typecheck 全靠本文件）。就地把缺的形状补在这里；
+ * 类型包追上后本文件应随冲突一起清掉。
  */
 declare namespace chrome {
   namespace readingList {

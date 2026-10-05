@@ -5,7 +5,7 @@ description = "脚本工具集：版本控制、构建检查、进程管理、�
 requires-python = ">=3.10"
 # fire=CLI 框架(fire_base 顶层 import), rich=强制输出(ui.py 缺席即报错),
 # pyyaml=配置读写(archery/graphwatch), requests=HTTP(archery/grafana)
-# 下界跟到 2026-09-21 的最新版。3.9 底线 2026-09-21 抬到 3.10: extras 的
+# 下界跟到 2026-10-05 的最新版。3.9 底线 2026-09-21 抬到 3.10: extras 的
 # curl-cffi>=0.16.3 只要 3.10+, 3.9 底线下 uv lock 永远解析失败, 锁文件刷不动。
 dependencies = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.34.2"]
 
@@ -66,11 +66,11 @@ websearch = "lib.cli.websearch:main"
 
 [project.optional-dependencies]
 # graphwatch 监听需要 graphify（PyPI 包名 graphifyy）+ 其硬依赖 watchdog，默认不装
-graphify = ["graphifyy[all]>=0.9.65", "watchdog>=6"]
+graphify = ["graphifyy[all]>=0.9.76", "watchdog>=6"]
 # webgrab / websearch 抓网页要的四件套，默认不装；playwright 装完还要 `playwright install chromium`
 web = ["curl-cffi>=0.16.3", "beautifulsoup4>=4.15.0", "markdownify>=1.2.3", "playwright>=1.63"]
 all = [
-    "graphifyy[all]>=0.9.65", "watchdog>=6",
+    "graphifyy[all]>=0.9.76", "watchdog>=6",
     "curl-cffi>=0.16.3", "beautifulsoup4>=4.15.0", "markdownify>=1.2.3", "playwright>=1.63",
 ]
 dev = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.34.2"]

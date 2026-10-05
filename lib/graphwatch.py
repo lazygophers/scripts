@@ -173,11 +173,12 @@ class GraphwatchCli(BaseCli):
         return 0
 
     @_cmd
-    def rebuild(self, directory: str = "") -> int:
+    def rebuild(self, directory: str = "", force: bool = False) -> int:
         """立即重建图谱：前台直跑，不进 daemon 队列、不等防抖。
 
-        用法: graphwatch rebuild            # 重建当前目录
-              graphwatch rebuild ~/code/x   # 重建指定目录
+        用法: graphwatch rebuild                 # 重建当前目录
+              graphwatch rebuild ~/code/x        # 重建指定目录
+              graphwatch rebuild --force         # 无变更也重建（重新聚类 + 重写导出物）
         """
         from lib.graphwatch_rebuild import rebuild as do_rebuild
 
@@ -194,7 +195,7 @@ class GraphwatchCli(BaseCli):
             ensure_graphify()
         for folder in valid:
             self._r.rule(f"rebuild {folder}", style="blue")
-            if do_rebuild(str(folder)):
+            if do_rebuild(str(folder), force=force):
                 failed = True
         if failed:
             self._r.err("有目录重建失败，详见上方日志")

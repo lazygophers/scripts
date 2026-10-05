@@ -235,7 +235,7 @@ class TestCliRebuild(GraphwatchCase):
         graphwatch.add_folder(self.mkdir("registered-but-unused"))
         result, do = self._run()
         self.assertEqual(result, 0)
-        do.assert_called_once_with(str(self.home / "cwd-repo"))
+        do.assert_called_once_with(str(self.home / "cwd-repo"), force=False)
 
     def test_explicit_directory_skips_registry(self):
         repo = self.mkdir()
@@ -243,7 +243,16 @@ class TestCliRebuild(GraphwatchCase):
              unittest.mock.patch("lib.graphwatch_rebuild.rebuild", return_value=0) as do:
             result = self._cli().rebuild(str(repo))
         self.assertEqual(result, 0)
-        do.assert_called_once_with(str(repo))
+        do.assert_called_once_with(str(repo), force=False)
+
+    def test_force_flag_passes_through(self):
+        (self.home / "cwd-repo").mkdir()
+        with unittest.mock.patch("lib.graphwatch.ensure_graphify"), \
+             unittest.mock.patch("lib.graphwatch_rebuild.rebuild", return_value=0) as do, \
+             unittest.mock.patch("lib.graphwatch.Path.cwd", return_value=self.home / "cwd-repo"):
+            result = self._cli().rebuild(force=True)
+        self.assertEqual(result, 0)
+        do.assert_called_once_with(str(self.home / "cwd-repo"), force=True)
 
     def test_missing_explicit_directory_fails_before_dependency_check(self):
         missing = self.home / "missing"
