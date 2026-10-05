@@ -62,6 +62,11 @@ def run_cli(cli: BaseCli) -> None:
     sys.argv = argv
     os.environ.setdefault("PAGER", "-")
 
+    # fire 的 help 路径会 `from IPython.core import oinspect`（实测 +126ms 启动），
+    # ImportError 时回落自带的 _InfoBackup，输出一致；本仓库无进程内 IPython
+    # 使用，塞 None 让该 import 直接抛 ImportError，help 不再等 IPython。
+    sys.modules.setdefault("IPython", None)
+
     import fire.console.console_io as _cio
     _cio.More = lambda contents, out, prompt=None, check_pager=True: out.write(contents)
 

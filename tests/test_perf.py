@@ -81,6 +81,27 @@ class TestStartupBudget(unittest.TestCase):
         over = {cli: count for cli, count in counts.items() if count > self.MODULE_BUDGET[cli]}
         self.assertEqual(over, {}, f"启动导入的模块数超预算（预算 {self.MODULE_BUDGET}）")
 
+    def test_fire_help_does_not_load_ipython(self):
+        """fire 的 help 路径默认 `from IPython.core import oinspect`（+126ms、
+        IPython 全家进内存）；run_cli 塞 sys.modules["IPython"]=None 让它回落
+        _InfoBackup。这里守的是那行 setdefault 不被删——删了 help 输出不变，
+        但每条 fire 命令的 --help 都静默慢 3 倍。"""
+        code = (
+            "import sys; sys.argv = ['n', '--help'];\n"
+            "from lib.fire_base import run_cli\n"
+            "class C:\n"
+            "    def x(self): return 0\n"
+            "try:\n"
+            "    run_cli(C())\n"
+            "except SystemExit:\n"
+            "    pass\n"
+            "print('IPY' if 'IPython.core' in sys.modules else 'OK')\n"
+        )
+        p = subprocess.run([sys.executable, "-c", code], cwd=ROOT,
+                           capture_output=True, text=True, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr[-500:])
+        self.assertIn("OK", p.stdout.split())
+
 
 if __name__ == "__main__":
     unittest.main()
