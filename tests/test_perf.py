@@ -48,6 +48,22 @@ class TestImportBudget(unittest.TestCase):
         self.assertEqual(offenders, {},
                          "这些命令不碰网络，却把 HTTP 栈拖进了导入图（每个约 200ms）")
 
+    def test_fire_path_defers_asyncio(self):
+        """fire.core 顶层 import asyncio 只服务交互 REPL，却在每个进程拖进
+        ssl/socket/logging 约 27ms；lib.fire_base 塞惰性占位挡住它。守两条：
+        fire 路径不加载 ssl；占位代理真能透明换成真 asyncio。"""
+        mods = _import_snapshot("lib.fire_base")
+        self.assertNotIn("ssl", mods)
+        code = (
+            "import lib.fire_base, sys, asyncio\n"
+            "print(callable(asyncio.run))\n"
+            "print(type(sys.modules['asyncio']).__name__)\n"
+        )
+        p = subprocess.run([sys.executable, "-c", code], cwd=ROOT,
+                           capture_output=True, text=True, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr[-500:])
+        self.assertEqual(p.stdout.split(), ["True", "module"])
+
     def test_reporter_does_not_need_a_console_before_printing(self):
         """lib.ui 本身能 import 成功且不启动任何子进程/网络（基线健康检查）。"""
         mods = _import_snapshot("lib.ui")

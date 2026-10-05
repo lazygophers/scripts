@@ -14,6 +14,30 @@ from lib.ai_env import is_ai_shell_env
 from functools import wraps
 from typing import Any, Callable
 
+import importlib
+import sys
+import types
+
+
+def _defer_asyncio_for_fire() -> None:
+    """fire.core 顶层 `import asyncio` 只服务交互 REPL 的 get_event_loop()
+    （fire/core.py:681），却拖进 ssl/socket/logging 一整条约 27ms。
+    先塞一个惰性占位模块：fire 拿到的 asyncio 是代理，真访问任何属性时
+    才加载真身并换回 sys.modules。fire 之外后续 `import asyncio` 也透明。"""
+    if "asyncio" in sys.modules:
+        return
+
+    class _LazyAsyncio(types.ModuleType):
+        def __getattr__(self, name):
+            sys.modules.pop("asyncio", None)
+            real = importlib.import_module("asyncio")
+            sys.modules["asyncio"] = real
+            return getattr(real, name)
+
+    sys.modules["asyncio"] = _LazyAsyncio("asyncio")
+
+
+_defer_asyncio_for_fire()
 import fire
 
 from lib.ui import Reporter, reporter
