@@ -22,7 +22,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # 不碰网络的命令：HTTP 栈不该出现在它们的导入图里
 NO_HTTP_CLIS = ["list_branch", "kk", "kkp", "cpd", "switch_branch", "sync_branch", "gitwf"]
-HTTP_MODULES = ["requests", "urllib3", "email.parser"]
+# ssl 单独值 ~15ms 且只被 asyncio 间接拖进来——fire 的惰性 asyncio 占位
+# （lib/fire_base.py）只护住 fire 这条导入路径，别的公共模块顶层照样能把它拖回来
+HTTP_MODULES = ["requests", "urllib3", "email.parser", "ssl"]
 
 
 
