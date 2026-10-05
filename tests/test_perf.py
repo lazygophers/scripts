@@ -56,6 +56,9 @@ class TestImportBudget(unittest.TestCase):
         fire 路径不加载 ssl；占位代理真能透明换成真 asyncio。"""
         mods = _import_snapshot("lib.fire_base")
         self.assertNotIn("ssl", mods)
+        # fire.formatting 无条件导入 formatting_windows（win32 副作用），POSIX 上
+        # 拖 ctypes/platform/subprocess/colorama ~10ms——lib.fire_base 桩空模块挡住
+        self.assertNotIn("ctypes", mods)
         code = (
             "import lib.fire_base, sys, asyncio\n"
             "print(callable(asyncio.run))\n"
@@ -86,9 +89,10 @@ class TestStartupBudget(unittest.TestCase):
     上限取实测值 +15%，够拦「有人在公共模块顶上加了一个重依赖」。
     """
 
-    # 2026-10-05 两轮惰性化后实测：fire 路径 asyncio 没了、rich 走 _load_rich()
-    # 按需加载，cpd 181 / list_branch 148 / kk 209 / browse 201，预算 = 实测 +15%
-    MODULE_BUDGET = {"cpd": 208, "list_branch": 170, "kk": 240, "browse": 231}
+    # 2026-10-05 三轮惰性化后实测：asyncio（fire 惰性占位）、rich（_load_rich()
+    # 按需）、fire.formatting_windows（win32 副作用模块，POSIX 桩空）都不在启动
+    # 导入图里，cpd 181 / list_branch 142 / kk 205 / browse 201，预算 = 实测 +15%
+    MODULE_BUDGET = {"cpd": 208, "list_branch": 163, "kk": 236, "browse": 231}
 
     def _module_count(self, cli: str) -> int:
         code = f"import sys; import lib.cli.{cli}; print(len(sys.modules))"

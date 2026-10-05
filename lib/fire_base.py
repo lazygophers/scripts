@@ -38,6 +38,19 @@ def _defer_asyncio_for_fire() -> None:
 
 
 _defer_asyncio_for_fire()
+
+
+def _stub_formatting_windows_for_fire() -> None:
+    """fire.formatting 无条件 `from fire import formatting_windows`（fire/formatting.py:17，
+    标注 unused-import，只为它在 win32 的初始化副作用），POSIX 上这模块除了拖进
+    ctypes/platform/subprocess/colorama（合计约 10ms）什么都不干。塞一个空模块
+    占位；真正跑在 win32 上时不桩（本仓库目标是 macOS/Linux，但别把窗口堵死）。"""
+    if sys.platform.startswith("win") or "fire.formatting_windows" in sys.modules:
+        return
+    sys.modules["fire.formatting_windows"] = types.ModuleType("fire.formatting_windows")
+
+
+_stub_formatting_windows_for_fire()
 import fire
 
 from lib.ui import Reporter, reporter
