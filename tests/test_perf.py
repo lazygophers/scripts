@@ -67,9 +67,11 @@ class TestImportBudget(unittest.TestCase):
         self.assertEqual(p.stdout.split(), ["True", "module"])
 
     def test_reporter_does_not_need_a_console_before_printing(self):
-        """lib.ui 本身能 import 成功且不启动任何子进程/网络（基线健康检查）。"""
+        """lib.ui import 成功、不启动子进程/网络，且 rich 不在导入图里
+        （2026-10-05 起 rich 惰性加载：首次构造 Console/渲染才 _load_rich()，
+        整链约 14ms，纯函数路径不该付这笔钱）。"""
         mods = _import_snapshot("lib.ui")
-        self.assertIn("rich.console", mods)
+        self.assertNotIn("rich.console", mods)
         self.assertNotIn("requests", mods)
 
 
@@ -84,7 +86,9 @@ class TestStartupBudget(unittest.TestCase):
     上限取实测值 +15%，够拦「有人在公共模块顶上加了一个重依赖」。
     """
 
-    MODULE_BUDGET = {"cpd": 210, "list_branch": 300, "kk": 300, "browse": 290}
+    # 2026-10-05 两轮惰性化后实测：fire 路径 asyncio 没了、rich 走 _load_rich()
+    # 按需加载，cpd 181 / list_branch 148 / kk 209 / browse 201，预算 = 实测 +15%
+    MODULE_BUDGET = {"cpd": 208, "list_branch": 170, "kk": 240, "browse": 231}
 
     def _module_count(self, cli: str) -> int:
         code = f"import sys; import lib.cli.{cli}; print(len(sys.modules))"

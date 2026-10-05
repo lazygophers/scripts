@@ -2,6 +2,12 @@
 
 所有 bin/* 工具依赖 Rich 美化输出。未安装 Rich 时脚本直接抛 RuntimeError，
 提示用户 `pip install rich`。不提供任何静默降级路径。
+
+rich 整链（console/table/panel/rule/style/text）实测约 14ms，测试套件的
+每个调度单元和每条纯函数路径都要 import 本模块但不一定渲染——所以 rich
+惰性加载：首次构造 Console / 渲染任何富文本时才 `_load_rich()`。模块外的
+`from lib.ui import Table` / `ui_mod.STYLE_X` 走 PEP 562 `__getattr__`，
+同样透明触发加载。
 """
 
 from __future__ import annotations
@@ -11,33 +17,57 @@ from collections.abc import Sequence
 
 from lib.ai_env import is_ai_shell_env
 
-try:
-    from rich.box import ROUNDED
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.rule import Rule
-    from rich.style import Style
-    from rich.table import Table
-    from rich.text import Text
+# rich 名字与样式常量都在 _load_rich() 里绑定进 globals()；加载前访问走
+# 模块级 __getattr__（PEP 562）。
+_RICH_NAMES = ("ROUNDED", "Console", "Panel", "Rule", "Style", "Table", "Text",
+               "STYLE_SUCCESS", "STYLE_ERROR", "STYLE_WARNING", "STYLE_INFO",
+               "STYLE_STEP", "STYLE_DIM")
 
+
+def _load_rich() -> None:
+    global HAS_RICH
+    try:
+        from rich.box import ROUNDED
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.rule import Rule
+        from rich.style import Style
+        from rich.table import Table
+        from rich.text import Text
+    except Exception as _rich_err:
+        # 首次渲染时才报错：bin/* 调用 Reporter 前必先 import lib.ui，
+        # 这里 raise 让调用方看到清晰提示。
+        raise RuntimeError(
+            "scripts 工具依赖 Rich 美化输出。请先安装:\n"
+            "  pip install rich\n"
+            f"原始错误: {_rich_err}"
+        ) from _rich_err
+    g = globals()
+    for name in ("ROUNDED", "Console", "Panel", "Rule", "Style", "Table", "Text"):
+        g[name] = locals()[name]
+    # === 样式常量 ===
+    g["STYLE_SUCCESS"] = Style(color="green", bold=True)
+    g["STYLE_ERROR"] = Style(color="red", bold=True)
+    g["STYLE_WARNING"] = Style(color="yellow", bold=True)
+    g["STYLE_INFO"] = Style(color="cyan")
+    g["STYLE_STEP"] = Style(color="blue", bold=True)
+    g["STYLE_DIM"] = Style(dim=True)
     HAS_RICH = True
-except Exception as _rich_err:
-    # 启动期就报错：bin/* 调用 Reporter 前必先 import lib.ui，
-    # 这里 raise 让调用方看到清晰提示。
-    raise RuntimeError(
-        "scripts 工具依赖 Rich 美化输出。请先安装:\n"
-        "  pip install rich\n"
-        f"原始错误: {_rich_err}"
-    ) from _rich_err
 
 
-# === 样式常量 ===
-STYLE_SUCCESS = Style(color="green", bold=True)
-STYLE_ERROR = Style(color="red", bold=True)
-STYLE_WARNING = Style(color="yellow", bold=True)
-STYLE_INFO = Style(color="cyan")
-STYLE_STEP = Style(color="blue", bold=True)
-STYLE_DIM = Style(dim=True)
+def _ensure_rich() -> None:
+    if "Console" not in globals():
+        _load_rich()
+
+
+def __getattr__(name: str):
+    if name in _RICH_NAMES or name == "HAS_RICH":
+        _ensure_rich()
+        try:
+            return globals()[name]
+        except KeyError:
+            pass
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # 图标
 ICON_SUCCESS = "✓"
@@ -58,6 +88,7 @@ STATUS_LABEL = {"ok": "成功", "skip": "跳过", "fail": "失败"}
 
 
 def console(stderr: bool = False) -> Console:
+    _ensure_rich()
     return Console(stderr=stderr)
 
 
@@ -103,6 +134,7 @@ def progress(console_obj: Console | None):
 
 def print_ansi(console_obj: Console | None, text: str) -> None:
     """把含 ANSI / Rich 标记的文本原样转写到 console。"""
+    _ensure_rich()
     if console_obj is None:
         raise ValueError("print_ansi() 需要 console_obj")
     console_obj.print(Text.from_ansi(text))
@@ -120,6 +152,7 @@ class Reporter:
         # AI 派生环境（lib/ai_env.py）自动切极简输出：去图标去框去色，
         # 只留结论行。tests/__init__.py 会清掉标记变量保证套件确定性。
         self.minimal = is_ai_shell_env()
+        _ensure_rich()
         if file is not None:
             # Rich 15 起对 StringIO 等非 tty 也按 TERM 决定出码（14 按 isatty），
             # 且 no_color=True 仍漏加粗：极简与显式 file 一律显式接管 force_terminal
@@ -352,6 +385,7 @@ def reporter(*, stderr: bool = True) -> Reporter:
 
 def ask_confirm(question: str, *, default: bool = False) -> bool | None:
     """是/否确认。强制 Rich：走 Confirm（带色 + 默认值提示）；非交互（EOF）返回 None。"""
+    _ensure_rich()
     from rich.prompt import Confirm
     try:
         return Confirm.ask(question, default=default, console=Console())
@@ -361,6 +395,7 @@ def ask_confirm(question: str, *, default: bool = False) -> bool | None:
 
 def ask_text(prompt: str, *, default: str = "") -> str | None:
     """文本输入。强制 Rich：走 Prompt（带色 + 默认值）；非交互（EOF）返回 None。"""
+    _ensure_rich()
     from rich.prompt import Prompt
     try:
         return Prompt.ask(prompt, default=default, console=Console())
@@ -370,6 +405,7 @@ def ask_text(prompt: str, *, default: str = "") -> str | None:
 
 def ask_secret(prompt: str) -> str | None:
     """密码 / 授权码输入，敲的时候不回显。非交互（EOF）返回 None。"""
+    _ensure_rich()
     from rich.prompt import Prompt
     try:
         return Prompt.ask(prompt, password=True, console=Console())
@@ -393,6 +429,7 @@ def ask_select(
     """
     from rich.text import Text
 
+    _ensure_rich()
     con = console or Console()
     if read_key is None:
         if not sys.stdin.isatty():
@@ -513,6 +550,7 @@ def print_runtime(start: float, end: float, *, label: str | None = None,
 
     from rich.text import Text
 
+    _ensure_rich()
     if is_ai_shell_env():
         # 极简：一行纯文本，去起止时间（对 AI 只有耗时有用，省 token）
         elapsed_s = _format_elapsed(end - start if elapsed is None else elapsed)
