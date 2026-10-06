@@ -4,6 +4,12 @@
  * - **daemon 没连上时照样能读能改能存** —— 用户提这整件事的起点就是这条
  * - 非法值有没有在扩展侧就被挡住
  * - `settings.html` 有没有被打包进 dist（漏了线上就是 404，本地开着 src/ 看不出来）
+ *
+ * settings.ts 在 `#form` 存在时导入就会自举（load + 事件绑定），且 Node 的覆盖率
+ * 不聚合带 query 的多次导入。规矩：**本进程只无 query 地导入一次**，首个用例先摆好
+ * 完整表单再导入让自举跑在真表单上，保存类场景共用这个自举 realm；其它场景换 realm
+ * 后直接调导出的函数。需要另一种自举结果的用例各占一个文件
+ * （settings-boot.test.ts / settings-boot2.test.ts）。
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -16,11 +22,6 @@ const HTML = readFileSync(join(SRC, "settings.html"), "utf8");
 
 type Any = Record<string, unknown>;
 
-/**
- * 装一个 jsdom 的 realm 和一个假 chrome。**不带 `#form`**：settings.ts 的自举那一段
- * 就是靠 `#form` 在不在判断「我是不是真的跑在设置页上」，不带就只导入不副作用，
- * 测试可以自己摆好 DOM 再单独调它导出的函数。
- */
 function realm(body: string, initial: Any = {}): { data: Any; dom: JSDOM } {
   const dom = new JSDOM(`<!doctype html><body>${body}</body>`);
   const g = globalThis as Any;
@@ -54,27 +55,96 @@ afterEach(() => {
   delete g.chrome;
 });
 
-type SettingsModule = typeof import("../src/settings.ts");
+let mod: Any | null = null;
+let bootDoc: Document | null = null;
 
-let mod: SettingsModule | undefined;
-
-/**
- * 模块只导入一次（带 query 破缓存会让 node 的覆盖率归因整段丢失——函数体全部
- * 报成未覆盖）。自举段因此导出成 `bootstrap()`：换 realm 的用例自己重跑它，
- * 等价于「新实例加载了一次」。
- */
-async function load(): Promise<SettingsModule> {
+async function load() {
   mod ??= await import("../src/settings.ts");
   return mod;
 }
 
-/** realm() 之后接自举：相当于页面在装好的 DOM 上加载。 */
-async function boot(): Promise<SettingsModule> {
-  const m = await load();
-  m.bootstrap();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  return m;
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+// ------------------------------------------------------------------ 自举（先跑）
+
+const CONFIG = {
+  confirm_mode: "per_domain",
+  deny_domains: ["bank.test"],
+  approved_domains: ["shop.test"],
+  audit: true,
+  audit_retention_days: 7,
+  disabled_features: ["downloads"],
+  domain_disabled_features: { "shop.test": ["script"] },
+};
+
+test("daemon 一句话都不用说：设置页能读、能改能存、坏草稿被拒、写失败报错", async () => {
+  // 自举只跑一次（绑在这次导入时的表单上），读/存/拒存/写失败四段共用一个 realm。
+  // realm() 里**没有** chrome.runtime.sendMessage。settings.ts 只要碰它一下就会
+  // TypeError，这条测试就红了 —— 这正是「不依赖本地程序」想钉死的东西。
+  const { data, dom } = realm(HTML, { "browse:config": CONFIG });
+  const m = await load();
+  await settle();
+  bootDoc = dom.window.document;
+
+  assert.equal(document.body.classList.contains("offline"), false, "没有理由显示离线");
+  assert.equal(
+    document.querySelector<HTMLInputElement>('input[name="confirm_mode"]:checked')?.value,
+    "per_domain",
+  );
+  assert.match(document.getElementById("path")?.textContent ?? "", /browse:config/);
+  assert.equal(m.CONFIRM_MODES.length, 3);
+
+  // 改动真的落盘，没碰的字段原样留着
+  const deny = document.getElementById("deny") as HTMLTextAreaElement;
+  deny.value = "evil.test\nbank.test";
+  (document.getElementById("audit") as HTMLInputElement).checked = false;
+  document.getElementById("form")?.dispatchEvent(new dom.window.Event("submit"));
+  await settle();
+
+  const saved = data["browse:config"] as {
+    deny_domains: string[];
+    audit: boolean;
+    approved_domains: string[];
+  };
+  assert.deepEqual(saved.deny_domains, ["evil.test", "bank.test"], "改动必须真的落盘");
+  assert.equal(saved.audit, false);
+  assert.deepEqual(saved.approved_domains, ["shop.test"], "没碰的字段要原样留着");
+  assert.equal(document.getElementById("status")?.textContent, "[settingsSaved]");
+
+  // 确认模式一个都没选：拒绝保存，不悄悄填成最松的模式
+  const before = { ...saved };
+  for (const input of document.querySelectorAll<HTMLInputElement>('input[name="confirm_mode"]')) {
+    input.checked = false;
+  }
+  document.getElementById("form")?.dispatchEvent(new dom.window.Event("submit"));
+  await settle();
+  assert.equal(document.getElementById("status")?.textContent, "[settingsBadMode:]");
+  assert.deepEqual(data["browse:config"], before, "坏草稿不许落盘");
+
+  // 写失败（Error）：状态行报错不炸页。先把上一段取消勾选的模式勾回来
+  const perDomain = document.querySelector<HTMLInputElement>(
+    'input[name="confirm_mode"][value="per_domain"]',
+  );
+  if (perDomain !== null) {
+    perDomain.checked = true;
+  }
+  (globalThis as Any).chrome.storage.local.set = async () => {
+    throw new Error("save boom");
+  };
+  document.getElementById("form")?.dispatchEvent(new dom.window.Event("submit"));
+  await settle();
+  assert.equal(document.getElementById("status")?.textContent, "save boom");
+
+  // 写失败（非 Error 异常）：也要给出可读的话
+  (globalThis as Any).chrome.storage.local.set = async () => {
+    throw "plain";
+  };
+  document.getElementById("form")?.dispatchEvent(new dom.window.Event("submit"));
+  await settle();
+  assert.equal(document.getElementById("status")?.textContent, "plain");
+});
 
 // ------------------------------------------------------------------ 校验
 
@@ -107,19 +177,15 @@ test("the deny list drops blanks, duplicates, leading dots and wildcards", async
     ["bank.test", "shop.test", "mail.test"],
   );
   assert.deepEqual(parseDomains(""), []);
+  assert.deepEqual(parseDomains("a.test, b.test;c.test  d.test"), [
+    "a.test",
+    "b.test",
+    "c.test",
+    "d.test",
+  ]);
 });
 
 // ------------------------------------------------------------------ 往返
-
-const CONFIG = {
-  confirm_mode: "per_domain",
-  deny_domains: ["bank.test"],
-  approved_domains: ["shop.test"],
-  audit: true,
-  audit_retention_days: 7,
-  disabled_features: ["downloads"],
-  domain_disabled_features: { "shop.test": ["script"] },
-};
 
 test("the form round-trips a config through render and readForm", async () => {
   realm(HTML);
@@ -172,98 +238,81 @@ test("功能目录每个功能都画出来了，方法名单也带上", async ()
   );
 });
 
-test("空格和逗号分隔的域名也能解析，不只是换行", async () => {
-  realm("");
-  const { parseDomains } = await load();
-  assert.deepEqual(parseDomains("a.test, b.test;c.test  d.test"), [
-    "a.test",
-    "b.test",
-    "c.test",
-    "d.test",
-  ]);
-});
-
-test("the real path is always on the page, so nobody thinks this is a second config", async () => {
+test("the real path is always on the page, so nobody thinks this is a second config", () => {
   assert.match(HTML, /id="path"/);
   assert.match(HTML, /data-i18n="settingsIntro"/);
 });
 
-// ------------------------------------------------- 本地程序没起来也要能用（起点）
+// ------------------------------------------------- 边角：空页、审计计数、写失败
 
-test("daemon 一句话都不用说：设置页能读", async () => {
-  // realm() 里**没有** chrome.runtime.sendMessage。settings.ts 只要碰它一下就会
-  // TypeError，这条测试就红了 —— 这正是「不依赖本地程序」想钉死的东西。
-  realm(HTML, { "browse:config": CONFIG });
-  await boot();
-
-  assert.equal(document.body.classList.contains("offline"), false, "没有理由显示离线");
-  assert.equal(
-    document.querySelector<HTMLInputElement>('input[name="confirm_mode"]:checked')?.value,
-    "per_domain",
-  );
-  assert.match(document.getElementById("path")?.textContent ?? "", /browse:config/);
+test("页面上没有那些 id 时 render/readForm 安静返回，不抛", async () => {
+  realm("");
+  const { render, readForm } = await load();
+  assert.doesNotThrow(() => render(CONFIG, ""));
+  // 没有功能行：readForm 的 continue 分支要走通，返回空列表而不是抛
+  var draft = readForm();
+  assert.deepEqual(draft.disabled_features, []);
+  assert.deepEqual(draft.domain_disabled_features, {});
 });
 
-test("daemon 一句话都不用说：设置页能改能存，存完读回来还在", async () => {
-  const { data, dom } = realm(HTML, { "browse:config": CONFIG });
-  const mod = await boot();
+test("审计计数异步补：认识的按方法计数，不认识的丢掉；审计读坏了页面照常", async () => {
+  const entries = [
+    { ts: "2026-01-01T00:00:00Z", method: "script.evaluate", domain: "a.test", action: null, result: "success", ms: 1 },
+    { ts: "2026-01-01T00:00:01Z", method: "script.evaluate", domain: "b.test", action: null, result: "success", ms: 1 },
+    { ts: "2026-01-01T00:00:02Z", method: "no.such.method", domain: null, action: null, result: "success", ms: 1 },
+  ];
+  realm(HTML, { "browse:audit": entries });
+  const { render } = await load();
+  render(CONFIG, "");
+  await settle();
 
-  const deny = document.getElementById("deny") as HTMLTextAreaElement;
-  deny.value = "evil.test\nbank.test";
-  (document.getElementById("audit") as HTMLInputElement).checked = false;
-  document.getElementById("form")?.dispatchEvent(new dom.window.Event("submit"));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  const saved = data["browse:config"] as {
-    deny_domains: string[];
-    audit: boolean;
-    approved_domains: string[];
-  };
-  assert.deepEqual(saved.deny_domains, ["evil.test", "bank.test"], "改动必须真的落盘");
-  assert.equal(saved.audit, false);
-  assert.deepEqual(saved.approved_domains, ["shop.test"], "没碰的字段要原样留着");
-  assert.equal(document.getElementById("status")?.textContent, "[settingsSaved]");
-  assert.equal(mod.CONFIRM_MODES.length, 3);
+  const used = document.querySelector<HTMLSpanElement>('.feature[data-feature="script"] .usage');
+  assert.match(used?.textContent ?? "", /settingsFeatUsed:2/);
 });
 
-test("没存过配置时给的是默认值，不是一片空白", async () => {
+test("审计读坏了：设置页照常打开，只是次数那格不显示", async () => {
   realm(HTML, {});
-  await boot();
-
-  assert.equal(
-    document.querySelector<HTMLInputElement>('input[name="confirm_mode"]:checked')?.value,
-    "silent",
-    "默认模式",
+  const { render } = await load();
+  (globalThis as Any).chrome.storage.local.get = async (key: string) => {
+    if (key === "browse:audit") {
+      throw new Error("audit gone");
+    }
+    return {};
+  };
+  assert.doesNotThrow(() => render(CONFIG, ""));
+  await settle();
+  assert.match(
+    document.querySelector<HTMLSpanElement>('.feature[data-feature="script"] .usage')?.textContent ?? "",
+    /settingsFeatUnused/,
   );
-  assert.equal((document.getElementById("retention") as HTMLInputElement).value, "7");
-  assert.equal(document.body.classList.contains("offline"), false);
 });
 
-test("撤销一个免确认域名，直接写存储，不经任何中间人", async () => {
-  const { data, dom } = realm(HTML, { "browse:config": CONFIG });
-  await boot();
+test("免确认名单为空时给一句「还没有」", async () => {
+  realm(HTML);
+  const { render } = await load();
+  render({ ...CONFIG, approved_domains: [] }, "");
+  assert.match(document.getElementById("approved")?.textContent ?? "", /settingsApprovedEmpty/);
+});
 
-  const button = document.querySelector<HTMLButtonElement>("#approved button");
-  assert.ok(button, "应该有一个撤销按钮");
-  button.dispatchEvent(new dom.window.Event("click"));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
+test("撤销成功直接写存储；撤销失败在页面上报错，不炸整页", async () => {
+  const { data } = realm(HTML, { "browse:config": CONFIG });
+  const { render } = await load();
+  render(CONFIG, "");
+  await settle();
+  (document.querySelector<HTMLButtonElement>("#approved button"))?.click();
+  await settle();
   assert.deepEqual(
     (data["browse:config"] as { approved_domains: string[] }).approved_domains,
     [],
   );
-});
 
-test("插件自己的存储坏了才显示离线，并且不画一份空配置上去", async () => {
-  realm(HTML, {});
-  (globalThis as Any).chrome.storage.local.get = async () => {
-    throw new Error("storage is gone");
+  (globalThis as Any).chrome.storage.local.set = async () => {
+    throw new Error("set boom");
   };
-  await boot();
-
-  assert.equal(document.body.classList.contains("offline"), true, "表单必须被禁掉");
-  assert.equal(document.getElementById("status")?.className, "bad");
-  assert.equal(document.getElementById("path")?.textContent, "…", "不能让用户以为设置丢了");
+  render(CONFIG, "");
+  (document.querySelector<HTMLButtonElement>("#approved button"))?.click();
+  await settle();
+  assert.equal(document.getElementById("status")?.textContent, "set boom");
 });
 
 // ------------------------------------------------------------------ 打包
@@ -277,70 +326,5 @@ test("settings.html and settings.ts are in the build, and the manifest points at
   assert.equal(manifest.default_locale, "zh_CN");
 });
 
-test("审计日志的用量计数异步补到每个功能行上", async () => {
-  realm(HTML, {
-    "browse:config": CONFIG,
-    "browse:audit": [
-      { method: "script.evaluate", ok: true },
-      { method: "script.evaluate", ok: true },
-      { method: "input.click", ok: true },
-      { method: "no.such", ok: true },
-    ],
-  });
-  await boot();
-  for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 1));
-  const usage = document.querySelector<HTMLSpanElement>('.feature[data-feature="script"] .usage');
-  assert.match(usage?.textContent ?? "", /settingsFeatUsed:2/);
-  const clickUsage = document.querySelector<HTMLSpanElement>('.feature[data-feature="input"] .usage');
-  assert.ok((clickUsage?.textContent ?? "").length > 0, "input 功能行也要有计数");
-});
-
-test("没有对应节点时 render 的每条守卫都安全返回", async () => {
-  realm("");
-  const { render, renderApproved } = await load();
-  render(CONFIG, "");
-  // renderApproved 未导出，但 render→renderApproved(domains) 已在无 #approved 的
-  // body 里跑过守卫；这里再验证没抛、没写任何东西
-  assert.equal(document.body.children.length, 0);
-});
-
-test("表单校验失败时 save 只说不存", async () => {
-  const { dom } = realm(HTML, { "browse:config": CONFIG });
-  await boot();
-  (document.getElementById("retention") as HTMLInputElement).value = "abc"; // parseInt→NaN，才进得了校验分支
-  document.getElementById("form")?.dispatchEvent(new dom.window.Event("submit"));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(document.getElementById("status")?.className, "bad");
-  assert.match(document.getElementById("status")?.textContent ?? "", /settingsBadRetention/);
-});
-
-test("存储写不进去时撤销和保存都把错误摆到状态行", async () => {
-  const { dom } = realm(HTML, { "browse:config": CONFIG });
-  (globalThis as Any).chrome.storage.local.set = async () => {
-    throw new Error("quota full");
-  };
-  await boot();
-
-  document.querySelector<HTMLButtonElement>("#approved button")
-    ?.dispatchEvent(new dom.window.Event("click"));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.match(document.getElementById("status")?.textContent ?? "", /quota full/);
-
-  document.getElementById("form")?.dispatchEvent(new dom.window.Event("submit"));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(document.getElementById("status")?.textContent, "quota full");
-});
-
-test("readForm 在功能行不在页面上时按空名单返回", async () => {
-  // realm("") 的 body 没有 .feature 行 → readForm 的 continue 分支
-  realm("");
-  const { readForm } = await load();
-  assert.deepEqual(readForm(), {
-    confirm_mode: "",
-    deny_domains: [],
-    audit: false,
-    audit_retention_days: Number.NaN,
-    disabled_features: [],
-    domain_disabled_features: {},
-  });
-});
+// bootDoc 供需要回到自举 realm 的后续文件参考（本文件内不再使用则忽略）
+void bootDoc;

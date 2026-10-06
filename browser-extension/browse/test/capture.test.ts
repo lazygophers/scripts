@@ -313,3 +313,51 @@ describe("desktopSourcePicked", () => {
     assert.equal(desktopSourcePicked("stream-x"), false);
   });
 });
+
+describe("captureRecordDesktop 参数与并发", () => {
+  it("refuses timeouts outside [5, 600]", async () => {
+    chromeWith({ desktopCapture: {} });
+    await rejectsWith(() => captureRecordDesktop({ sources: ["screen"], timeout: 4 }), "invalid argument");
+    await rejectsWith(() => captureRecordDesktop({ sources: ["screen"], timeout: 601 }), "invalid argument");
+    await rejectsWith(() => captureRecordDesktop({ sources: ["screen"], timeout: "soon" }), "invalid argument");
+    clearChrome();
+  });
+
+  it("refuses a second picker while one is open", async () => {
+    chromeWith({ desktopCapture: {}, offscreen: { Reason: OFFSCREEN_REASONS, createDocument: async () => {} }, tabCapture: { getMediaStreamId: async () => "s1" } });
+    const first = captureRecordDesktop({ sources: ["screen"] });
+    await new Promise((r) => setTimeout(r, 0));
+    await rejectsWith(() => captureRecordDesktop({ sources: ["screen"] }), "invalid argument");
+    assert.equal(desktopSourcePicked("stream-1"), true, "先把第一个选完");
+    const done = (await first) as Any;
+    await captureRecordStop({ recording: done.recording });
+    clearChrome();
+  });
+});
+
+describe("captureRecordStop 保存失败", () => {
+  it("returns base64 with saved:false when the download is refused", async () => {
+    chromeWith(
+      {
+        runtime: {
+          getContexts: async () => [],
+          getURL: (p: string) => `chrome-extension://id/${p}`,
+          sendMessage: async () => ({ ok: true, base64: "QUJD", bytes: 3, seconds: 2, kind: "tab" }),
+        },
+        downloads: { download: async () => { throw new Error("quota"); } },
+        tabCapture: { getMediaStreamId: async () => "s1" },
+        offscreen: { Reason: OFFSCREEN_REASONS, createDocument: async () => {} },
+        tabs: {
+          query: async () => [{ id: 7, url: "https://a.test/", active: true, groupId: 500 }],
+          get: async () => ({ id: 7, url: "https://a.test/", groupId: 500 }),
+        },
+        scripting: { executeScript: async () => [{ result: undefined }] },
+      },
+    );
+    const { recording } = await captureRecordTab({});
+    const r = (await captureRecordStop({ recording })) as Any;
+    assert.equal(r.saved, false);
+    assert.equal(r.base64, "QUJD");
+    clearChrome();
+  });
+});

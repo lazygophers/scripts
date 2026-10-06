@@ -116,3 +116,42 @@ test("callFunction rejects non-array arguments", async () => {
   );
   teardown();
 });
+
+test("a throwing function declaration reports the page's own message", async () => {
+  setup();
+  const err = await rejectsWith(
+    () => scriptCallFunction({ functionDeclaration: "() => { throw new TypeError('boom') }" }),
+    "unknown error",
+  );
+  assert.match(err.message, /boom/);
+  teardown();
+});
+
+test("a non-object target is refused before anything runs", async () => {
+  setup();
+  await rejectsWith(
+    () => scriptCallFunction({ functionDeclaration: "() => 1", target: "7" }),
+    "invalid argument",
+  );
+  teardown();
+});
+
+test("a declaration throwing a non-Error still reports something readable", async () => {
+  setup();
+  const err = await rejectsWith(
+    () => scriptCallFunction({ functionDeclaration: "() => { throw 'plain' }" }),
+    "unknown error",
+  );
+  assert.match(err.message, /plain/);
+  teardown();
+});
+
+test("callFunction awaits the value when awaitPromise is not disabled", async () => {
+  setup();
+  const result = await scriptCallFunction({
+    functionDeclaration: "async () => 'done'",
+    awaitPromise: true,
+  });
+  assert.equal(result.result.value, "done");
+  teardown();
+});

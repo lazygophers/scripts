@@ -75,3 +75,33 @@ test("an id ends the css path, and limit truncates instead of dumping a feed", a
   assert.equal(truncated, true);
   assert.equal(elements[0]?.css, "#go");
 });
+
+test("an explicit role attribute wins over the tag name", async () => {
+  const { elements } = await snapshot(`<div role="button" id="rb">press</div>`);
+  assert.deepEqual(elements.map((e) => e.role), ["button"]);
+});
+
+test("zero-sized boxes are invisible even when not display:none", async () => {
+  const dom = page(`<a href="#z" id="zero" data-zero>z</a><button id="b">ok</button>`);
+  // data-zero 元素给 0×0 的盒子：可见性过滤必须把它丢掉
+  (dom.window as unknown as { Element: { prototype: Element } }).Element.prototype
+    .getBoundingClientRect = function (this: Element) {
+    const zero = (this as HTMLElement).hasAttribute?.("data-zero") ?? false;
+    const hidden = (this as HTMLElement).style?.display === "none";
+    return { width: zero || hidden ? 0 : 100, height: zero || hidden ? 0 : 20 } as DOMRect;
+  };
+  (globalThis as Record<string, unknown>).getComputedStyle = (el: Element) =>
+    (dom.window as unknown as { getComputedStyle: (e: Element) => CSSStyleDeclaration })
+      .getComputedStyle(el);
+  installChrome({
+    ...ownSession(),
+    tabs: { query: async () => [{ id: 1, url: "https://example.test/page", active: true, groupId: 500 }] },
+    scripting: scriptingMock(),
+  });
+  try {
+    const { elements } = await pageSnapshot({});
+    assert.deepEqual(elements.map((e) => e.tag), ["button"]);
+  } finally {
+    clearChrome();
+  }
+});

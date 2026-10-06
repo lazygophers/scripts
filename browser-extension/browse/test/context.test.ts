@@ -124,3 +124,46 @@ test("a missing chrome namespace is an explicit unsupported operation", async ()
   assert.match(err.message, /chrome.downloads is not available/);
   assert.doesNotThrow(() => requireApi("tabs", "listing tabs"));
 });
+
+test("a malformed frame part is a bad context id", async () => {
+  withOwnTabs();
+  const err = await rejectsWith(() => resolveContext({ context: "1.frame" }), "no such frame");
+  assert.match(err.message, /bad context id/);
+});
+
+test("all-scope matchUrl reports its own miss message; no active tab also refuses", async () => {
+  withOwnTabs();
+  const miss = await rejectsWith(
+    () => resolveContext({ matchUrl: "https://nowhere.test/*" }, "all"),
+    "no such frame",
+  );
+  assert.match(miss.message, /no browsing context matches/);
+
+  // all scope 的活动页兜底查 currentWindow 的 active tab；没有就拒
+  ownWorld([], { registry: [] });
+  const { tabs } = { tabs: undefined };
+  void tabs;
+  installChrome({
+    tabs: {
+      query: async () => [],
+      group: async () => 1,
+    },
+    tabGroups: { query: async () => [] },
+  });
+  await rejectsWith(() => resolveContext({}, "all"), "no such frame");
+});
+
+test("multiple matchUrl hits list every candidate with its url", async () => {
+  withOwnTabs();
+  const err = await rejectsWith(
+    () => resolveContext({ matchUrl: "https://b.test/*" }),
+    "invalid argument",
+  );
+  assert.match(err.message, /matches 2 contexts/);
+  assert.match(err.message, /b\.test/);
+});
+
+test("a matchUrl hit whose tab has no id is refused", async () => {
+  ownWorld([{ url: "https://a.test/login", active: true, groupId: 500 }]);
+  await rejectsWith(() => resolveContext({ matchUrl: "https://a.test/*" }), "no such frame");
+});

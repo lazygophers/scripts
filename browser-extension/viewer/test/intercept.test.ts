@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FORCED_EXTS, fileOf, rules } from "../src/intercept.ts";
+import { FORCED_EXTS, applyRules, fileOf, rules } from "../src/intercept.ts";
+import { clearChrome, installChrome } from "./mock.ts";
 
 /**
  * 拦截协议（CONTEXT.md）：规则生成（发端）和 file 参数解码（收端）的两端一致性。
@@ -48,4 +49,44 @@ test("已知边界：文件路径里的字面 & 会截断 query（dNR 不能编�
     fileOf("chrome-extension://viewer/viewer.html?file=file:///tmp/a&b.yaml"),
     "file:///tmp/a",
   );
+});
+
+test("开关拨到开：按扩展地址生成规则并写入 dNR", async () => {
+  const calls: chrome.declarativeNetRequest.UpdateRuleOptions[] = [];
+  installChrome({
+    runtime: { getURL: (p: string) => `chrome-extension://abc/${p}` },
+    declarativeNetRequest: {
+      updateDynamicRules: async (opts: chrome.declarativeNetRequest.UpdateRuleOptions) =>
+        void calls.push(opts),
+    },
+  });
+  try {
+    await applyRules(true);
+    const [only] = calls;
+    assert.equal(calls.length, 1);
+    assert.deepEqual(only?.removeRuleIds, [1, 2, 3]);
+    assert.deepEqual(only?.addRules, rules("chrome-extension://abc/"));
+  } finally {
+    clearChrome();
+  }
+});
+
+test("开关拨到关：同一批 id 删掉、不新增规则", async () => {
+  const calls: chrome.declarativeNetRequest.UpdateRuleOptions[] = [];
+  installChrome({
+    runtime: { getURL: (p: string) => `chrome-extension://abc/${p}` },
+    declarativeNetRequest: {
+      updateDynamicRules: async (opts: chrome.declarativeNetRequest.UpdateRuleOptions) =>
+        void calls.push(opts),
+    },
+  });
+  try {
+    await applyRules(false);
+    const [only] = calls;
+    assert.equal(calls.length, 1);
+    assert.deepEqual(only?.removeRuleIds, [1, 2, 3]);
+    assert.deepEqual(only?.addRules, []);
+  } finally {
+    clearChrome();
+  }
 });

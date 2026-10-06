@@ -189,3 +189,86 @@ test("subscribe is refused when the browser has no webRequest", async () => {
   await rejectsWith(() => networkSubscribe({}), "unsupported operation");
   clearChrome();
 });
+
+test("subscribe refuses a non-array types field", async () => {
+  setup();
+  await rejectsWith(
+    () => networkSubscribe({ types: "script" }),
+    "invalid argument",
+  );
+  clearChrome();
+});
+
+test("unsubscribe without id removes everything; unknown id is refused", async () => {
+  setup();
+  await networkSubscribe({ matchUrl: "*/api/*" });
+  await networkSubscribe({});
+  const removed = (await networkUnsubscribe({})).removed;
+  assert.equal(removed.length, 2, "全部订阅都被移除");
+  assert.ok(removed.every((id) => id.startsWith("net-")), removed.join(","));
+  await networkSubscribe({});
+  await rejectsWith(() => networkUnsubscribe({ subscription: "nope" }), "invalid argument");
+  teardown();
+});
+
+test("events with no matching subscription or unknown request are dropped silently", async () => {
+  const { fire, events } = setup();
+  await networkSubscribe({ matchUrl: "*/api/*", types: ["script"] });
+
+  // 请求 URL 不匹配订阅：onBeforeRequest 直接丢弃，onCompleted 也无订阅命中
+  fire.onBeforeRequest?.forEach((fn) => fn({ url: "https://b.test/x", type: "script", requestId: "r1" }));
+  fire.onCompleted?.forEach((fn) => fn({ url: "https://b.test/x", type: "script", requestId: "r1", statusCode: 200, fromCache: false, tabId: 3 }));
+  // onSendHeaders 对未知 request：no-op
+  fire.onSendHeaders?.forEach((fn) => fn({ requestId: "ghost", requestHeaders: [{ name: "h", value: "v" }] }));
+  // onErrorOccurred 无匹配：静默
+  fire.onErrorOccurred?.forEach((fn) => fn({ url: "https://b.test/x", type: "script", requestId: "r1", error: "x", tabId: 3 }));
+
+  assert.equal(events.filter((e) => e.method === "lg:network.request").length, 0);
+  teardown();
+});
+
+test("completed request emits full metadata with headers, duration and negative tab", async () => {
+  const { fire, events } = setup();
+  await networkSubscribe({});
+
+  fire.onBeforeRequest?.forEach((fn) =>
+    fn({ url: "https://a.test/x", type: "script", requestId: "r9", timeStamp: 1000, method: "GET", tabId: 7 }));
+  fire.onSendHeaders?.forEach((fn) =>
+    fn({ requestId: "r9", requestHeaders: [{ name: "a", value: "1" }, { name: "b" }] }));
+  fire.onCompleted?.forEach((fn) =>
+    fn({ url: "https://a.test/x", type: "script", requestId: "r9", statusCode: 200, fromCache: true, tabId: 7, timeStamp: 1500, responseHeaders: [{ name: "c", value: "2" }, { name: "d" }] }));
+  fire.onErrorOccurred?.forEach((fn) =>
+    fn({ url: "https://a.test/x", type: "script", requestId: "r9", error: "boom", tabId: -1, timeStamp: 1500 }));
+
+  const completed = events.filter((e) => e.method === "network.responseCompleted");
+  assert.equal(completed.length, 1);
+  const req = completed[0]?.params.request as Any;
+  assert.equal(req.headers.a, "1");
+  assert.equal(req.headers.b, "", "无值的 header 用空串");
+  assert.equal(req.context, "7");
+  assert.equal(req.timestamp, 1000);
+  const resp = completed[0]?.params.response as Any;
+  assert.equal(resp.headers.c, "2");
+  assert.equal(resp.headers.d, "");
+  assert.equal(completed[0]?.params["lg:durationMs"], 500);
+
+  const failed = events.filter((e) => e.method === "network.fetchError");
+  assert.equal(failed.length, 1);
+  assert.equal((failed[0]?.params.request as Any).context, null, "tabId < 0 报 null");
+  teardown();
+});
+
+test("completed without a prior onBeforeRequest still emits with fallbacks", async () => {
+  const { fire, events } = setup();
+  await networkSubscribe({});
+  fire.onCompleted?.forEach((fn) =>
+    fn({ url: "https://a.test/x", type: "script", requestId: "zz", statusCode: 200, fromCache: false, tabId: 1, timeStamp: 42 }));
+  const completed = events.filter((e) => e.method === "network.responseCompleted");
+  assert.equal(completed.length, 1);
+  const req = completed[0]?.params.request as Any;
+  assert.equal(req.context, "1");
+  assert.equal(req.timestamp, 42, "没有 entry 时用 details.timeStamp");
+  assert.deepEqual(req.headers, {});
+  assert.equal(completed[0]?.params["lg:durationMs"], null);
+  teardown();
+});

@@ -9,6 +9,12 @@ import { manifestFor } from "./manifest.mjs";
 const SHARED = dirname(fileURLToPath(import.meta.url));
 
 /**
+ * watch 模式启动的 esbuild context 句柄。导出来是为了能收走（测试 dispose、
+ * 调用方关 watch）——不留句柄的 watch 是收不掉的长驻进程。
+ */
+export const watchers = [];
+
+/**
  * Build one extension directory into a loadable `dist`.
  *
  * `root` is the extension directory (`browser-extension/<name>`); every other
@@ -64,8 +70,9 @@ export async function buildExtension({
   const iife = { ...common, entryPoints: iifeEntryPoints, format: "iife" };
 
   if (watch) {
-    if (hasEsm) await (await context(esm)).watch();
-    if (iifeEntryPoints.length) await (await context(iife)).watch();
+    if (hasEsm) watchers.push(await context(esm));
+    if (iifeEntryPoints.length) watchers.push(await context(iife));
+    for (const ctx of watchers) await ctx.watch();
   } else {
     if (hasEsm) await build(esm);
     if (iifeEntryPoints.length) await build(iife);

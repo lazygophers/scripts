@@ -118,6 +118,10 @@ test("packDist：真目录验过压成 zip，验不过整条命令失败", async
     manifest_version: 3, name: "viewer", version: "0.0.1",
   }));
   await writeFile(join(dist, "a.txt"), "x");
+  // dist 里有 html 才会走 packDist 的页面读取支；html 引用包内存在的文件
+  await mkdir(join(dist, "sub"));
+  await writeFile(join(dist, "sub", "page.html"), '<script src="a.txt"></script>');
+  await writeFile(join(dist, "sub", "leaf.js"), "x");
 
   const zip = await packDist({ dist, out: join(root, "out"), name: "p.zip" });
   const { stat } = await import("node:fs/promises");
@@ -127,6 +131,11 @@ test("packDist：真目录验过压成 zip，验不过整条命令失败", async
   await assert.rejects(
     () => packDist({ dist, out: join(root, "out"), name: "bad.zip" }),
     /sourcemap/,
+  );
+  await writeFile(join(dist, "sub", "page.html"), '<script src="missing.js"></script>');
+  await assert.rejects(
+    () => packDist({ dist, out: join(root, "out"), name: "bad2.zip" }),
+    /sub\/page.html 里引的文件不在包里/,
   );
   await (await import("node:fs/promises")).rm(root, { recursive: true, force: true });
 });
@@ -157,3 +166,31 @@ test("packDist 的 zip 命令不在时给出可读错误", async () => {
 
 import assert from "node:assert/strict";
 import { join } from "node:path";
+
+test("packDist：zip 在但退出非 0，报退出码而不是 error.message", async () => {
+  const { mkdtemp, writeFile, mkdir } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { packDist } = await import("../package.mjs");
+  const root = await mkdtemp(join(tmpdir(), "packdist-"));
+  const dist = join(root, "dist");
+  await mkdir(dist);
+  await writeFile(join(dist, "manifest.json"), JSON.stringify({
+    manifest_version: 3, name: "viewer", version: "0.0.1",
+  }));
+  // PATH 前置一个假 zip：能找到（spawnSync 无 error）但退出码 3
+  const bin = join(root, "bin");
+  await mkdir(bin);
+  await writeFile(join(bin, "zip"), "#!/bin/sh\nexit 3\n");
+  await (await import("node:fs/promises")).chmod(join(bin, "zip"), 0o755);
+  const realPath = process.env.PATH;
+  process.env.PATH = `${bin}:${realPath}`;
+  try {
+    await assert.rejects(
+      () => packDist({ dist, out: join(root, "out"), name: "z.zip" }),
+      /退出码 3/,
+    );
+  } finally {
+    process.env.PATH = realPath;
+    await (await import("node:fs/promises")).rm(root, { recursive: true, force: true });
+  }
+});

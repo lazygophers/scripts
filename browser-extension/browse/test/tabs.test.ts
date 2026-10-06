@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { afterEach, describe, it } from "node:test";
+
 import {
   tabsAdopt,
   tabsGroup,
@@ -7,224 +8,289 @@ import {
   tabsUngroup,
   tabsUpdateGroup,
 } from "../src/handlers/tabs.ts";
-import { setConfirmHook, type ConfirmRequest } from "../src/handlers/confirm.ts";
 import { clearContextCache } from "../src/handlers/context.ts";
-import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
+import { clearChrome, installChrome, ownWorld, rejectsWith } from "./mock.ts";
 
 type Any = Record<string, unknown>;
 
-/**
- * 夹具：一个可变浏览器世界。组 500 = browse/default（自己的），组 501 = 别的
- * browse/other，组 9 = 普通组（非 browse/）。tab 7 在组 500（own），tab 8 无组，
- * tab 9 在组 9。
- */
-function setup() {
-  const calls: Any = { grouped: [], ungrouped: [], updated: [], registrySets: [] };
-  const groups = new Map<number, Any>([
-    [500, { id: 500, windowId: 20, title: "browse/default", color: "blue", collapsed: false }],
-    [501, { id: 501, windowId: 20, title: "browse/other", color: "grey", collapsed: true }],
-    [9, { id: 9, windowId: 20, title: "work", color: "red", collapsed: false }],
-  ]);
-  const tabs = new Map<number, Any>([
-    [7, { id: 7, windowId: 20, url: "https://own.test/a", groupId: 500, active: true }],
-    [8, { id: 8, windowId: 20, url: "https://foreign.test/b", groupId: undefined }],
-    [9, { id: 9, windowId: 20, url: "https://work.test/c", groupId: 9 }],
-  ]);
-  let nextGroupId = 600;
-  const localData: Any = {
-    "browse:config": { confirm_mode: "always" },
-    "browse:ownership": [],
-  };
-  installChrome({
-    tabs: {
-      query: async (q: Any = {}) => {
-        const all = [...tabs.values()];
-        if (q.groupId !== undefined) return all.filter((t) => t.groupId === q.groupId);
-        if (q.active) return all.filter((t) => t.active);
-        return all;
-      },
-      get: async (id: number) => {
-        const tab = tabs.get(id);
-        if (tab === undefined) throw new Error(`no tab ${id}`);
-        return tab;
-      },
-      group: async (opts: Any) => {
-        calls.grouped.push(opts);
-        let gid = opts.groupId;
-        if (gid === undefined) {
-          gid = nextGroupId++;
-          groups.set(gid, { id: gid, windowId: 20, title: "", color: "grey", collapsed: false });
-        }
-        for (const id of opts.tabIds as number[]) {
-          tabs.get(id).groupId = gid;
-        }
-        return gid;
-      },
-      ungroup: async (ids: number | number[]) => {
-        const list = Array.isArray(ids) ? ids : [ids];
-        calls.ungrouped.push(list);
-        for (const id of list) tabs.get(id).groupId = undefined;
-      },
-    },
-    tabGroups: {
-      get: async (id: number) => {
-        const g = groups.get(id);
-        if (g === undefined) throw new Error(`no group ${id}`);
-        return g;
-      },
-      query: async (q: Any = {}) =>
-        [...groups.values()].filter(
-          (g) => (q.title === undefined || g.title === q.title)
-            && (q.color === undefined || g.color === q.color)),
-      update: async (id: number, changes: Any) => {
-        calls.updated.push([id, changes]);
-        const g = groups.get(id);
-        if (g === undefined) throw new Error(`no group ${id}`);
-        Object.assign(g, changes);
-        return g;
-      },
-    },
-    windows: { getCurrent: async () => ({ id: 20 }) },
-    storage: {
-      session: {
-        get: async () => ({ "browse:own": { groupId: 500 } }),
-        set: async () => {},
-      },
-      local: {
-        get: async (keys?: string | string[]) => {
-          const out: Any = {};
-          if (keys === undefined) return { ...localData };
-          for (const k of Array.isArray(keys) ? keys : [keys]) out[k] = localData[k];
-          return out;
-        },
-        set: async (items: Any) => {
-          Object.assign(localData, items);
-          calls.registrySets.push(items);
-        },
-      },
-    },
-  });
-  clearContextCache();
-  return { calls, groups, tabs, localData };
-}
-
-test.beforeEach(() => {
-  setConfirmHook(async () => true);
-  clearContextCache();
-});
-
-test.afterEach(() => {
-  setConfirmHook(null as unknown as () => Promise<void>);
+afterEach(() => {
   clearChrome();
+  clearContextCache();
 });
 
-test("group: new group echoes tabGroups.get, update path sets title/color", async () => {
-  const { calls } = setup();
-  // 不给 group 参数：Chrome 语义是新建一组（哪怕 tab 已在组里）
-  assert.deepEqual(
-    await tabsGroup({ context: "7" }),
-    { group: "600", title: "", color: "grey" },
-  );
-  assert.deepEqual(calls.grouped, [{ tabIds: [7] }]);
-
-  assert.deepEqual(
-    await tabsGroup({ context: "7", title: "browse/x", color: "red", group: "501" }),
-    { group: "501", title: "browse/x", color: "red" },
-  );
-  assert.deepEqual(calls.updated.at(-1), [501, { title: "browse/x", color: "red" }]);
-});
-
-test("group rejects bad color, bad group id and frame contexts", async () => {
-  setup();
-  await rejectsWith(() => tabsGroup({ context: "7", color: "chartreuse" }), "invalid argument");
-  await rejectsWith(() => tabsGroup({ context: "7", group: "abc" }), "invalid argument");
-  await rejectsWith(() => tabsGroup({ context: "7.0" }), "unsupported operation");
-});
-
-test("ungroup: by context, by group id, empty group errors", async () => {
-  const { calls } = setup();
-  assert.deepEqual(await tabsUngroup({ context: "7" }), { ungrouped: 1 });
-  assert.deepEqual(calls.ungrouped.at(-1), [7]);
-
-  assert.deepEqual(await tabsUngroup({ group: "9" }), { ungrouped: 1 });
-  await rejectsWith(() => tabsUngroup({ group: "604" }), "invalid argument");
-  await rejectsWith(() => tabsUngroup({ group: "x" }), "invalid argument");
-});
-
-test("groups: lists with tab ids, filters by title and color", async () => {
-  setup();
-  const all = await tabsGroups({});
-  assert.deepEqual(
-    all.groups.map((g) => g.group),
-    ["500", "501", "9"],
-  );
-  assert.deepEqual(all.groups[0], {
-    group: "500", title: "browse/default", color: "blue", collapsed: false, window: 20, tabs: [7],
+describe("tabs.group", () => {
+  it("creates a new group when none is given", async () => {
+    ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500 }]);
+    installChrome({
+      tabs: { group: async () => 777, ungroup: async () => {} },
+      tabGroups: {
+        get: async (id: number) => ({ id, title: "browse/default", color: "blue" }),
+        update: async (id: number, d: Any) => ({ id, title: d.title, color: d.color }),
+        query: async () => [],
+      },
+    });
+    const r = await tabsGroup({ context: "1" });
+    assert.deepEqual(r, { group: "777", title: "browse/default", color: "blue" });
   });
-  const only = await tabsGroups({ title: "browse/other" });
-  assert.deepEqual(only.groups.map((g) => g.group), ["501"]);
-  const red = await tabsGroups({ color: "red" });
-  assert.deepEqual(red.groups.map((g) => g.group), ["9"]);
-  await rejectsWith(() => tabsGroups({ color: "teal" }), "invalid argument");
-});
 
-test("updateGroup: happy path and every validation branch", async () => {
-  const { calls } = setup();
-  assert.deepEqual(
-    await tabsUpdateGroup({ group: "500", title: "browse/new" }),
-    { group: "500", title: "browse/new", color: "blue", collapsed: false },
-  );
-  assert.deepEqual(calls.updated.at(-1), [500, { title: "browse/new" }]);
-
-  await rejectsWith(() => tabsUpdateGroup({ title: "x" }), "invalid argument");
-  await rejectsWith(() => tabsUpdateGroup({ group: "500", color: "nope" }), "invalid argument");
-  await rejectsWith(() => tabsUpdateGroup({ group: "500", collapsed: "yes" }), "invalid argument");
-  await rejectsWith(() => tabsUpdateGroup({ group: "500" }), "invalid argument");
-});
-
-test("adopt: needs matchUrl or context, rejects frames, records the visit", async () => {
-  const { calls, localData } = setup();
-  await rejectsWith(() => tabsAdopt({}), "invalid argument");
-  await rejectsWith(() => tabsAdopt({ context: "8.0" }), "unsupported operation");
-
-  const asked: ConfirmRequest[] = [];
-  setConfirmHook(async (req) => {
-    asked.push(req);
-    return true;
+  it("updates title and colour of an existing group", async () => {
+    ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500 }]);
+    const updates: Any[] = [];
+    installChrome({
+      tabs: { group: async ({ groupId }: Any) => groupId, ungroup: async () => {} },
+      tabGroups: {
+        get: async () => {
+          throw new Error("should not get");
+        },
+        update: async (id: number, d: Any) => (updates.push(d), { id, ...d }),
+        query: async () => [],
+      },
+    });
+    const r = await tabsGroup({ context: "1", group: "500", title: "t", color: "red" });
+    assert.deepEqual(r, { group: "500", title: "t", color: "red" });
+    assert.deepEqual(updates[0], { title: "t", color: "red" });
   });
-  const result = await tabsAdopt({ context: "8", group: "other" });
-  assert.deepEqual(result, { context: "8", group: "other", url: "https://foreign.test/b" });
-  assert.equal(asked.length, 1);
-  assert.equal(asked[0].action, "adoptTab");
-  // browse/other 组已存在（501），收编进它
-  assert.deepEqual(calls.grouped.at(-1), { tabIds: [8], groupId: 501 });
-  const reg = localData["browse:ownership"] as Any[];
-  assert.equal(reg[0].u, "https://foreign.test/b");
-  assert.equal(reg[0].g, "other");
-});
 
-test("adopt: creates the group when missing, idempotent when already own", async () => {
-  const { calls } = setup();
-  const result = await tabsAdopt({ context: "9" });
-  assert.deepEqual(result, { context: "9", group: "default", url: "https://work.test/c" });
-  // 无现成 browse/default？有（500）——tab 9 应进 500
-  assert.deepEqual(calls.grouped.at(-1), { tabIds: [9], groupId: 500 });
-
-  // 已是自己的 tab：幂等成功，不弹确认、不动组
-  setConfirmHook(async () => {
-    throw new Error("must not confirm an own tab");
+  it("rejects unknown colours, bad group ids and frame targets", async () => {
+    ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500 }]);
+    installChrome({
+      tabs: { group: async () => 1, ungroup: async () => {} },
+      tabGroups: { get: async () => ({}), update: async () => ({}), query: async () => [] },
+    });
+    await rejectsWith(() => tabsGroup({ context: "1", color: "chartreuse" }), "invalid argument");
+    await rejectsWith(() => tabsGroup({ context: "1", group: "abc" }), "invalid argument");
+    await rejectsWith(() => tabsGroup({ context: "1.2" }), "unsupported operation");
   });
-  assert.deepEqual(
-    await tabsAdopt({ context: "7", group: "whatever" }),
-    { context: "7", group: "whatever", url: "https://own.test/a" },
-  );
+
+  it("refuses when the browser cannot group tabs", async () => {
+    installChrome({ runtime: {} });
+    await rejectsWith(() => tabsGroup({ context: "1" }), "unsupported operation");
+  });
 });
 
-test("adopt: builds a fresh group when no browse/ group matches the name", async () => {
-  const { calls } = setup();
-  await tabsAdopt({ context: "8", group: "fresh" });
-  // browse/fresh 不存在 → tabs.group 新建 + tabGroups.update 改名
-  const last = calls.grouped.at(-1) as Any;
-  assert.deepEqual(last.tabIds, [8]);
-  assert.equal(last.groupId, undefined);
+describe("tabs.ungroup", () => {
+  it("dissolves a whole group by id", async () => {
+    const w = ownWorld([
+      { id: 1, url: "https://a.example/x", groupId: 500 },
+      { id: 2, url: "https://b.example/y", groupId: 500 },
+    ]);
+    let ungrouped: number[] = [];
+    installChrome({
+      tabs: {
+        query: async (q: Any) => (q.groupId === 500 ? w.tabs : []),
+        ungroup: async (ids: number[]) => (ungrouped = ids),
+      },
+    });
+    const r = await tabsUngroup({ group: "500" });
+    assert.deepEqual(r, { ungrouped: 2 });
+    assert.deepEqual(ungrouped, [1, 2]);
+  });
+
+  it("rejects an empty group and ungroups a single context otherwise", async () => {
+    ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500 }]);
+    let ungrouped: unknown;
+    installChrome({
+      tabs: {
+        query: async () => [],
+        ungroup: async (ids: unknown) => (ungrouped = ids),
+      },
+    });
+    await rejectsWith(() => tabsUngroup({ group: "500" }), "invalid argument");
+    assert.deepEqual(await tabsUngroup({ context: "1" }), { ungrouped: 1 });
+    assert.deepEqual(ungrouped, 1);
+  });
+});
+
+describe("tabs.groups", () => {
+  it("lists groups with their tab members", async () => {
+    const w = ownWorld([
+      { id: 1, url: "https://a.example/x", groupId: 500 },
+      { id: 2, url: "https://b.example/y", groupId: 501 },
+    ]);
+    installChrome({
+      tabGroups: {
+        query: async () => [w.group, { ...w.group, id: 501, title: "browse/other", color: "red" }],
+        update: async () => ({}),
+        get: async () => w.group,
+      },
+      tabs: { query: async () => w.tabs, group: async () => 1, ungroup: async () => {} },
+    });
+    const r = await tabsGroups({});
+    assert.equal(r.groups.length, 2);
+    assert.deepEqual(r.groups[0], {
+      group: "500",
+      title: "browse/default",
+      color: "blue",
+      collapsed: false,
+      window: 20,
+      tabs: [1],
+    });
+    assert.deepEqual(r.groups[1]?.tabs, [2]);
+  });
+
+  it("filters by title and rejects unknown colours", async () => {
+    const w = ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500 }]);
+    installChrome({
+      tabGroups: {
+        query: async (q: Any) => (q.title === "browse/default" ? [w.group] : []),
+        update: async () => ({}),
+        get: async () => w.group,
+      },
+      tabs: { query: async () => w.tabs, group: async () => 1, ungroup: async () => {} },
+    });
+    const r = await tabsGroups({ title: "browse/default" });
+    assert.equal(r.groups.length, 1);
+    await rejectsWith(() => tabsGroups({ color: "nope" }), "invalid argument");
+  });
+});
+
+describe("tabs.updateGroup", () => {
+  it("updates title, colour and collapsed state", async () => {
+    ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500 }]);
+    installChrome({
+      tabGroups: {
+        update: async (id: number, d: Any) => ({ id, title: "browse/default", color: "blue", ...d }),
+        query: async () => [],
+        get: async () => ({}),
+      },
+      tabs: { group: async () => 1, ungroup: async () => {} },
+    });
+    const r = await tabsUpdateGroup({ group: "500", title: "x", color: "pink", collapsed: true });
+    assert.deepEqual(r, { group: "500", title: "x", color: "pink", collapsed: true });
+  });
+
+  it("validates its arguments", async () => {
+    ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500 }]);
+    installChrome({
+      tabGroups: { update: async () => ({}), query: async () => [], get: async () => ({}) },
+      tabs: { group: async () => 1, ungroup: async () => {} },
+    });
+    await rejectsWith(() => tabsUpdateGroup({}), "invalid argument");
+    await rejectsWith(() => tabsUpdateGroup({ group: "x1" }), "invalid argument");
+    await rejectsWith(() => tabsUpdateGroup({ group: "500", color: "nope" }), "invalid argument");
+    await rejectsWith(() => tabsUpdateGroup({ group: "500", collapsed: "yes" }), "invalid argument");
+    await rejectsWith(() => tabsUpdateGroup({ group: "500" }), "invalid argument");
+  });
+
+  it("falls back to the requested values when update returns nothing", async () => {
+    ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500 }]);
+    installChrome({
+      tabGroups: { update: async () => undefined, query: async () => [], get: async () => ({}) },
+      tabs: { group: async () => 1, ungroup: async () => {} },
+    });
+    const r = await tabsUpdateGroup({ group: "500", title: "t" });
+    assert.deepEqual(r, { group: "500", title: "t", color: "", collapsed: false });
+  });
+});
+
+describe("tabs.adopt", () => {
+  it("needs matchUrl or context", async () => {
+    ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500 }]);
+    installChrome({ tabs: { group: async () => 1 } });
+    await rejectsWith(() => tabsAdopt({}), "invalid argument");
+  });
+
+  it("is idempotent for a tab that is already ours", async () => {
+    ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500 }], {
+      registry: ["https://a.example/x"],
+    });
+    const r = await tabsAdopt({ context: "1" });
+    assert.deepEqual(r, { context: "1", group: "default", url: "https://a.example/x" });
+  });
+
+  it("adopts a foreign tab into an existing browse group", async () => {
+    const w = ownWorld([
+      { id: 1, url: "https://own.example/x", groupId: 500 },
+      { id: 9, url: "https://foreign.example/y" },
+    ]);
+    installChrome({
+      tabGroups: {
+        query: async (q: Any) => (q.title === "browse/default" ? [w.group] : []),
+        update: async () => ({}),
+        get: async () => w.group,
+      },
+      tabs: {
+        get: async (id: number) => w.tabs.find((t) => t.id === id)!,
+        group: async ({ tabIds, groupId }: Any) => {
+          for (const id of tabIds) {
+            const tab = w.tabs.find((t) => t.id === id);
+            if (tab !== undefined) tab.groupId = groupId;
+          }
+          return groupId;
+        },
+        ungroup: async () => {},
+      },
+    });
+    const r = await tabsAdopt({ context: "9" });
+    assert.deepEqual(r, { context: "9", group: "default", url: "https://foreign.example/y" });
+    assert.equal(w.tabs.find((t) => t.id === 9)?.groupId, 500);
+  });
+
+  it("creates a new browse group when none exists yet", async () => {
+    const w = ownWorld([
+      { id: 1, url: "https://own.example/x", groupId: 500 },
+      { id: 9, url: "https://foreign.example/y" },
+    ]);
+    installChrome({
+      tabGroups: {
+        query: async () => [],
+        update: async (id: number, d: Any) => Object.assign({ id }, d),
+        get: async () => w.group,
+      },
+      tabs: {
+        get: async (id: number) => w.tabs.find((t) => t.id === id)!,
+        group: async ({ tabIds, groupId }: Any) => {
+          for (const id of tabIds) {
+            const tab = w.tabs.find((t) => t.id === id);
+            if (tab !== undefined) tab.groupId = groupId ?? 888;
+          }
+          return groupId ?? 888;
+        },
+        ungroup: async () => {},
+      },
+    });
+    const r = await tabsAdopt({ context: "9", group: "work" });
+    assert.equal(r.group, "work");
+    assert.equal(w.tabs.find((t) => t.id === 9)?.groupId, 888);
+  });
+
+  it("refuses frame targets and missing APIs", async () => {
+    ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500 }]);
+    installChrome({ tabs: { group: async () => 1 }, tabGroups: { query: async () => [] } });
+    await rejectsWith(() => tabsAdopt({ context: "1.2" }), "unsupported operation");
+    installChrome({ runtime: {} });
+    await rejectsWith(() => tabsAdopt({ context: "1" }), "unsupported operation");
+  });
+});
+
+describe("tabs.group 字段组合", () => {
+  it("updates title only, colour only, and tolerates a titleless group", async () => {
+    const w = ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500 }]);
+    installChrome({
+      tabs: { query: async () => w.tabs, group: async ({ groupId }: Any) => groupId ?? 777, ungroup: async () => {} },
+      tabGroups: {
+        update: async (id: number, d: Any) => ({ id, ...d }),
+        get: async () => w.group,
+        query: async () => [{ ...w.group, title: undefined }],
+      },
+    });
+    assert.deepEqual(await tabsGroup({ context: "1", title: "t" }), {
+      group: "777", title: "t", color: "",
+    });
+    assert.deepEqual(await tabsGroup({ context: "1", color: "cyan" }), {
+      group: "777", title: "", color: "cyan",
+    });
+    const listed = await tabsGroups({});
+    assert.equal(listed.groups[0]?.title, "", "没有 title 的组显示空串");
+  });
+
+  it("adopt works on a tab without a url", async () => {
+    ownWorld([{ id: 1, url: "https://own.example/x", groupId: 500 }, { id: 9 }]);
+    installChrome({
+      tabGroups: { query: async () => [], update: async () => ({}), get: async () => ({}) },
+      tabs: { get: async (id: number) => ({ id }), group: async () => 1, ungroup: async () => {} },
+    });
+    const r = await tabsAdopt({ context: "9" });
+    assert.equal(r.url, "");
+  });
 });

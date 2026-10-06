@@ -73,39 +73,52 @@ test("put on broken storage reports cached: 0 instead of failing", async () => {
   assert.deepEqual(await cachePut({ context: "7", kind: "text", body: "x" }), { cached: 0 });
 });
 
-test("put 没有 kind/body 直接拒", async () => {
-  ownWorld([{ id: 7, url: "https://a.test/", groupId: 500 }]);
-  await rejectsWith(() => cachePut({}), "invalid argument");
+test("put needs both kind and body", async () => {
+  ownWorld([{ id: 7, url: "https://a.test/", groupId: 500, active: true }]);
+  await rejectsWith(() => cachePut({ kind: "text" }), "invalid argument");
+  await rejectsWith(() => cachePut({ body: "x" }), "invalid argument");
 });
 
-test("全局 100 条上限：超了就整环丢最老的 tab", async () => {
-  const tabs = Array.from({ length: 21 }, (_, i) => ({
-    id: 100 + i, url: `https://t${i}.test/`, groupId: 500,
+test("the global cap drops whole oldest pages until back under 100", async () => {
+  const many = Array.from({ length: 25 }, (_, i) => ({
+    id: i + 1,
+    url: `https://t${i}.test/`,
+    groupId: 500,
   }));
-  const world = ownWorld(tabs);
-  // 21 个 tab × 5 条 = 105 > 100，最老那个 tab 的整环被丢
-  for (const tab of tabs) {
-    for (let i = 0; i < 5; i += 1) {
-      await cachePut({ context: String(tab.id), kind: "text", body: `t${tab.id}-${i}` });
+  ownWorld(many);
+  // 25 页 × 5 份 = 125 > 100：最旧的 5 页整页丢，回到 100
+  for (let round = 0; round < 5; round++) {
+    for (let tab = 1; tab <= 25; tab++) {
+      await cachePut({ context: String(tab), kind: "text", body: `t${tab}-r${round}` });
     }
   }
-  const listed = (await cacheList()).pages;
-  assert.equal(listed.length, 20, `应剩 20 个 tab，实得 ${listed.length}`);
-  assert.ok(!listed.some((p: { context: string }) => p.context === "100"), "最老的 tab100 应被整环丢掉");
-  void world;
+  const listed = await cacheList();
+  assert.equal(listed.pages.length, 20, "100 条上限按整页淘汰");
+  for (const page of listed.pages) {
+    assert.equal(page.entries, 5);
+  }
+  await rejectsWith(() => cacheGet({ context: "1" }), "no such frame", "最旧的页被整页丢了");
 });
 
-test("invalidateTab 在存储坏掉时也不抛", async () => {
-  const world = ownWorld([{ id: 7, url: "https://a.test/", groupId: 500 }]);
-  await cachePut({ kind: "text", body: "x" });
-  (globalThis.chrome as Record<string, unknown>).storage = {
-    local: {
-      get: async () => {
-        throw new Error("storage broken");
+test("invalidateTab swallows broken storage", async () => {
+  ownWorld([], {
+    extra: {
+      storage: {
+        local: {
+          get: async () => {
+            throw new Error("gone");
+          },
+          set: async () => {},
+        },
+        session: { get: async () => ({}), set: async () => {} },
       },
-      set: async () => {},
     },
-  };
-  await invalidateTab(7); // 不抛即通过
-  void world;
+  });
+  await assert.doesNotReject(() => invalidateTab(7));
+});
+
+test("cacheList tolerates a tab entry with an empty ring", async () => {
+  ownWorld([], { local: { "browse:pagecache": { "77": [] } } });
+  const listed = await cacheList();
+  assert.deepEqual(listed.pages, [{ context: "77", entries: 0, latest: 0, kind: "" }]);
 });

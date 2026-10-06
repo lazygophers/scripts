@@ -136,3 +136,8 @@ describe("clipboardWrite", () => {
     assert.equal(created, false);
   });
 });
+
+  it("uses a generic message when the failure has no error text", async () => {
+    chromeWith({ ok: false });
+    await assert.rejects(() => clipboardWrite({ text: "x" }), /clipboard write failed/);
+  });

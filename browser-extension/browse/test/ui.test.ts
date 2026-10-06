@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { afterEach, describe, it } from "node:test";
+
 import {
   commandsList,
   listenUi,
@@ -10,97 +11,133 @@ import {
 } from "../src/handlers/ui.ts";
 import { setEventSink } from "../src/events.ts";
 import { clearContextCache } from "../src/handlers/context.ts";
-import { installChrome, ownSession, rejectsWith } from "./mock.ts";
+import { clearChrome, installChrome, ownWorld, rejectsWith } from "./mock.ts";
 
 type Any = Record<string, unknown>;
 
-function setup() {
-  const calls: Any = { opened: [], closed: [], behavior: [], suggestions: [], listeners: {} };
+afterEach(() => {
+  clearChrome();
+  clearContextCache();
+  setEventSink(null);
+});
+
+function listenerWorld(extra: Any = {}): { events: Any[] } {
+  const events: Any[] = [];
+  setEventSink((e) => events.push(e));
   installChrome({
-    ...ownSession(),
     commands: {
-      getAll: async () => [{ name: "_execute_action" }, { name: "open-panel" }],
-      onCommand: { addListener: (fn: Any) => { calls.listeners.command = fn; } },
-    },
-    sidePanel: {
-      open: async (opts: Any) => { calls.opened.push(opts); },
-      close: async (opts: Any) => { calls.closed.push(opts); },
-      setPanelBehavior: async (opts: Any) => { calls.behavior.push(opts); },
+      getAll: async () => [{ name: "snap" }],
+      onCommand: { addListener: (_fn: unknown) => {} },
     },
     omnibox: {
-      setDefaultSuggestion: async (s: Any) => { calls.suggestions.push(s); },
-      onInputStarted: { addListener: (fn: Any) => { calls.listeners.started = fn; } },
-      onInputChanged: { addListener: (fn: Any) => { calls.listeners.changed = fn; } },
-      onInputEntered: { addListener: (fn: Any) => { calls.listeners.entered = fn; } },
-      onInputCancelled: { addListener: (fn: Any) => { calls.listeners.cancelled = fn; } },
+      setDefaultSuggestion: async () => {},
+      onInputStarted: { addListener: (_fn: unknown) => {} },
+      onInputChanged: { addListener: (_fn: unknown) => {} },
+      onInputEntered: { addListener: (_fn: unknown) => {} },
+      onInputCancelled: { addListener: (_fn: unknown) => {} },
     },
+    ...extra,
   });
-  clearContextCache();
-  return { calls };
+  return { events };
 }
 
-test.afterEach(() => {
-  setEventSink(null);
-  clearContextCache();
-});
+describe("ui.commands", () => {
+  it("lists keyboard commands", async () => {
+    listenerWorld();
+    assert.deepEqual(await commandsList(), { commands: [{ name: "snap" }] });
+  });
 
-test("commandsList returns chrome.commands.getAll", async () => {
-  setup();
-  assert.deepEqual(await commandsList(), {
-    commands: [{ name: "_execute_action" }, { name: "open-panel" }],
+  it("refuses when the commands API is missing", async () => {
+    installChrome({ runtime: {} });
+    await rejectsWith(() => commandsList(), "unsupported operation");
   });
 });
 
-test("sidePanel open/close with and without a target", async () => {
-  const { calls } = setup();
-  assert.deepEqual(await sidePanelOpen({}), { opened: true });
-  assert.deepEqual(await sidePanelClose({}), { closed: true });
-  assert.deepEqual(calls.opened, [{}]);
-  assert.deepEqual(calls.closed, [{}]);
-
-  // 带目标：resolveContextOnce 走当前活动 tab（ownSession 的夹具是 tab 7）
-  assert.deepEqual(await sidePanelOpen({ context: "7" }), { opened: true });
-  assert.deepEqual(await sidePanelClose({ context: "7" }), { closed: true });
-  assert.deepEqual(calls.opened.at(-1), { tabId: 7 });
-  assert.deepEqual(calls.closed.at(-1), { tabId: 7 });
-});
-
-test("sidePanelBehavior sets the action-click behavior", async () => {
-  const { calls } = setup();
-  assert.deepEqual(await sidePanelBehavior({ openPanelOnActionClick: true }), {
-    openPanelOnActionClick: true,
+describe("ui.sidePanel", () => {
+  it("opens on the resolved tab when a target is given", async () => {
+    ownWorld([{ id: 1, url: "https://a.example/x", groupId: 500, active: true }]);
+    const opens: Any[] = [];
+    listenerWorld({
+      sidePanel: {
+        open: async (o: Any) => void opens.push(o),
+        close: async (o: Any) => void opens.push({ close: o }),
+        setPanelBehavior: async () => {},
+      },
+    });
+    assert.deepEqual(await sidePanelOpen({ context: "1" }), { opened: true });
+    assert.deepEqual(opens[0], { tabId: 1 });
+    assert.deepEqual(await sidePanelOpen({}), { opened: true });
+    assert.deepEqual(opens[1], {});
+    assert.deepEqual(await sidePanelClose({ context: "1" }), { closed: true });
+    assert.deepEqual(await sidePanelClose({}), { closed: true });
+    assert.deepEqual(await sidePanelBehavior({ openPanelOnActionClick: true }), {
+      openPanelOnActionClick: true,
+    });
+    assert.deepEqual(await sidePanelBehavior({}), { openPanelOnActionClick: false });
   });
-  assert.deepEqual(await sidePanelBehavior({}), { openPanelOnActionClick: false });
-  assert.deepEqual(calls.behavior, [
-    { openPanelOnActionClick: true },
-    { openPanelOnActionClick: false },
-  ]);
+
+  it("refuses when the sidePanel API is missing", async () => {
+    installChrome({ runtime: {} });
+    await rejectsWith(() => sidePanelOpen({}), "unsupported operation");
+    await rejectsWith(() => sidePanelClose({}), "unsupported operation");
+    await rejectsWith(() => sidePanelBehavior({}), "unsupported operation");
+  });
 });
 
-test("omniboxSetDefault requires a description", async () => {
-  const { calls } = setup();
-  await rejectsWith(() => omniboxSetDefault({}), "invalid argument");
-  assert.deepEqual(await omniboxSetDefault({ description: "搜: %s" }), { default: "搜: %s" });
-  assert.deepEqual(calls.suggestions, [{ description: "搜: %s" }]);
+describe("ui.omnibox", () => {
+  it("sets the default suggestion", async () => {
+    listenerWorld();
+    assert.deepEqual(await omniboxSetDefault({ description: "搜: %s" }), { default: "搜: %s" });
+  });
+
+  it("requires a description", async () => {
+    listenerWorld();
+    await rejectsWith(() => omniboxSetDefault({}), "invalid argument");
+  });
 });
 
-test("listenUi forwards commands and omnibox phases as events", () => {
-  const { calls } = setup();
-  const seen: Any[] = [];
-  setEventSink((event) => seen.push(event));
-  listenUi();
+describe("ui.listenUi", () => {
+  it("forwards command and omnibox events", () => {
+    const { events } = listenerWorld();
+    let onCommand: ((command: string) => void) | undefined;
+    let onStarted: (() => void) | undefined;
+    let onChanged: ((text: string) => void) | undefined;
+    let onEntered: ((text: string, d: string) => void) | undefined;
+    let onCancelled: (() => void) | undefined;
+    installChrome({
+      commands: {
+        onCommand: {
+          addListener: (fn: (c: string) => void) => (onCommand = fn),
+        },
+      },
+      omnibox: {
+        onInputStarted: { addListener: (fn: () => void) => (onStarted = fn) },
+        onInputChanged: { addListener: (fn: (t: string) => void) => (onChanged = fn) },
+        onInputEntered: { addListener: (fn: (t: string, d: string) => void) => (onEntered = fn) },
+        onInputCancelled: { addListener: (fn: () => void) => (onCancelled = fn) },
+      },
+    });
+    listenUi();
+    onCommand?.("snap");
+    onStarted?.();
+    onChanged?.("q");
+    onEntered?.("q", "newForegroundTab");
+    onCancelled?.();
+    assert.deepEqual(events, [
+      { type: "event", method: "lg:commands.triggered", params: { command: "snap" } },
+      { type: "event", method: "lg:omnibox.input", params: { phase: "started" } },
+      { type: "event", method: "lg:omnibox.input", params: { phase: "changed", text: "q" } },
+      {
+        type: "event",
+        method: "lg:omnibox.input",
+        params: { phase: "entered", text: "q", disposition: "newForegroundTab" },
+      },
+      { type: "event", method: "lg:omnibox.input", params: { phase: "cancelled" } },
+    ]);
+  });
 
-  (calls.listeners.command as (c: string) => void)("open-panel");
-  (calls.listeners.started as () => void)();
-  (calls.listeners.changed as (t: string) => void)("query");
-  (calls.listeners.entered as (t: string, d: string) => void)("goto https://a.test", "currentTab");
-  (calls.listeners.cancelled as () => void)();
-
-  assert.deepEqual(seen.map((e) => [e.method, e.params]), [
-    ["lg:commands.triggered", { command: "open-panel" }],
-    ["lg:omnibox.input", { phase: "started" }],
-    ["lg:omnibox.input", { phase: "changed", text: "query" }],
-    ["lg:omnibox.input", { phase: "entered", text: "goto https://a.test", disposition: "currentTab" }],
-    ["lg:omnibox.input", { phase: "cancelled" }],
-  ]);
+  it("tolerates missing command and omnibox APIs", () => {
+    installChrome({});
+    assert.doesNotThrow(() => listenUi());
+  });
 });

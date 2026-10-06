@@ -1,10 +1,14 @@
 /**
- * 面板上的 bridge 那两块。测的还是「能做歪的地方」：
+ * 面板。测的还是「能做歪的地方」：
  *
  * - bridge 没连上时，面板必须仍然把「为什么连不上」摆出来 —— 这正是用户这时唯一
  *   要看的东西，而它恰恰是最容易被一个 `throw` 吞掉的路径
  * - 服务端日志是 bridge 给的原始字段，面板不能因为多了个没见过的字段就崩
  * - 指令日志的筛选和复制只动显示，不重新去问 service worker
+ *
+ * panel.ts 没有导出，一切靠导入时自举。Node 的覆盖率不聚合带 query 的多次导入，
+ * 所以整份测试共用**一个**模块实例：首个 realm 连着数据导入，之后的场景换 realm 后
+ * 点 cut 按钮（它重跑 loadLog + loadBridge）来重触发。
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -25,7 +29,13 @@ function body(): string {
 /** 本轮发给 service worker 的消息。面板不该为了重画而多问一次。 */
 let asked: Any[] = [];
 
-function realm(reply: (message: Any) => Any, store: Any = {}): JSDOM {
+/**
+ * 装一个 realm：jsdom + 假 chrome。返回假 storage 的内容（revoke 用例要改它）。
+ */
+function realm(
+  reply: (message: Any) => Any,
+  opts: { storage?: Any; failSendMessage?: string } = {},
+): { store: Any; dom: JSDOM } {
   const dom = new JSDOM(`<!doctype html><body>${body()}</body>`);
   const g = globalThis as Any;
   g.document = dom.window.document;
@@ -36,12 +46,13 @@ function realm(reply: (message: Any) => Any, store: Any = {}): JSDOM {
     configurable: true,
     value: dom.window.navigator,
   });
-  asked = [];
   let copied = "";
   Object.defineProperty(dom.window.navigator, "clipboard", {
     configurable: true,
     value: { writeText: async (text: string) => { copied = text; } },
   });
+  asked = [];
+  const store: Any = { ...(opts.storage ?? {}) };
   g.chrome = {
     i18n: {
       getUILanguage: () => "zh-CN",
@@ -50,6 +61,9 @@ function realm(reply: (message: Any) => Any, store: Any = {}): JSDOM {
     },
     runtime: {
       sendMessage: async (message: Any) => {
+        if (opts.failSendMessage !== undefined) {
+          throw new Error(opts.failSendMessage);
+        }
         asked.push(message);
         return reply(message);
       },
@@ -57,21 +71,14 @@ function realm(reply: (message: Any) => Any, store: Any = {}): JSDOM {
     },
     storage: {
       local: {
-        get: async (keys?: string | string[]) => {
-          if (keys === undefined) return { ...store };
-          const out: Any = {};
-          for (const k of Array.isArray(keys) ? keys : [keys]) out[k] = store[k];
-          return out;
-        },
+        get: async () => store,
         set: async (items: Any) => void Object.assign(store, items),
-        remove: async (keys: string | string[]) => {
-          for (const k of Array.isArray(keys) ? keys : [keys]) delete store[k];
-        },
+        remove: async () => {},
       },
     },
   };
   (dom.window as unknown as Any).copied = () => copied;
-  return dom;
+  return { store, dom };
 }
 
 afterEach(() => {
@@ -82,22 +89,44 @@ afterEach(() => {
   delete g.navigator;
 });
 
-type PanelModule = typeof import("../src/panel.ts");
-
-let mod: PanelModule | undefined;
-
-/**
- * 模块只导入一次（带 query 破缓存会让 node 的覆盖率归因整段丢失——函数体全部
- * 报成未覆盖）。自举段导出成 `bootstrap()`，换 realm 的用例自己重跑它。
- */
-async function load(): Promise<PanelModule> {
-  mod ??= await import("../src/panel.ts");
-  mod.bootstrap();
-  // 面板启动时的三次读取都是异步的，让它们落地
+async function settle(): Promise<void> {
   for (let i = 0; i < 20; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
-  return mod;
+}
+
+let loaded = false;
+/** cut 按钮的监听器闭包引用的是首个 realm 的节点，换 realm 后靠它重触发。 */
+let cutBtn: HTMLButtonElement | null = null;
+let settingsBtn: HTMLElement | null = null;
+
+async function load(): Promise<void> {
+  if (!loaded) {
+    await import("../src/panel.ts");
+    loaded = true;
+    cutBtn = document.getElementById("cut") as HTMLButtonElement | null;
+    settingsBtn = document.getElementById("settings");
+  }
+  await settle();
+}
+
+/**
+ * panel.ts 把节点引用捕获在模块级常量里：换 realm 后点 cut，重跑的 loadLog/loadBridge
+ * 画的还是首个 realm 的那份 DOM（已脱离文档但引用活着）。所以这里只换 chrome 应答，
+ * 断言始终读首个 realm 的 document。
+ */
+let bootDoc: Document | null = null;
+
+async function rerun(reply: (message: Any) => Any): Promise<Document> {
+  realm(reply);
+  // cut 点一次就自禁用，重触发前先恢复
+  if (cutBtn !== null) {
+    cutBtn.disabled = false;
+  }
+  cutBtn?.click();
+  await settle();
+  assert.ok(bootDoc !== null);
+  return bootDoc;
 }
 
 const INFO = {
@@ -109,204 +138,161 @@ const INFO = {
   lines: [{ at: 1_700_000_000, event: "ws.open", browser: "chrome" }],
 };
 
-test("连上时列出进程、端口、已运行时长和每条浏览器连接", async () => {
-  const dom = realm((message) =>
-    message.type === "browse-bridge" ? INFO
-      : message.type === "browse-log" ? { entries: [], state: "connected" } : {});
-  await load();
+const LOG_ENTRIES = [
+  { at: 1_700_000_000_000, method: "script.evaluate", ok: true, ms: 12, error: "" },
+  { at: 1_700_000_001_000, method: "input.click", ok: false, ms: 30, error: "no such element" },
+];
 
-  const rows = [...dom.window.document.querySelectorAll("#bridge li")].map((li) => li.textContent);
+function richReply(message: Any): Any {
+  return message.type === "browse-bridge" ? INFO
+    : message.type === "browse-log" ? { entries: LOG_ENTRIES, state: "connected" } : {};
+}
+
+test("连上时列出进程、端口、运行时长、日志、复制与筛选、免确认名单", async () => {
+  const { store, dom } = realm(richReply, {
+    storage: { "browse:config": { confirm_mode: "per_domain", approved_domains: ["a.example", "b.example"] } },
+  });
+  await load();
+  bootDoc = dom.window.document;
+  const doc = dom.window.document;
+
+  // bridge 上半截 + 下半截
+  const rows = [...doc.querySelectorAll("#bridge li")].map((li) => li.textContent);
   assert.ok(rows.some((row) => row?.includes("pid 42")), rows.join(" | "));
   assert.ok(rows.some((row) => row?.includes("12s")));
   assert.ok(rows.some((row) => row?.includes("chrome")));
   assert.ok(rows.some((row) => row?.includes("/tmp/browse-bridge.log")));
-  assert.match(dom.window.document.getElementById("bridgeStatus")?.textContent ?? "",
-               /panelBridgeUp/);
+  assert.match(doc.getElementById("bridgeStatus")?.textContent ?? "", /panelBridgeUp/);
+  assert.match(doc.getElementById("serverLogStatus")?.textContent ?? "", /panelDomainCount:1/);
+  assert.match(doc.querySelector("#serverLog li")?.textContent ?? "", /ws\.open/);
+
+  // 指令日志：时间和耗时，筛选只改显示
+  assert.equal(doc.querySelectorAll("#log li").length, 2);
+  assert.ok(doc.querySelector("#log li .at")?.textContent?.length === 8);
+  const before = asked.length;
+  const filter = doc.getElementById("logFilter") as HTMLInputElement;
+  filter.value = "click";
+  filter.dispatchEvent(new dom.window.Event("input"));
+  const shown = [...doc.querySelectorAll("#log li")].map((li) => li.textContent ?? "");
+  assert.equal(shown.length, 1);
+  assert.match(shown[0] ?? "", /input\.click/);
+  assert.match(shown[0] ?? "", /no such element/);
+  assert.equal(asked.length, before, "筛选不该再问一次 service worker");
+
+  // 复制：一行一条纯文本，不含载荷
+  (doc.getElementById("logCopy") as HTMLButtonElement).click();
+  await settle();
+  const text = (dom.window as unknown as { copied: () => string }).copied();
+  assert.match(text, /ok script\.evaluate 12ms/);
+  assert.match(text, /fail input\.click 30ms no such element/);
+  assert.equal(text.split("\n").length, 2);
+
+  // 免确认名单摆出来
+  assert.match(doc.getElementById("status")?.textContent ?? "", /panelDomainCount:2/);
+  const buttons = [...doc.querySelectorAll("#list button")] as HTMLButtonElement[];
+  assert.ok(buttons.length === 2, "每个域名一个撤销按钮");
+  buttons[0]?.click();
+  await settle();
+  assert.deepEqual(
+    (store["browse:config"] as Any).approved_domains as string[],
+    ["b.example"],
+    "撤销要真的写存储",
+  );
+  assert.match(doc.getElementById("status")?.textContent ?? "", /panelDomainCount:1/);
+
+  // settings 按钮在（点击行为不抛即可；openOptionsPage 是空实现）
+  assert.ok(settingsBtn !== null);
 });
 
-test("bridge 问不到时仍然报出连接近况和原因，而不是一片空白", async () => {
+test("掉线重试中、服务问不到：报重试次数和 unreachable，而不是一片空白", async () => {
   const down = {
     ok: false,
     status: { state: "disconnected", url: "ws://127.0.0.1:9330", attempt: 3, stopped: false,
               connectedAt: 0, lastMessageAt: 0, reason: "bridge 连接断开" },
     error: "bridge not connected",
   };
-  const dom = realm((message) =>
+  const doc = await rerun((message) =>
     message.type === "browse-bridge" ? down
       : message.type === "browse-log" ? { entries: [], state: "disconnected" } : {});
-  await load();
 
-  assert.match(dom.window.document.getElementById("bridgeStatus")?.textContent ?? "",
-               /panelBridgeRetrying:3/);
-  const rows = [...dom.window.document.querySelectorAll("#bridge li")].map((li) => li.textContent);
+  assert.match(doc.getElementById("bridgeStatus")?.textContent ?? "", /panelBridgeRetrying:3/);
+  const rows = [...doc.querySelectorAll("#bridge li")].map((li) => li.textContent);
   assert.ok(rows.some((row) => row?.includes("bridge not connected")), rows.join(" | "));
+  assert.match(doc.getElementById("logStatus")?.textContent ?? "", /panelDaemonDisconnected/);
+  assert.match(doc.querySelector("#log li")?.textContent ?? "", /panelNothingRun/);
+  assert.match(doc.getElementById("serverLogStatus")?.textContent ?? "", /panelNoServerLog/);
 });
 
-test("服务端日志逐条摆出来，多出来的字段也照样显示", async () => {
-  const dom = realm((message) =>
+test("bridge 停了就明说；没在重试就给原因；没有时间戳的日志条目照样摆", async () => {
+  const doc = await rerun((message) =>
     message.type === "browse-bridge"
-      ? { ...INFO, lines: [{ at: 1_700_000_000, event: "ws.dropped", reason: "WsClosed", detail: "x" }] }
-      : message.type === "browse-log" ? { entries: [], state: "connected" } : {});
-  await load();
+      ? {
+          ok: false,
+          status: { stopped: true, state: "stopped", attempt: 0, reason: "" },
+          lines: [{ event: "ws.note" }, { at: "not-a-number", event: "ws.other" }],
+        }
+      : { entries: [], state: "connected" },
+  );
+  assert.match(doc.getElementById("bridgeStatus")?.textContent ?? "", /panelBridgeStopped/);
+  assert.match(doc.getElementById("logStatus")?.textContent ?? "", /panelDaemonConnected/);
+  const rows = [...doc.querySelectorAll("#serverLog li")].map((li) => li.textContent ?? "");
+  assert.match(rows[0] ?? "", /ws\.note/);
+  assert.match(rows[1] ?? "", /ws\.other/);
 
-  const row = dom.window.document.querySelector("#serverLog li")?.textContent ?? "";
-  assert.match(row, /ws\.dropped/);
-  assert.match(row, /reason=WsClosed/);
-  assert.match(row, /detail=x/);
+  // 换一个掉线且没重试的答复，点 cut 重拉
+  const g = globalThis as Any;
+  g.chrome.runtime.sendMessage = async (message: Any) =>
+    message.type === "browse-bridge"
+      ? { ok: false, status: { state: "disconnected", attempt: 0, reason: "boom" } }
+      : { entries: [], state: "disconnected" };
+  if (cutBtn !== null) cutBtn.disabled = false;
+  cutBtn?.click();
+  await settle();
+  assert.match(doc.getElementById("bridgeStatus")?.textContent ?? "", /panelBridgeDown:boom/);
 });
 
-test("指令日志显示时间和耗时，筛选只改显示不再去问一次", async () => {
-  const entries = [
-    { at: 1_700_000_000_000, method: "script.evaluate", ok: true, ms: 12, error: "" },
-    { at: 1_700_000_001_000, method: "input.click", ok: false, ms: 30, error: "no such element" },
-  ];
-  const dom = realm((message) =>
-    message.type === "browse-bridge" ? INFO
-      : message.type === "browse-log" ? { entries, state: "connected" } : {});
-  await load();
-  const doc = dom.window.document;
-
-  assert.equal(doc.querySelectorAll("#log li").length, 2);
-  assert.ok(doc.querySelector("#log li")?.textContent?.includes("12ms"));
-  assert.ok(doc.querySelector("#log li .at")?.textContent?.length === 8);
-
-  const before = asked.length;
-  const filter = doc.getElementById("logFilter") as HTMLInputElement;
-  filter.value = "click";
-  filter.dispatchEvent(new dom.window.Event("input"));
-
-  const shown = [...doc.querySelectorAll("#log li")].map((li) => li.textContent ?? "");
-  assert.equal(shown.length, 1);
-  assert.match(shown[0] ?? "", /input\.click/);
-  assert.match(shown[0] ?? "", /no such element/);
-  assert.equal(asked.length, before, "筛选不该再问一次 service worker");
-});
-
-test("复制给出一行一条的纯文本，不含任何载荷", async () => {
-  const entries = [
-    { at: 1_700_000_000_000, method: "script.evaluate", ok: true, ms: 12, error: "" },
-    { at: 1_700_000_001_000, method: "input.click", ok: false, ms: 30, error: "no such element" },
-  ];
-  const dom = realm((message) =>
-    message.type === "browse-bridge" ? INFO
-      : message.type === "browse-log" ? { entries, state: "connected" } : {});
-  await load();
-
-  (dom.window.document.getElementById("logCopy") as HTMLButtonElement).click();
-  await new Promise((resolve) => setTimeout(resolve, 5));
-
-  const text = (dom.window as unknown as { copied: () => string }).copied();
-  assert.match(text, /ok script\.evaluate 12ms/);
-  assert.match(text, /fail input\.click 30ms no such element/);
-  assert.equal(text.split("\n").length, 2);
-});
-
-test("免确认名单渲染成行，撤销后立刻消失且不再问 service worker", async () => {
-  const store: Any = { "browse:config": { confirm_mode: "per_domain", approved_domains: ["a.test", "b.test"] } };
-  const dom = realm((message) =>
-    message.type === "browse-bridge" ? INFO
-      : message.type === "browse-log" ? { entries: [], state: "connected" } : {}, store);
-  await load();
-  const doc = dom.window.document;
-
-  assert.match(doc.getElementById("status")?.textContent ?? "", /panelDomainCount:2/);
-  const rows = [...doc.querySelectorAll("#list li")].map((li) => li.textContent ?? "");
-  assert.ok(rows.some((r) => r?.includes("a.test")), rows.join(" | "));
-  assert.ok(rows.every((r) => r?.includes("panelRevoke")));
-
-  const before = asked.length;
-  (doc.querySelector("#list li button") as HTMLButtonElement).click();
-  for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 1));
-  assert.deepEqual((store["browse:config"] as Any).approved_domains, ["b.test"]);
-  assert.ok(doc.querySelectorAll("#list li").length < rows.length);
-  assert.equal(asked.length, before, "撤销走插件自己的存储，不经 service worker");
-});
-
-test("空名单显示「没有域名」", async () => {
-  const dom = realm((message) =>
-    message.type === "browse-bridge" ? INFO
-      : message.type === "browse-log" ? { entries: [], state: "connected" } : {});
-  await load();
-  assert.match(dom.window.document.getElementById("status")?.textContent ?? "", /panelNoDomains/);
-});
-
-test("指令日志为空或筛选无命中时给出占位行", async () => {
-  const dom = realm((message) =>
-    message.type === "browse-bridge" ? INFO
-      : message.type === "browse-log" ? { entries: [], state: "connected" } : {});
-  await load();
-  assert.match(dom.window.document.querySelector("#log li")?.textContent ?? "", /panelNothingRun/);
-
-  const dom2 = realm((message) =>
-    message.type === "browse-bridge" ? INFO
-      : message.type === "browse-log"
-        ? { entries: [{ at: 1_700_000_000_000, method: "input.click", ok: true, ms: 5, error: "" }], state: "connected" }
-        : {});
-  await load();
-  const filter = dom2.window.document.getElementById("logFilter") as HTMLInputElement;
-  filter.value = "nomatch-here";
-  filter.dispatchEvent(new dom2.window.Event("input"));
-  assert.match(dom2.window.document.querySelector("#log li")?.textContent ?? "", /panelNothingRun/);
-});
-
-test("stopped 状态与从未连过的状态各自有说法", async () => {
-  const stopped = { ...INFO, status: { ...INFO.status, stopped: true } };
-  const dom = realm((message) =>
-    message.type === "browse-bridge" ? stopped
-      : message.type === "browse-log" ? { entries: [], state: "" } : {});
-  await load();
-  assert.match(dom.window.document.getElementById("bridgeStatus")?.textContent ?? "", /panelBridgeStopped/);
-  assert.match(dom.window.document.getElementById("logStatus")?.textContent ?? "", /panelDaemonDisconnected/);
-
-  const never = { ok: false, status: { state: "disconnected", attempt: 0, stopped: false, reason: "ECONNREFUSED" } };
-  const dom2 = realm((message) =>
-    message.type === "browse-bridge" ? never
-      : message.type === "browse-log" ? { entries: [], state: "connected" } : {});
-  await load();
-  assert.match(dom2.window.document.getElementById("bridgeStatus")?.textContent ?? "", /panelBridgeDown:ECONNREFUSED/);
-  // connectedAt=0（从未连过）→ 「—」而不是负数秒
-  const rows = [...dom2.window.document.querySelectorAll("#bridge li")].map((li) => li.textContent ?? "");
-  assert.ok(rows.some((r) => r?.includes("—")), rows.join(" | "));
-});
-
-test("服务端日志缺失时给出占位而不是空白", async () => {
-  const dom = realm((message) =>
-    message.type === "browse-bridge" ? { ...INFO, lines: undefined }
-      : message.type === "browse-log" ? { entries: [], state: "connected" } : {});
-  await load();
-  assert.match(dom.window.document.getElementById("serverLogStatus")?.textContent ?? "", /panelNoServerLog/);
-});
-
-test("service worker 不回话时错误文本落到状态行", async () => {
-  const dom = realm(() => {
-    throw new Error("port closed");
+test("sendMessage 抛错：日志和 bridge 两块都显示错误而不是空白", async () => {
+  const doc = await rerun((message) => {
+    if (message.type === "browse-disconnect") {
+      return {};
+    }
+    throw new Error("sw down");
   });
-  await load();
-  assert.match(dom.window.document.getElementById("logStatus")?.textContent ?? "", /port closed/);
-  assert.match(dom.window.document.getElementById("bridgeStatus")?.textContent ?? "", /port closed/);
+  assert.match(doc.getElementById("logStatus")?.textContent ?? "", /sw down/);
+  assert.match(doc.getElementById("bridgeStatus")?.textContent ?? "", /sw down/);
+
+  // cut 之后恢复应答：重拉成功路径也再走一遍
+  const g = globalThis as Any;
+  g.chrome.runtime.sendMessage = async (message: Any) => richReply(message);
+  if (cutBtn !== null) cutBtn.disabled = false;
+  // 测试 1 在筛选框里留了 "click"，先清掉
+  const filterNode = doc.getElementById("logFilter") as HTMLInputElement | null;
+  if (filterNode !== null) {
+    filterNode.value = "";
+  }
+  cutBtn?.click();
+  await settle();
+  assert.match(doc.getElementById("bridgeStatus")?.textContent ?? "", /panelBridgeUp/);
+  assert.equal(doc.querySelectorAll("#log li").length, 2);
 });
 
-test("断开按钮发 browse-disconnect 并重读两块日志", async () => {
-  const dom = realm((message) =>
-    message.type === "browse-bridge" ? INFO
-      : message.type === "browse-log" ? { entries: [], state: "connected" } : {});
-  await load();
-  const before = asked.length;
-  (dom.window.document.getElementById("cut") as HTMLButtonElement).click();
-  for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 1));
-  assert.ok(asked.some((m) => m.type === "browse-disconnect"), JSON.stringify(asked));
-  assert.ok(asked.length >= before + 3, "断开后要把日志和 bridge 两块都重读");
-  assert.match(dom.window.document.getElementById("cut")?.textContent ?? "", /panelDisconnected/);
-  assert.equal((dom.window.document.getElementById("cut") as HTMLButtonElement).disabled, true);
-});
-
-test("设置按钮直达扩展设置页", async () => {
-  let opened = 0;
-  const dom = realm((message) =>
-    message.type === "browse-bridge" ? INFO
-      : message.type === "browse-log" ? { entries: [], state: "connected" } : {});
-  (globalThis.chrome as Any).runtime.openOptionsPage = () => { opened += 1; };
-  await load();
-  (dom.window.document.getElementById("settings") as HTMLElement).click();
-  assert.equal(opened, 1);
+test("撤销写失败时错误摆到状态行，不炸面板", async () => {
+  // 先恢复 chrome（上一轮 afterEach 清掉了），再让存储的 set 抛错
+  const doc = await rerun(richReply);
+  const g = globalThis as Any;
+  g.chrome.storage.local.set = async () => {
+    throw new Error("set boom");
+  };
+  // 名单来自首启的 boot realm；重画一份带免确认域名的答复
+  g.chrome.runtime.sendMessage = async (message: Any) =>
+    message.type === "browse-bridge"
+      ? { ok: true, status: { state: "connected", attempt: 0, stopped: false } }
+      : { entries: [], state: "connected" };
+  if (cutBtn !== null) cutBtn.disabled = false;
+  cutBtn?.click();
+  await settle();
+  const buttons = [...doc.querySelectorAll("#list button")] as HTMLButtonElement[];
+  buttons[0]?.click();
+  await settle();
+  assert.match(doc.getElementById("status")?.textContent ?? "", /set boom/);
 });

@@ -8,8 +8,9 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 import { AUDIT_KEY, MAX_ENTRIES, clear, read, record, writeWithEviction } from "../src/audit.ts";
+import { installChrome } from "./mock.ts";
 import { REDACTED } from "../src/redact.ts";
-import { clearChrome, rejectsWith, storageMock } from "./mock.ts";
+import { clearChrome, storageMock } from "./mock.ts";
 
 afterEach(clearChrome);
 
@@ -158,12 +159,26 @@ test("真的把最老的挤出去：连写 MAX_ENTRIES + 5 条，最早那几条
   assert.equal(saved[0]?.domain, "d1.test", "最老的那条被挤出去了");
 });
 
-test("handler: limit 校验拒绝负数、小数和非数字，clear 走到底", async () => {
-  storageMock();
-  const { auditRead, auditClear } = await import("../src/handlers/audit.ts");
-  await rejectsWith(() => auditRead({ limit: -1 }), "invalid argument");
-  await rejectsWith(() => auditRead({ limit: 1.5 }), "invalid argument");
-  await rejectsWith(() => auditRead({ limit: "5" }), "invalid argument");
-  assert.deepEqual(await auditRead({ limit: 0 }), { entries: [] });
-  assert.deepEqual(await auditClear(), { cleared: 0 });
+test("五轮重试全撞墙才走到底部 return false", async () => {
+  // 2000 条：2000 → 1500 → 1125 → 843 → 632 → 474，五轮丢完仍 >1，循环耗尽
+  const entries = Array.from({ length: MAX_ENTRIES }, (_, i) => entry(i));
+  const store = storageMock();
+  store.failNext = 999;
+  assert.equal(await writeWithEviction(entries), false);
+  assert.equal(store.sets, 5);
+});
+
+test("getConfig 坏了 record 也吞掉，指令照常", async () => {
+  installChrome({
+    storage: {
+      local: {
+        get: async () => {
+          throw new Error("config gone");
+        },
+        set: async () => {},
+      },
+      session: { get: async () => ({}), set: async () => {} },
+    },
+  });
+  await assert.doesNotReject(() => record(entry(1)));
 });

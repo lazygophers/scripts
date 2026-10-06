@@ -1,85 +1,99 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { wauthAttach, wauthComplete, wauthDetach, listenWauth } from "../src/handlers/wauth.ts";
-import { installChrome, ownSession, rejectsWith } from "./mock.ts";
+import { afterEach, describe, it } from "node:test";
+
+import {
+  wauthAttach,
+  wauthComplete,
+  wauthDetach,
+  listenWauth,
+} from "../src/handlers/wauth.ts";
 import { setEventSink } from "../src/events.ts";
+import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
 
 type Any = Record<string, unknown>;
 
-function setup(calls: Any = {}) {
-  const requests: Any[] = [];
-  const proxy = {
-    attach: async () => {
-      calls.attach = (calls.attach as number ?? 0) + 1;
-    },
-    detach: async () => {
-      calls.detach = (calls.detach as number ?? 0) + 1;
-    },
-    completeGetRequest: async (id: string, r: Any) => {
-      requests.push({ kind: "get", id, r });
-    },
-    completeCreateRequest: async (id: string, r: Any) => {
-      requests.push({ kind: "create", id, r });
-    },
-    onRequest: { addListener: (fn: (e: Any) => void) => { calls.listener = fn; } },
-  };
+afterEach(() => {
+  clearChrome();
+  setEventSink(null);
+});
+
+function wauthWorld(): { gets: Any[]; creates: Any[] } {
+  const state = { gets: [] as Any[], creates: [] as Any[] };
   installChrome({
-    ...ownSession(),
-    webAuthenticationProxy: proxy as Any,
+    webAuthenticationProxy: {
+      attach: async () => {},
+      detach: async () => {},
+      completeGetRequest: async (id: string, r: Any) => void state.gets.push({ id, r }),
+      completeCreateRequest: async (id: string, r: Any) => void state.creates.push({ id, r }),
+    },
   });
-  return { calls, requests, proxy };
+  return state;
 }
 
-test("attach/detach round-trip the proxy", async () => {
-  const { calls } = setup();
-  assert.deepEqual(await wauthAttach(), { attached: true });
-  assert.deepEqual(await wauthDetach(), { detached: true });
-  assert.equal(calls.attach, 1);
-  assert.equal(calls.detach, 1);
-});
-
-test("complete validates kind, status code and headers", async () => {
-  const { requests } = setup();
-  await rejectsWith(
-    () => wauthComplete({ request: "r1", kind: "sign", httpStatusCode: 200 }),
-    "invalid argument",
-  );
-  await rejectsWith(
-    () => wauthComplete({ request: "r1", kind: "get", httpStatusCode: "200" }),
-    "invalid argument",
-  );
-  await rejectsWith(
-    () => wauthComplete({ request: "r1", kind: "get", httpStatusCode: 200, headers: "x" }),
-    "invalid argument",
-  );
-  assert.deepEqual(requests, []);
-
-  assert.deepEqual(await wauthComplete({ request: "r1", kind: "get", httpStatusCode: 200 }), {
-    completed: "r1",
+describe("wauth", () => {
+  it("attaches and detaches the proxy", async () => {
+    wauthWorld();
+    assert.deepEqual(await wauthAttach(), { attached: true });
+    assert.deepEqual(await wauthDetach(), { detached: true });
   });
-  assert.deepEqual(await wauthComplete({
-    request: "r2",
-    kind: "create",
-    httpStatusCode: 201,
-    headers: { "x-a": "1" },
-  }), { completed: "r2" });
-  assert.deepEqual(requests, [
-    { kind: "get", id: "r1", r: { httpStatusCode: 200 } },
-    { kind: "create", id: "r2", r: { httpStatusCode: 201, headers: { "x-a": "1" } } },
-  ]);
+
+  it("completes get and create requests", async () => {
+    const s = wauthWorld();
+    assert.deepEqual(
+      await wauthComplete({ request: "r1", kind: "get", httpStatusCode: 200 }),
+      { completed: "r1" },
+    );
+    assert.deepEqual(s.gets, [{ id: "r1", r: { httpStatusCode: 200 } }]);
+    assert.deepEqual(
+      await wauthComplete({ request: "r2", kind: "create", httpStatusCode: 401, headers: { a: "b" } }),
+      { completed: "r2" },
+    );
+    assert.deepEqual(s.creates, [{ id: "r2", r: { httpStatusCode: 401, headers: { a: "b" } } }]);
+  });
+
+  it("validates its arguments", async () => {
+    wauthWorld();
+    await rejectsWith(() => wauthComplete({ kind: "get", httpStatusCode: 200 }), "invalid argument");
+    await rejectsWith(() => wauthComplete({ request: "r", httpStatusCode: 200 }), "invalid argument");
+    await rejectsWith(() => wauthComplete({ request: "r", kind: "nope", httpStatusCode: 200 }), "invalid argument");
+    await rejectsWith(() => wauthComplete({ request: "r", kind: "get" }), "invalid argument");
+    await rejectsWith(
+      () => wauthComplete({ request: "r", kind: "get", httpStatusCode: 200, headers: "x" }),
+      "invalid argument",
+    );
+  });
+
+  it("refuses when the browser has no webAuthenticationProxy", async () => {
+    installChrome({ runtime: {} });
+    await rejectsWith(() => wauthAttach(), "unsupported operation");
+    await rejectsWith(() => wauthDetach(), "unsupported operation");
+    await rejectsWith(() => wauthComplete({ request: "r", kind: "get", httpStatusCode: 200 }), "unsupported operation");
+  });
 });
 
-test("listenWauth forwards onRequest into lg:wauth.request events", async () => {
-  const { calls } = setup();
-  const seen: Any[] = [];
-  setEventSink((event) => seen.push(event));
-  listenWauth();
-  (calls.listener as (e: Any) => void)({ requestId: "r9", type: "create" });
-  setEventSink(null);
-  assert.equal(seen.length, 1);
-  assert.equal(seen[0].method, "lg:wauth.request");
-  const params = seen[0].params as Any;
-  assert.equal(params.request, "r9");
-  assert.equal(params.kind, "create");
-  assert.equal((params.raw as Any).requestId, "r9");
+describe("wauth.listenWauth", () => {
+  it("forwards requests as events", () => {
+    const events: Any[] = [];
+    setEventSink((e) => events.push(e));
+    let onRequest: ((e: Any) => void) | undefined;
+    installChrome({
+      webAuthenticationProxy: {
+        onRequest: { addListener: (fn: (e: Any) => void) => (onRequest = fn) },
+      },
+    });
+    listenWauth();
+    onRequest?.({ requestId: "r1", type: "get" });
+    assert.deepEqual(events[0], {
+      type: "event",
+      method: "lg:wauth.request",
+      params: { request: "r1", kind: "get", raw: { requestId: "r1", type: "get" } },
+    });
+  });
+
+  it("tolerates a missing API and listener", () => {
+    installChrome({});
+    assert.doesNotThrow(() => listenWauth());
+    installChrome({ webAuthenticationProxy: {} });
+    assert.doesNotThrow(() => listenWauth());
+  });
 });

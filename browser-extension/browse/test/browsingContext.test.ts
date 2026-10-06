@@ -205,107 +205,137 @@ test("operating on an existing tab never moves it into a group", async () => {
   }
 });
 
-test("getTree: root 对不上时报 no such frame，没 id 的 tab 没有 children", async () => {
+test("create without a tab id is an unknown error, not a bogus context", async () => {
   tabsMock();
-  await rejectsWith(() => browsingContextGetTree({ root: "999" }), "no such frame");
-
-  // tabs.query 回一个没 id 的 tab：tabToContext 走 tabId=-1，frameChildren 直接空
   installChrome({
-    tabs: {
-      query: async () => [{ url: "https://weird.test/", active: true, groupId: 500 }],
-      get: async () => ({}),
-    },
-    tabGroups: { query: async () => [{ id: 500, title: "browse/default" }] },
-  });
-  const tree = await browsingContextGetTree({});
-  assert.equal(tree.contexts.length, 1);
-  assert.equal(tree.contexts[0].context, "-1");
-  assert.deepEqual(tree.contexts[0].children, []);
-  clearChrome();
-});
-
-test("create: 开出来的 tab 没 id 直接报 unknown error", async () => {
-  const calls: Any[] = [];
-  installChrome({
-    tabs: {
-      query: async () => [],
-      get: async () => ({}),
-      create: async (opts: Any) => {
-        calls.push(opts);
-        return { windowId: 3 };
-      },
-    },
+    tabs: { create: async () => ({ windowId: 3 }), query: async () => [], get: async () => ({}) },
   });
   await rejectsWith(() => browsingContextCreate({ url: "https://x.test/" }), "unknown error");
-  assert.equal(calls.length, 1);
   clearChrome();
 });
 
-test("captureScreenshot 只认 viewport 和 png/jpeg", async () => {
-  const { chrome } = tabsMock();
-  void chrome;
-  await rejectsWith(
-    () => browsingContextCaptureScreenshot({ origin: "document" }),
-    "unsupported operation",
-  );
-  await rejectsWith(() => browsingContextCaptureScreenshot({ format: "webp" }), "invalid argument");
-  clearChrome();
-});
-
-test("reload 的超时路径：页面一直不 complete 就按 unknown error 拒", async () => {
-  const listeners: ((id: number, info: Any) => void)[] = [];
+test("getTree with nothing owned answers an empty list", async () => {
+  ownWorld([], { registry: [] });
   installChrome({
+    tabs: { query: async () => [] },
+    tabGroups: { query: async () => [] },
+    webNavigation: { getAllFrames: async () => [] },
+  });
+  assert.deepEqual(await browsingContextGetTree({}), { contexts: [] });
+  clearChrome();
+});
+
+test("captureScreenshot refuses formats it cannot produce", async () => {
+  tabsMock();
+  installChrome({ tabs: { captureVisibleTab: async () => "data" } });
+  await rejectsWith(
+    () => browsingContextCaptureScreenshot({ format: "webp" }),
+    "invalid argument",
+  );
+  clearChrome();
+});
+
+test("frame enumeration reports child frames and survives unreadable tabs", async () => {
+  ownWorld([{ id: 7, url: "https://a.test/", groupId: 500, active: true }]);
+  installChrome({
+    webNavigation: {
+      getAllFrames: async ({ tabId }: Any) =>
+        tabId === 7
+          ? [
+              { frameId: 0, parentFrameId: -1, url: "https://a.test/" },
+              { frameId: 3, parentFrameId: 0, url: "https://a.test/inner" },
+            ]
+          : (() => { throw new Error("chrome://"); })(),
+    },
+    tabs: { query: async () => [{ id: 7, url: "https://a.test/", groupId: 500, active: true }] },
+  });
+  const { contexts } = await browsingContextGetTree({ all: true });
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0]?.children?.length, 1);
+  assert.equal(contexts[0]?.children?.[0]?.context, "7.3");
+  assert.equal(contexts[0]?.children?.[0]?.parent, "7");
+  clearChrome();
+});
+
+test("an unknown root context is refused", async () => {
+  ownWorld([{ id: 7, url: "https://a.test/", groupId: 500, active: true }]);
+  await rejectsWith(() => browsingContextGetTree({ root: "9" }), "no such frame");
+  clearChrome();
+});
+
+test("navigate that never completes rejects after its timeout", async () => {
+  const { chrome } = tabsMock();
+  // 装一个从不报 complete 的 onUpdated
+  installChrome({
+    ...((globalThis as Any).chrome as Any),
     tabs: {
-      query: async () => [{ id: 7, url: "https://a.test/", active: true, groupId: 500 }],
-      get: async () => ({ id: 7, url: "https://a.test/", active: true, groupId: 500 }),
-      reload: async () => {},
+      ...(chrome.tabs as Any),
       onUpdated: {
-        addListener: (fn: (id: number, info: Any) => void) => listeners.push(fn),
+        addListener: () => {},
         removeListener: () => {},
       },
     },
   });
-  await rejectsWith(
-    () => browsingContextReload({ context: "7", timeout: 5 }),
+  const err = await rejectsWith(
+    () => browsingContextNavigate({ url: "https://x.test/", timeout: 20 }),
     "unknown error",
   );
-  assert.equal(listeners.length, 1, "监听器挂上了，只是没人触发");
+  assert.match(err.message, /navigation did not finish in 20ms/);
   clearChrome();
 });
 
-test("frameChildren: chrome:// 页面取不到 frame 清单时按无子级上报", async () => {
+test("create without a url opens a blank active tab", async () => {
+  const { calls } = tabsMock();
+  assert.deepEqual(await browsingContextCreate({}), { context: "99" });
+  assert.deepEqual(calls[0], { create: { active: true } });
+  clearChrome();
+});
+
+test("navigate and reload fall back to the request url or empty when the tab has none", async () => {
+  const { chrome } = tabsMock({ url: undefined });
   installChrome({
+    ...((globalThis as Any).chrome as Any),
     tabs: {
-      query: async () => [{ id: 7, url: "chrome://settings/", active: true, groupId: 500 }],
-      get: async () => ({ id: 7, url: "chrome://settings/", active: true, groupId: 500 }),
-    },
-    tabGroups: { query: async () => [{ id: 500, title: "browse/default" }] },
-    webNavigation: {
-      getAllFrames: async () => {
-        throw new Error("cannot access chrome://");
-      },
+      ...(chrome.tabs as Any),
+      get: async () => ({ id: 7, url: undefined, active: true, windowId: 3, groupId: 500 }),
     },
   });
-  const tree = await browsingContextGetTree({});
-  assert.deepEqual(tree.contexts[0].children, []);
+  const nav = await browsingContextNavigate({ url: "https://x.test/" });
+  assert.equal(nav.url, "https://x.test/");
+  const reload = await browsingContextReload({});
+  assert.equal(reload.url, "");
+  clearChrome();
+});
 
-  // 正常页面：子 frame 清单映射成 children
+test("captureScreenshot tolerates a bare base64 payload without a data-url prefix", async () => {
+  tabsMock();
   installChrome({
     tabs: {
       query: async () => [{ id: 7, url: "https://a.test/", active: true, groupId: 500 }],
       get: async () => ({ id: 7, url: "https://a.test/", active: true, groupId: 500 }),
+      captureVisibleTab: async () => "QUJD",
+      update: async () => ({}),
     },
-    tabGroups: { query: async () => [{ id: 500, title: "browse/default" }] },
-    webNavigation: {
-      getAllFrames: async () => [
-        { frameId: 0, parentFrameId: -1, url: "https://a.test/" },
-        { frameId: 2, parentFrameId: 0, url: "https://ads.test/f" },
-      ],
-    },
+    windows: { update: async () => ({}) },
   });
-  const tree2 = await browsingContextGetTree({});
-  assert.deepEqual(tree2.contexts[0].children, [{
-    context: "7.2", parent: "7", url: "https://ads.test/f", children: [],
-  }]);
+  const r = await browsingContextCaptureScreenshot({});
+  assert.equal(r.data, "QUJD");
+  clearChrome();
+});
+
+test("unreadable frames (webNavigation rejects) yield a context with no children", async () => {
+  ownWorld([{ id: 7, url: "https://a.test/", groupId: 500, active: true }]);
+  installChrome({
+    webNavigation: {
+      getAllFrames: async () => {
+        throw new Error("chrome://");
+      },
+    },
+    tabGroups: { query: async () => [{ id: 500, windowId: 3, title: "browse/default" }] },
+    tabs: { query: async () => [{ id: 7, url: "https://a.test/", groupId: 500, active: true }] },
+  });
+  const { contexts } = await browsingContextGetTree({});
+  assert.equal(contexts.length, 1);
+  assert.deepEqual(contexts[0]?.children, []);
   clearChrome();
 });

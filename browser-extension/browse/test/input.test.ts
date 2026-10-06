@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { inputClick, inputKey, inputScroll, inputType, inputUpload } from "../src/handlers/input.ts";
+import { inputClick, inputKey, inputScroll, inputType, inputUpload, pageInput, pageUpload } from "../src/handlers/input.ts";
 import { setConfirmHook, type ConfirmRequest } from "../src/handlers/confirm.ts";
 import { clearChrome, installChrome, ownSession, page, rejectsWith, scriptingMock } from "./mock.ts";
 import type { JSDOM } from "jsdom";
@@ -297,4 +297,101 @@ test("upload rejects disabled file inputs", async () => {
     () => inputUpload({ selector: "#d", dataBase64: btoa("x") }),
     "invalid argument",
   );
+});
+
+test("scroll validates dx and dy types", async () => {
+  setup(`<div id="s">x</div>`);
+  await rejectsWith(() => inputScroll({ selector: "#s", dx: "left" }), "invalid argument");
+  await rejectsWith(() => inputScroll({ selector: "#s", dy: "down" }), "invalid argument");
+});
+
+test("upload with a js= locator goes through the MAIN world confirm", async () => {
+  const { dom } = setup(`<input id="f" type="file">`);
+  void dom;
+  const result = (await inputUpload({
+    selector: "js=document.querySelector('#f')",
+    dataBase64: btoa("x"),
+  })) as Any;
+  assert.equal(result["lg:isTrusted"], false);
+  setConfirmHook(async () => false);
+  await rejectsWith(
+    () => inputUpload({ selector: "js=document.querySelector('#f')", dataBase64: btoa("x") }),
+    "lg:user rejected",
+  );
+  setConfirmHook(async () => true);
+});
+
+test("pageUpload without the injected locator reports a page error", async () => {
+  const g = globalThis as unknown as Record<string, unknown>;
+  const saved = g.__browseLocate;
+  delete g.__browseLocate;
+  try {
+    const outcome = await pageUpload({ scheme: "css", value: "#f" }, {}, { dataBase64: "x" });
+    assert.deepEqual(outcome, {
+      ok: false,
+      message: "unknown error: locator was not injected into the page",
+    });
+  } finally {
+    g.__browseLocate = saved;
+  }
+});
+
+test("pageUpload reports unmatched locators via the injected locate", async () => {
+  const g = globalThis as unknown as Record<string, unknown>;
+  const saved = g.__browseLocate;
+  g.__browseLocate = async () => [];
+  try {
+    const outcome = await pageUpload({ scheme: "css", value: "#none" }, {}, { dataBase64: "x" });
+    assert.equal(outcome.ok, false);
+    assert.match(outcome.ok ? "" : outcome.message, /locator matched nothing/);
+  } finally {
+    g.__browseLocate = saved;
+  }
+});
+
+test("pageInput without the injected locator reports a page error", async () => {
+  const g = globalThis as unknown as Record<string, unknown>;
+  const saved = g.__browseLocate;
+  delete g.__browseLocate;
+  try {
+    const outcome = await pageInput("click", { selector: "#go" }, {});
+    assert.deepEqual(outcome, {
+      ok: false,
+      message: "unknown error: locator was not injected into the page",
+    });
+  } finally {
+    g.__browseLocate = saved;
+  }
+});
+
+test("scrollIntoView is used when the deltas are zero", async () => {
+  const { dom } = setup(`<div id="box">x</div>`);
+  let intoView = 0;
+  const box = dom.window.document.querySelector("#box") as HTMLElement;
+  box.scrollIntoView = () => { intoView += 1; };
+  const result = (await inputScroll({ selector: "#box", dx: 0, dy: 0 })) as Any;
+  assert.equal(intoView, 1);
+  assert.deepEqual(result.scrolled, { x: 0, y: 0 });
+});
+
+test("key honours an explicit code; scroll defaults the deltas; click takes locate options", async () => {
+  const { dom } = setup(`<input id="t" type="text"><div id="s">x</div>`);
+  void dom;
+  const typed: string[] = [];
+  (dom.window.document.querySelector("#t") as HTMLElement).addEventListener("keydown", (e) => {
+    typed.push(`${e.key}:${e.keyCode}`);
+  });
+  await inputKey({ selector: "#t", key: "a", code: "KeyA" });
+  assert.ok(typed[0]?.startsWith("a:"), typed.join());
+
+  const scrolled = (await inputScroll({ selector: "#s" })) as Any;
+  assert.deepEqual(scrolled.scrolled, { x: 0, y: 0 });
+
+  await inputClick({ selector: "#t", index: 0, timeout: 100, all: true });
+});
+
+test("upload forwards locate options", async () => {
+  const { dom } = setup(`<input id="f" type="file">`);
+  void dom;
+  await inputUpload({ selector: "#f", dataBase64: btoa("x"), index: 0, timeout: 200 });
 });

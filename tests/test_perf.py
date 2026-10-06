@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import unittest
@@ -102,6 +103,10 @@ class TestStartupBudget(unittest.TestCase):
         return int(p.stdout.strip())
 
     def test_startup_imports_stay_within_budget(self):
+        # coverage 的 sitecustomize 会在每个子进程注入 coverage 模块链，把模块数
+        # 撑爆预算——那是测量伪影不是回归，裸跑本测试是准的。
+        if os.environ.get("COVERAGE_PROCESS_START"):
+            self.skipTest("coverage 注入模块链，模块数预算在此环境无意义")
         with ThreadPoolExecutor(max_workers=len(self.MODULE_BUDGET)) as pool:
             counts = dict(zip(self.MODULE_BUDGET, pool.map(self._module_count, self.MODULE_BUDGET)))
         over = {cli: count for cli, count in counts.items() if count > self.MODULE_BUDGET[cli]}
