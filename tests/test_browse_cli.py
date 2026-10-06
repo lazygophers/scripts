@@ -1062,6 +1062,7 @@ class TestFriendlyMapping(unittest.TestCase):
         "lg:page.snapshot", "lg:tabs.group", "lg:tabs.ungroup", "lg:tabs.groups",
         "lg:tabs.updateGroup", "lg:cache.put",
         "network.subscribe", "network.unsubscribe", "lg:pageCapture.saveMhtml",
+        "input.upload",
     })
 
     def test_every_method_is_friendly_or_api_only(self):

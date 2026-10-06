@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { inputClick, inputKey, inputScroll, inputType } from "../src/handlers/input.ts";
+import { inputClick, inputKey, inputScroll, inputType, inputUpload } from "../src/handlers/input.ts";
 import { setConfirmHook, type ConfirmRequest } from "../src/handlers/confirm.ts";
 import { clearChrome, installChrome, ownSession, page, rejectsWith, scriptingMock } from "./mock.ts";
 import type { JSDOM } from "jsdom";
@@ -257,4 +257,44 @@ test("a refused confirm stops a js= locator on every input command", async () =>
 
   setConfirmHook(async () => true);
   clearChrome();
+});
+
+test("upload sets files via DataTransfer and fires input+change", async () => {
+  const { dom } = setup(`<input id="f" type="file">`);
+  const events: string[] = [];
+  const input = dom.window.document.querySelector("#f")!;
+  for (const type of ["input", "change"]) {
+    input.addEventListener(type, (e) => events.push(`${e.type}:${e.isTrusted}`));
+  }
+
+  const result = (await inputUpload({
+    selector: "#f",
+    dataBase64: btoa("hello"),
+    fileName: "a.txt",
+    mimeType: "text/plain",
+  })) as Any;
+  assert.deepEqual(events, ["input:false", "change:false"]);
+  assert.equal(result["lg:isTrusted"], false);
+  assert.equal(result.file.name, "a.txt");
+  assert.equal(result.file.size, 5);
+  assert.equal((input as HTMLInputElement).files!.length, 1);
+  assert.equal((input as HTMLInputElement).files![0].name, "a.txt");
+});
+
+test("upload rejects non-file inputs", async () => {
+  const { dom } = setup(`<input id="t" type="text">`);
+  void dom;
+  await rejectsWith(
+    () => inputUpload({ selector: "#t", dataBase64: btoa("x") }),
+    "invalid argument",
+  );
+});
+
+test("upload rejects disabled file inputs", async () => {
+  const { dom } = setup(`<input id="d" type="file" disabled>`);
+  void dom;
+  await rejectsWith(
+    () => inputUpload({ selector: "#d", dataBase64: btoa("x") }),
+    "invalid argument",
+  );
 });

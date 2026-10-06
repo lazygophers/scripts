@@ -101,6 +101,7 @@ METHODS: dict[str, tuple[str, ...]] = {
     "input.type": ("selector", "text"),
     "input.key": ("key",),
     "input.scroll": (),
+    "input.upload": ("selector", "dataBase64"),
     "storage.getCookies": (),
     "storage.setCookie": ("url", "name", "value"),
     "storage.deleteCookies": (),
@@ -241,7 +242,7 @@ FLAT_SIMPLE: dict[str, tuple[str, tuple[str, ...]]] = {
 # 别名：不写进 --help，只保留肌肉记忆（spec 4）
 FLAT_ALIASES = {"navigate": "goto", "shot": "screenshot", "script": "eval"}
 FLAT_SPECIAL = frozenset({"open", "close", "list", "screenshot", "text", "html",
-                          "back", "forward", "wait"})
+                          "back", "forward", "wait", "upload"})
 
 # 名词组 → action → (底层方法, 位置参数名)。group 组是五条多步命令，走专门函数。
 NOUN_GROUPS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
@@ -460,6 +461,11 @@ def route(tokens: list[str]) -> tuple[str, dict, dict]:
     if head in FLAT_SIMPLE:
         method, names = FLAT_SIMPLE[head]
         params, opts = _bind_params(method, *split_tokens(tokens[1:]))
+        if head == "upload" and isinstance(params.get("selector"), str):
+            # file input 几乎总是隐藏元素，没有可见文字；友好层默认按 CSS 找，
+            # 与 click/fill 的 text= 默认相反（spec 3.1 的判据：哪种默认最少意外）
+            if not params["selector"].startswith(_LOCATOR_PREFIXES):
+                params["selector"] = f"css={params['selector']}"
         if head in ("click", "fill") and isinstance(params.get("selector"), str):
             # 友好层默认按可见文字找；要 CSS 就写全 `css=...`（spec 3.1）
             if not params["selector"].startswith(_LOCATOR_PREFIXES):
@@ -480,6 +486,7 @@ _FLAT_ARGS: dict[str, tuple[str, ...]] = {
     "back": (),
     "forward": (),
     "wait": ("target",),
+    "upload": ("selector", "path"),
 }
 # group 组五条命令的位置参数名（spec 3.4）
 _GROUP_ARGS: dict[str, tuple[str, ...]] = {
@@ -864,6 +871,7 @@ HELP = """browse — 用命令行驱动浏览器扩展
   browse list                            所有标签页：id / 标题 / 网址 / 分组 / 窗口
   browse click <目标>                    点一下；不写前缀默认按可见文字找
   browse fill <目标> <文字>               填输入框
+  browse upload <选择器> <文件>            给 <input type=file> 上传本地文件（默认按 CSS 找；≤768KB）
   browse screenshot [文件]               截当前视口，默认存 ~/Downloads；--base64 才吐 base64
   browse snapshot                        这一页能点/能填的元素 + 可用定位符
   browse text                            正文纯文字（给人和 AI 读的）
@@ -1287,6 +1295,44 @@ _EVAL_WRAPPERS = {
 }
 
 
+_UPLOAD_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+    ".pdf": "application/pdf",
+}
+
+
+async def _cmd_upload(params: dict, opts: dict, sock: pathlib.Path, browser: str) -> None:
+    """`browse upload <selector> <本地路径>`：DataTransfer 把本地文件塞进
+    <input type="file">（页面侧 handler input.upload），派发 input+change。
+    事件是合成的，页面自校验 isTrusted 的上传控件会拒（同 input.* 全家）。"""
+    selector = params.pop("selector")
+    path_arg = params.pop("path")
+    if not isinstance(path_arg, str) or not path_arg:
+        raise UsageError("upload 需要 <selector> <本地文件路径> 两个参数")
+    path = pathlib.Path(path_arg).expanduser()
+    if not path.is_file():
+        raise UsageError(f"文件不存在: {path}")
+    data = path.read_bytes()
+    # native messaging 对 Chrome 方向有 1MB 级上限，base64 再涨 1/3；超了直接报，
+    # 不让消息在路上被静默截断
+    if len(data) > 768 * 1024:
+        raise UsageError(
+            f"文件 {len(data)} 字节超过 768KB 上限（native messaging 单消息限制），"
+            "裁剪或压缩后再传"
+        )
+    send = {k: v for k, v in params.items() if k not in ("fileName", "mimeType")}
+    send.update({
+        "selector": selector,
+        "dataBase64": base64.b64encode(data).decode("ascii"),
+        "fileName": params.get("fileName", path.name),
+        "mimeType": params.get("mimeType", _UPLOAD_MIME.get(path.suffix.lower(),
+                                                           "application/octet-stream")),
+    })
+    result = _outcome_or_die(await execute("input.upload", send, sock, browser=browser))
+    print_result(result, table=_want_table(opts))
+
+
 async def _cmd_eval_wrapped(verb: str, params: dict, opts: dict, sock: pathlib.Path,
                            browser: str) -> None:
     """text / html / back / forward：一段写死的 JS 包一层 script.evaluate（spec 3.1）。"""
@@ -1493,6 +1539,10 @@ async def _dispatch_friendly(name: str, params: dict, opts: dict, sock: pathlib.
     if name == "screenshot":
         await _resolve_target(params, opts, sock, browser)
         await _cmd_screenshot(params, opts, sock, browser)
+        return EXIT_OK
+    if name == "upload":
+        await _resolve_target(params, opts, sock, browser)
+        await _cmd_upload(params, opts, sock, browser)
         return EXIT_OK
     if name in _EVAL_WRAPPERS:
         await _resolve_target(params, opts, sock, browser)

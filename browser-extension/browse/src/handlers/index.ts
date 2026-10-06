@@ -31,7 +31,7 @@ import {
 import { gcmDeleteToken, gcmId, gcmToken } from "./gcm.ts";
 import { historyDelete, historySearch } from "./history.ts";
 import { idleState, searchQuery, systemInfo } from "./info.ts";
-import { inputClick, inputKey, inputScroll, inputType } from "./input.ts";
+import { inputClick, inputKey, inputScroll, inputType, inputUpload } from "./input.ts";
 import { networkSubscribe, networkUnsubscribe } from "./network.ts";
 import {
   notificationsClear,
@@ -104,6 +104,7 @@ export const HANDLERS: Record<string, Handler> = {
   "input.type": inputType,
   "input.scroll": inputScroll,
   "input.key": inputKey,
+  "input.upload": inputUpload,
 
   "storage.getCookies": storageGetCookies,
   "storage.setCookie": storageSetCookie,
@@ -216,6 +217,7 @@ const PAGE_METHODS = new Set([
   "input.type",
   "input.scroll",
   "input.key",
+  "input.upload",
   "storage.getLocalStorage",
   "storage.setLocalStorage",
   "lg:page.snapshot",

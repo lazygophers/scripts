@@ -243,3 +243,95 @@ export async function pageInput(
     return { ok: false, message: err instanceof Error ? err.message : String(err) };
   }
 }
+
+export async function inputUpload(params: Record<string, unknown>): Promise<unknown> {
+  // `input.upload` 单独成函数不走 performInput：它的动作不是合成鼠标/键盘事件，
+  // 而是 DataTransfer 塞 File 再整体赋给 input.files（FileList 只读，但属性可写），
+  // 最后派发 input + change。事件同样是合成的（isTrusted false），页面自校验
+  // isTrusted 的上传控件会拒——和 input.* 其余成员同一条限制。
+  const selector = requireString(params.selector, "selector");
+  const dataBase64 = requireString(params.dataBase64, "dataBase64");
+  const payload: Record<string, unknown> = {
+    dataBase64,
+    ...(params.fileName === undefined ? {} : { fileName: asString(params.fileName, "fileName") }),
+    ...(params.mimeType === undefined ? {} : { mimeType: asString(params.mimeType, "mimeType") }),
+  };
+  const locator = parseLocator(selector);
+  const options: LocateOptions = {
+    ...(typeof params.index === "number" ? { index: params.index } : {}),
+    ...(typeof params.timeout === "number" ? { timeout: params.timeout } : {}),
+  };
+  const target = await resolveContextOnce(params);
+  const world = locator.scheme === "js" ? "MAIN" : "ISOLATED";
+  if (world === "MAIN") {
+    await confirm({
+      action: "evalMainWorld",
+      method: "input.upload",
+      url: await targetUrl(target),
+    });
+  }
+  const value = await runInPage(target, world, pageUpload, [locator, options, payload]);
+  return { ...(value as Record<string, unknown>), "lg:isTrusted": false };
+}
+
+/**
+ * Runs inside the page (same serialisation rules as pageInput: closes over
+ * nothing, helpers stay nested).
+ */
+export async function pageUpload(
+  locator: { scheme: Scheme; value: string },
+  options: LocateOptions,
+  payload: Record<string, unknown>,
+): Promise<PageResult<Record<string, unknown>>> {
+  try {
+    const locate = (globalThis as unknown as Record<string, unknown>).__browseLocate as
+      | PageLocate
+      | undefined;
+    if (typeof locate !== "function") {
+      throw new Error("unknown error: locator was not injected into the page");
+    }
+    const elements = await locate(locator.scheme, locator.value, options);
+    const describe = (el: Element): string => {
+      const id = el.id ? `#${el.id}` : "";
+      return `<${el.tagName.toLowerCase()}${id}>`;
+    };
+    if (elements.length === 0) {
+      throw new Error("no such frame: locator matched nothing");
+    }
+    const input = elements[0] as HTMLInputElement;
+    if (input.tagName !== "INPUT" || (input as HTMLInputElement).type !== "file") {
+      throw new Error(
+        `invalid argument: not a file input: ${describe(input)} (want <input type="file">)`,
+      );
+    }
+    if (input.disabled || input.getAttribute("aria-disabled") === "true") {
+      throw new Error(`invalid argument: element is disabled: ${describe(input)}`);
+    }
+
+    const b64 = String(payload.dataBase64);
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const name = typeof payload.fileName === "string" && payload.fileName !== ""
+      ? payload.fileName
+      : "upload.bin";
+    const type = typeof payload.mimeType === "string" ? payload.mimeType : "application/octet-stream";
+    const file = new File([bytes], name, { type });
+
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return {
+      ok: true,
+      value: {
+        count: 1,
+        element: [describe(input)],
+        file: { name, size: file.size, type },
+      },
+    };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+}

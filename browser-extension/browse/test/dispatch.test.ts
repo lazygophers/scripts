@@ -24,6 +24,7 @@ const V1 = [
   "input.type",
   "input.scroll",
   "input.key",
+  "input.upload",
   "storage.getCookies",
   "storage.setCookie",
   "storage.deleteCookies",

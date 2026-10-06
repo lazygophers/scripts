@@ -38,6 +38,9 @@ export function page(
     "document",
     "Element",
     "HTMLElement",
+    "HTMLInputElement",
+    "DataTransfer",
+    "File",
     "XPathResult",
     "MutationObserver",
     "MouseEvent",
@@ -45,6 +48,37 @@ export function page(
     "Event",
   ]) {
     g[name] = (dom.window as unknown as Any)[name];
+  }
+  // jsdom 没有 DataTransfer，`input.files` 也是只读 getter（浏览器里两者都是
+  // 原生全局/可写属性）。upload 路径两者都要，替身只活在测试环境。
+  if (typeof g.DataTransfer !== "function") {
+    class FakeDataTransfer {
+      private readonly list: File[] = [];
+      readonly items = {
+        add: (file: File): void => {
+          this.list.push(file);
+        },
+      };
+      get files(): File[] {
+        return this.list;
+      }
+    }
+    g.DataTransfer = FakeDataTransfer;
+  }
+  const inputProto = (dom.window as unknown as Any).HTMLInputElement?.prototype as
+    | Any
+    | undefined;
+  if (inputProto !== undefined) {
+    const EMPTY: File[] = [];
+    Object.defineProperty(inputProto, "files", {
+      get(this: HTMLInputElement): File[] {
+        return ((this as unknown as Any)._files as File[] | undefined) ?? EMPTY;
+      },
+      set(this: HTMLInputElement, value: File[]): void {
+        (this as unknown as Any)._files = value;
+      },
+      configurable: true,
+    });
   }
   // jsdom 对 `file://` 这类不透明来源会在取 `localStorage` 时直接抛错，而本地文件
   // 页面正是被测的场景，所以这一个单独试着取，取不到就不装。

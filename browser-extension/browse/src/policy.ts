@@ -85,7 +85,7 @@ export const FEATURES: Feature[] = [
   { id: "script", methods: ["script.evaluate", "script.callFunction"] },
   {
     id: "input",
-    methods: ["input.click", "input.type", "input.scroll", "input.key"],
+    methods: ["input.click", "input.type", "input.scroll", "input.key", "input.upload"],
   },
   {
     id: "storage",
