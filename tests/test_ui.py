@@ -446,3 +446,156 @@ class TestAskSelect(unittest.TestCase):
 
         result = ask_select("选一个", ["a", "b"], console=Console(file=io.StringIO()))
         self.assertIsNone(result)
+
+
+class TestLazyRichAndTty(unittest.TestCase):
+    """惰性 rich 的错误面 + __getattr__ + ask_select/_read_tty_key 的 TTY 路径。"""
+
+    def test_missing_attr_raises_attributeerror(self):
+        with self.assertRaises(AttributeError):
+            ui_mod.no_such_thing
+
+    def test_missing_rich_raises_runtime_error_with_hint(self):
+        import importlib
+        saved = {k: v for k, v in sys.modules.items()
+                 if k == "rich" or k.startswith("rich.")}
+        for k in list(saved):
+            del sys.modules[k]
+        # rich.console 塞 None：_load_rich 的 from-import 直接 ImportError
+        sys.modules["rich.console"] = None
+        try:
+            importlib.reload(ui_mod)
+            # reload 复用同一个 module 对象，上一世绑进去的 rich 名字还在 globals，
+            # 先清掉 _ensure_rich 才会真的去 _load_rich
+            for name in list(ui_mod._RICH_NAMES) + ["HAS_RICH"]:
+                ui_mod.__dict__.pop(name, None)
+            with self.assertRaises(RuntimeError) as ctx:
+                ui_mod._ensure_rich()
+            self.assertIn("pip install rich", str(ctx.exception))
+        finally:
+            for k in [k for k in sys.modules if k == "rich" or k.startswith("rich.")]:
+                del sys.modules[k]
+            sys.modules.update(saved)
+            importlib.reload(ui_mod)
+            ui_mod._ensure_rich()
+
+    def _fake_stdin(self, isatty: bool, fileno=0):
+        m = patch.object(sys, "stdin")
+        stdin = m.start()
+        stdin.isatty.return_value = isatty
+        stdin.fileno.return_value = fileno
+        self.addCleanup(m.stop)
+        return stdin
+
+    def test_ask_select_tty_uses_read_tty_key_and_flushes_input(self):
+        import types
+        fake_termios = types.ModuleType("termios")
+        fake_termios.TCIFLUSH = 0
+        flushes = []
+
+        def tcflush(fd, queue):
+            flushes.append((fd, queue))
+
+        fake_termios.tcflush = tcflush
+        keys = iter(["down", "enter"])
+        self._fake_stdin(True)
+        con = io.StringIO()
+        with patch.dict(sys.modules, {"termios": fake_termios}), \
+             patch.object(ui_mod, "_read_tty_key", lambda: next(keys)):
+            # console 参数给个写进 StringIO 的真 Console，避开交互终端
+            from rich.console import Console
+            choice = ui_mod.ask_select("选一个", ["a", "b"], current="a",
+                                       console=Console(file=con, force_terminal=False))
+        self.assertEqual(choice, "b")
+        self.assertEqual(len(flushes), 1)
+        self.assertIn("选一个", con.getvalue())
+
+    def test_ask_select_flush_error_is_swallowed(self):
+        import types
+        import termios as real_termios
+        fake_termios = types.ModuleType("termios")
+        fake_termios.error = real_termios.error
+        fake_termios.TCIFLUSH = 0
+
+        def tcflush(fd, queue):
+            raise real_termios.error("gone")
+
+        fake_termios.tcflush = tcflush
+        keys = iter(["1"])
+        self._fake_stdin(True)
+        with patch.dict(sys.modules, {"termios": fake_termios}), \
+             patch.object(ui_mod, "_read_tty_key", lambda: next(keys)):
+            self.assertEqual(ui_mod.ask_select("s", ["x", "y"]), "x")
+
+    def test_read_tty_key_posix_and_escape_paths(self):
+        import select as select_mod
+        import termios as real_termios
+        import tty  # 先进缓存：patch.dict 换掉 termios 后 tty.py 的模块级 from-import 会炸
+        import types
+        void = tty
+
+        state = {"chars": "", "pos": 0, "restored": None}
+        stdin = self._fake_stdin(True, fileno=99)
+
+        def read(n):
+            out = state["chars"][state["pos"]:state["pos"] + n]
+            state["pos"] += len(out)
+            return out
+
+        stdin.read = read
+
+        fake_termios = types.ModuleType("termios")
+        fake_termios.TCSADRAIN = real_termios.TCSADRAIN
+        fake_termios.tcgetattr = lambda fd: {"old": True}
+        fake_termios.setcbreak = lambda fd: None
+
+        def tcsetattr(fd, when, attrs):
+            state["restored"] = attrs
+
+        fake_termios.tcsetattr = tcsetattr
+
+        def arm(chars):
+            state["chars"] = chars
+            state["pos"] = 0
+            return ui_mod._read_tty_key()
+
+        with patch.dict(sys.modules, {"termios": fake_termios}), \
+             patch("tty.setcbreak", lambda fd: None):
+            self.assertEqual(arm("\r"), "enter")
+            self.assertEqual(arm("q"), "q")
+            with patch.object(select_mod, "select", return_value=[[99], [], []]):
+                self.assertEqual(arm("\x1b[A"), "up")
+                self.assertEqual(arm("\x1b[Z"), "")
+            with patch.object(select_mod, "select", return_value=[[], [], []]):
+                self.assertEqual(arm("\x1b"), "esc")
+            with self.assertRaises(KeyboardInterrupt):
+                arm("\x03")
+        self.assertEqual(state["restored"], {"old": True})
+        void = stdin
+
+    def test_read_tty_key_windows_paths(self):
+        import types
+        fake_msvcrt = types.ModuleType("msvcrt")
+        queue: list[str] = []
+
+        def getwch():
+            return queue.pop(0) if queue else ""
+
+        fake_msvcrt.getwch = getwch
+        self._fake_stdin(True)
+
+        def arm(chars):
+            queue.clear()
+            queue.extend(chars)
+            return ui_mod._read_tty_key()
+
+        with patch.object(sys, "platform", "win32"), \
+             patch.dict(sys.modules, {"msvcrt": fake_msvcrt}):
+            self.assertEqual(arm(["\r"]), "enter")
+            self.assertEqual(arm(["\x1b"]), "esc")
+            self.assertEqual(arm(["H"]), "H")
+            self.assertEqual(arm(["\x00", "H"]), "up")
+            self.assertEqual(arm(["\xe0", "P"]), "down")
+            self.assertEqual(arm(["\x00", "K"]), "left")
+            self.assertEqual(arm(["\x00", "M"]), "right")
+            self.assertEqual(arm(["\x00", "?"]), "")

@@ -1,11 +1,15 @@
 """tests for lib/claude_session.py"""
+import io
 import json
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
+from unittest.mock import patch
 from pathlib import Path
 
 from lib.claude_session import filter_sessions, list_sessions
+from lib.cli.claude_session import COLUMNS, _emit, _parse_args
 
 NOW = int(time.time() * 1000)
 
@@ -91,8 +95,6 @@ class EmitFormatTest(unittest.TestCase):
         from contextlib import redirect_stdout
         from unittest.mock import patch
 
-        from lib.cli.claude_session import COLUMNS, _emit
-
         row = dict(zip((k for _, k in COLUMNS), self.ROW))
         buf = io.StringIO()
         with patch("lib.ai_env.is_ai_shell_env", return_value=False),              redirect_stdout(buf):
@@ -109,3 +111,49 @@ class EmitFormatTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCliEmitAndMain(unittest.TestCase):
+    """CLI 层：表格输出、_parse_args、main 的过滤与格式分派。"""
+
+    ROW = ["n1", "sid1", "demo", "busy", "today", "yday"]
+
+    def test_table_format_renders_rich_table(self):
+        row = dict(zip((k for _, k in COLUMNS), self.ROW))
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            _emit(row and [row], "table")
+        self.assertIn("Claude Code 会话", buf.getvalue())
+        self.assertIn("sid1", buf.getvalue())
+
+    def test_parse_args_flags(self):
+        args = _parse_args(["-s", "abc", "-f", "json"])
+        self.assertEqual((args.session, args.format), ("abc", "json"))
+        args2 = _parse_args(["--project"])
+        self.assertEqual(args2.project, "")  # 省略值 = 当前目录所属项目
+        args3 = _parse_args(["--project", "demo"])
+        self.assertEqual(args3.project, "demo")
+
+    def test_main_filters_and_emits(self):
+        import lib.cli.claude_session as cli
+
+        sessions = [dict(zip((k for _, k in COLUMNS), self.ROW))]
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=sessions), \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session", "-s", "sid1"])
+        self.assertEqual(rc, 0)
+        self.assertIn("sid1", buf.getvalue())
+        self.assertIn("\t", buf.getvalue())  # AI 环境 TSV
+
+        with patch("lib.claude_session.list_sessions", return_value=sessions), \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=False), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session", "-f", "csv"])
+        self.assertEqual(rc, 0)
+        self.assertIn("sid1", buf.getvalue())

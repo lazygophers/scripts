@@ -174,9 +174,12 @@ export class NativeConnection {
 
   private persistStopped(): void {
     try {
-      void chrome.storage.local.set({ [STOPPED_KEY]: this.stopped });
+      // .catch 不能省：storage.set 的拒绝是异步的，try/catch 接不住，
+      // 裸 void 会变成 unhandledRejection
+      void chrome.storage.local.set({ [STOPPED_KEY]: this.stopped })
+        .catch(() => undefined);
     } catch {
-      // 测试环境没有 chrome.storage：内存态仍然正确，只是不跨重启
+      // 同步抛（测试环境没有 chrome.storage）：内存态仍然正确，只是不跨重启
     }
   }
 

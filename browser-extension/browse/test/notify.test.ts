@@ -99,3 +99,21 @@ describe("power", () => {
   });
 });
 
+
+describe("listenNotifications", () => {
+  it("点击通知转发成 lg:notifications.clicked 事件", async () => {
+    const { setEventSink } = await import("../src/events.ts");
+    const { listenNotifications } = await import("../src/handlers/notify.ts");
+    let listener: ((id: string) => void) | undefined;
+    installChrome({
+      notifications: { onClicked: { addListener: (fn: (id: string) => void) => { listener = fn; } } },
+      runtime: {},
+    });
+    const seen: Any[] = [];
+    setEventSink((event) => seen.push(event));
+    listenNotifications();
+    listener!("note-1");
+    setEventSink(null);
+    assert.deepEqual(seen, [{ type: "event", method: "lg:notifications.clicked", params: { id: "note-1" } }]);
+  });
+});

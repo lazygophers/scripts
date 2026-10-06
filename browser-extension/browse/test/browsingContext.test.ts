@@ -204,3 +204,108 @@ test("operating on an existing tab never moves it into a group", async () => {
     clearChrome();
   }
 });
+
+test("getTree: root 对不上时报 no such frame，没 id 的 tab 没有 children", async () => {
+  tabsMock();
+  await rejectsWith(() => browsingContextGetTree({ root: "999" }), "no such frame");
+
+  // tabs.query 回一个没 id 的 tab：tabToContext 走 tabId=-1，frameChildren 直接空
+  installChrome({
+    tabs: {
+      query: async () => [{ url: "https://weird.test/", active: true, groupId: 500 }],
+      get: async () => ({}),
+    },
+    tabGroups: { query: async () => [{ id: 500, title: "browse/default" }] },
+  });
+  const tree = await browsingContextGetTree({});
+  assert.equal(tree.contexts.length, 1);
+  assert.equal(tree.contexts[0].context, "-1");
+  assert.deepEqual(tree.contexts[0].children, []);
+  clearChrome();
+});
+
+test("create: 开出来的 tab 没 id 直接报 unknown error", async () => {
+  const calls: Any[] = [];
+  installChrome({
+    tabs: {
+      query: async () => [],
+      get: async () => ({}),
+      create: async (opts: Any) => {
+        calls.push(opts);
+        return { windowId: 3 };
+      },
+    },
+  });
+  await rejectsWith(() => browsingContextCreate({ url: "https://x.test/" }), "unknown error");
+  assert.equal(calls.length, 1);
+  clearChrome();
+});
+
+test("captureScreenshot 只认 viewport 和 png/jpeg", async () => {
+  const { chrome } = tabsMock();
+  void chrome;
+  await rejectsWith(
+    () => browsingContextCaptureScreenshot({ origin: "document" }),
+    "unsupported operation",
+  );
+  await rejectsWith(() => browsingContextCaptureScreenshot({ format: "webp" }), "invalid argument");
+  clearChrome();
+});
+
+test("reload 的超时路径：页面一直不 complete 就按 unknown error 拒", async () => {
+  const listeners: ((id: number, info: Any) => void)[] = [];
+  installChrome({
+    tabs: {
+      query: async () => [{ id: 7, url: "https://a.test/", active: true, groupId: 500 }],
+      get: async () => ({ id: 7, url: "https://a.test/", active: true, groupId: 500 }),
+      reload: async () => {},
+      onUpdated: {
+        addListener: (fn: (id: number, info: Any) => void) => listeners.push(fn),
+        removeListener: () => {},
+      },
+    },
+  });
+  await rejectsWith(
+    () => browsingContextReload({ context: "7", timeout: 5 }),
+    "unknown error",
+  );
+  assert.equal(listeners.length, 1, "监听器挂上了，只是没人触发");
+  clearChrome();
+});
+
+test("frameChildren: chrome:// 页面取不到 frame 清单时按无子级上报", async () => {
+  installChrome({
+    tabs: {
+      query: async () => [{ id: 7, url: "chrome://settings/", active: true, groupId: 500 }],
+      get: async () => ({ id: 7, url: "chrome://settings/", active: true, groupId: 500 }),
+    },
+    tabGroups: { query: async () => [{ id: 500, title: "browse/default" }] },
+    webNavigation: {
+      getAllFrames: async () => {
+        throw new Error("cannot access chrome://");
+      },
+    },
+  });
+  const tree = await browsingContextGetTree({});
+  assert.deepEqual(tree.contexts[0].children, []);
+
+  // 正常页面：子 frame 清单映射成 children
+  installChrome({
+    tabs: {
+      query: async () => [{ id: 7, url: "https://a.test/", active: true, groupId: 500 }],
+      get: async () => ({ id: 7, url: "https://a.test/", active: true, groupId: 500 }),
+    },
+    tabGroups: { query: async () => [{ id: 500, title: "browse/default" }] },
+    webNavigation: {
+      getAllFrames: async () => [
+        { frameId: 0, parentFrameId: -1, url: "https://a.test/" },
+        { frameId: 2, parentFrameId: 0, url: "https://ads.test/f" },
+      ],
+    },
+  });
+  const tree2 = await browsingContextGetTree({});
+  assert.deepEqual(tree2.contexts[0].children, [{
+    context: "7.2", parent: "7", url: "https://ads.test/f", children: [],
+  }]);
+  clearChrome();
+});

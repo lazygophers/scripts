@@ -318,8 +318,15 @@ async function save(): Promise<void> {
   }
 }
 
-const form = byId<HTMLFormElement>("form");
-if (form) {
+/**
+ * 页面自举：localize + 表单提交接线 + 首次读取。导出是为了测试——模块只能求值
+ * 一次，测试要换着 realm 重跑这段；真页面上等价于模块加载时跑一次。
+ */
+export function bootstrap(): void {
+  const form = byId<HTMLFormElement>("form");
+  if (!form) {
+    return;
+  }
   localize();
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -327,3 +334,5 @@ if (form) {
   });
   void load();
 }
+
+bootstrap();

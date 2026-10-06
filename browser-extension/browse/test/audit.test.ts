@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 import { AUDIT_KEY, MAX_ENTRIES, clear, read, record, writeWithEviction } from "../src/audit.ts";
 import { REDACTED } from "../src/redact.ts";
-import { clearChrome, storageMock } from "./mock.ts";
+import { clearChrome, rejectsWith, storageMock } from "./mock.ts";
 
 afterEach(clearChrome);
 
@@ -156,4 +156,14 @@ test("真的把最老的挤出去：连写 MAX_ENTRIES + 5 条，最早那几条
   assert.equal(saved.length, MAX_ENTRIES, "总数封顶");
   assert.equal(saved.at(-1)?.domain, "newest.test", "最新的一条在");
   assert.equal(saved[0]?.domain, "d1.test", "最老的那条被挤出去了");
+});
+
+test("handler: limit 校验拒绝负数、小数和非数字，clear 走到底", async () => {
+  storageMock();
+  const { auditRead, auditClear } = await import("../src/handlers/audit.ts");
+  await rejectsWith(() => auditRead({ limit: -1 }), "invalid argument");
+  await rejectsWith(() => auditRead({ limit: 1.5 }), "invalid argument");
+  await rejectsWith(() => auditRead({ limit: "5" }), "invalid argument");
+  assert.deepEqual(await auditRead({ limit: 0 }), { entries: [] });
+  assert.deepEqual(await auditClear(), { cleared: 0 });
 });

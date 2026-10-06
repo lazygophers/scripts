@@ -196,3 +196,89 @@ class TestSubprocessSmoke(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeClient:
+    """记下每个调用；api_404=True 模拟老站让 REST 全 404、走 web 回退。"""
+
+    def __init__(self, api_404: bool = False):
+        self.calls: list = []
+        self._api_404 = api_404
+
+    def _api(self, tag, path, extra=None):
+        self.calls.append((tag, path, extra))
+        if self._api_404:
+            raise ArcheryError("HTTP 404 not found")
+        return {"ok": path}
+
+    def get(self, path, **kw):
+        return self._api("GET", path, kw)
+
+    def post(self, path, body=None, **kw):
+        return self._api("POST", path, body)
+
+    def web(self, method, path, **kw):
+        self.calls.append(("WEB", method, path))
+        return {"web": path}
+
+    def request(self, method, path, **kw):
+        self.calls.append(("REQ", method, path, kw))
+        return {"paths": {"/a/": {"get": {"summary": "A"}}}}
+
+
+class TestToolImpls(unittest.TestCase):
+    """每个 MCP 工具的实现层：参数拼装对不对、api→web 回退走不走。"""
+
+    def test_query_tools(self):
+        import lib.archery_mcp as m
+        c = FakeClient(api_404=True)
+        m._t_query_execute(c, {"sql": "select 1", "instance_name": "i", "db_name": "d"})
+        self.assertEqual([x[0] for x in c.calls[:2]], ["POST", "WEB"])
+        self.assertEqual(c.calls[0][2], {"instance_name": "i", "db_name": "d",
+                                         "schema_name": "", "tb_name": "",
+                                         "sql_content": "select 1", "limit_num": 0})
+
+        m._t_query_instances(c, {"params": {"limit": 5}})
+        m._t_query_describe(c, {"instance_name": "i", "db_name": "d", "tb_name": "t"})
+        m._t_query_logs(c, {"params": {"page": 2}})
+        self.assertEqual(len([x for x in c.calls if x[0] == "WEB"]), 4)
+
+    def test_workflow_tools(self):
+        import lib.archery_mcp as m
+        c = FakeClient()
+        m._t_workflow_list(c, {"params": {"page": 1}})
+        m._t_workflow_check(c, {"instance_id": "3", "db_name": "d", "full_sql": "s"})
+        m._t_workflow_audit(c, {"engineer": "e", "workflow_id": "9",
+                                "audit_remark": "ok", "audit_type": "pass"})
+        m._t_workflow_execute(c, {"workflow_id": "9", "engineer": "e"})  # type=2 默认
+        m._t_workflow_execute(c, {"workflow_id": "9", "engineer": "e",
+                                  "workflow_type": 1})
+        posts = [x for x in c.calls if x[0] == "POST"]
+        self.assertEqual(posts[0][2], {"instance_id": 3, "db_name": "d", "full_sql": "s"})
+        self.assertEqual(posts[1][2]["workflow_id"], 9)
+        self.assertEqual(posts[1][2]["audit_type"], "pass")
+        self.assertEqual(posts[2][2], {"workflow_id": 9, "workflow_type": 2,
+                                       "engineer": "e", "mode": "auto"})
+        self.assertEqual(posts[3][2], {"workflow_id": 9, "workflow_type": 1})
+
+    def test_schema_list_parses_yaml_and_skips_noise(self):
+        import lib.archery_mcp as m
+        c = FakeClient()
+        rows = m._t_schema_list(c, {})
+        self.assertEqual(rows, [{"method": "GET", "path": "/a/", "summary": "A"}])
+        # request 返回 str 时走 yaml 解析
+        y = mock.Mock()
+        y.return_value = "paths:\n  /b/:\n    post:\n      summary: B\n"
+        with mock.patch.object(c, "request", y):
+            rows2 = m._t_schema_list(c, {})
+        self.assertEqual(rows2, [{"method": "POST", "path": "/b/", "summary": "B"}])
+
+    def test_api_tool(self):
+        import lib.archery_mcp as m
+        c = FakeClient()
+        m._t_api(c, {"method": "get", "path": "/x/", "params": {"a": 1},
+                     "data": {"k": "v"}})
+        self.assertEqual(c.calls[-1], ("REQ", "GET", "/x/",
+                                       {"params": {"a": 1}, "json_body": {"k": "v"}}))
+        with self.assertRaises(ArcheryError):
+            m._t_api(c, {"method": "get", "path": "/x/", "data": "notdict"})

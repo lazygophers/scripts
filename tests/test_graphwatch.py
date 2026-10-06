@@ -8,6 +8,8 @@ from __future__ import annotations
 import importlib.util
 import os
 import stat
+import contextlib
+import io
 import sys
 import tempfile
 import threading
@@ -2097,3 +2099,147 @@ class TestPruneBackups(GraphwatchCase):
         self.assertEqual(removed, ["2026-09-20"])
         self.assertEqual(sorted(p.name for p in out.iterdir()),
                          ["2026-09-01", "2026-09-21", "2026-09-27", "cache", "wiki"])
+
+
+class TestCliAiEnv(GraphwatchCase):
+    """AI 环境的三个 TSV/竖线输出分支 + 重建失败聚合。"""
+
+    def _ai(self, on=True):
+        return unittest.mock.patch("lib.ai_env.is_ai_shell_env", return_value=on)
+
+    def test_list_and_status_and_show_in_ai_env(self):
+        import contextlib
+        import io as _io
+
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        out = _io.StringIO()
+        with self._ai(), contextlib.redirect_stdout(out):
+            self.assertEqual(self._cli().list(), 0)
+        self.assertIn(str(repo), out.getvalue())
+
+        st = {"registered": False, "running": False, "pid": None}
+        out2 = _io.StringIO()
+        with self._ai(), contextlib.redirect_stdout(out2), \
+             unittest.mock.patch("lib.graphwatch.service_state", return_value=st), \
+             unittest.mock.patch("lib.graphwatch.tail_log", return_value=[]):
+            self.assertEqual(self._cli().status(log=0), 0)
+        self.assertIn("|", out2.getvalue())
+
+        out3 = _io.StringIO()
+        with self._ai(), contextlib.redirect_stdout(out3), \
+             unittest.mock.patch("lib.graphwatch.service_state", return_value=st), \
+             unittest.mock.patch("lib.graphwatch.tail_log", return_value=[]):
+            self.assertEqual(self._cli().status(), 0)
+        self.assertIn(" | ", out3.getvalue())
+
+    def test_rebuild_failure_aggregates_and_missing_dir_fails(self):
+        repo1 = self.mkdir("a")
+        repo2 = self.mkdir("b")
+        graphwatch.add_folder(repo1)
+        graphwatch.add_folder(repo2)
+
+        def fake_rebuild(path, force=False):
+            return 1 if path.endswith("a") else 0
+
+        with unittest.mock.patch("lib.graphwatch.ensure_graphify"), \
+             unittest.mock.patch("lib.graphwatch_rebuild.rebuild",
+                                 side_effect=fake_rebuild):
+            rc = self._cli().rebuild(f"{repo1},{repo2}")
+        self.assertEqual(rc, 1)
+
+        # 目录不存在：不走 rebuild，直接失败收场
+        with unittest.mock.patch("lib.graphwatch_rebuild.rebuild") as do:
+            rc2 = self._cli().rebuild(str(self.home / "nope"))
+        self.assertEqual(rc2, 1)
+        do.assert_not_called()
+
+
+
+class TestRebuildEdges(GraphwatchCase):
+    """rebuild 的门面分支：无图、锁占用、win32 锁、god_nodes 兜底。"""
+
+    def test_rebuild_without_graph_returns_zero_without_lock(self):
+        import lib.graphwatch_rebuild as rb
+        repo = self.mkdir()
+        with unittest.mock.patch.object(rb, "_release_rebuild_lock") as rel, \
+             unittest.mock.patch.object(rb, "_acquire_rebuild_lock",
+                                        return_value=object()) as lock:
+            with unittest.mock.patch.object(rb, "_rebuild_unlocked", return_value=0) as inner:
+                self.assertEqual(rb.rebuild(str(repo)), 0)
+        lock.assert_called_once()
+        inner.assert_called_once()
+        rel.assert_called_once()
+
+    def test_rebuild_locked_skips(self):
+        import lib.graphwatch_rebuild as rb
+        repo = self.mkdir()
+        (repo / "graphify-out").mkdir()
+        (repo / "graphify-out" / "graph.json").write_text("{}")
+        out = io.StringIO()
+        with unittest.mock.patch.object(rb, "_acquire_rebuild_lock", return_value=None), \
+             contextlib.redirect_stderr(out):
+            self.assertEqual(rb.rebuild(str(repo)), 1)
+        self.assertIn("已在构建，不排队等待", out.getvalue())
+
+    def test_windows_lock_and_release(self):
+        import lib.graphwatch_rebuild as rb
+        import types
+        calls = []
+        fake_msvcrt = types.ModuleType("msvcrt")
+        fake_msvcrt.LK_NBLCK = 1
+        fake_msvcrt.LK_UNLCK = 2
+        fake_msvcrt.locking = lambda fd, mode, n: calls.append((fd, mode, n))
+        repo = self.mkdir()
+        (repo / "graphify-out").mkdir()
+        import os as real_os
+        with unittest.mock.patch("sys.platform", "win32"), \
+             unittest.mock.patch.dict(sys.modules, {"msvcrt": fake_msvcrt}), \
+             unittest.mock.patch("os.lseek", side_effect=lambda *a: calls.append(("seek",) + a)):
+            got = rb._acquire_rebuild_lock(repo)
+            self.assertIsNotNone(got)
+            # 释放也走 msvcrt 分支（win32 平台补丁对两个函数同时生效）
+            rb._release_rebuild_lock(got)
+        self.assertTrue(any(c[0] != "seek" and c[1] == 1 for c in calls), calls)
+        self.assertTrue(any(c[0] == "seek" for c in calls), calls)
+        void = real_os
+
+
+class TestRegraphEdges(GraphwatchCase):
+    """regraph() 门面：没图、锁占用、图没变跳过。"""
+
+    def test_regraph_without_graph_is_zero(self):
+        import lib.graphwatch_rebuild as rb
+        repo = self.mkdir()
+        with unittest.mock.patch.object(rb, "_acquire_rebuild_lock") as lock:
+            self.assertEqual(rb.regraph(str(repo)), 0)
+        lock.assert_not_called()
+
+    def test_regraph_locked_skips_with_zero(self):
+        import lib.graphwatch_rebuild as rb
+        repo = self.mkdir()
+        (repo / "graphify-out").mkdir()
+        (repo / "graphify-out" / "graph.json").write_text("{}")
+        out = io.StringIO()
+        with unittest.mock.patch.object(rb, "_acquire_rebuild_lock", return_value=None), \
+             contextlib.redirect_stderr(out):
+            self.assertEqual(rb.regraph(str(repo)), 0)
+        self.assertIn("已在构建，跳过本次重算", out.getvalue())
+
+    def test_regraph_unchanged_graph_skips(self):
+        import lib.graphwatch_rebuild as rb
+        import time as _time
+        repo = self.mkdir()
+        out_dir = repo / "graphify-out"
+        out_dir.mkdir()
+        g = out_dir / "graph.json"
+        g.write_text("{}")
+        stamp = out_dir / rb.REGRAPH_STAMP
+        stamp.write_text("")  # stamp 比 graph 新：图没变
+        err = io.StringIO()
+        with unittest.mock.patch.object(rb, "_acquire_rebuild_lock", return_value=999), \
+             unittest.mock.patch.object(rb, "_release_rebuild_lock"), \
+             unittest.mock.patch.object(rb, "prune_backups", return_value=[]), \
+             contextlib.redirect_stderr(err):
+            self.assertEqual(rb.regraph(str(repo)), 0)
+        self.assertIn("图没变", err.getvalue())

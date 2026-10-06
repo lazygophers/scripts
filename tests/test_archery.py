@@ -438,7 +438,14 @@ class TestClient(ServerCase):
         self.assertIn("炸了", str(ctx.exception))
 
     def test_unreachable_host_raises_archery_error(self):
-        client = self.client(url="http://127.0.0.1:1")
+        # 不硬编码端口：本机可能有进程占着低端口（实测 1/tcp 被占），
+        # 现找一个空闲端口，关掉后立刻用（竞争窗口极小）
+        import socket
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        client = self.client(url=f"http://127.0.0.1:{port}")
         with self.assertRaises(ArcheryError) as ctx:
             client.request("GET", "/api/info", auth=False)
         self.assertIn("连不上", str(ctx.exception))

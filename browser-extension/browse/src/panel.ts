@@ -13,18 +13,20 @@ import { localize, msg } from "./i18n.ts";
 import type { LogEntry } from "./native-port.ts";
 import { getConfig, revoke } from "./policy.ts";
 
-const list = document.getElementById("list") as HTMLUListElement | null;
-const statusNode = document.getElementById("status");
-const logList = document.getElementById("log") as HTMLUListElement | null;
-const logStatus = document.getElementById("logStatus");
-const bridgeList = document.getElementById("bridge") as HTMLUListElement | null;
-const bridgeStatus = document.getElementById("bridgeStatus");
-const serverLogList = document.getElementById("serverLog") as HTMLUListElement | null;
-const serverLogStatus = document.getElementById("serverLogStatus");
-const logFilter = document.getElementById("logFilter") as HTMLInputElement | null;
-const logCopy = document.getElementById("logCopy") as HTMLButtonElement | null;
-const cut = document.getElementById("cut") as HTMLButtonElement | null;
-const settings = document.getElementById("settings") as HTMLButtonElement | null;
+// 节点在 bootstrap() 里才找：模块只求值一次，测试要换着 realm 重跑，模块级
+// 缓存的节点会指向第一次的旧 DOM。
+let list: HTMLUListElement | null = null;
+let statusNode: HTMLElement | null = null;
+let logList: HTMLUListElement | null = null;
+let logStatus: HTMLElement | null = null;
+let bridgeList: HTMLUListElement | null = null;
+let bridgeStatus: HTMLElement | null = null;
+let serverLogList: HTMLUListElement | null = null;
+let serverLogStatus: HTMLElement | null = null;
+let logFilter: HTMLInputElement | null = null;
+let logCopy: HTMLButtonElement | null = null;
+let cut: HTMLButtonElement | null = null;
+let settings: HTMLButtonElement | null = null;
 
 /**
  * 免确认名单直接读写 `chrome.storage.local`。以前这里要经 service worker 转给 daemon，
@@ -258,27 +260,48 @@ async function loadBridge(): Promise<void> {
   }
 }
 
-logFilter?.addEventListener("input", () => renderLog());
+/**
+ * 页面自举：事件接线 + 三块首读。导出是为了测试（模块只能求值一次，测试要换着
+ * realm 重跑这段），真页面上等价于模块加载时跑一次。
+ */
+export function bootstrap(): void {
+  list = document.getElementById("list") as HTMLUListElement | null;
+  statusNode = document.getElementById("status");
+  logList = document.getElementById("log") as HTMLUListElement | null;
+  logStatus = document.getElementById("logStatus");
+  bridgeList = document.getElementById("bridge") as HTMLUListElement | null;
+  bridgeStatus = document.getElementById("bridgeStatus");
+  serverLogList = document.getElementById("serverLog") as HTMLUListElement | null;
+  serverLogStatus = document.getElementById("serverLogStatus");
+  logFilter = document.getElementById("logFilter") as HTMLInputElement | null;
+  logCopy = document.getElementById("logCopy") as HTMLButtonElement | null;
+  cut = document.getElementById("cut") as HTMLButtonElement | null;
+  settings = document.getElementById("settings") as HTMLButtonElement | null;
 
-logCopy?.addEventListener("click", () => {
-  void navigator.clipboard.writeText(logText()).then(() => {
-    logCopy.textContent = msg("panelCopied");
+  logFilter?.addEventListener("input", () => renderLog());
+
+  logCopy?.addEventListener("click", () => {
+    void navigator.clipboard.writeText(logText()).then(() => {
+      logCopy!.textContent = msg("panelCopied");
+    });
   });
-});
 
-cut?.addEventListener("click", () => {
-  cut.disabled = true;
-  void chrome.runtime.sendMessage({ type: "browse-disconnect" }).then(() => {
-    cut.textContent = msg("panelDisconnected");
-    void loadLog();
-    void loadBridge();
+  cut?.addEventListener("click", () => {
+    cut!.disabled = true;
+    void chrome.runtime.sendMessage({ type: "browse-disconnect" }).then(() => {
+      cut!.textContent = msg("panelDisconnected");
+      void loadLog();
+      void loadBridge();
+    });
   });
-});
 
-// The options page is otherwise three clicks deep in chrome://extensions.
-settings?.addEventListener("click", () => chrome.runtime.openOptionsPage());
+  // The options page is otherwise three clicks deep in chrome://extensions.
+  settings?.addEventListener("click", () => chrome.runtime.openOptionsPage());
 
-localize();
-void run(() => call("list"));
-void loadLog();
-void loadBridge();
+  localize();
+  void run(() => call("list"));
+  void loadLog();
+  void loadBridge();
+}
+
+bootstrap();

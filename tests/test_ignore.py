@@ -251,3 +251,11 @@ class TestLazyhelpIgnore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUnreadable(unittest.TestCase):
+    def test_unreadable_file_raises_ignore_error(self):
+        # 目录当 .lazyscriptsignore 读：OSError（IsADirectoryError）路径
+        with TemporaryDirectory() as d:
+            with self.assertRaises(IgnoreError):
+                load_ignore_file(Path(d))

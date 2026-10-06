@@ -70,3 +70,90 @@ test("html 里的网址和页内锚点不当成包里的文件", () => {
     <link rel="stylesheet" href="viewer.css" /><script src="background.js"></script>`;
   deepStrictEqual(checkPackage(files, manifest, { "settings.html": html }), []);
 });
+
+test("html 引到包外的文件、sourcemap、坏 manifest 各自报出来", () => {
+  deepStrictEqual(
+    checkPackage(files, manifest, { "settings.html": '<script src="missing.js"></script>' }),
+    ["settings.html 里引的文件不在包里：missing.js"],
+  );
+  deepStrictEqual(checkPackage([...files, "x.map"], manifest), [
+    "打包不该带上 sourcemap：x.map",
+  ]);
+  deepStrictEqual(
+    checkPackage(files, { manifest_version: 2, name: "viewer", version: "1" }),
+    ["manifest_version 不是 3"],
+  );
+  deepStrictEqual(checkPackage(files, { manifest_version: 3, name: "viewer" }), [
+    "manifest 少了 version",
+  ]);
+});
+
+test("referenced 的其余形状：scripts 数组、popup、css、锚点与外链不算", () => {
+  const m = {
+    manifest_version: 3,
+    name: "viewer",
+    version: "1",
+    background: { scripts: ["sw.js"] },
+    action: { default_popup: "popup.html" },
+    content_scripts: [{ js: ["c.js"], css: ["c.css"] }],
+  };
+  const have = ["manifest.json", "sw.js", "popup.html", "c.js", "c.css"];
+  deepStrictEqual(checkPackage(have, m, {
+    "popup.html": '<a href="https://x.test/">e</a><a href="#top">t</a><script src="c.js"></script>',
+  }), []);
+  deepStrictEqual(checkPackage(have.filter((f) => f !== "popup.html"), m), [
+    "manifest 点到名的文件不在包里：popup.html",
+  ]);
+});
+
+test("packDist：真目录验过压成 zip，验不过整条命令失败", async () => {
+  const { mkdtemp, writeFile, mkdir } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { packDist } = await import("../package.mjs");
+
+  const root = await mkdtemp(join(tmpdir(), "packdist-"));
+  const dist = join(root, "dist");
+  await mkdir(dist);
+  await writeFile(join(dist, "manifest.json"), JSON.stringify({
+    manifest_version: 3, name: "viewer", version: "0.0.1",
+  }));
+  await writeFile(join(dist, "a.txt"), "x");
+
+  const zip = await packDist({ dist, out: join(root, "out"), name: "p.zip" });
+  const { stat } = await import("node:fs/promises");
+  assertZip(await stat(zip));
+
+  await writeFile(join(dist, "b.map"), "{}");
+  await assert.rejects(
+    () => packDist({ dist, out: join(root, "out"), name: "bad.zip" }),
+    /sourcemap/,
+  );
+  await (await import("node:fs/promises")).rm(root, { recursive: true, force: true });
+});
+
+function assertZip(stat) {
+  if (!stat.isFile() || stat.size === 0) throw new Error("zip 没打出来");
+}
+
+test("packDist 的 zip 命令不在时给出可读错误", async () => {
+  const { mkdtemp, writeFile, mkdir } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { packDist } = await import("../package.mjs");
+  const root = await mkdtemp(join(tmpdir(), "packdist-"));
+  const dist = join(root, "dist");
+  await mkdir(dist);
+  await writeFile(join(dist, "manifest.json"), JSON.stringify({
+    manifest_version: 3, name: "viewer", version: "0.0.1",
+  }));
+  const realPath = process.env.PATH;
+  process.env.PATH = "/nonexistent";
+  try {
+    await assert.rejects(() => packDist({ dist, out: join(root, "out"), name: "z.zip" }), /zip 失败/);
+  } finally {
+    process.env.PATH = realPath;
+  }
+  await (await import("node:fs/promises")).rm(root, { recursive: true, force: true });
+});
+
+import assert from "node:assert/strict";
+import { join } from "node:path";

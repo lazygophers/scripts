@@ -54,9 +54,26 @@ afterEach(() => {
   delete g.chrome;
 });
 
-async function load() {
-  // 每个用例要拿到新的模块实例（自举那段只在导入时跑一次），所以带 query 破缓存
-  return import(`../src/settings.ts?${Math.random()}`);
+type SettingsModule = typeof import("../src/settings.ts");
+
+let mod: SettingsModule | undefined;
+
+/**
+ * 模块只导入一次（带 query 破缓存会让 node 的覆盖率归因整段丢失——函数体全部
+ * 报成未覆盖）。自举段因此导出成 `bootstrap()`：换 realm 的用例自己重跑它，
+ * 等价于「新实例加载了一次」。
+ */
+async function load(): Promise<SettingsModule> {
+  mod ??= await import("../src/settings.ts");
+  return mod;
+}
+
+/** realm() 之后接自举：相当于页面在装好的 DOM 上加载。 */
+async function boot(): Promise<SettingsModule> {
+  const m = await load();
+  m.bootstrap();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return m;
 }
 
 // ------------------------------------------------------------------ 校验
@@ -177,8 +194,7 @@ test("daemon 一句话都不用说：设置页能读", async () => {
   // realm() 里**没有** chrome.runtime.sendMessage。settings.ts 只要碰它一下就会
   // TypeError，这条测试就红了 —— 这正是「不依赖本地程序」想钉死的东西。
   realm(HTML, { "browse:config": CONFIG });
-  await load();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await boot();
 
   assert.equal(document.body.classList.contains("offline"), false, "没有理由显示离线");
   assert.equal(
@@ -190,8 +206,7 @@ test("daemon 一句话都不用说：设置页能读", async () => {
 
 test("daemon 一句话都不用说：设置页能改能存，存完读回来还在", async () => {
   const { data, dom } = realm(HTML, { "browse:config": CONFIG });
-  const mod = await load();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  const mod = await boot();
 
   const deny = document.getElementById("deny") as HTMLTextAreaElement;
   deny.value = "evil.test\nbank.test";
@@ -213,8 +228,7 @@ test("daemon 一句话都不用说：设置页能改能存，存完读回来还�
 
 test("没存过配置时给的是默认值，不是一片空白", async () => {
   realm(HTML, {});
-  await load();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await boot();
 
   assert.equal(
     document.querySelector<HTMLInputElement>('input[name="confirm_mode"]:checked')?.value,
@@ -227,8 +241,7 @@ test("没存过配置时给的是默认值，不是一片空白", async () => {
 
 test("撤销一个免确认域名，直接写存储，不经任何中间人", async () => {
   const { data, dom } = realm(HTML, { "browse:config": CONFIG });
-  await load();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await boot();
 
   const button = document.querySelector<HTMLButtonElement>("#approved button");
   assert.ok(button, "应该有一个撤销按钮");
@@ -246,8 +259,7 @@ test("插件自己的存储坏了才显示离线，并且不画一份空配置�
   (globalThis as Any).chrome.storage.local.get = async () => {
     throw new Error("storage is gone");
   };
-  await load();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await boot();
 
   assert.equal(document.body.classList.contains("offline"), true, "表单必须被禁掉");
   assert.equal(document.getElementById("status")?.className, "bad");
@@ -263,4 +275,72 @@ test("settings.html and settings.ts are in the build, and the manifest points at
   const manifest = JSON.parse(readFileSync(join(SRC, "manifest.json"), "utf8"));
   assert.equal(manifest.options_page, "settings.html");
   assert.equal(manifest.default_locale, "zh_CN");
+});
+
+test("审计日志的用量计数异步补到每个功能行上", async () => {
+  realm(HTML, {
+    "browse:config": CONFIG,
+    "browse:audit": [
+      { method: "script.evaluate", ok: true },
+      { method: "script.evaluate", ok: true },
+      { method: "input.click", ok: true },
+      { method: "no.such", ok: true },
+    ],
+  });
+  await boot();
+  for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 1));
+  const usage = document.querySelector<HTMLSpanElement>('.feature[data-feature="script"] .usage');
+  assert.match(usage?.textContent ?? "", /settingsFeatUsed:2/);
+  const clickUsage = document.querySelector<HTMLSpanElement>('.feature[data-feature="input"] .usage');
+  assert.ok((clickUsage?.textContent ?? "").length > 0, "input 功能行也要有计数");
+});
+
+test("没有对应节点时 render 的每条守卫都安全返回", async () => {
+  realm("");
+  const { render, renderApproved } = await load();
+  render(CONFIG, "");
+  // renderApproved 未导出，但 render→renderApproved(domains) 已在无 #approved 的
+  // body 里跑过守卫；这里再验证没抛、没写任何东西
+  assert.equal(document.body.children.length, 0);
+});
+
+test("表单校验失败时 save 只说不存", async () => {
+  const { dom } = realm(HTML, { "browse:config": CONFIG });
+  await boot();
+  (document.getElementById("retention") as HTMLInputElement).value = "abc"; // parseInt→NaN，才进得了校验分支
+  document.getElementById("form")?.dispatchEvent(new dom.window.Event("submit"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById("status")?.className, "bad");
+  assert.match(document.getElementById("status")?.textContent ?? "", /settingsBadRetention/);
+});
+
+test("存储写不进去时撤销和保存都把错误摆到状态行", async () => {
+  const { dom } = realm(HTML, { "browse:config": CONFIG });
+  (globalThis as Any).chrome.storage.local.set = async () => {
+    throw new Error("quota full");
+  };
+  await boot();
+
+  document.querySelector<HTMLButtonElement>("#approved button")
+    ?.dispatchEvent(new dom.window.Event("click"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.match(document.getElementById("status")?.textContent ?? "", /quota full/);
+
+  document.getElementById("form")?.dispatchEvent(new dom.window.Event("submit"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById("status")?.textContent, "quota full");
+});
+
+test("readForm 在功能行不在页面上时按空名单返回", async () => {
+  // realm("") 的 body 没有 .feature 行 → readForm 的 continue 分支
+  realm("");
+  const { readForm } = await load();
+  assert.deepEqual(readForm(), {
+    confirm_mode: "",
+    deny_domains: [],
+    audit: false,
+    audit_retention_days: Number.NaN,
+    disabled_features: [],
+    domain_disabled_features: {},
+  });
 });

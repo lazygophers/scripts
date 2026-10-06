@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -181,3 +182,23 @@ class VolatileSocketCase(unittest.TestCase):
                                          runner=runner)
         self.assertTrue(path.is_file())
         self.assertTrue(runner.calls)
+
+
+class TestPlatformEdges(unittest.TestCase):
+    def test_windows_enable_disable_are_noops(self) -> None:
+        from lib.browse_service import _disable, _enable
+        self.assertEqual(_enable("win32", pathlib.Path("x")), [])
+        self.assertEqual(_disable("win32"), [])
+
+    def test_darwin_disable_boots_out_the_label(self) -> None:
+        from lib.browse_service import LABEL, _disable
+        cmds = _disable("darwin")
+        self.assertEqual(len(cmds), 1)
+        self.assertEqual(cmds[0][:2], ["launchctl", "bootout"])
+        self.assertIn(LABEL, cmds[0][2])
+
+    def test_unresolvable_socket_counts_as_volatile(self) -> None:
+        from lib.browse_service import _socket_is_volatile
+        with unittest.mock.patch.object(pathlib.Path, "resolve",
+                                       side_effect=OSError("gone")):
+            self.assertTrue(_socket_is_volatile("/tmp/whatever.sock"))

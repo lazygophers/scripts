@@ -65,9 +65,10 @@ export function page(
     }
     g.DataTransfer = FakeDataTransfer;
   }
-  const inputProto = (dom.window as unknown as Any).HTMLInputElement?.prototype as
-    | Any
+  const inputCtor = (dom.window as unknown as Any).HTMLInputElement as
+    | { prototype?: Any }
     | undefined;
+  const inputProto = inputCtor?.prototype;
   if (inputProto !== undefined) {
     const EMPTY: File[] = [];
     Object.defineProperty(inputProto, "files", {
