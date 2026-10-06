@@ -75,3 +75,25 @@ python3 -m unittest discover -s tests -q   # 串行，调试单个用例时更�
 
 写法只有一种：消息落文件再 `git commit -F <file>`。单行、确定不含反引号的消息才
 可以用 `-m`。
+
+## 覆盖率口径：分母决定一切（2026-10-06 五包 95% 门槛踩出来的）
+
+- **Node 默认报告不可直接引用**：`--experimental-test-coverage` 不带 `--test-coverage-include`
+  会把测试文件计入分母（虚高），且**未加载的源码不进分母**（browse 曾有 5 个入口文件、
+  shared 的 build.mjs 完全漏出）。正确命令：`--test-coverage-include='src/**/*.ts'` +
+  `--test-coverage-lines/branches/functions=95` 三门槛，并核 `find src -name '*.ts'` 与报告
+  文件数一致。同进程对带 query 的重复 import 只有最后一个实例进覆盖率——每份夹具独立
+  测试文件（panel-boot/settings-boot 先例）。
+- **Python 并行收集**：`tests/run.py` 每单元一个子进程，外层 `coverage run` 只测到调度器
+  本身（TOTAL 1%）。正确做法：`COVERAGE_PROCESS_START` + sitecustomize
+  （`coverage.process_startup()`）+ `--parallel-mode` + `combine`，`--source=<repo>/lib`
+  才能把未被 import 的源码（如 lib/cli/live_server.py 曾 0% 漏出）纳入分母。跑完记得
+  `--keep`。mise python 3.14 缺 bs4/curl_cffi/graphify/watchdog，用 conda 3.13。
+- **IntelliJ 插件的 JaCoCo 恒 0% 是机制问题**：插件类经 IDE 类加载体系加载，绕过
+  javaagent transformer。offline instrumentation（构建期插桩 sandbox 测试 jar）是唯一
+  可行路径，见 idea-plugins/lazy-git 的 `instrumentTestSandboxJar`；发布产物必须验证无
+  探针。BRANCH counter 对 Kotlin 编译器生成的 null 检查/when 兜底过度计数，门禁用
+  INSTRUCTION+LINE 双 counter，branch 如实报告不硬凑。
+- **测量伪影要隔离**：coverage 的 sitecustomize 会给被测子进程注入 coverage 模块链，
+  `test_perf` 的启动模块数预算必爆（kk 290>236）——该预算测试检测
+  `COVERAGE_PROCESS_START` 跳过，裸跑不受影响。
