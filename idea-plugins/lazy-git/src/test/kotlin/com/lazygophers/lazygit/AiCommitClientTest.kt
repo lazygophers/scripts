@@ -168,6 +168,22 @@ class AiCommitClientTest {
     }
 
     @Test
+    fun `anthropic retry notifies consumers that rely on the default no-op hook`() {
+        responder = { index, exchange ->
+            if (index == 0) {
+                fail(exchange, 400, """{"error":"thinking disabled is not supported"}""")
+            } else {
+                sse(exchange, """data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}""")
+            }
+        }
+        val sb = StringBuilder()
+        val text = client("anthropic").stream("prompt", object : SseConsumer {
+            override fun onDelta(t: String) { sb.append(t) }
+        })
+        assertEquals("ok", text)
+    }
+
+    @Test
     fun `openai does not retry on 400`() {
         responder = { _, exchange -> fail(exchange, 400, "bad request") }
         assertFailsWith<RuntimeException> { client("openai").stream("prompt", Collector()) }

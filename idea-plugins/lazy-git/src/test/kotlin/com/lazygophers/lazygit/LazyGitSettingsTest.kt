@@ -3,6 +3,7 @@ package com.lazygophers.lazygit.settings
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 /**
@@ -68,6 +69,17 @@ class LazyGitSettingsTest {
         // generateServiceName 会拼上 IDE 的前缀，只断言自己那两截在里面
         assertEquals(true, attributes.serviceName.contains("lazy-git"))
         assertEquals(true, attributes.serviceName.contains("api-key"))
+    }
+
+    @Test
+    fun `saveApiKey with a blank key removes the stored credential`() {
+        val settings = LazyGitSettings()
+        settings.saveApiKey("temp")
+        settings.saveApiKey("   ")
+        assertNull(LazyGitSettings.apiKeyAttributes().let { attrs ->
+            // 空值分支走 setPassword(attrs, null)，内存库里不应再有凭据
+            com.intellij.ide.passwordSafe.PasswordSafe.instance.getPassword(attrs)
+        })
     }
 
     @Test
