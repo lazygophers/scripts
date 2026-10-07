@@ -44,6 +44,10 @@ def launchd_plist() -> str:
     <string>{exe}</string>
     <string>run</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>GRAPHIFY_VIZ_NODE_LIMIT</key><string>50000</string>
+  </dict>
   <key>KeepAlive</key>
   <dict>
     <key>Crashed</key><true/>
