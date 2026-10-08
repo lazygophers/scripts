@@ -105,6 +105,19 @@ class TestSwitchToBranch(unittest.TestCase):
             _switch_to_branch("dev", "git", "origin", "main")
         self.assertIn("dev", str(cm.exception))
 
+    @patch("lib.git.run")
+    def test_dirty_conflict_reports_real_cause(self, mock_run):
+        # 2026-10-08 实例：go mod tidy 改了 go.mod 未提交，checkout 被拒，
+        # 旧代码吞掉 git 原文报「请确认分支是否存在」，误导排障方向
+        err = "error: Your local changes to the following files would be overwritten by checkout:\n\tgo.mod"
+        mock_run.side_effect = [_proc(1, stderr=err), _proc(1, stderr="fatal: a branch named 'dev' already exists")]
+        with self.assertRaises(GitError) as cm:
+            _switch_to_branch("dev", "git", "origin", "main")
+        msg = str(cm.exception)
+        self.assertIn("未提交", msg)
+        self.assertIn("go.mod", msg)
+        self.assertNotIn("是否存在", msg)
+
 
 class TestReportHelper(unittest.TestCase):
     def test_none_reporter_noop(self):

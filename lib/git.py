@@ -48,7 +48,12 @@ def _switch_to_branch(branch: str, bit_cmd: str, remote: str, original_branch: s
             capture_output=True,
         )
         if p2.returncode != 0:
-            raise GitError(f"切换分支失败，请确认分支 '{branch}' 是否存在！")
+            detail = ((p.stderr or "") + (p2.stderr or "")).strip()
+            if "would be overwritten by checkout" in detail:
+                raise GitError(
+                    f"切换分支失败：本地有未提交改动与 {branch} 冲突，先 commit 或 stash 后重跑\n{detail}"
+                )
+            raise GitError(f"切换分支失败，请确认分支 '{branch}' 是否存在！\n{detail}".rstrip())
 
 
 def _report(r: Reporter | None, method: str, *args, **kwargs) -> None:

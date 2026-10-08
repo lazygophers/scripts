@@ -44,7 +44,9 @@ class TestIdeaBuild(unittest.TestCase):
         cli._r = mock.MagicMock()
         import subprocess
 
-        with mock.patch.object(subprocess, "call", return_value=0) as call:
+        # zip 发现逻辑一并 mock：不依赖本机 build/distributions 恰好残留上次构建产物
+        with mock.patch.object(subprocess, "call", return_value=0) as call, \
+             mock.patch.object(pathlib.Path, "glob", return_value=[pathlib.Path("/tmp/fake.zip")]):
             self.assertEqual(cli.idea(), 0)
         command = call.call_args.args[0]
         self.assertEqual(command[:3], ["mise", "exec", "--"])
