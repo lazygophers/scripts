@@ -19,6 +19,9 @@ python3 -m unittest discover -s tests -q   # 串行，调试单个用例时更�
 
 - **测试类必须继承 `unittest.TestCase`。** pytest 风格的裸类会被 `unittest` 静默收集到 0 个：
   `tests/test_kk.py` 的 18 个用例就这样躺了很久没人跑。`tests/test_meta.py` 现在守着这条。
+- **测试不许依赖磁盘残留。** `test_lazyhelp_cli` 的 idea 用例曾依赖磁盘上残留的 zip
+  才能过，换台机器或清了缓存就红（2026-10-08 全量回归时炸出来，改为 mock `Path.glob`）。
+  夹具自建或 mock，不假设本机文件系统的历史状态。
 - **测试名要兑现承诺。** `test_bad_line_ignored` 只发 ping 就断言——名字说的"坏行"从未出现。
   下次真有人弄坏分帧逻辑，这条测试照样绿。测什么名就写什么，或改名。
 - **新增 `bin/<name>` 必须同时写进 `pyproject.toml` 的 `[project.scripts]`**，否则 uvx 用户
@@ -40,6 +43,8 @@ python3 -m unittest discover -s tests -q   # 串行，调试单个用例时更�
   结果照样是 OK。`python3` 不指向 conda 时（子 agent、干净 shell）就会静默跳过，改用
   `/Users/luoxin/miniconda3/bin/python tests/run.py test_graphwatch_e2e`（实测 15 用例 24s）。`tests/run.py`
   不报 skipped 数，先跑 `<同一解释器> -c "import graphify, watchdog"` 确认能导入。
+  同理：`graphify query`（pipx 装的 `graphifyy` CLI）跑在 python3.14 下 jieba 报
+  `NameError: xrange`（2026-10-08 实测），知识图谱查询改用 conda 解释器，或直接 grep。
 - **跑完就把临时目录收掉。** 678 个调度单元 = 678 个临时目录，不收就堆在 `/tmp` 里。
 - **browse 扩展：新 Chrome API 依赖先扩 `mock.ts`，再改调用方。** `resolveContext` 加入 `storage.session`/`tabGroups` 后 21 个测试文件需改——`ownWorld()`/`ownSession()` 助手是事后补的。正确顺序：先在 `browser-extension/browse/test/mock.ts` 扩好夹具，再逐一迁移用到这个函数的测试。
 - **改完 TypeScript 文件先做单文件冒烟，再跑全套 typecheck。** `node --experimental-strip-types <file.ts>` 在 Node 22+ 上秒级捕获 parse 级语法错（如 filter 回调漏 `async`），比等 `npm run typecheck` 省一轮子进程往返。仅在改完本文件、交付给 `npm test` 前作为快速检查，不替代 typecheck。
