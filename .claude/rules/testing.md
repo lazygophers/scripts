@@ -48,6 +48,9 @@ python3 -m unittest discover -s tests -q   # 串行，调试单个用例时更�
 - **跑完就把临时目录收掉。** 678 个调度单元 = 678 个临时目录，不收就堆在 `/tmp` 里。
 - **browse 扩展：新 Chrome API 依赖先扩 `mock.ts`，再改调用方。** `resolveContext` 加入 `storage.session`/`tabGroups` 后 21 个测试文件需改——`ownWorld()`/`ownSession()` 助手是事后补的。正确顺序：先在 `browser-extension/browse/test/mock.ts` 扩好夹具，再逐一迁移用到这个函数的测试。
 - **改完 TypeScript 文件先做单文件冒烟，再跑全套 typecheck。** `node --experimental-strip-types <file.ts>` 在 Node 22+ 上秒级捕获 parse 级语法错（如 filter 回调漏 `async`），比等 `npm run typecheck` 省一轮子进程往返。仅在改完本文件、交付给 `npm test` 前作为快速检查，不替代 typecheck。
+- **改既有组件结构（DOM 结构/选择器/事件挂载点）时，先 grep 类名把旧测试找全。** 同一组件的用例散落在多个测试文件，改最顺手那个文件 ≠ 改完。2026-10-09 viewer 悬停框 `.lfv-preview` 从裸 `pre` 变 `div>(tools+pre)`、事件从 link 挪到 cell，波及 `listing.test.ts` / `branch-gaps.test.ts` / `prettify.test.ts` / `entry-gaps.test.ts` 四个文件，`grep -rn ".lfv-preview" browser-extension/viewer/test/` 才找全（settings.test.ts 的命中是反向断言，不用动）。DOM 一动就跑这条 grep，别等 typecheck——DOM 字符串选择器不是类型错误，测不到就静默漏。
+- **mock 回调的参数签名照真实 API 全量声明。** viewer `entry-gaps.test.ts` 的 `onMessage` mock 最初只声明 2 参，background 用上第 3 参 `sendResponse` 后测试里被迫 `as unknown as` 加宽再调。mock 签名照 chrome 类型抄全（连 sendResponse），后续加参只动实现不动测试。与上面 browse 的「先扩 mock.ts 再改调用方」同一条原则：mock 落后于真实 API，债就在测试里。
+- **派子 agent 跑测试前确认它带本地执行工具。** Explore 类只读 agent 没有 Bash，`npm --prefix browser-extension/*/ test` 跑不了，白等一轮。跑测试派 general-purpose，或主对话自己跑。
 
 ## 别写慢测试
 
