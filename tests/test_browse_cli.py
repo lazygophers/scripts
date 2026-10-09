@@ -1337,3 +1337,47 @@ class TestOutputFormat(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(target.read_bytes(), b"\x89PNG-fake")
         self.assertEqual(json.loads(out.getvalue())["file"], str(target))
+
+
+class TestConnPids(unittest.TestCase):
+    """`browse status` 用 lsof 反查连接 pid 的解析：只认箭头左侧。"""
+
+    def test_maps_client_local_port_to_pid(self):
+        lsof = "\n".join([
+            "p100",
+            "n127.0.0.1:51000->127.0.0.1:9330",
+            "p200",
+            "n127.0.0.1:52000->127.0.0.1:9330",
+        ])
+        with mock.patch.object(browse.subprocess, "run", return_value=mock.Mock(stdout=lsof)):
+            pids = browse._conn_pids(9330, [{"peerPort": 51000}, {"peerPort": 52000}])
+        self.assertEqual(pids, {51000: 100, 52000: 200})
+
+    def test_ignores_bridge_side_of_the_connection(self):
+        # bridge 自己那条 n 行是 9330->peerPort；取右侧会把 bridge pid 贴给别人
+        lsof = "\n".join([
+            "p300",
+            "n127.0.0.1:9330->127.0.0.1:51000",
+            "p100",
+            "n127.0.0.1:51000->127.0.0.1:9330",
+        ])
+        with mock.patch.object(browse.subprocess, "run", return_value=mock.Mock(stdout=lsof)):
+            pids = browse._conn_pids(9330, [{"peerPort": 51000}])
+        self.assertEqual(pids, {51000: 100})
+
+    def test_skips_unparseable_and_unknown_ports(self):
+        lsof = "\n".join([
+            "p100",
+            "n127.0.0.1:51000->127.0.0.1:9330",
+            "p*(bad",
+            "nnot-an-addr",
+        ])
+        with mock.patch.object(browse.subprocess, "run", return_value=mock.Mock(stdout=lsof)):
+            pids = browse._conn_pids(9330, [{"peerPort": 51000}, {"peerPort": 0}, {}])
+        self.assertEqual(pids, {51000: 100})
+
+    def test_no_lsof_call_without_peer_ports(self):
+        with mock.patch.object(browse.subprocess, "run") as run_mock:
+            pids = browse._conn_pids(9330, [{"peerPort": 0}, {}])
+        self.assertEqual(pids, {})
+        run_mock.assert_not_called()

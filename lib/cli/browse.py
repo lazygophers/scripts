@@ -1738,13 +1738,16 @@ def _conn_pids(ws_port: int, conns: list[dict]) -> dict[int, int]:
         if line.startswith("p") and line[1:].isdigit():
             cur = int(line[1:])
         elif line.startswith("n") and cur:
-            for side in line[1:].split("->"):
-                try:
-                    port = int(side.rsplit(":", 1)[1])
-                except (IndexError, ValueError):
-                    continue
-                if port in ports:
-                    pids[port] = cur
+            # 只看箭头左侧：lsof 对每条连接给两端各一条 n 行，bridge 自己那条
+            # 「9330->peerPort」的右侧也含 peerPort，取右侧会把 bridge 的 pid
+            # 贴到别人的连接上
+            local = line[1:].split("->")[0]
+            try:
+                port = int(local.rsplit(":", 1)[1])
+            except (IndexError, ValueError):
+                continue
+            if port in ports:
+                pids[port] = cur
     return pids
 
 
