@@ -1764,7 +1764,8 @@ def _cmd_status(tokens: list[str]) -> int:
     sock = _sock_of(flags)
     report = reporter(stderr=True)
 
-    running = probe(sock)
+    # 和其他指令一样自动拉起：status 只是看一眼，不该要求 daemon 先活着
+    running = ensure_daemon(sock)
     conns: list[dict] = []
     info: dict = {}
     if running:
