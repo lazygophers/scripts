@@ -38,6 +38,7 @@ python3 -m unittest discover -s tests -q   # 串行，调试单个用例时更�
 - **临时目录路径要短。** browse daemon 的 unix socket 全路径在 macOS 上限 104 字节，系统
   `TMPDIR`（`/var/folders/…`）再套一层 `mkdtemp` 就超，报出来的还是 `[Errno None] None:`
   这种看不懂的错。并行跑测器因此把 worker 的 `TMPDIR` 建在 `/tmp` 下。
+- **扩展产物是打包单文件，别按源文件名找。** `dist/` 里没有 `native-port.js`——所有 `src/*.ts` 都打进 `dist/background.js`。核对改动是否进了构建：先 `git status` 看 `dist/` 是否被重建，再 grep 关键字符串到 `dist/background.js`（正则里的 `/` 被转义成 `\/`，用 `grep -c 'Arc\\/'` 这类转义写法）。
 - **graphwatch 的集成/e2e 测试要用装了 graphify 的解释器跑。** `tests/test_graphwatch_e2e.py`、
   `tests/test_graphwatch_artifacts.py` 在 `import graphify, watchdog` 失败时整类 `skipUnless` 跳过，
   结果照样是 OK。`python3` 不指向 conda 时（子 agent、干净 shell）就会静默跳过，改用

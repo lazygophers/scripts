@@ -1396,7 +1396,7 @@ class TestBrowserLabels(unittest.TestCase):
             "Google Chrome Helper"), "chrome")
         self.assertEqual(browse._app_name(
             "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"), "edge")
-        self.assertEqual(browse._app_name("/usr/bin/chromium"), "")
+        self.assertEqual(browse._app_name("/usr/bin/chromium"), "chromium")
         self.assertEqual(browse._app_name(""), "")
 
     def test_browser_labels_ps_parse(self):
@@ -1420,3 +1420,17 @@ class TestBrowserLabels(unittest.TestCase):
         self.assertEqual(browse._app_name("/Applications/Setapp/Opera.app/Contents/MacOS/Opera"), "opera")
         self.assertEqual(browse._app_name(
             "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"), "brave")
+
+    def test_app_name_windows_and_linux_layouts(self):
+        # Windows：全路径 + exe 基名（ps 在那边给的 comm 形状）
+        self.assertEqual(browse._app_name(r"C:\Program Files\Google\Chrome\Application\chrome.exe"), "chrome")
+        self.assertEqual(browse._app_name(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"), "edge")
+        self.assertEqual(browse._app_name(r"C:\Users\u\AppData\Local\Arc\app\Arc.exe"), "arc")
+        # Linux：发行包二进制名，渠道后缀剥掉
+        self.assertEqual(browse._app_name("/usr/bin/google-chrome-stable"), "chrome")
+        self.assertEqual(browse._app_name("/usr/bin/brave-browser"), "brave")
+        self.assertEqual(browse._app_name("/usr/bin/microsoft-edge-stable"), "edge")
+        self.assertEqual(browse._app_name("/opt/vivaldi/vivaldi"), "vivaldi")
+        self.assertEqual(browse._app_name("/snap/bin/chromium"), "chromium")
+        # 白名单外不认：碰巧叫 arc 的无关进程不冒充浏览器
+        self.assertEqual(browse._app_name("/usr/bin/archive-tool"), "")

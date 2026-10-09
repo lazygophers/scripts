@@ -57,6 +57,7 @@ execute 阶段的 `push_*` / `merge_*` 子进程在 AI 环境改为**捕获**（
 新 CLI 不用做任何事，走 Reporter 即继承；自建 Console 时禁止
 `force_terminal=True` 无条件开启，必须 `force_terminal=not is_ai_shell_env()`。
 出 JSON 时必须用 `json_dumps()` 而非裸 `json.dumps(..., indent=2)`。
+要在 AI shell 里预览人类格式输出（或复测极简分流）：`env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ./bin/<cmd>`（标记变量全集见 `lib/ai_env.py` 的 `_MARKERS`）。
 新增 AI 工具标记时改 `lib/ai_env.py` 的 `_MARKERS`，不动 ui。测试里
 `tests/__init__.py` 已清掉标记变量保证断言确定性；测极简模式本身用
 `patch.dict` 注入（见 `tests/test_ui_minimal.py`）。

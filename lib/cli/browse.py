@@ -1754,15 +1754,36 @@ def _conn_pids(ws_port: int, conns: list[dict]) -> dict[int, int]:
 
 
 # 扩展自报的品牌名（brands/UA）分不出 Chromium 分支——Arc 实测两者都是纯
-# Chromium 形状（lg:browser.info 拿的底牌）——进程路径里的 .app 名才是可靠信号
+# Chromium 形状（lg:browser.info 拿的底牌）——进程路径才是可靠信号。
+# macOS 认 .app 段；Windows 认 .exe 基名；Linux 认发行包的二进制名。
 _APP_ALIASES = {"google chrome": "chrome", "microsoft edge": "edge", "brave browser": "brave"}
+# 三平台落地后的名字都对齐到同一套短名（与扩展 browserName() 的词汇表一致）
+_BIN_ALIASES = {
+    "msedge": "edge",
+    "google-chrome": "chrome",
+    "chromium-browser": "chromium",
+    "microsoft-edge": "edge",
+    "brave-browser": "brave",
+}
+# 认识的基名（剥掉 .exe / -stable / -beta 之后）。白名单外的名字不认，
+# 免得把随便一个碰巧叫 arc 的进程标成浏览器
+_KNOWN_BROWSERS = {
+    "chrome", "chromium", "edge", "brave", "opera", "vivaldi", "arc",
+    "yandex", "dia", "sigmaos",
+}
 
 
 def _app_name(comm: str) -> str:
-    """进程路径 → 浏览器短名；没有 .app 段（Linux/非 app）返回空串。"""
+    """进程路径 → 浏览器短名；认不出返回空串（调用方退回扩展自报名）。"""
+    # macOS：取第一个 .app 段（bundle 名），嵌套路径（Setapp）也对
     seg = next((s for s in comm.split("/") if s.endswith(".app")), "")
-    name = seg[:-4].strip().lower() if seg else ""
-    return _APP_ALIASES.get(name, name) if name else ""
+    if seg:
+        name = seg[:-4].strip().lower()
+        return _APP_ALIASES.get(name, name)
+    # Windows / Linux：取基名，剥 .exe 和渠道后缀，对齐后进白名单才算
+    base = comm.replace("\\", "/").rsplit("/", 1)[-1].strip().lower()
+    base = base.removesuffix(".exe").removesuffix("-stable").removesuffix("-beta")
+    return _BIN_ALIASES.get(base) or (base if base in _KNOWN_BROWSERS else "")
 
 
 def _browser_labels(pids: set[int]) -> dict[int, str]:
