@@ -8,7 +8,8 @@
     "type": "module"
   },
   "options_page": "settings.html",
-  "permissions": ["storage", "declarativeNetRequest"],
+  "permissions": ["storage", "declarativeNetRequest", "nativeMessaging"],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtU+8sz0kyrcnxYx76ZjxUDPLwGpkiJutpRLfxJg8Dll5CUmkulkHLq+LGmvlms16iaMfU7O+pdL/ydVfZkIqiGpzaHT5+PSNtaDnG7gvUDylTbr/LCMjp49FYuwjey02DA4GRaHgp+0j4FCf9TTbM/6rkD2FO8m1pDzAaHAz6D/vNwsUOMrbiWu5glV2GyQfKt+7pjSK0KUmqVifqaB2zq5aVC20GuoNLSY9irPWZAdDMKG1YSk9WAwO47azwaHuMLVxuBHr0W6viAbpHvZt1ImkCplsTTGllQeVblRVjbI3GEt9CeEVfRnFByLag+OX5b3dXCu8pF4f14AChsQwVQIDAQAB",
   "browser_specific_settings": {
     "gecko": {
       "id": "viewer@lazygophers.com",

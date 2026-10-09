@@ -258,7 +258,7 @@ test("html 悬停用沙箱 iframe 渲染预览，不当纯文本读", async () =
   delete (globalThis as { fetch?: unknown }).fetch;
 });
 
-test("目录的框只有一个复制文件夹名按钮，不去读文件", async () => {
+test("目录的框是复制文件夹名 + 在资源管理器打开两个按钮，不去读文件", async () => {
   const dom = page("");
   const copied: string[] = [];
   Object.defineProperty(dom.window, "navigator", {
@@ -268,15 +268,37 @@ test("目录的框只有一个复制文件夹名按钮，不去读文件", async
   (globalThis as { fetch?: unknown }).fetch = async () => {
     throw new Error("不该读目录");
   };
+  const sent: unknown[] = [];
+  installChrome({ runtime: { sendMessage: async (message: unknown) => {
+    sent.push(message);
+    return { ok: true, message: "已在文件管理器打开" };
+  } } });
   const host = renderListing(dom.window.document, [entry({ name: "src", dir: true, url: "file:///tmp/src/" })], "/tmp");
   (host.querySelector(".lfv-entry") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   await new Promise((resolve) => setImmediate(resolve));
 
   const buttons = Array.from(host.querySelectorAll(".lfv-copy"), (b) => b as HTMLButtonElement);
-  assert.deepEqual(buttons.map((b) => b.textContent), ["复制文件夹名"]);
+  assert.deepEqual(buttons.map((b) => b.textContent), ["复制文件夹名", "在资源管理器打开"]);
   assert.equal(host.querySelector(".lfv-preview pre"), null, "目录没有正文区");
   buttons[0]?.click();
+  buttons[1]?.click();
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(copied, ["src"]);
+  assert.deepEqual(sent, [{ type: "lfv-reveal", url: "file:///tmp/src/" }]);
+  assert.equal(buttons[1]?.textContent, "已打开");
   delete (globalThis as { fetch?: unknown }).fetch;
+  clearChrome();
+});
+
+test("资源管理器打开失败把原因写在按钮上", async () => {
+  const dom = page("");
+  installChrome({ runtime: { sendMessage: async () => ({ ok: false, error: "host 未注册" }) } });
+  const host = renderListing(dom.window.document, [entry({ name: "src", dir: true, url: "file:///tmp/src/" })], "/tmp");
+  (host.querySelector(".lfv-entry") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  await new Promise((resolve) => setImmediate(resolve));
+  const reveal = Array.from(host.querySelectorAll(".lfv-copy"), (b) => b as HTMLButtonElement)[1];
+  reveal?.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reveal?.textContent, "打开失败：host 未注册");
+  clearChrome();
 });

@@ -19,6 +19,11 @@ function bgSetup() {
   installChrome({
     runtime: {
       getURL: (path: string) => `chrome-extension://viewer/${path}`,
+      // native host 的桩：默认「没装」——lastError 有值，回话是 undefined。
+      sendNativeMessage: (_host: string, _message: unknown, callback: (reply: unknown) => void) => {
+        callback(undefined);
+      },
+      lastError: { message: "Specified native messaging host not found." },
       onInstalled: {
         addListener: (fn: (details: { reason: string }) => void) => installed.push(fn),
       },
@@ -307,4 +312,66 @@ test("mermaid.ts 加载即初始化，renderDiagram 出 SVG 或按语法错拒�
     if (hadWindow) g["window"] = prevWindow;
     else delete g["window"];
   }
+});
+
+/* ---------- background：lfv-reveal 转给 native host（前面的 settings 段已把 chrome 清了，这里自带桩） ---------- */
+
+/** reveal 用的 chrome 桩：默认「host 没装」——callback(undefined) + lastError 有值。 */
+function revealSetup(sendNativeMessage: unknown, lastError: unknown) {
+  installChrome({
+    runtime: {
+      getURL: (path: string) => `chrome-extension://viewer/${path}`,
+      sendNativeMessage,
+      lastError,
+      onInstalled: { addListener: () => {} },
+      onMessage: { addListener: () => {} },
+    },
+  });
+}
+
+const NOT_INSTALLED = "Specified native messaging host not found.";
+
+test("revealInFileManager 解码路径后交给 native host，回话原样带回来", async () => {
+  const { revealInFileManager } = await import("../src/background.ts");
+  const calls: unknown[][] = [];
+  revealSetup((host: string, message: unknown, callback: (reply: unknown) => void) => {
+    calls.push([host, message]);
+    callback({ ok: true, message: "已在文件管理器打开" });
+  }, undefined);
+  const reply = await revealInFileManager("file:///tmp/%E4%B8%AD%E6%96%87.md");
+  assert.deepEqual(calls, [["com.lazygophers.viewer_reveal", { path: "/tmp/中文.md" }]]);
+  assert.deepEqual(reply, { ok: true, message: "已在文件管理器打开" });
+});
+
+test("host 没装时 lastError 的原文透传，不炸", async () => {
+  const { revealInFileManager } = await import("../src/background.ts");
+  revealSetup((_host: string, _message: unknown, callback: (reply: unknown) => void) => {
+    callback(undefined);
+  }, { message: NOT_INSTALLED });
+  const reply = await revealInFileManager("file:///tmp/a");
+  assert.deepEqual(reply, { ok: false, error: NOT_INSTALLED });
+});
+
+test("onMessage 的 lfv-reveal 走 sendResponse 回话，非 file:// 拒收", async () => {
+  await import("../src/background.ts");
+  revealSetup((_host: string, _message: unknown, callback: (reply: unknown) => void) => {
+    callback(undefined);
+  }, { message: NOT_INSTALLED });
+  let replied: unknown;
+  const listener = messages[0] as unknown as (
+    message: unknown, sender: unknown, sendResponse: (response: unknown) => void,
+  ) => unknown;
+  const keep = listener({ type: "lfv-reveal", url: "https://evil.test/x" }, {}, (r: unknown) => {
+    replied = r;
+  });
+  assert.equal(keep, true);
+  assert.deepEqual(replied, { ok: false, error: "不是 file:// 地址" });
+
+  replied = undefined;
+  listener({ type: "lfv-reveal", url: "file:///tmp/a" }, {}, (r: unknown) => {
+    replied = r;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  // 桩还是「没装」：失败原样回到 listing 的按钮上。
+  assert.deepEqual(replied, { ok: false, error: NOT_INSTALLED });
 });

@@ -189,7 +189,7 @@ export function wireEntryPopup(doc: Document, anchor: HTMLElement, entry: PopupE
     const tools = doc.createElement("div");
     tools.className = "lfv-preview-tools";
     if (entry.dir) {
-      tools.append(copyButton(doc, "复制文件夹名", entry.name));
+      tools.append(copyButton(doc, "复制文件夹名", entry.name), revealButton(doc, entry.url));
     } else {
       tools.append(copyButton(doc, "复制文件名", entry.name), copyButton(doc, "复制完整路径", entry.url));
     }
@@ -256,6 +256,32 @@ function copyButton(doc: Document, label: string, text: string): HTMLButtonEleme
       },
       (error: Error) => {
         button.textContent = `复制失败：${error.message}`;
+      },
+    );
+  });
+  return button;
+}
+
+/** 「在资源管理器打开」按钮：让后台找 native host 代跑，成没成写在按钮自己身上。 */
+function revealButton(doc: Document, url: string): HTMLButtonElement {
+  const button = doc.createElement("button");
+  button.className = "lfv-copy";
+  button.type = "button";
+  button.textContent = "在资源管理器打开";
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const sendMessage = (globalThis as { chrome?: typeof chrome }).chrome?.runtime?.sendMessage;
+    if (typeof sendMessage !== "function") {
+      button.textContent = "本环境不支持";
+      return;
+    }
+    void sendMessage({ type: "lfv-reveal", url }).then(
+      (reply: { ok?: boolean; message?: string; error?: string } | undefined) => {
+        button.textContent = reply?.ok === true ? "已打开" : `打开失败：${reply?.error ?? "后台没回话"}`;
+      },
+      (error: Error) => {
+        button.textContent = `打开失败：${error.message}`;
       },
     );
   });

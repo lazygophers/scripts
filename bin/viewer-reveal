@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""viewer-reveal 薄壳入口 — viewer 扩展的「在资源管理器打开」native host（install/uninstall/status/host，fire）"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.viewer_reveal import main
+
+raise SystemExit(main())

@@ -56,6 +56,7 @@ TOOLS: dict[str, tuple[str, str]] = {
     "vpn-prio": ("数据与网络", "调整 macOS 网络服务优先级（压低 OpenVPN default 路由）"),
     "ipinfo": ("数据与网络", "查询内网 IP + 网络类型（含热点识别）"),
     "ipv6": ("数据与网络", "开关本机所有网络服务的 IPv6（enable/disable 子命令，需 sudo）"),
+    "viewer-reveal": ("数据与网络", "viewer 扩展的「在资源管理器打开」native host（install/uninstall/status）"),
     # 网页检索: 搜索 / 抓取
     "websearch": ("网页检索", "多引擎网页检索（全引擎免 key 并行，按 URL 合并去重）"),
     "webgrab": ("网页检索", "抓网页转 Markdown（反爬直抓 + Playwright 渲染 + 34 站点适配 + 登录态持久化）"),

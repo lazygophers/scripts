@@ -59,9 +59,48 @@ export async function headFile(message: unknown): Promise<{ ok: boolean; text?: 
   }
 }
 
+/**
+ * 「在资源管理器打开」：交给 native host 去跑（扩展进程起不了系统程序）。
+ * host 由仓库里的 `viewer-reveal install` 注册（`com.lazygophers.viewer_reveal`），
+ * 没装时 Chrome 直接在 sendNativeMessage 的回调里给 lastError，原样带回去。
+ */
+export function revealInFileManager(
+  url: string,
+): Promise<{ ok: boolean; message?: string | undefined; error?: string | undefined }> {
+  const path = decodeURIComponent(new URL(url).pathname);
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendNativeMessage("com.lazygophers.viewer_reveal", { path }, (reply: unknown) => {
+        const failure = chrome.runtime.lastError?.message;
+        if (failure !== undefined) return resolve({ ok: false, error: failure });
+        const typed = reply as { ok?: boolean; message?: string; error?: string } | undefined;
+        resolve(typed === undefined
+          ? { ok: false, error: "host 没回话" }
+          : {
+            ok: typed.ok === true,
+            ...(typed.message === undefined ? {} : { message: typed.message }),
+            ...(typed.error === undefined ? {} : { error: typed.error }),
+          });
+      });
+    } catch (error) {
+      resolve({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+}
+
 chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (response: unknown) => void) => {
   if (openLocal(message, sender.tab?.id)) return false;
-  if ((message as { type?: unknown } | null)?.type !== "lfv-head") return false;
+  const { type } = (message ?? {}) as { type?: unknown };
+  if (type === "lfv-reveal") {
+    const { url } = (message ?? {}) as { url?: unknown };
+    if (typeof url === "string" && url.startsWith("file://")) {
+      void revealInFileManager(url).then(sendResponse);
+      return true;
+    }
+    sendResponse({ ok: false, error: "不是 file:// 地址" });
+    return true;
+  }
+  if (type !== "lfv-head") return false;
   void headFile(message).then(sendResponse);
   return true;
 });
