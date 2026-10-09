@@ -1412,3 +1412,11 @@ class TestBrowserLabels(unittest.TestCase):
         with mock.patch.object(browse.subprocess, "run") as run_mock:
             self.assertEqual(browse._browser_labels(set()), {})
         run_mock.assert_not_called()
+
+    def test_app_name_other_forks_and_nested_paths(self):
+        # 其它 Chromium 分支走通用规则；Setapp 这类嵌套目录取第一个 .app 段
+        self.assertEqual(browse._app_name("/Applications/Vivaldi.app/Contents/MacOS/Vivaldi"), "vivaldi")
+        self.assertEqual(browse._app_name("/Applications/Opera.app/Contents/MacOS/Opera"), "opera")
+        self.assertEqual(browse._app_name("/Applications/Setapp/Opera.app/Contents/MacOS/Opera"), "opera")
+        self.assertEqual(browse._app_name(
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"), "brave")
