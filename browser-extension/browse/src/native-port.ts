@@ -46,7 +46,7 @@ const LOG_SIZE = 20;
  * 连接仍然唯一，只是重连后会变，测试不关心这个字段所以无妨。
  */
 let cachedInstanceId: string | null = null;
-async function instanceId(): Promise<string> {
+export async function instanceId(): Promise<string> {
   if (cachedInstanceId !== null) {
     return cachedInstanceId;
   }

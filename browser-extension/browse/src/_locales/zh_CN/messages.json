@@ -383,9 +383,6 @@
   "panelBridge": {
     "message": "bridge 服务"
   },
-  "panelServerLog": {
-    "message": "bridge 日志"
-  },
   "panelFilter": {
     "message": "筛选指令"
   },
@@ -432,9 +429,6 @@
         "content": "$1"
       }
     }
-  },
-  "panelNoServerLog": {
-    "message": "日志是空的"
   },
   "panelBridgeLastSeen": {
     "message": "上次通信"

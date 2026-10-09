@@ -21,8 +21,6 @@ let logList: HTMLUListElement | null = null;
 let logStatus: HTMLElement | null = null;
 let bridgeList: HTMLUListElement | null = null;
 let bridgeStatus: HTMLElement | null = null;
-let serverLogList: HTMLUListElement | null = null;
-let serverLogStatus: HTMLElement | null = null;
 let logFilter: HTMLInputElement | null = null;
 let logCopy: HTMLButtonElement | null = null;
 let cut: HTMLButtonElement | null = null;
@@ -199,7 +197,7 @@ function renderBridge(reply: Record<string, unknown>): void {
 
   const info = reply.info as {
     pid?: number; port?: number; uptimeSeconds?: number; logPath?: string;
-    connections?: { browser: string; idleSeconds: number }[];
+    connections?: { browser: string; idleSeconds: number; instanceId?: string }[];
   } | undefined;
   if (info === undefined) {
     bridgeList.append(line(
@@ -210,49 +208,18 @@ function renderBridge(reply: Record<string, unknown>): void {
   }
   bridgeList.append(line(msg("panelBridgeProcess"), `pid ${info.pid} · :${info.port}`));
   bridgeList.append(line(msg("panelBridgeUptime"), `${info.uptimeSeconds}s`));
-  for (const conn of info.connections ?? []) {
+  // 只摆本浏览器自己的连接，别的浏览器的槽位不展示（用户：服务只展示自己的信息）
+  const ownId = String(reply.ownInstanceId ?? "");
+  for (const conn of (info.connections ?? []).filter((c) => c.instanceId === ownId)) {
     bridgeList.append(line(conn.browser, `${conn.idleSeconds}s`));
   }
   bridgeList.append(line(msg("panelBridgeLogPath"), String(info.logPath ?? "")));
-}
-
-/** bridge 服务端日志：一行一条事件，新的在下面（和文件里的顺序一致）。 */
-function renderServerLog(lines: Record<string, unknown>[] | undefined): void {
-  if (serverLogStatus) {
-    serverLogStatus.textContent = lines && lines.length
-      ? msg("panelDomainCount", String(lines.length))
-      : msg("panelNoServerLog");
-  }
-  if (!serverLogList) {
-    return;
-  }
-  serverLogList.replaceChildren();
-  for (const entry of lines ?? []) {
-    const at = typeof entry.at === "number" ? clock(entry.at * 1000) : "";
-    const rest = Object.entries(entry)
-      .filter(([key]) => key !== "at" && key !== "event")
-      .map(([key, value]) => `${key}=${String(value)}`)
-      .join(" ");
-    const row = document.createElement("li");
-    row.className = "logline";
-    const stamp = document.createElement("span");
-    stamp.className = "at";
-    stamp.textContent = at;
-    const name = document.createElement("span");
-    name.textContent = String(entry.event ?? "");
-    const detail = document.createElement("span");
-    detail.className = "ms";
-    detail.textContent = rest;
-    row.append(stamp, name, detail);
-    serverLogList.append(row);
-  }
 }
 
 async function loadBridge(): Promise<void> {
   try {
     const reply = await chrome.runtime.sendMessage({ type: "browse-bridge", limit: 30 });
     renderBridge((reply ?? {}) as Record<string, unknown>);
-    renderServerLog(reply?.lines as Record<string, unknown>[] | undefined);
   } catch (err) {
     if (bridgeStatus) {
       bridgeStatus.textContent = err instanceof Error ? err.message : String(err);
@@ -271,8 +238,6 @@ export function bootstrap(): void {
   logStatus = document.getElementById("logStatus");
   bridgeList = document.getElementById("bridge") as HTMLUListElement | null;
   bridgeStatus = document.getElementById("bridgeStatus");
-  serverLogList = document.getElementById("serverLog") as HTMLUListElement | null;
-  serverLogStatus = document.getElementById("serverLogStatus");
   logFilter = document.getElementById("logFilter") as HTMLInputElement | null;
   logCopy = document.getElementById("logCopy") as HTMLButtonElement | null;
   cut = document.getElementById("cut") as HTMLButtonElement | null;

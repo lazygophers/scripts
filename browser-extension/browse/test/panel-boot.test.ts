@@ -18,8 +18,8 @@ afterEach(() => {
 });
 
 test("缺节点的页面上自举：所有 render 路径都安静返回，不抛", async () => {
-  // 只有 #cut：boot 后点它就能带着其余节点全 null 的状态走 renderLog / renderBridge /
-  // renderServerLog 的缺席分支；storage.get 抛错让首启的 run() 走 catch（statusNode 也是 null）。
+  // 只有 #cut：boot 后点它就能带着其余节点全 null 的状态走 renderLog / renderBridge
+  // 的缺席分支；storage.get 抛错让首启的 run() 走 catch（statusNode 也是 null）。
   const dom = new JSDOM(`<!doctype html><body><button id="cut"></button></body>`);
   const g = globalThis as Any;
   g.document = dom.window.document;
@@ -53,7 +53,7 @@ test("缺节点的页面上自举：所有 render 路径都安静返回，不抛
   for (let i = 0; i < 20; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
-  // storage 恢复后再点 cut：renderLog / renderBridge / renderServerLog 照常跑，
+  // storage 恢复后再点 cut：renderLog / renderBridge 照常跑，
   // 但那些节点都不在 —— 缺席分支必须安静返回
   getThrows = false;
   (dom.window.document.getElementById("cut") as HTMLButtonElement).click();

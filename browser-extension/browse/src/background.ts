@@ -8,7 +8,7 @@ import { listenNotifications } from "./handlers/notify.ts";
 import { listenPrinting } from "./handlers/printing.ts";
 import { listenUi } from "./handlers/ui.ts";
 import { listenWauth } from "./handlers/wauth.ts";
-import { NativeConnection, type ConnectionState } from "./native-port.ts";
+import { NativeConnection, instanceId, type ConnectionState } from "./native-port.ts";
 
 /** Badge, spec 4.5: connected shows a dot, running commands show their count. */
 let state: ConnectionState = "disconnected";
@@ -64,7 +64,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   // 面板要显示 bridge 的服务情况和日志。连接近况是 service worker 自己的；
   // bridge 那两条只读方法要走 WebSocket 问它，所以这一支是异步的。
   if (message?.type === "browse-bridge") {
-    void bridgeReport(Number(message.limit) || 30).then(sendResponse);
+    void bridgeReport().then(sendResponse);
     return true;
   }
   if (message?.type === "browse-disconnect") {
@@ -81,17 +81,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 /**
- * bridge 的服务情况 + 服务端日志。bridge 没连上时照样返回连接近况——那正是用户
- * 这时候最需要看的东西，所以服务端那两项缺了不算失败。
+ * bridge 的服务情况 + 本浏览器自己的连接。日志原文不再出 service worker（用户：
+ * 插件不要直接展示日志的内容），bridge 没连上时照样返回连接近况——那正是用户
+ * 这时候最需要看的东西，所以缺了不算失败。
  */
-async function bridgeReport(limit: number): Promise<Record<string, unknown>> {
+async function bridgeReport(): Promise<Record<string, unknown>> {
   const status = connection.status();
   try {
-    const [info, log] = await Promise.all([
-      connection.request("lg:bridge.info"),
-      connection.request("lg:bridge.log", { limit }),
-    ]);
-    return { ok: true, status, info, lines: (log as { lines?: unknown[] }).lines ?? [] };
+    const info = await connection.request("lg:bridge.info");
+    // 面板用它把别的浏览器的槽位滤掉，只摆自己的那行
+    const ownInstanceId = await instanceId();
+    return { ok: true, status, info, ownInstanceId };
   } catch (err) {
     return { ok: false, status, error: err instanceof Error ? err.message : String(err) };
   }

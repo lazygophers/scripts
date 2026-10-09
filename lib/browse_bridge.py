@@ -179,6 +179,7 @@ class Bridge(Daemon):
             "sinceSeconds": int(now - meta["since"]),
             "idleSeconds": int(now - meta["lastSeen"]),
             "peerPort": meta.get("peerPort", 0),
+            "instanceId": meta.get("instanceId", ""),
         } for cid, meta in self._ws_meta.items()]
 
     def info(self) -> dict:
@@ -291,17 +292,22 @@ class _Adapter:
                     "since": time.monotonic(),
                     "lastSeen": time.monotonic(),
                     "peerPort": self.peer_port,
+                    "instanceId": self._instance_id,
                 }
                 browse_log.record("ws.open", connectionId=self.conn_id, browser=name)
             await browse_ws.send_text(self.ws_writer, json.dumps(message, ensure_ascii=False))
 
-    # hello 里的 browser 名，翻译后的第一条（hello）记下；之后的消息只刷新 lastSeen
+    # hello 里的 browser 名 / instanceId，翻译后的第一条（hello）记下；之后的消息只刷新 lastSeen
     _browser: str = ""
+    _instance_id: str = ""
 
     def _touch(self, message: dict) -> None:
         if self.conn_id is None and message.get("type") == "hello":
             browser = message.get("browser")
             self._browser = browser if isinstance(browser, str) and browser else "chromium"
+            instance_id = message.get("instanceId")
+            if isinstance(instance_id, str) and instance_id:
+                self._instance_id = instance_id
             return
         entry = self.meta.get(self.conn_id or -1)
         if entry is not None:

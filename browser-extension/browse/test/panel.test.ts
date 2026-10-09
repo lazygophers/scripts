@@ -3,7 +3,7 @@
  *
  * - bridge 没连上时，面板必须仍然把「为什么连不上」摆出来 —— 这正是用户这时唯一
  *   要看的东西，而它恰恰是最容易被一个 `throw` 吞掉的路径
- * - 服务端日志是 bridge 给的原始字段，面板不能因为多了个没见过的字段就崩
+ * - bridge 卡只摆本浏览器的连接，别的浏览器的槽位不出现
  * - 指令日志的筛选和复制只动显示，不重新去问 service worker
  *
  * panel.ts 没有导出，一切靠导入时自举。Node 的覆盖率不聚合带 query 的多次导入，
@@ -133,9 +133,12 @@ const INFO = {
   ok: true,
   status: { state: "connected", url: "ws://127.0.0.1:9330", attempt: 0, stopped: false,
             connectedAt: Date.now() - 5_000, lastMessageAt: Date.now() - 1_000, reason: "" },
+  ownInstanceId: "own-1",
   info: { pid: 42, port: 9330, uptimeSeconds: 12, logPath: "/tmp/browse-bridge.log",
-          connections: [{ browser: "chrome", idleSeconds: 3 }] },
-  lines: [{ at: 1_700_000_000, event: "ws.open", browser: "chrome" }],
+          connections: [
+            { browser: "chrome", idleSeconds: 3, instanceId: "own-1" },
+            { browser: "edge", idleSeconds: 9, instanceId: "other-2" },
+          ] },
 };
 
 const LOG_ENTRIES = [
@@ -156,15 +159,14 @@ test("连上时列出进程、端口、运行时长、日志、复制与筛选�
   bootDoc = dom.window.document;
   const doc = dom.window.document;
 
-  // bridge 上半截 + 下半截
+  // bridge 上半截 + 下半截（只摆本浏览器的连接，别人的槽位不出现）
   const rows = [...doc.querySelectorAll("#bridge li")].map((li) => li.textContent);
   assert.ok(rows.some((row) => row?.includes("pid 42")), rows.join(" | "));
   assert.ok(rows.some((row) => row?.includes("12s")));
   assert.ok(rows.some((row) => row?.includes("chrome")));
+  assert.ok(!rows.some((row) => row?.includes("edge")), "别人的连接不展示");
   assert.ok(rows.some((row) => row?.includes("/tmp/browse-bridge.log")));
   assert.match(doc.getElementById("bridgeStatus")?.textContent ?? "", /panelBridgeUp/);
-  assert.match(doc.getElementById("serverLogStatus")?.textContent ?? "", /panelDomainCount:1/);
-  assert.match(doc.querySelector("#serverLog li")?.textContent ?? "", /ws\.open/);
 
   // 指令日志：时间和耗时，筛选只改显示
   assert.equal(doc.querySelectorAll("#log li").length, 2);
@@ -220,24 +222,16 @@ test("掉线重试中、服务问不到：报重试次数和 unreachable，而�
   assert.ok(rows.some((row) => row?.includes("bridge not connected")), rows.join(" | "));
   assert.match(doc.getElementById("logStatus")?.textContent ?? "", /panelDaemonDisconnected/);
   assert.match(doc.querySelector("#log li")?.textContent ?? "", /panelNothingRun/);
-  assert.match(doc.getElementById("serverLogStatus")?.textContent ?? "", /panelNoServerLog/);
 });
 
-test("bridge 停了就明说；没在重试就给原因；没有时间戳的日志条目照样摆", async () => {
+test("bridge 停了就明说；没在重试就给原因", async () => {
   const doc = await rerun((message) =>
     message.type === "browse-bridge"
-      ? {
-          ok: false,
-          status: { stopped: true, state: "stopped", attempt: 0, reason: "" },
-          lines: [{ event: "ws.note" }, { at: "not-a-number", event: "ws.other" }],
-        }
+      ? { ok: false, status: { stopped: true, state: "stopped", attempt: 0, reason: "" } }
       : { entries: [], state: "connected" },
   );
   assert.match(doc.getElementById("bridgeStatus")?.textContent ?? "", /panelBridgeStopped/);
   assert.match(doc.getElementById("logStatus")?.textContent ?? "", /panelDaemonConnected/);
-  const rows = [...doc.querySelectorAll("#serverLog li")].map((li) => li.textContent ?? "");
-  assert.match(rows[0] ?? "", /ws\.note/);
-  assert.match(rows[1] ?? "", /ws\.other/);
 
   // 换一个掉线且没重试的答复，点 cut 重拉
   const g = globalThis as Any;

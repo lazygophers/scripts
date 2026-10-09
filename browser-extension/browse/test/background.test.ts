@@ -199,32 +199,16 @@ test("opening the bridge flips the badge to connected and says hello", async () 
   assert.deepEqual(badgeTitles.at(-1), { title: "browse: connected" });
 });
 
-test("browse-bridge returns bridge info and log lines when it answers", async () => {
+test("browse-bridge returns bridge info and its own instanceId when it answers", async () => {
   const reply = (
-    await askBridge((id, method, sock) => {
-      if (method === "lg:bridge.info") {
-        sock.reply(id, { type: "success", result: { version: 1 } });
-      } else {
-        sock.reply(id, { type: "success", result: { lines: ["l1"] } });
-      }
+    await askBridge((id, _method, sock) => {
+      sock.reply(id, { type: "success", result: { version: 1 } });
     }, { limit: 5 })
   )[0] as Any;
   assert.equal(reply.ok, true);
   assert.deepEqual(reply.info, { version: 1 });
-  assert.deepEqual(reply.lines, ["l1"]);
+  assert.equal(typeof reply.ownInstanceId, "string");
   assert.equal((reply.status as Any).state, "connected");
-});
-
-test("browse-bridge tolerates a log reply without lines and a default limit", async () => {
-  const reply = (
-    await askBridge((id, method, sock) => {
-      sock.reply(id, method === "lg:bridge.info"
-        ? { type: "success", result: {} }
-        : { type: "success", result: {} });
-    })
-  )[0] as Any;
-  assert.equal(reply.ok, true);
-  assert.deepEqual(reply.lines, []);
 });
 
 test("browse-bridge surfaces an error reply as ok:false", async () => {
