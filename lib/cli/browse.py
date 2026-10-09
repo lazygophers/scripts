@@ -50,7 +50,7 @@ import time
 from urllib.parse import urlsplit
 import zlib
 
-from lib.ai_env import json_dumps
+from lib.ai_env import is_ai_shell_env, json_dumps
 from lib import browse_bridge, browse_log
 from lib.browse_daemon import (
     ABORT_METHOD,
@@ -1842,16 +1842,26 @@ def _cmd_status(tokens: list[str]) -> int:
 
     port_to_pid = _conn_pids(info.get("port", 0), conns) if conns else {}
     labels = _browser_labels({p for p in port_to_pid.values()}) if port_to_pid else {}
-    for conn in conns:
-        pid = port_to_pid.get(conn.get("peerPort", 0))
-        # hello 报的名字在 Chromium 分支间会撞车，进程路径识别到的名字更真
-        name = (labels.get(pid) or conn["browser"]) if pid else conn["browser"]
-        profile = conn.get("profile", "")
-        name = f"{name} ({profile})" if profile else name
-        pid_note = f" · pid {pid}" if pid else ""
-        report.ok(
-            f"{name}: 插件已连接 · connectionId {conn['connectionId']}"
-            f"{pid_note} · 已连 {conn['sinceSeconds']} 秒 · 心跳 {conn['idleSeconds']} 秒前")
+    if is_ai_shell_env():
+        # AI 终端：数据出口走竖线行——槽位名（--browser 路由要用的）| 展示名（含 profile）。
+        # pid/时长/心跳对模型是纯耗 token，砍掉
+        for conn in conns:
+            pid = port_to_pid.get(conn.get("peerPort", 0))
+            name = (labels.get(pid) or conn["browser"]) if pid else conn["browser"]
+            profile = conn.get("profile", "")
+            display = f"{name} ({profile})" if profile else name
+            print(f"{conn['browser']} | {display}")
+    else:
+        for conn in conns:
+            pid = port_to_pid.get(conn.get("peerPort", 0))
+            # hello 报的名字在 Chromium 分支间会撞车，进程路径识别到的名字更真
+            name = (labels.get(pid) or conn["browser"]) if pid else conn["browser"]
+            profile = conn.get("profile", "")
+            name = f"{name} ({profile})" if profile else name
+            pid_note = f" · pid {pid}" if pid else ""
+            report.ok(
+                f"{name}: 插件已连接 · connectionId {conn['connectionId']}"
+                f"{pid_note} · 已连 {conn['sinceSeconds']} 秒 · 心跳 {conn['idleSeconds']} 秒前")
     if running and not conns:
         report.err("没有任何插件连着：扩展加载后会自动连 bridge（装完/升级扩展要重新加载一次）")
     elif not running:
