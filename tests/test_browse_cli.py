@@ -1381,3 +1381,34 @@ class TestConnPids(unittest.TestCase):
             pids = browse._conn_pids(9330, [{"peerPort": 0}, {}])
         self.assertEqual(pids, {})
         run_mock.assert_not_called()
+
+
+class TestBrowserLabels(unittest.TestCase):
+    """status 用进程路径识别浏览器名：UA/brands 分不出 Chromium 分支。"""
+
+    def test_app_name_from_bundle_path(self):
+        self.assertEqual(browse._app_name(
+            "/Applications/Arc.app/Contents/Frameworks/ArcCore.framework/Helpers/"
+            "Browser Helper.app/Contents/MacOS/Browser Helper"), "arc")
+        self.assertEqual(browse._app_name(
+            "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome "
+            "Framework.framework/Helpers/Google Chrome Helper.app/Contents/MacOS/"
+            "Google Chrome Helper"), "chrome")
+        self.assertEqual(browse._app_name(
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"), "edge")
+        self.assertEqual(browse._app_name("/usr/bin/chromium"), "")
+        self.assertEqual(browse._app_name(""), "")
+
+    def test_browser_labels_ps_parse(self):
+        ps_out = "\n".join([
+            "  123 /Applications/Arc.app/Contents/MacOS/Arc",
+            "  456 /Applications/Chromium.app/Contents/MacOS/Chromium",
+        ])
+        with mock.patch.object(browse.subprocess, "run", return_value=mock.Mock(stdout=ps_out)):
+            labels = browse._browser_labels({123, 456})
+        self.assertEqual(labels, {123: "arc", 456: "chromium"})
+
+    def test_browser_labels_empty(self):
+        with mock.patch.object(browse.subprocess, "run") as run_mock:
+            self.assertEqual(browse._browser_labels(set()), {})
+        run_mock.assert_not_called()

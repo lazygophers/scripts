@@ -1753,6 +1753,38 @@ def _conn_pids(ws_port: int, conns: list[dict]) -> dict[int, int]:
     return pids
 
 
+# 扩展自报的品牌名（brands/UA）分不出 Chromium 分支——Arc 实测两者都是纯
+# Chromium 形状（lg:browser.info 拿的底牌）——进程路径里的 .app 名才是可靠信号
+_APP_ALIASES = {"google chrome": "chrome", "microsoft edge": "edge", "brave browser": "brave"}
+
+
+def _app_name(comm: str) -> str:
+    """进程路径 → 浏览器短名；没有 .app 段（Linux/非 app）返回空串。"""
+    seg = next((s for s in comm.split("/") if s.endswith(".app")), "")
+    name = seg[:-4].strip().lower() if seg else ""
+    return _APP_ALIASES.get(name, name) if name else ""
+
+
+def _browser_labels(pids: set[int]) -> dict[int, str]:
+    """pid → 浏览器名，一次 ps 读所有连接的进程路径。"""
+    if not pids:
+        return {}
+    out = subprocess.run(
+        ["ps", "-p", ",".join(str(p) for p in sorted(pids)), "-o", "pid=,comm="],
+        capture_output=True, text=True)
+    labels: dict[int, str] = {}
+    for line in out.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        labels[pid] = _app_name(parts[1])
+    return labels
+
+
 def _cmd_status(tokens: list[str]) -> int:
     """`browse status`：一条命令看完整条链路。bridge 的连接表是唯一真相。
 
@@ -1779,11 +1811,14 @@ def _cmd_status(tokens: list[str]) -> int:
     report.ok(f"bridge: 在跑{pid_note}（{sock}）" if running else f"bridge: 没在跑（{sock}）")
 
     port_to_pid = _conn_pids(info.get("port", 0), conns) if conns else {}
+    labels = _browser_labels({p for p in port_to_pid.values()}) if port_to_pid else {}
     for conn in conns:
         pid = port_to_pid.get(conn.get("peerPort", 0))
+        # hello 报的名字在 Chromium 分支间会撞车，进程路径识别到的名字更真
+        name = labels.get(pid) or conn["browser"] if pid else conn["browser"]
         pid_note = f" · pid {pid}" if pid else ""
         report.ok(
-            f"{conn['browser']}: 插件已连接 · connectionId {conn['connectionId']}"
+            f"{name}: 插件已连接 · connectionId {conn['connectionId']}"
             f"{pid_note} · 已连 {conn['sinceSeconds']} 秒 · 心跳 {conn['idleSeconds']} 秒前")
     if running and not conns:
         report.err("没有任何插件连着：扩展加载后会自动连 bridge（装完/升级扩展要重新加载一次）")
