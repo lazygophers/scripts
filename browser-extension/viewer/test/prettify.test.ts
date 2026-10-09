@@ -1730,6 +1730,43 @@ test("切回原始时复制按钮也收起来", async () => {
   assert.equal(doc.querySelector(".lfv-copy-toggle"), null);
 });
 
+test("正文里的本地链接悬停弹悬浮卡片：预览 + 复制文件名/路径", async () => {
+  const storage = storageMock({ "viewer-settings": {} });
+  assert.ok(storage);
+  const dom = textFile("file:///tmp/docs/guide.md", "");
+  const doc = dom.window.document;
+  first(doc).textContent = "[邻居](../dir/other.md)\n[锚点](#节)\n[外站](https://example.test/)\n";
+  globalThis.fetch = (async (url: string) => {
+    assert.equal(url, "file:///tmp/dir/other.md");
+    return { text: async () => "l1\nl2\nl3\nl4\nl5\nl6" };
+  }) as unknown as typeof fetch;
+  prettify(doc);
+  await rendered(doc);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const local = [...doc.querySelectorAll("a[href]")].find(
+    (a) => (a as HTMLAnchorElement).href === "file:///tmp/dir/other.md",
+  ) as HTMLElement;
+  local.dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true }));
+  // listing 包按需加载是异步的，装好监听后还补发了一次 mouseenter。
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const card = local.querySelector(":scope > .lfv-preview") as HTMLElement;
+  assert.ok(card, "卡片挂在链接自己身上");
+  assert.equal((card.querySelector("pre") as HTMLElement).textContent, "l1\nl2\nl3\nl4\nl5");
+  const buttons = [...card.querySelectorAll(".lfv-copy")] as HTMLElement[];
+  assert.deepEqual(buttons.map((button) => button.textContent), ["复制文件名", "复制完整路径"]);
+
+  // 锚点和外站链接不弹。
+  const anchor = [...doc.querySelectorAll("a[href]")].find((a) =>
+    a.getAttribute("href") === "#%E8%8A%82") as HTMLElement;
+  anchor.dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(anchor.querySelector(".lfv-preview"), null);
+  delete (globalThis as { fetch?: unknown }).fetch;
+});
+
 // ------------------------------------------------ 懒加载面与构建入口一致性
 
 test("LAZY 的每个包都有对应的构建入口，忘了加 entry 就过不了测试", async () => {

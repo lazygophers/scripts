@@ -52,7 +52,8 @@ export async function headFile(message: unknown): Promise<{ ok: boolean; text?: 
     const reader = response.body?.getReader();
     const chunk = await reader?.read();
     void reader?.cancel();
-    return { ok: true, text: (chunk?.value === undefined ? await response.text() : new TextDecoder().decode(chunk.value)).slice(0, 4096) };
+    // 截到 64 KB：文本预览几行就够，html 渲染预览需要更多，都够用且不整文件拉。
+    return { ok: true, text: (chunk?.value === undefined ? await response.text() : new TextDecoder().decode(chunk.value)).slice(0, 64 * 1024) };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

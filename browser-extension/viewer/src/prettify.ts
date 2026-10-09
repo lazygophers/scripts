@@ -146,6 +146,44 @@ function swap(doc: Document, plain: HTMLElement[], pretty: () => HTMLElement[], 
   const nodes = on ? [...pretty(), makeThemeButton(doc), makeFileCopyButton(doc), button] : [...plain, button];
   doc.documentElement.classList.toggle("lfv-on", on);
   doc.body.replaceChildren(...nodes);
+  if (on) wireLinkCards(doc);
+}
+
+/**
+ * 文件内的超链接：悬停弹和目录条目同一张悬浮卡片（预览 + 复制文件名/路径）。
+ * 卡片那套代码住在 listing 包里，第一次真悬停才去加载，别的页面不替它付钱。
+ *
+ * 正文是异步填进来的（markdown 先挂壳再渲染），挂载时扫一遍链接扫不全，
+ * 所以用 `mouseover` 委托：悬到哪个链接上才处理哪个。
+ */
+const cardedLinks = new WeakMap<Document, WeakSet<Element>>();
+
+function wireLinkCards(doc: Document): void {
+  let seen = cardedLinks.get(doc);
+  if (seen === undefined) {
+    seen = new WeakSet();
+    cardedLinks.set(doc, seen);
+    doc.addEventListener("mouseover", (event) => {
+      const link = (event.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (link === null || seen?.has(link)) return;
+      seen?.add(link);
+      // 目录条目的链接自己已经挂过卡片，别再挂一层。
+      if (link.closest(".lfv-dir-view") !== null) return;
+      const url = new URL(link.href);
+      if (url.protocol !== "file:") return;
+      // 页内锚点（#…）指向当前文件自己，不弹。
+      if (url.hash !== "" && url.pathname === new URL(sourceUrl(doc)).pathname) return;
+      void LAZY.listing().then((module) => {
+        module.wireEntryPopup(doc, link, {
+          name: decodeURIComponent(url.pathname.split("/").filter((p) => p !== "").pop() ?? ""),
+          url: link.href,
+          dir: url.pathname.endsWith("/"),
+        });
+        // 这次悬停已经发生，卡片那边的监听还没装上；补发一个 mouseenter 让卡片当场浮出来。
+        link.dispatchEvent(new MouseEvent("mouseenter"));
+      });
+    });
+  }
 }
 
 /** 已经接上主题的页面。读一次存储、挂一次监听就够。 */

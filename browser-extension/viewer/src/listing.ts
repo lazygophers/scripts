@@ -37,6 +37,9 @@ const PREVIEWABLE = new Set([
   "sql", "css", "scss",
 ]);
 
+/** html 一类：悬停预览用 iframe 渲染出来看，不当纯文本读。 */
+const HTML_EXTS = new Set(["html", "htm"]);
+
 /** 预览读多少字节就够：前几行而已，不整个文件拉下来。 */
 const PREVIEW_BYTES = 4096;
 
@@ -154,20 +157,27 @@ function row(doc: Document, entry: Entry): HTMLElement {
   timeCell.textContent = entry.mtimeText;
 
   tr.append(nameCell, sizeCell, timeCell);
-  if (entry.dir || PREVIEWABLE.has(extOf(entry.name))) wirePopup(doc, nameCell, entry);
+  const ext = extOf(entry.name);
+  if (entry.dir || PREVIEWABLE.has(ext) || HTML_EXTS.has(ext)) wireEntryPopup(doc, nameCell, entry);
   return tr;
 }
 
+/** 悬浮卡片认得的条目：名字、地址、是不是目录。目录列表的行和文件内的超链接都给得出这三样。 */
+export type PopupEntry = Pick<Entry, "name" | "url" | "dir">;
+
 /**
- * 鼠标停在文本文件或目录上时浮出操作框：文件在框角上给「复制文件名 / 完整路径」，
- * 正文往下铺开头几行；目录只有一个「复制文件夹名」。读一次就留着，移开再回来不重读。
+ * 鼠标停在条目上时浮出悬浮卡片：卡片角上是「复制文件名 / 完整路径」（目录是
+ * 「复制文件夹名」），下面按类型铺预览——纯文本给开头几行，html 用沙箱 iframe
+ * 渲染。读一次就留着，移开再回来不重读。
  *
- * 事件挂在 cell 上而不是链接上：框是 cell 的孩子，指针从名字挪进框里点按钮时
- * 不能算离开。
+ * 事件挂在锚点上而不是里面的链接上：卡片是锚点的孩子（只是绝对定位浮在表/正文上），
+ * 指针从名字挪进卡片点按钮时不算离开。目录列表传名字格，文件内超链接由 prettify 传链接本身。
  */
-function wirePopup(doc: Document, cell: HTMLElement, entry: Entry): void {
+export function wireEntryPopup(doc: Document, anchor: HTMLElement, entry: PopupEntry): void {
+  // 卡片绝对定位在锚点下方，锚点自己得是个定位基准。
+  anchor.classList.add("lfv-popup-anchor");
   let box: HTMLElement | null = null;
-  cell.addEventListener("mouseenter", () => {
+  anchor.addEventListener("mouseenter", () => {
     if (box !== null) {
       box.hidden = false;
       return;
@@ -184,11 +194,27 @@ function wirePopup(doc: Document, cell: HTMLElement, entry: Entry): void {
     }
     box.append(tools);
 
-    if (!entry.dir && PREVIEWABLE.has(extOf(entry.name))) {
+    const ext = extOf(entry.name);
+    if (!entry.dir && HTML_EXTS.has(ext)) {
+      // 沙箱一个权限都不给：预览只是看一眼，脚本和导航都不许。
+      const frame = doc.createElement("iframe");
+      frame.className = "lfv-preview-frame";
+      frame.setAttribute("sandbox", "");
+      box.append(frame);
+      // 读不到时把原因写在原地：空白 iframe 看不出是文件的问题还是扩展的问题。
+      void raw(entry.url).then(
+        (text) => {
+          frame.srcdoc = text;
+        },
+        (error: Error) => {
+          frame.replaceWith(failNote(doc, `渲染不出来：${error.message}`));
+        },
+      );
+    } else if (!entry.dir && PREVIEWABLE.has(ext)) {
       const pre = doc.createElement("pre");
+      // 「读取中…」先占位：读不到时把原因写在原地，免得看不出是文件的问题还是扩展的问题。
       pre.textContent = "读取中…";
       box.append(pre);
-      // 读不到时把原因写在原地：卡在「读取中…」看不出是文件的问题还是扩展的问题。
       void head(entry.url).then(
         (text) => {
           pre.textContent = text;
@@ -198,11 +224,18 @@ function wirePopup(doc: Document, cell: HTMLElement, entry: Entry): void {
         },
       );
     }
-    cell.append(box);
+    anchor.append(box);
   });
-  cell.addEventListener("mouseleave", () => {
+  anchor.addEventListener("mouseleave", () => {
     if (box !== null) box.hidden = true;
   });
+}
+
+/** 预览出错时顶替正文的一行小字。 */
+function failNote(doc: Document, text: string): HTMLElement {
+  const pre = doc.createElement("pre");
+  pre.textContent = text;
+  return pre;
 }
 
 /** 复制按钮：点一下抄进剪贴板，成没成写在按钮自己身上。 */
@@ -211,7 +244,11 @@ function copyButton(doc: Document, label: string, text: string): HTMLButtonEleme
   button.className = "lfv-copy";
   button.type = "button";
   button.textContent = label;
-  button.addEventListener("click", () => {
+  button.addEventListener("click", (event) => {
+    // 卡片可能挂在文件内超链接上：不拦的话这一下会顺带让浏览器跳转到链接目标。
+    event.preventDefault();
+    event.stopPropagation();
+
     void copyText(doc, text).then(
       () => {
         button.textContent = "已复制";
@@ -249,9 +286,10 @@ async function copyText(doc: Document, text: string): Promise<void> {
  * 取文件开头那一段。只读第一块数据就停，大文件不会整个拉下来。
  *
  * 内容脚本直接 fetch `file://` 会被 CORS 拦（file:// 页面的 origin 是 null），拦下时
- * 转给后台代读——那边带着 `host_permissions`，浏览器放行。
+ * 转给后台代读——那边带着 `host_permissions`，浏览器放行。返回的是没裁过的原文，
+ * 裁几行留给 `head()`，html 渲染预览则整段进 iframe。
  */
-async function head(url: string): Promise<string> {
+async function raw(url: string): Promise<string> {
   let text: string;
   try {
     const response = await fetch(url);
@@ -267,6 +305,9 @@ async function head(url: string): Promise<string> {
     if (reply === undefined || !reply.ok) throw direct;
     text = reply.text ?? "";
   }
+  return text;
+}async function head(url: string): Promise<string> {
+  const text = await raw(url);
   return text.slice(0, PREVIEW_BYTES).split("\n").slice(0, PREVIEW_LINES).join("\n");
 }
 

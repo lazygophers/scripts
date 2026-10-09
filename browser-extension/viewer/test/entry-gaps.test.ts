@@ -55,15 +55,15 @@ test("onMessage 回调把消息转给 openLocal", () => {
 
 /* ---------- background：lfv-head 代读（内容脚本 fetch file:// 被 CORS 拦） ---------- */
 
-test("headFile 只读 file:// 的 lfv-head，读到的截到 4096 字节", async () => {
+test("headFile 只读 file:// 的 lfv-head，读到的截到 64 KB", async () => {
   const { headFile } = await import("../src/background.ts");
   (globalThis as { fetch?: unknown }).fetch = async (url: string) => {
     assert.equal(url, "file:///tmp/a.md");
-    return { body: undefined, text: async () => "内容".repeat(3000) };
+    return { body: undefined, text: async () => "内".repeat(70_000) };
   };
   const good = await headFile({ type: "lfv-head", url: "file:///tmp/a.md" });
   assert.equal(good.ok, true);
-  assert.equal(good.text?.length, 4096);
+  assert.equal(good.text?.length, 64 * 1024);
   delete (globalThis as { fetch?: unknown }).fetch;
 
   assert.deepEqual(await headFile({ type: "lfv-head", url: "https://evil.test/x" }), {

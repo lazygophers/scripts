@@ -242,6 +242,22 @@ test("预览框右上角有复制文件名和完整路径两个按钮，点了�
   assert.deepEqual(buttons.map((b) => b.textContent), ["已复制", "已复制"]);
 });
 
+test("html 悬停用沙箱 iframe 渲染预览，不当纯文本读", async () => {
+  const dom = page("");
+  (globalThis as { fetch?: unknown }).fetch = async () => {
+    return { body: undefined, text: async () => "<h1>标题</h1><script>alert(1)</script>" };
+  };
+  const host = renderListing(dom.window.document, [entry({ name: "a.html", url: "file:///tmp/a.html" })], "/tmp");
+  (host.querySelector("tbody tr td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const frame = host.querySelector(".lfv-preview-frame") as HTMLIFrameElement;
+  assert.equal(frame.getAttribute("sandbox"), "", "沙箱一个权限都不给");
+  assert.equal(frame.getAttribute("srcdoc"), "<h1>标题</h1><script>alert(1)</script>");
+  assert.equal(host.querySelector(".lfv-preview pre"), null, "html 不走纯文本预览");
+  delete (globalThis as { fetch?: unknown }).fetch;
+});
+
 test("目录的框只有一个复制文件夹名按钮，不去读文件", async () => {
   const dom = page("");
   const copied: string[] = [];
