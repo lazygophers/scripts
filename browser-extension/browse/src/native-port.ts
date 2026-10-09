@@ -68,35 +68,23 @@ export async function instanceId(): Promise<string> {
 }
 
 /**
- * profile 名（同一浏览器多 profile 时区分连接用）。优先级：手动 set 的覆盖值 >
- * `chrome.identity.getProfileUserInfo` 读到的账号邮箱（自动，不需要 set）> 空。
- * 每个 profile 的 `chrome.storage` 独立；hello 和每条心跳都带上，
- * bridge 侧的心跳刷新让改名 20 秒内生效，不用重连。
+ * profile 名（同一浏览器多 profile 时区分连接用）。Chrome 不开放 profile 显示名
+ * 给扩展（唯一的身份 API 是 identity 的邮箱，用户否掉了），所以只有手动
+ * `lg:profile.set` 起的名。每个 profile 的 `chrome.storage` 独立，各自设各自的；
+ * hello 和每条心跳都带上，bridge 侧的心跳刷新让改名 20 秒内生效，不用重连。
  */
 let cachedProfileName: string | null = null;
 export async function profileName(): Promise<string> {
   if (cachedProfileName !== null) {
     return cachedProfileName;
   }
-  let override = "";
   try {
     const stored = await chrome.storage.local.get("browse:profileName");
-    if (typeof stored["browse:profileName"] === "string") {
-      override = stored["browse:profileName"] as string;
-    }
+    cachedProfileName = typeof stored["browse:profileName"] === "string"
+      ? (stored["browse:profileName"] as string)
+      : "";
   } catch {
-    // 测试环境没有 storage：跳过覆盖值
-  }
-  if (override !== "") {
-    cachedProfileName = override;
-    return override;
-  }
-  // 没有手动名就读现成的：当前 profile 登录的账号（identity 权限，装时声明过）
-  try {
-    const info = await chrome.identity.getProfileUserInfo({ accountStatus: "ANY" });
-    cachedProfileName = info?.email ?? "";
-  } catch {
-    cachedProfileName = ""; // 没登录 / 分支浏览器不支持 identity：就没有自动名
+    cachedProfileName = "";
   }
   return cachedProfileName;
 }
