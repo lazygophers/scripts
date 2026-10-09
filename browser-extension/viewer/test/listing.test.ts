@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { parseListing, renderListing, type Entry } from "../src/listing.ts";
-import { page } from "./mock.ts";
+import { clearChrome, installChrome, page } from "./mock.ts";
 
 /**
  * 目录列表。读的是 chromium 自己那张索引页（`net/base/dir_header.html`）：
@@ -185,14 +185,14 @@ test("鼠标停在文本文件上才读预览，图片不读", async () => {
     entry({ name: "b.png", url: "file:///tmp/b.png" }),
   ], "/tmp");
 
-  const links = host.querySelectorAll(".lfv-entry");
-  links[1]?.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  const cells = Array.from(host.querySelectorAll("tbody tr"), (tr) => tr.firstElementChild as HTMLElement);
+  cells[1]?.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   assert.deepEqual(fetched, [], "图片不该触发读取");
 
-  links[0]?.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  cells[0]?.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(fetched, ["file:///tmp/a.md"]);
-  assert.equal(host.querySelector(".lfv-preview")?.textContent, "第一行\n第二行\n第三行\n第四行\n第五行");
+  assert.equal(host.querySelector(".lfv-preview pre")?.textContent, "第一行\n第二行\n第三行\n第四行\n第五行");
   delete (globalThis as { fetch?: unknown }).fetch;
 });
 
@@ -202,8 +202,65 @@ test("读不出来时把原因写在预览框里，不卡在「读取中…」",
     throw new Error("NetworkError");
   };
   const host = renderListing(dom.window.document, [entry({ name: "a.md" })], "/tmp");
-  host.querySelector(".lfv-entry")?.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  (host.querySelector("tbody tr td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(host.querySelector(".lfv-preview")?.textContent, "读不出这个文件：NetworkError");
+  assert.equal(host.querySelector(".lfv-preview pre")?.textContent, "读不出这个文件：NetworkError");
+  delete (globalThis as { fetch?: unknown }).fetch;
+});
+
+test("内容脚本 fetch 被 CORS 拦时转给后台代读，读到的还是前几行", async () => {
+  const dom = page("");
+  (globalThis as { fetch?: unknown }).fetch = async () => {
+    throw new TypeError("CORS blocked");
+  };
+  installChrome({ runtime: { sendMessage: async () => ({ ok: true, text: "甲\n乙\n丙\n丁\n戊\n己" }) } });
+  const host = renderListing(dom.window.document, [entry({ name: "a.md", url: "file:///tmp/a.md" })], "/tmp");
+  (host.querySelector("tbody tr td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(host.querySelector(".lfv-preview pre")?.textContent, "甲\n乙\n丙\n丁\n戊");
+  delete (globalThis as { fetch?: unknown }).fetch;
+  clearChrome();
+});
+
+test("预览框右上角有复制文件名和完整路径两个按钮，点了抄进剪贴板", async () => {
+  const dom = page("");
+  const copied: string[] = [];
+  Object.defineProperty(dom.window, "navigator", {
+    value: { clipboard: { writeText: async (text: string) => { copied.push(text); } } },
+    configurable: true,
+  });
+  const host = renderListing(dom.window.document, [entry({ name: "a.md", url: "file:///tmp/a.md" })], "/tmp");
+  (host.querySelector("tbody tr td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+
+  const buttons = Array.from(host.querySelectorAll(".lfv-copy"), (b) => b as HTMLButtonElement);
+  assert.deepEqual(buttons.map((b) => b.textContent), ["复制文件名", "复制完整路径"]);
+  buttons[0]?.click();
+  buttons[1]?.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(copied, ["a.md", "file:///tmp/a.md"]);
+  assert.deepEqual(buttons.map((b) => b.textContent), ["已复制", "已复制"]);
+});
+
+test("目录的框只有一个复制文件夹名按钮，不去读文件", async () => {
+  const dom = page("");
+  const copied: string[] = [];
+  Object.defineProperty(dom.window, "navigator", {
+    value: { clipboard: { writeText: async (text: string) => { copied.push(text); } } },
+    configurable: true,
+  });
+  (globalThis as { fetch?: unknown }).fetch = async () => {
+    throw new Error("不该读目录");
+  };
+  const host = renderListing(dom.window.document, [entry({ name: "src", dir: true, url: "file:///tmp/src/" })], "/tmp");
+  (host.querySelector("tbody tr td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const buttons = Array.from(host.querySelectorAll(".lfv-copy"), (b) => b as HTMLButtonElement);
+  assert.deepEqual(buttons.map((b) => b.textContent), ["复制文件夹名"]);
+  assert.equal(host.querySelector(".lfv-preview pre"), null, "目录没有正文区");
+  buttons[0]?.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(copied, ["src"]);
   delete (globalThis as { fetch?: unknown }).fetch;
 });

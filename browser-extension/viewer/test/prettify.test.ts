@@ -1378,33 +1378,31 @@ test("悬停文本文件浮出开头几行，图片这类不触发", async () =>
     return { text: async () => "1\n2\n3\n4\n5\n6\n7\n" };
   }) as unknown as typeof fetch;
 
-  const hover = (name: string) =>
-    (Array.from(host.querySelectorAll(".lfv-entry")).find(
-      (n) => n.textContent === name,
-    ) as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  const hover = (name: string, type: string) =>
+    ((
+      Array.from(host.querySelectorAll(".lfv-entry")).find(
+        (n) => n.textContent === name,
+      ) as HTMLElement
+    ).closest("td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent(type));
 
-  hover("b.go");
+  hover("b.go", "mouseenter");
   await new Promise((resolve) => setTimeout(resolve, 0));
   const preview = host.querySelector(".lfv-preview") as HTMLElement;
   // 只要开头 5 行。
-  assert.equal(preview.textContent, "1\n2\n3\n4\n5");
+  assert.equal((preview.querySelector("pre") as HTMLElement).textContent, "1\n2\n3\n4\n5");
   assert.equal(String(fetched), "file:///tmp/dir/b.go");
 
   // 移开收起，再回来不重读。
-  (
-    Array.from(host.querySelectorAll(".lfv-entry")).find(
-      (n) => n.textContent === "b.go",
-    ) as HTMLElement
-  ).dispatchEvent(new dom.window.MouseEvent("mouseleave"));
+  hover("b.go", "mouseleave");
   assert.equal(preview.hidden, true);
 
   fetched = null;
-  hover("b.go");
+  hover("b.go", "mouseenter");
   assert.equal(preview.hidden, false);
   assert.equal(fetched, null);
 
-  // 图片不是文本，根本不去读。
-  hover("a.png");
+  // 图片不是文本，不弹框也不去读。
+  hover("a.png", "mouseenter");
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(host.querySelectorAll(".lfv-preview").length, 1);
   assert.equal(fetched, null);

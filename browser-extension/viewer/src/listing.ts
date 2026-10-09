@@ -154,42 +154,119 @@ function row(doc: Document, entry: Entry): HTMLElement {
   timeCell.textContent = entry.mtimeText;
 
   tr.append(nameCell, sizeCell, timeCell);
-  if (!entry.dir && PREVIEWABLE.has(extOf(entry.name))) wirePreview(doc, link, nameCell, entry);
+  if (entry.dir || PREVIEWABLE.has(extOf(entry.name))) wirePopup(doc, nameCell, entry);
   return tr;
 }
 
-/** 鼠标停在文本文件上时浮出开头几行。读一次就留着，移开再回来不重读。 */
-function wirePreview(doc: Document, link: HTMLElement, cell: HTMLElement, entry: Entry): void {
+/**
+ * 鼠标停在文本文件或目录上时浮出操作框：文件在框角上给「复制文件名 / 完整路径」，
+ * 正文往下铺开头几行；目录只有一个「复制文件夹名」。读一次就留着，移开再回来不重读。
+ *
+ * 事件挂在 cell 上而不是链接上：框是 cell 的孩子，指针从名字挪进框里点按钮时
+ * 不能算离开。
+ */
+function wirePopup(doc: Document, cell: HTMLElement, entry: Entry): void {
   let box: HTMLElement | null = null;
-  link.addEventListener("mouseenter", () => {
+  cell.addEventListener("mouseenter", () => {
     if (box !== null) {
       box.hidden = false;
       return;
     }
-    box = doc.createElement("pre");
+    box = doc.createElement("div");
     box.className = "lfv-preview";
-    box.textContent = "读取中…";
+
+    const tools = doc.createElement("div");
+    tools.className = "lfv-preview-tools";
+    if (entry.dir) {
+      tools.append(copyButton(doc, "复制文件夹名", entry.name));
+    } else {
+      tools.append(copyButton(doc, "复制文件名", entry.name), copyButton(doc, "复制完整路径", entry.url));
+    }
+    box.append(tools);
+
+    if (!entry.dir && PREVIEWABLE.has(extOf(entry.name))) {
+      const pre = doc.createElement("pre");
+      pre.textContent = "读取中…";
+      box.append(pre);
+      // 读不到时把原因写在原地：卡在「读取中…」看不出是文件的问题还是扩展的问题。
+      void head(entry.url).then(
+        (text) => {
+          pre.textContent = text;
+        },
+        (error: Error) => {
+          pre.textContent = `读不出这个文件：${error.message}`;
+        },
+      );
+    }
     cell.append(box);
-    // 读不到时把原因写在原地：卡在「读取中…」看不出是文件的问题还是扩展的问题。
-    void head(entry.url).then(
-      (text) => {
-        if (box !== null) box.textContent = text;
-      },
-      (error: Error) => {
-        if (box !== null) box.textContent = `读不出这个文件：${error.message}`;
-      },
-    );
   });
-  link.addEventListener("mouseleave", () => {
+  cell.addEventListener("mouseleave", () => {
     if (box !== null) box.hidden = true;
   });
 }
 
-/** 取文件开头那一段。只读第一块数据就停，大文件不会整个拉下来。 */
+/** 复制按钮：点一下抄进剪贴板，成没成写在按钮自己身上。 */
+function copyButton(doc: Document, label: string, text: string): HTMLButtonElement {
+  const button = doc.createElement("button");
+  button.className = "lfv-copy";
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", () => {
+    void copyText(doc, text).then(
+      () => {
+        button.textContent = "已复制";
+      },
+      (error: Error) => {
+        button.textContent = `复制失败：${error.message}`;
+      },
+    );
+  });
+  return button;
+}
+
+/** 剪贴板优先走 `navigator.clipboard`；file:// 页面上它常常拿不到授权，退到 `execCommand`。 */
+async function copyText(doc: Document, text: string): Promise<void> {
+  const clipboard = doc.defaultView?.navigator.clipboard;
+  if (clipboard !== undefined) {
+    try {
+      await clipboard.writeText(text);
+      return;
+    } catch {
+      // 授权被拒就走下面的老路，不打断。
+    }
+  }
+  const scratch = doc.createElement("textarea");
+  scratch.value = text;
+  scratch.style.position = "fixed";
+  scratch.style.opacity = "0";
+  doc.body.append(scratch);
+  scratch.select();
+  if (!doc.execCommand("copy")) throw new Error("浏览器不让复制");
+  scratch.remove();
+}
+
+/**
+ * 取文件开头那一段。只读第一块数据就停，大文件不会整个拉下来。
+ *
+ * 内容脚本直接 fetch `file://` 会被 CORS 拦（file:// 页面的 origin 是 null），拦下时
+ * 转给后台代读——那边带着 `host_permissions`，浏览器放行。
+ */
 async function head(url: string): Promise<string> {
-  const response = await fetch(url);
-  const reader = response.body?.getReader();
-  const text = reader === undefined ? await response.text() : await firstChunk(reader);
+  let text: string;
+  try {
+    const response = await fetch(url);
+    const reader = response.body?.getReader();
+    text = reader === undefined ? await response.text() : await firstChunk(reader);
+  } catch (direct) {
+    // 裸写 `chrome.runtime` 在没有这个全局的环境（测试、Firefox 的页面世界）是
+    // ReferenceError，会把真正要报的错盖掉，所以从 globalThis 上摸。
+    const sendMessage = (globalThis as { chrome?: typeof chrome }).chrome?.runtime?.sendMessage;
+    const reply = typeof sendMessage === "function"
+      ? await sendMessage({ type: "lfv-head", url }) as { ok: boolean; text?: string } | undefined
+      : undefined;
+    if (reply === undefined || !reply.ok) throw direct;
+    text = reply.text ?? "";
+  }
   return text.slice(0, PREVIEW_BYTES).split("\n").slice(0, PREVIEW_LINES).join("\n");
 }
 

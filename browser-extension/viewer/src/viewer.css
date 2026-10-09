@@ -947,6 +947,32 @@ html.lfv-on .lfv-preview {
   border-radius: 0.375rem;
 }
 
+/* 操作按钮排在框的右上角，正文往下铺。 */
+html.lfv-on .lfv-preview-tools {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+html.lfv-on .lfv-copy {
+  padding: 0.1rem 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+html.lfv-on .lfv-copy:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+html.lfv-on .lfv-preview pre {
+  margin: 0.35rem 0 0;
+}
+
 html.lfv-on .lfv-dir-empty {
   padding: 1rem 0;
   color: var(--muted-foreground);

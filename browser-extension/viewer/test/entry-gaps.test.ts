@@ -6,7 +6,12 @@ import { clearChrome, installChrome, page, storageMock } from "./mock.ts";
 /* ---------- background：顶层挂的两个监听回调 ---------- */
 
 let installed: ((details: { reason: string }) => void)[] = [];
-let messages: ((message: unknown, sender: { tab?: { id: number } }) => void)[] = [];
+type MessageListener = (
+  message: unknown,
+  sender: { tab?: { id: number } },
+  sendResponse: (response: unknown) => void,
+) => unknown;
+let messages: MessageListener[] = [];
 
 function bgSetup() {
   installed = [];
@@ -18,8 +23,7 @@ function bgSetup() {
         addListener: (fn: (details: { reason: string }) => void) => installed.push(fn),
       },
       onMessage: {
-        addListener: (fn: (message: unknown, sender: { tab?: { id: number } }) => void) =>
-          messages.push(fn),
+        addListener: (fn: MessageListener) => messages.push(fn),
       },
     },
     extension: { isAllowedFileSchemeAccess: async () => true },
@@ -43,9 +47,52 @@ test("onInstalled 回调把 reason 转给 welcome（不该弹的 reason 不弹�
 
 test("onMessage 回调把消息转给 openLocal", () => {
   assert.equal(messages.length, 1);
-  messages[0]!({ type: "lfv-open", url: "file:///a.txt" }, { tab: { id: 5 } });
-  messages[0]!({ type: "other" }, {});
+  const noop = () => {};
+  messages[0]!({ type: "lfv-open", url: "file:///a.txt" }, { tab: { id: 5 } }, noop);
+  messages[0]!({ type: "other" }, {}, noop);
   assert.ok(true);
+});
+
+/* ---------- background：lfv-head 代读（内容脚本 fetch file:// 被 CORS 拦） ---------- */
+
+test("headFile 只读 file:// 的 lfv-head，读到的截到 4096 字节", async () => {
+  const { headFile } = await import("../src/background.ts");
+  (globalThis as { fetch?: unknown }).fetch = async (url: string) => {
+    assert.equal(url, "file:///tmp/a.md");
+    return { body: undefined, text: async () => "内容".repeat(3000) };
+  };
+  const good = await headFile({ type: "lfv-head", url: "file:///tmp/a.md" });
+  assert.equal(good.ok, true);
+  assert.equal(good.text?.length, 4096);
+  delete (globalThis as { fetch?: unknown }).fetch;
+
+  assert.deepEqual(await headFile({ type: "lfv-head", url: "https://evil.test/x" }), {
+    ok: false, error: "不是可读的 file:// 地址",
+  });
+  assert.deepEqual(await headFile({ type: "other" }), { ok: false, error: "不是可读的 file:// 地址" });
+});
+
+test("headFile 读挂了把原因带回来，onMessage 上回给内容脚本", async () => {
+  const { headFile } = await import("../src/background.ts");
+  (globalThis as { fetch?: unknown }).fetch = async () => {
+    throw new Error("net::ERR_FILE_NOT_FOUND");
+  };
+  const bad = await headFile({ type: "lfv-head", url: "file:///tmp/none.md" });
+  assert.deepEqual(bad, { ok: false, error: "net::ERR_FILE_NOT_FOUND" });
+
+  // 走消息那条路：sendResponse 拿到的是 headFile 的返回值，且回调 return true 保住异步回话。
+  // 挂监听时 mock 只声明了两个参数，这里第三个 sendResponse 是运行时真有的，加宽后再调。
+  let replied: unknown;
+  const listener = messages[0] as unknown as (
+    message: unknown, sender: unknown, sendResponse: (response: unknown) => void,
+  ) => unknown;
+  const keep = listener({ type: "lfv-head", url: "file:///tmp/none.md" }, {}, (r: unknown) => {
+    replied = r;
+  });
+  assert.equal(keep, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(replied, { ok: false, error: "net::ERR_FILE_NOT_FOUND" });
+  delete (globalThis as { fetch?: unknown }).fetch;
 });
 
 /* ---------- settings：onChanged 三条分支 + 自定义面板 ---------- */

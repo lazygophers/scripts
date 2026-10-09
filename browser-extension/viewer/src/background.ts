@@ -36,6 +36,31 @@ export function openLocal(message: unknown, tabId: number | undefined): boolean 
   return true;
 }
 
-chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.MessageSender) => {
-  openLocal(message, sender.tab?.id);
+/**
+ * 目录悬停预览的取文件头。内容脚本 fetch `file://` 会被 CORS 拦（file:// 页面
+ * origin 是 null），只有后台带着 `host_permissions` 去读才放行，所以这一步只能
+ * 由这里代劳。只回第一块数据，回多少由调用方自己裁。
+ */
+export async function headFile(message: unknown): Promise<{ ok: boolean; text?: string; error?: string }> {
+  const { type, url } = (message ?? {}) as { type?: unknown; url?: unknown };
+  if (type !== "lfv-head" || typeof url !== "string" || !url.startsWith("file://")) {
+    return { ok: false, error: "不是可读的 file:// 地址" };
+  }
+  try {
+    const response = await fetch(url);
+    // firstChunk 和 listing.ts 里那份各守一个 bundle，不值得为几行开共享模块。
+    const reader = response.body?.getReader();
+    const chunk = await reader?.read();
+    void reader?.cancel();
+    return { ok: true, text: (chunk?.value === undefined ? await response.text() : new TextDecoder().decode(chunk.value)).slice(0, 4096) };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+chrome.runtime.onMessage.addListener((message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (response: unknown) => void) => {
+  if (openLocal(message, sender.tab?.id)) return false;
+  if ((message as { type?: unknown } | null)?.type !== "lfv-head") return false;
+  void headFile(message).then(sendResponse);
+  return true;
 });
