@@ -1702,6 +1702,34 @@ test("切回原始时主题按钮收起来，切回美化又回来", async () =>
   assert.ok(doc.querySelector(".lfv-theme-toggle"));
 });
 
+test("复制按钮点开是文件名和完整路径两条，点了抄进剪贴板", async () => {
+  const { dom, doc } = await themedPage();
+  const copied: string[] = [];
+  Object.defineProperty(dom.window, "navigator", {
+    value: { clipboard: { writeText: async (text: string) => { copied.push(text); } } },
+    configurable: true,
+  });
+
+  const button = doc.querySelector(".lfv-copy-toggle") as HTMLElement;
+  assert.equal(button.textContent, "复制");
+  button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const rows = [...doc.querySelectorAll("#lfv-copy-menu button")] as HTMLElement[];
+  assert.deepEqual(rows.map((row) => row.textContent), ["复制文件名", "复制完整路径"]);
+  rows[0]?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  rows[1]?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(copied, ["guide.md", "file:///tmp/docs/guide.md"]);
+  assert.deepEqual(rows.map((row) => row.textContent), ["已复制", "已复制"]);
+});
+
+test("切回原始时复制按钮也收起来", async () => {
+  const { doc } = await themedPage();
+  (doc.querySelector(".lfv-toggle") as HTMLElement).click();
+  assert.equal(doc.querySelector(".lfv-copy-toggle"), null);
+});
+
 // ------------------------------------------------ 懒加载面与构建入口一致性
 
 test("LAZY 的每个包都有对应的构建入口，忘了加 entry 就过不了测试", async () => {

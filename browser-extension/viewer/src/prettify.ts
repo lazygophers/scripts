@@ -142,8 +142,8 @@ function swap(doc: Document, plain: HTMLElement[], pretty: () => HTMLElement[], 
   wireSearch(doc);
   wireTheme(doc);
   const button = makeButton(doc, on ? "原始" : "美化", () => swap(doc, plain, pretty, !on), "8px");
-  // 主题按钮只在美化档出现：切回「原始」是要看浏览器原来的样子，那时页面上不该有主题。
-  const nodes = on ? [...pretty(), makeThemeButton(doc), button] : [...plain, button];
+  // 主题 / 复制按钮只在美化档出现：切回「原始」是要看浏览器原来的样子，那时页面上不该有扩展的 UI。
+  const nodes = on ? [...pretty(), makeThemeButton(doc), makeFileCopyButton(doc), button] : [...plain, button];
   doc.documentElement.classList.toggle("lfv-on", on);
   doc.body.replaceChildren(...nodes);
 }
@@ -247,6 +247,89 @@ function toggleThemeMenu(doc: Document, anchor: HTMLElement): void {
       if (!(event.target as Element | null)?.closest?.(`#${MENU_ID}`)) menu.remove();
     }, { once: true });
   }, 0);
+}
+
+/** 复制按钮：挨着「主题」，点开浮出文件名 / 完整路径两条（右上角弹窗）。 */
+function makeFileCopyButton(doc: Document): HTMLElement {
+  const button = makeButton(doc, "复制", () => toggleCopyMenu(doc, button), "128px");
+  button.className = "lfv-copy-toggle";
+  return button;
+}
+
+const COPY_MENU_ID = "lfv-copy-menu";
+
+function toggleCopyMenu(doc: Document, anchor: HTMLElement): void {
+  const open = doc.getElementById(COPY_MENU_ID);
+  if (open !== null) {
+    open.remove();
+    return;
+  }
+  const url = sourceUrl(doc);
+  // 路径是浏览器编码过的，人要抄的是解码后的名字。
+  const name = decodeURIComponent(new URL(url).pathname.split("/").filter((p) => p !== "").pop() ?? "");
+  const menu = doc.createElement("div");
+  menu.id = COPY_MENU_ID;
+  menu.setAttribute(
+    "style",
+    "position:fixed;top:36px;right:128px;z-index:2147483647;min-width:200px;" +
+      "padding:4px;border:1px solid var(--border);border-radius:8px;" +
+      "background:var(--card);color:var(--foreground);" +
+      "box-shadow:0 10px 30px rgb(0 0 0 / 0.25);font:13px/1.5 system-ui,sans-serif",
+  );
+  menu.append(copyRow(doc, "复制文件名", name), copyRow(doc, "复制完整路径", url));
+  anchor.after(menu);
+  // 点别处就收起来，同上面主题菜单。
+  doc.defaultView?.setTimeout(() => {
+    doc.addEventListener("click", (event) => {
+      if (!(event.target as Element | null)?.closest?.(`#${COPY_MENU_ID}`)) menu.remove();
+    }, { once: true });
+  }, 0);
+}
+
+/** 菜单里的一行：点了抄进剪贴板，成没成写在行自己身上；菜单开着方便连抄两条。 */
+function copyRow(doc: Document, label: string, text: string): HTMLElement {
+  const row = doc.createElement("button");
+  row.type = "button";
+  row.setAttribute(
+    "style",
+    "display:block;width:100%;padding:6px 9px;border:0;border-radius:6px;cursor:pointer;" +
+      "text-align:left;font:inherit;background:none;color:inherit;overflow:hidden;text-overflow:ellipsis",
+  );
+  row.textContent = label;
+  row.title = text;
+  row.addEventListener("click", () => {
+    void copyText(doc, text).then(
+      () => {
+        row.textContent = "已复制";
+      },
+      (error: Error) => {
+        row.textContent = `复制失败：${error.message}`;
+      },
+    );
+  });
+  return row;
+}
+
+/** 抄进剪贴板；file:// 页面上 `navigator.clipboard` 常拿不到授权，退到 `execCommand`。
+ *  和 listing.ts 里那份各守一个 bundle（这份在内容脚本主包，那份在按需包），不共享。 */
+async function copyText(doc: Document, text: string): Promise<void> {
+  const clipboard = doc.defaultView?.navigator.clipboard;
+  if (clipboard !== undefined) {
+    try {
+      await clipboard.writeText(text);
+      return;
+    } catch {
+      // 授权被拒就走下面的老路，不打断。
+    }
+  }
+  const scratch = doc.createElement("textarea");
+  scratch.value = text;
+  scratch.style.position = "fixed";
+  scratch.style.opacity = "0";
+  doc.body.append(scratch);
+  scratch.select();
+  if (!doc.execCommand("copy")) throw new Error("浏览器不让复制");
+  scratch.remove();
 }
 
 /** 文件页：美化档每次都按原文重新渲染一遍，所以来回切不会留下上一次的状态。 */
