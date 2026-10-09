@@ -1274,8 +1274,9 @@ test("打开本地目录时换成美化后的列表，条目按类型给图标",
 
   const icon = (name: string) =>
     Array.from(host.querySelectorAll(".lfv-entry")).find((n) => n.textContent === name)?.className;
-  assert.equal(icon("src/"), "lfv-entry lfv-icon-dir");
-  assert.equal(icon("b.go"), "lfv-entry lfv-icon-code");
+  // 会弹卡片的条目（目录、可预览文本）多带 lfv-popup-anchor；图片不带。
+  assert.equal(icon("src/"), "lfv-entry lfv-icon-dir lfv-popup-anchor");
+  assert.equal(icon("b.go"), "lfv-entry lfv-icon-code lfv-popup-anchor");
   assert.equal(icon("a.png"), "lfv-entry lfv-icon-image");
 });
 
@@ -1378,12 +1379,10 @@ test("悬停文本文件浮出开头几行，图片这类不触发", async () =>
     return { text: async () => "1\n2\n3\n4\n5\n6\n7\n" };
   }) as unknown as typeof fetch;
 
+  // 卡片就挂在链接里面，打开后链接的 textContent 不再是纯文件名，所以按行的 data-name 找。
   const hover = (name: string, type: string) =>
-    ((
-      Array.from(host.querySelectorAll(".lfv-entry")).find(
-        (n) => n.textContent === name,
-      ) as HTMLElement
-    ).closest("td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent(type));
+    (host.querySelector(`tr[data-name="${name}"] .lfv-entry`) as HTMLElement)
+      .dispatchEvent(new dom.window.MouseEvent(type));
 
   hover("b.go", "mouseenter");
   await new Promise((resolve) => setTimeout(resolve, 0));

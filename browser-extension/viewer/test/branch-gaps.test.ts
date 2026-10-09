@@ -336,7 +336,7 @@ test("预览：读第一块就掐断连接", async () => {
     "/",
   );
   const link = host.querySelector("a.lfv-entry") as HTMLElement;
-  (link.closest("td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  link.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   await new Promise((r) => setImmediate(r));
   const box = host.querySelector(".lfv-preview pre") as HTMLElement;
   assert.equal(box?.textContent?.split("\n").length, 5, "只留 5 行");
@@ -354,7 +354,7 @@ test("预览：读不出时把原因写在原地", async () => {
     "/",
   );
   const link = host.querySelector("a.lfv-entry") as HTMLElement;
-  (link.closest("td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  link.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   await new Promise((r) => setImmediate(r));
   assert.match((host.querySelector(".lfv-preview pre") as HTMLElement).textContent ?? "", /读不出这个文件：EACCES/);
 });
@@ -369,13 +369,12 @@ test("预览框移开隐藏、回来直接显示不再读", async () => {
     "/",
   );
   const link = host.querySelector("a.lfv-entry") as HTMLElement;
-  const cell = link.closest("td") as HTMLElement;
-  cell.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  link.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   await new Promise((r) => setImmediate(r));
   const box = host.querySelector(".lfv-preview") as HTMLElement;
-  cell.dispatchEvent(new dom.window.MouseEvent("mouseleave"));
+  link.dispatchEvent(new dom.window.MouseEvent("mouseleave"));
   assert.equal(box.hidden, true);
-  cell.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  link.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   assert.equal(box.hidden, false);
   assert.equal(reads, 1, "第二次进来不该重读");
 });

@@ -97,8 +97,8 @@ test("按扩展名挂图标类，目录和不认识的扩展名各有档位", ()
   const kinds = Array.from(host.querySelectorAll(".lfv-entry"), (a) => a.className);
   assert.deepEqual(kinds.sort(), [
     "lfv-entry lfv-icon-archive",
-    "lfv-entry lfv-icon-code",
-    "lfv-entry lfv-icon-dir",
+    "lfv-entry lfv-icon-code lfv-popup-anchor",
+    "lfv-entry lfv-icon-dir lfv-popup-anchor",
     "lfv-entry lfv-icon-file",
     "lfv-entry lfv-icon-image",
   ]);
@@ -185,7 +185,7 @@ test("鼠标停在文本文件上才读预览，图片不读", async () => {
     entry({ name: "b.png", url: "file:///tmp/b.png" }),
   ], "/tmp");
 
-  const cells = Array.from(host.querySelectorAll("tbody tr"), (tr) => tr.firstElementChild as HTMLElement);
+  const cells = Array.from(host.querySelectorAll(".lfv-entry"), (a) => a as HTMLElement);
   cells[1]?.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   assert.deepEqual(fetched, [], "图片不该触发读取");
 
@@ -202,7 +202,7 @@ test("读不出来时把原因写在预览框里，不卡在「读取中…」",
     throw new Error("NetworkError");
   };
   const host = renderListing(dom.window.document, [entry({ name: "a.md" })], "/tmp");
-  (host.querySelector("tbody tr td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  (host.querySelector(".lfv-entry") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(host.querySelector(".lfv-preview pre")?.textContent, "读不出这个文件：NetworkError");
   delete (globalThis as { fetch?: unknown }).fetch;
@@ -215,7 +215,7 @@ test("内容脚本 fetch 被 CORS 拦时转给后台代读，读到的还是前�
   };
   installChrome({ runtime: { sendMessage: async () => ({ ok: true, text: "甲\n乙\n丙\n丁\n戊\n己" }) } });
   const host = renderListing(dom.window.document, [entry({ name: "a.md", url: "file:///tmp/a.md" })], "/tmp");
-  (host.querySelector("tbody tr td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  (host.querySelector(".lfv-entry") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(host.querySelector(".lfv-preview pre")?.textContent, "甲\n乙\n丙\n丁\n戊");
@@ -231,7 +231,7 @@ test("预览框右上角有复制文件名和完整路径两个按钮，点了�
     configurable: true,
   });
   const host = renderListing(dom.window.document, [entry({ name: "a.md", url: "file:///tmp/a.md" })], "/tmp");
-  (host.querySelector("tbody tr td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  (host.querySelector(".lfv-entry") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
 
   const buttons = Array.from(host.querySelectorAll(".lfv-copy"), (b) => b as HTMLButtonElement);
   assert.deepEqual(buttons.map((b) => b.textContent), ["复制文件名", "复制完整路径"]);
@@ -248,7 +248,7 @@ test("html 悬停用沙箱 iframe 渲染预览，不当纯文本读", async () =
     return { body: undefined, text: async () => "<h1>标题</h1><script>alert(1)</script>" };
   };
   const host = renderListing(dom.window.document, [entry({ name: "a.html", url: "file:///tmp/a.html" })], "/tmp");
-  (host.querySelector("tbody tr td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  (host.querySelector(".lfv-entry") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   await new Promise((resolve) => setImmediate(resolve));
 
   const frame = host.querySelector(".lfv-preview-frame") as HTMLIFrameElement;
@@ -269,7 +269,7 @@ test("目录的框只有一个复制文件夹名按钮，不去读文件", async
     throw new Error("不该读目录");
   };
   const host = renderListing(dom.window.document, [entry({ name: "src", dir: true, url: "file:///tmp/src/" })], "/tmp");
-  (host.querySelector("tbody tr td") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  (host.querySelector(".lfv-entry") as HTMLElement).dispatchEvent(new dom.window.MouseEvent("mouseenter"));
   await new Promise((resolve) => setImmediate(resolve));
 
   const buttons = Array.from(host.querySelectorAll(".lfv-copy"), (b) => b as HTMLButtonElement);

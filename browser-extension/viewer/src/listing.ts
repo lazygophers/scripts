@@ -158,7 +158,7 @@ function row(doc: Document, entry: Entry): HTMLElement {
 
   tr.append(nameCell, sizeCell, timeCell);
   const ext = extOf(entry.name);
-  if (entry.dir || PREVIEWABLE.has(ext) || HTML_EXTS.has(ext)) wireEntryPopup(doc, nameCell, entry);
+  if (entry.dir || PREVIEWABLE.has(ext) || HTML_EXTS.has(ext)) wireEntryPopup(doc, link, entry);
   return tr;
 }
 
@@ -170,8 +170,9 @@ export type PopupEntry = Pick<Entry, "name" | "url" | "dir">;
  * 「复制文件夹名」），下面按类型铺预览——纯文本给开头几行，html 用沙箱 iframe
  * 渲染。读一次就留着，移开再回来不重读。
  *
- * 事件挂在锚点上而不是里面的链接上：卡片是锚点的孩子（只是绝对定位浮在表/正文上），
- * 指针从名字挪进卡片点按钮时不算离开。目录列表传名字格，文件内超链接由 prettify 传链接本身。
+ * 事件挂在文件名链接上而不是整个名字格：悬在格子的空白处不该弹卡。卡片是锚点的
+ * 孩子（只是绝对定位浮在表/正文上），指针从名字挪进卡片点按钮时不算离开。
+ * 目录列表和文件内超链接传的都是链接本身。
  */
 export function wireEntryPopup(doc: Document, anchor: HTMLElement, entry: PopupEntry): void {
   // 卡片绝对定位在锚点下方，锚点自己得是个定位基准。
