@@ -1434,3 +1434,43 @@ class TestBrowserLabels(unittest.TestCase):
         self.assertEqual(browse._app_name("/snap/bin/chromium"), "chromium")
         # 白名单外不认：碰巧叫 arc 的无关进程不冒充浏览器
         self.assertEqual(browse._app_name("/usr/bin/archive-tool"), "")
+
+
+class TestResolveBrowserAlias(unittest.TestCase):
+    """--browser 的展示名（arc）翻译成槽位名（chromium）。"""
+
+    def _patch_env(self, info, labels):
+        execute = mock.AsyncMock(return_value={"status": "ok", "result": info})
+        return mock.patch.multiple(
+            browse, execute=execute, _conn_pids=mock.DEFAULT, _browser_labels=mock.DEFAULT,
+        ), labels
+
+    def test_alias_translated_to_slot(self):
+        info = {"port": 9330, "connections": [
+            {"browser": "chromium", "peerPort": 51000},
+            {"browser": "chrome", "peerPort": 52000},
+        ]}
+        with mock.patch.object(browse, "execute", mock.AsyncMock(
+                return_value={"status": "ok", "result": info})), \
+             mock.patch.object(browse, "_conn_pids", return_value={51000: 111, 52000: 222}), \
+             mock.patch.object(browse, "_browser_labels", return_value={111: "arc", 222: "chrome"}):
+            self.assertEqual(browse._resolve_browser_alias(pathlib.Path("/tmp/s"), "arc"), "chromium")
+            # 本来就是槽位名：原样返回，不做翻译
+            self.assertEqual(browse._resolve_browser_alias(pathlib.Path("/tmp/s"), "chromium"), "chromium")
+            self.assertEqual(browse._resolve_browser_alias(pathlib.Path("/tmp/s"), "chrome"), "chrome")
+
+    def test_unknown_name_passthrough(self):
+        info = {"port": 9330, "connections": [{"browser": "chromium", "peerPort": 51000}]}
+        with mock.patch.object(browse, "execute", mock.AsyncMock(
+                return_value={"status": "ok", "result": info})), \
+             mock.patch.object(browse, "_conn_pids", return_value={51000: 111}), \
+             mock.patch.object(browse, "_browser_labels", return_value={111: "arc"}):
+            # 认不出的名字原样发——daemon 会报错并列出都有谁
+            self.assertEqual(browse._resolve_browser_alias(pathlib.Path("/tmp/s"), "edge"), "edge")
+            # 空串（没给 --browser）直接返回，不查连接表
+            self.assertEqual(browse._resolve_browser_alias(pathlib.Path("/tmp/s"), ""), "")
+
+    def test_bridge_down_passthrough(self):
+        with mock.patch.object(browse, "execute", mock.AsyncMock(
+                return_value={"status": "failed", "error": "timeout"})):
+            self.assertEqual(browse._resolve_browser_alias(pathlib.Path("/tmp/s"), "arc"), "arc")

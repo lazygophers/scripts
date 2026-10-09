@@ -1500,10 +1500,37 @@ async def _cmd_wait_idle(sock: pathlib.Path, browser: str, timeout: float) -> in
         writer.close()
 
 
+def _resolve_browser_alias(sock: pathlib.Path, browser: str) -> str:
+    """`--browser` 的展示名（arc/chrome…）→ 槽位名（chromium/chrome-2…）。
+
+    路由认的是 hello 自报的槽位名；展示名是 CLI 从进程路径识别的，两者在
+    Arc 这类不自报品牌的分支上对不上。已经是槽位名或认不出就原样返回，
+    认不出时 daemon 会报错并列出都有谁。
+    """
+    if not browser:
+        return browser
+    from lib import browse_bridge
+
+    outcome = asyncio.run(execute(browse_bridge.INFO_METHOD, {}, sock))
+    if outcome["status"] != "ok":
+        return browser
+    info = outcome["result"]
+    conns = info.get("connections", [])
+    if browser in {c["browser"] for c in conns}:
+        return browser
+    port_to_pid = _conn_pids(info.get("port", 0), conns)
+    labels = _browser_labels({p for p in port_to_pid.values()})
+    for conn in conns:
+        pid = port_to_pid.get(conn.get("peerPort", 0))
+        if pid and labels.get(pid) == browser:
+            return conn["browser"]
+    return browser
+
+
 def _cmd_any(tokens: list[str]) -> int:
     name, params, opts = route(tokens)
     sock = _sock_of(opts)
-    browser = browser_of(opts)
+    browser = _resolve_browser_alias(sock, browser_of(opts))
     duration = parse_duration(opts["duration"]) if "duration" in opts else None
     if duration is not None and "network.subscribe" not in name and name != "net watch":
         raise UsageError("--duration 只对 `browse net watch`（和 api network subscribe）有意义")
