@@ -23,6 +23,53 @@ def _pgrep(pattern: str) -> list[int]:
     return [int(line.strip()) for line in out.splitlines() if line.strip().isdigit()]
 
 
+def kill_by_pids(
+    pids: list[int],
+    *,
+    dry_run: bool = False,
+    script_markers: set[str] | None = None,
+) -> int:
+    """按 pid 精确终止。
+
+    数字参数走这里而不是 pgrep -f：pgrep -f 63447 会命中命令行里恰好含
+    这个数字的无关进程（如 `--port 63447`），精确 pid 不做模糊匹配。
+    排除自身和 args 含 script_markers 的进程，dry_run 仅预览。
+    返回 0 成功 / 1 有失败。
+    """
+    r = reporter(stderr=True)
+    if script_markers is None:
+        script_markers = set()
+
+    current_pid = os.getpid()
+    info = ps_info(pids, include_ppid=True)
+    filtered: list[int] = []
+    for pid in pids:
+        if pid == current_pid:
+            continue
+        row = info.get(pid)
+        if not row:
+            r.warn(f"进程不存在: {pid}")
+            continue
+        args_text = row[3] if len(row) > 3 else ""
+        if not args_text or any(m in args_text for m in script_markers):
+            continue
+        filtered.append(pid)
+
+    if not filtered:
+        r.ok(f"未找到可终止的进程: {' '.join(str(p) for p in pids)}")
+        return 0
+
+    r.rule("进程列表", style="yellow")
+    make_process_table(filtered, info, "进程列表", r, include_ppid=True)
+
+    if dry_run:
+        r.step(f"[dry-run] 将终止 {len(filtered)} 个进程（实际未终止）")
+        return 0
+
+    success, fail = kill_pids(filtered, r=r)
+    return 1 if fail else 0
+
+
 def kill_by_name(
     patterns: list[str],
     *,

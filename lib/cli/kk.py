@@ -5,7 +5,7 @@ import pathlib
 import sys
 
 from lib.fire_base import BaseCli, run_cli, timed_cli
-from lib.process import kill_by_name
+from lib.process import kill_by_name, kill_by_pids
 
 
 class KkCli(BaseCli):
@@ -19,13 +19,22 @@ class KkCli(BaseCli):
     def by_name(self, *patterns: str, dry_run: bool = False):
         """终止匹配的进程
 
-        用法: kk <pattern1> [pattern2 ...] [--dry-run]
+        用法: kk <pattern1|pid> [pattern2|pid2 ...] [--dry-run]
+        全是数字当 pid 精确终止；含非数字按进程名正则匹配（fire 会把
+        数字参数转成 int，这里统一转回字符串防 _NAME_RE 炸）
         """
         if not patterns:
             self._r.err("kk: 至少需要一个进程名")
             return 1
+        args = [str(p) for p in patterns]
+        if all(a.isdigit() for a in args):
+            return kill_by_pids(
+                [int(a) for a in args],
+                dry_run=dry_run,
+                script_markers={pathlib.Path(sys.argv[0]).name, "kk"},
+            )
         return kill_by_name(
-            list(patterns),
+            args,
             dry_run=dry_run,
             script_markers={pathlib.Path(sys.argv[0]).name, "kk"},
         )

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from lib.process import _pgrep, kill_by_name
+from lib.process import _pgrep, kill_by_name, kill_by_pids
 from lib.process import ps_info as _ps_info_fn
 
 
@@ -183,4 +183,63 @@ class TestKillByName(unittest.TestCase):
         }
         with patch("lib.process.os.kill") as mock_kill:
             assert kill_by_name(["python"], dry_run=True) == 0
+        assert mock_kill.call_count == 0
+
+
+class TestKillByPids(unittest.TestCase):
+    """Test lib.process.kill_by_pids — `kk <pid>` 精确终止路径。"""
+
+    @patch("lib.process.os.kill")
+    @patch("lib.process.ps_info")
+    def test_kill_pids_success(self, mock_ps_info, mock_kill):
+        mock_ps_info.return_value = {
+            63447: ["63447", "user", "100", "node server.js"],
+        }
+        assert kill_by_pids([63447]) == 0
+        assert mock_kill.call_count == 1
+
+    @patch("lib.process.os.kill")
+    @patch("lib.process.ps_info")
+    def test_kill_pids_excludes_self(self, mock_ps_info, mock_kill):
+        current = os.getpid()
+        mock_ps_info.return_value = {
+            current: [str(current), "user", "100", "python other.py"],
+            5678: ["5678", "user", "100", "python other.py"],
+        }
+        assert kill_by_pids([current, 5678]) == 0
+        assert mock_kill.call_count == 1
+
+    @patch("lib.process.ps_info")
+    def test_kill_pids_nonexistent_warns_and_skips(self, mock_ps_info):
+        mock_ps_info.return_value = {}
+        assert kill_by_pids([999999]) == 0
+        # ps_info 返回空 = 进程不存在，不杀任何东西
+
+    @patch("lib.process.os.kill")
+    @patch("lib.process.ps_info")
+    def test_kill_pids_filters_script_markers(self, mock_ps_info, mock_kill):
+        mock_ps_info.return_value = {
+            1234: ["1234", "user", "100", "python kk.py 63447"],
+            5678: ["5678", "user", "100", "node server.js"],
+        }
+        assert kill_by_pids([1234, 5678], script_markers={"kk"}) == 0
+        assert mock_kill.call_count == 1
+
+    @patch("lib.process.os.kill")
+    @patch("lib.process.ps_info")
+    def test_kill_pids_partial_failure(self, mock_ps_info, mock_kill):
+        mock_ps_info.return_value = {
+            1234: ["1234", "user", "100", "node a.js"],
+            5678: ["5678", "user", "100", "node b.js"],
+        }
+        mock_kill.side_effect = [None, Exception("Permission denied")]
+        assert kill_by_pids([1234, 5678]) == 1
+
+    @patch("lib.process.os.kill")
+    @patch("lib.process.ps_info")
+    def test_kill_pids_dry_run_does_not_kill(self, mock_ps_info, mock_kill):
+        mock_ps_info.return_value = {
+            1234: ["1234", "user", "100", "node server.js"],
+        }
+        assert kill_by_pids([1234], dry_run=True) == 0
         assert mock_kill.call_count == 0
