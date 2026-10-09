@@ -83,7 +83,11 @@ function browserName(): string {
       return lower;
     }
   }
-  return "chromium"; // Arc 等 Chromium 分支不在 brands 里报自己 —— 展示名退化，路由不受影响
+  // Arc 不在 brands 里报自己，但 UA 带 " Arc/<版本>" —— 用它兜底，别再退化成 chromium
+  if (/\sArc\//.test(navigator.userAgent)) {
+    return "arc";
+  }
+  return "chromium"; // 不认识的 Chromium 分支 —— 展示名退化，路由不受影响
 }
 
 export type ConnectionState = "connected" | "disconnected";

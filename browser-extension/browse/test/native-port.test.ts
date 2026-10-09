@@ -250,6 +250,7 @@ test("browserName maps known brands and falls back to chromium", async () => {
   boot();
   const nav = globalThis.navigator as unknown as {
     userAgentData?: { brands: { brand: string }[] };
+    userAgent?: string;
   };
   const cases: [{ brand: string }[], string][] = [
     [[{ brand: "Google Chrome" }, { brand: "other" }], "chrome"],
@@ -265,6 +266,11 @@ test("browserName maps known brands and falls back to chromium", async () => {
       configurable: true,
       value: { brands },
     });
+    // Arc 走的是 UA 兜底分支（brands 里不报自己），先清干净 UA 隔离用例
+    Object.defineProperty(globalThis.navigator, "userAgent", {
+      configurable: true,
+      value: "Mozilla/5.0",
+    });
     const conn = new NativeConnection(() => {}, () => {});
     conn.resume(); // 前一轮 disconnect 的刹车在同一份 storage 里，用 resume 解开
     await settle();
@@ -275,6 +281,24 @@ test("browserName maps known brands and falls back to chromium", async () => {
     conn.disconnect();
     sockets.length = 0;
   }
+  // UA 兜底：brands 不报 Arc、UA 带 " Arc/<版本>" —— 真实 Arc 的形状
+  Object.defineProperty(globalThis.navigator, "userAgent", {
+    configurable: true,
+    value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Arc/1.100.0",
+  });
+  const arcConn = new NativeConnection(() => {}, () => {});
+  arcConn.resume();
+  await settle();
+  const arcSock = sockets[0]!;
+  arcSock.open();
+  await settle();
+  assert.equal(JSON.parse(arcSock.sent[0] ?? "{}").browser, "arc");
+  arcConn.disconnect();
+  sockets.length = 0;
+  Object.defineProperty(globalThis.navigator, "userAgent", {
+    configurable: true,
+    value: "Mozilla/5.0",
+  });
   Object.defineProperty(globalThis.navigator, "userAgentData", {
     configurable: true,
     value: undefined,

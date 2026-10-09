@@ -1719,12 +1719,41 @@ def _cmd_install(tokens: list[str], uninstall: bool) -> int:
     return install_main(["browse install", *(["--uninstall"] if uninstall else []), *tokens])
 
 
+def _conn_pids(ws_port: int, conns: list[dict]) -> dict[int, int]:
+    """lsof 反查每条扩展连接的浏览器进程 pid。
+
+    bridge 只看得到 TCP 对端的临时端口（peerPort）；TCP 上没有对端进程
+    凭据，pid 只能在 CLI 侧用 lsof 把「本机端口 = peerPort 的 ESTABLISHED
+    连接」映射回进程。
+    """
+    ports = {c["peerPort"] for c in conns if c.get("peerPort")}
+    if not ports:
+        return {}
+    out = subprocess.run(
+        ["lsof", "-nP", f"-iTCP:{ws_port}", "-sTCP:ESTABLISHED", "-F", "pLn"],
+        capture_output=True, text=True)
+    pids: dict[int, int] = {}
+    cur = 0
+    for line in out.stdout.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            cur = int(line[1:])
+        elif line.startswith("n") and cur:
+            for side in line[1:].split("->"):
+                try:
+                    port = int(side.rsplit(":", 1)[1])
+                except (IndexError, ValueError):
+                    continue
+                if port in ports:
+                    pids[port] = cur
+    return pids
+
+
 def _cmd_status(tokens: list[str]) -> int:
     """`browse status`：一条命令看完整条链路。bridge 的连接表是唯一真相。
 
-    每条插件连接一行：浏览器名、connectionId、已连多久、上次心跳几秒前。
-    旧 native messaging 的注册（manifest/wrapper）只是残留提示 —— 它们不再是
-    连接的一部分，`browse uninstall` 可以清掉。
+    每条插件连接一行：浏览器名、connectionId、浏览器进程 pid（lsof 反查）、
+    已连多久、上次心跳几秒前。旧 native messaging 的注册（manifest/wrapper）
+    只是残留提示 —— 它们不再是连接的一部分，`browse uninstall` 可以清掉。
     """
     from lib import browse_bridge, browse_install
 
@@ -1733,17 +1762,23 @@ def _cmd_status(tokens: list[str]) -> int:
     report = reporter(stderr=True)
 
     running = probe(sock)
-    report.ok(f"bridge: {'在跑' if running else '没在跑'}（{sock}）")
-
     conns: list[dict] = []
+    info: dict = {}
     if running:
-        outcome = asyncio.run(execute(browse_bridge.CONNECTIONS_METHOD, {}, sock))
+        outcome = asyncio.run(execute(browse_bridge.INFO_METHOD, {}, sock))
         if outcome["status"] == "ok":
-            conns = outcome["result"].get("connections", [])
+            info = outcome["result"]
+            conns = info.get("connections", [])
+    pid_note = f"，pid {info['pid']}" if info.get("pid") else ""
+    report.ok(f"bridge: 在跑{pid_note}（{sock}）" if running else f"bridge: 没在跑（{sock}）")
+
+    port_to_pid = _conn_pids(info.get("port", 0), conns) if conns else {}
     for conn in conns:
+        pid = port_to_pid.get(conn.get("peerPort", 0))
+        pid_note = f" · pid {pid}" if pid else ""
         report.ok(
             f"{conn['browser']}: 插件已连接 · connectionId {conn['connectionId']}"
-            f" · 已连 {conn['sinceSeconds']} 秒 · 心跳 {conn['idleSeconds']} 秒前")
+            f"{pid_note} · 已连 {conn['sinceSeconds']} 秒 · 心跳 {conn['idleSeconds']} 秒前")
     if running and not conns:
         report.err("没有任何插件连着：扩展加载后会自动连 bridge（装完/升级扩展要重新加载一次）")
     elif not running:

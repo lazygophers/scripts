@@ -141,6 +141,9 @@ class Bridge(Daemon):
     async def _adopt_ws(self, ws_reader: asyncio.StreamReader,
                         ws_writer: asyncio.StreamWriter) -> None:
         """把一条 WS 连接适配成 daemon 的流，然后把 daemon 的处理直接挂上去。"""
+        # 对端（扩展所在浏览器进程）的临时端口：TCP 连接没有对端进程概念，
+        # pid 只能由 CLI 用 lsof 拿这个端口反查（`browse status`）
+        peer_port = (ws_writer.get_extra_info("peername") or (None, 0))[1] or 0
         # socketpair 两端各接成 asyncio 流：一端给 daemon，一端给适配泵
         ours, theirs = socket.socketpair()
         ours.setblocking(False)
@@ -150,7 +153,8 @@ class Bridge(Daemon):
 
         adapter = _Adapter(ws_reader=ws_reader, ws_writer=ws_writer,
                            sock_reader=pump_reader, sock_writer=pump_writer,
-                           meta=self._ws_meta, silence=self.ws_silence)
+                           meta=self._ws_meta, silence=self.ws_silence,
+                           peer_port=peer_port)
         daemon_task = asyncio.create_task(super()._handle(daemon_reader, daemon_writer))
         try:
             await adapter.pump()
@@ -174,6 +178,7 @@ class Bridge(Daemon):
             "browser": meta["browser"],
             "sinceSeconds": int(now - meta["since"]),
             "idleSeconds": int(now - meta["lastSeen"]),
+            "peerPort": meta.get("peerPort", 0),
         } for cid, meta in self._ws_meta.items()]
 
     def info(self) -> dict:
@@ -242,6 +247,8 @@ class _Adapter:
     meta: dict[int, dict]
     # 静默超时可注入（测试用短值）；生产走模块常量。
     silence: float = WS_SILENCE_TIMEOUT
+    # 扩展侧 TCP 连接的临时端口，进 _ws_meta 供 `browse status` lsof 反查 pid
+    peer_port: int = 0
 
     conn_id: int | None = field(default=None, init=False)
 
@@ -283,6 +290,7 @@ class _Adapter:
                     "browser": name,
                     "since": time.monotonic(),
                     "lastSeen": time.monotonic(),
+                    "peerPort": self.peer_port,
                 }
                 browse_log.record("ws.open", connectionId=self.conn_id, browser=name)
             await browse_ws.send_text(self.ws_writer, json.dumps(message, ensure_ascii=False))
