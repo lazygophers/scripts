@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 
-import { idleState, searchQuery, systemInfo } from "../src/handlers/info.ts";
+import { browserInfo, idleState, searchQuery, systemInfo } from "../src/handlers/info.ts";
 import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
 
 type Any = Record<string, unknown>;
@@ -157,5 +157,16 @@ describe("systemInfo", () => {
   it("an empty parts list asks for nothing and returns nothing", async () => {
     installChrome({ system: systemApi() });
     assert.deepEqual(await systemInfo({ parts: [] }), {});
+  });
+});
+
+describe("browserInfo", () => {
+  it("reports the raw UA, brands and the extension version", async () => {
+    installChrome({ runtime: { getManifest: () => ({ version: "0.9.1" }) } });
+    const out = await browserInfo();
+    assert.equal(typeof out.userAgent, "string");
+    assert.equal(out.extensionVersion, "0.9.1");
+    assert.ok(Array.isArray(out.brands), "brands 永远是数组（拿不到就是空）");
+    assert.equal(typeof out.mobile, "boolean");
   });
 });

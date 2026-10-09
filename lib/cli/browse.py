@@ -140,6 +140,7 @@ METHODS: dict[str, tuple[str, ...]] = {
     "lg:search.query": ("text",),
     "lg:idle.state": (),
     "lg:system.info": (),
+    "lg:browser.info": (),
     "lg:notifications.show": ("title", "message"),
     "lg:notifications.clear": ("id",),
     "lg:power.keepAwake": (),
@@ -281,6 +282,7 @@ NOUN_GROUPS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
     },
     "sys": {
         "info": ("lg:system.info", ()),
+        "browser": ("lg:browser.info", ()),
         "idle": ("lg:idle.state", ()),
         "notify": ("lg:notifications.show", ("title", "message")),
         "notify-clear": ("lg:notifications.clear", ("id",)),

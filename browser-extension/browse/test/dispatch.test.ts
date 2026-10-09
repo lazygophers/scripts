@@ -60,6 +60,7 @@ const V1 = [
   "lg:search.query",
   "lg:idle.state",
   "lg:system.info",
+  "lg:browser.info",
   "lg:notifications.show",
   "lg:notifications.clear",
   "lg:power.keepAwake",

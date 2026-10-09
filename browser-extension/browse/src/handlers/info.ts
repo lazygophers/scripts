@@ -31,6 +31,23 @@ export async function searchQuery(params: Record<string, unknown>): Promise<unkn
   return { searched: text };
 }
 
+/**
+ * `lg:browser.info`：浏览器自报家门——UA、brands、扩展版本。展示与排障用，
+ * 不参与路由判定（路由靠 connectionId + instanceId，见 native-port.ts）。
+ */
+export async function browserInfo(): Promise<Record<string, unknown>> {
+  const uaData = (navigator as {
+    userAgentData?: { brands?: { brand: string }[]; mobile?: boolean; platform?: string };
+  }).userAgentData;
+  return {
+    userAgent: navigator.userAgent,
+    brands: uaData?.brands ?? [],
+    mobile: uaData?.mobile ?? false,
+    platform: uaData?.platform ?? "",
+    extensionVersion: chrome.runtime.getManifest().version,
+  };
+}
+
 export async function idleState(
   params: Record<string, unknown>,
 ): Promise<{ state: `${chrome.idle.IdleState}` }> {
