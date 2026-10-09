@@ -141,6 +141,8 @@ METHODS: dict[str, tuple[str, ...]] = {
     "lg:idle.state": (),
     "lg:system.info": (),
     "lg:browser.info": (),
+    "lg:profile.get": (),
+    "lg:profile.set": ("name",),
     "lg:notifications.show": ("title", "message"),
     "lg:notifications.clear": ("id",),
     "lg:power.keepAwake": (),
@@ -279,6 +281,10 @@ NOUN_GROUPS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
         "proxy": ("lg:proxy.get", ()),
         "proxy-set": ("lg:proxy.set", ("mode",)),
         "proxy-clear": ("lg:proxy.clear", ()),
+    },
+    "profile": {
+        "get": ("lg:profile.get", ()),
+        "set": ("lg:profile.set", ("name",)),
     },
     "sys": {
         "info": ("lg:system.info", ()),
@@ -920,6 +926,9 @@ sys 组（浏览器/系统杂项）
   browse sys awake | awake-off           防休眠开/关
   browse sys clipboard | clipboard-set <文字>
   browse sys search <文字> | perms
+
+profile 组（多 profile 区分连接）
+  browse profile get | profile set <名字>  给当前 profile 起名；status 和面板显示 chrome (名字)
 
 rec 组（录制）
   browse rec tab | rec desktop | rec stop <录制号>
@@ -1836,7 +1845,9 @@ def _cmd_status(tokens: list[str]) -> int:
     for conn in conns:
         pid = port_to_pid.get(conn.get("peerPort", 0))
         # hello 报的名字在 Chromium 分支间会撞车，进程路径识别到的名字更真
-        name = labels.get(pid) or conn["browser"] if pid else conn["browser"]
+        name = (labels.get(pid) or conn["browser"]) if pid else conn["browser"]
+        profile = conn.get("profile", "")
+        name = f"{name} ({profile})" if profile else name
         pid_note = f" · pid {pid}" if pid else ""
         report.ok(
             f"{name}: 插件已连接 · connectionId {conn['connectionId']}"

@@ -31,6 +31,7 @@ import {
 import { gcmDeleteToken, gcmId, gcmToken } from "./gcm.ts";
 import { historyDelete, historySearch } from "./history.ts";
 import { browserInfo, idleState, searchQuery, systemInfo } from "./info.ts";
+import { profileGet, profileSet } from "./profile.ts";
 import { inputClick, inputKey, inputScroll, inputType, inputUpload } from "./input.ts";
 import { networkSubscribe, networkUnsubscribe } from "./network.ts";
 import {
@@ -155,6 +156,9 @@ export const HANDLERS: Record<string, Handler> = {
   "lg:idle.state": idleState,
   "lg:system.info": systemInfo,
   "lg:browser.info": browserInfo,
+
+  "lg:profile.get": profileGet,
+  "lg:profile.set": profileSet,
 
   "lg:notifications.show": notificationsShow,
   "lg:notifications.clear": notificationsClear,

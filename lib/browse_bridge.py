@@ -180,6 +180,7 @@ class Bridge(Daemon):
             "idleSeconds": int(now - meta["lastSeen"]),
             "peerPort": meta.get("peerPort", 0),
             "instanceId": meta.get("instanceId", ""),
+            "profile": meta.get("profile", ""),
         } for cid, meta in self._ws_meta.items()]
 
     def info(self) -> dict:
@@ -293,13 +294,17 @@ class _Adapter:
                     "lastSeen": time.monotonic(),
                     "peerPort": self.peer_port,
                     "instanceId": self._instance_id,
+                    "profile": self._profile,
                 }
                 browse_log.record("ws.open", connectionId=self.conn_id, browser=name)
             await browse_ws.send_text(self.ws_writer, json.dumps(message, ensure_ascii=False))
 
-    # hello 里的 browser 名 / instanceId，翻译后的第一条（hello）记下；之后的消息只刷新 lastSeen
+    # hello 里的 browser 名 / instanceId / profile，翻译后的第一条（hello）记下；
+    # 之后的消息只刷新 lastSeen 和 profile（lg:keepalive.ping 的 params 里带，
+    # `lg:profile.set` 改名后 20 秒内不需要重连）
     _browser: str = ""
     _instance_id: str = ""
+    _profile: str = ""
 
     def _touch(self, message: dict) -> None:
         if self.conn_id is None and message.get("type") == "hello":
@@ -308,10 +313,18 @@ class _Adapter:
             instance_id = message.get("instanceId")
             if isinstance(instance_id, str) and instance_id:
                 self._instance_id = instance_id
+            profile = message.get("profile")
+            if isinstance(profile, str):
+                self._profile = profile
             return
         entry = self.meta.get(self.conn_id or -1)
         if entry is not None:
             entry["lastSeen"] = time.monotonic()
+            params = message.get("params")
+            if isinstance(params, dict):
+                profile = params.get("profile")
+                if isinstance(profile, str):
+                    entry["profile"] = profile
 
 
 async def run(path: Path | None = None, idle_timeout: float | None = None,

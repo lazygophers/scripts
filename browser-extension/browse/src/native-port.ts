@@ -67,6 +67,37 @@ export async function instanceId(): Promise<string> {
   return cachedInstanceId;
 }
 
+/**
+ * profile 名（同一浏览器多 profile 时区分连接用）。每个 profile 的
+ * `chrome.storage` 独立，所以各自设各自的；hello 和每条心跳都带上，
+ * bridge 侧的心跳刷新让改名 20 秒内生效，不用重连。
+ */
+let cachedProfileName: string | null = null;
+export async function profileName(): Promise<string> {
+  if (cachedProfileName !== null) {
+    return cachedProfileName;
+  }
+  const key = "browse:profileName";
+  try {
+    const stored = await chrome.storage.local.get(key);
+    cachedProfileName = typeof stored[key] === "string" ? (stored[key] as string) : "";
+  } catch {
+    cachedProfileName = "";
+  }
+  return cachedProfileName;
+}
+
+/** `lg:profile.set` 用：写 storage（跨重启持久）并刷新缓存，下一条心跳就报新名。 */
+export async function saveProfileName(name: string): Promise<void> {
+  const key = "browse:profileName";
+  try {
+    await chrome.storage.local.set({ [key]: name });
+  } catch {
+    // 测试环境没有 storage：只改内存，够心跳用
+  }
+  cachedProfileName = name;
+}
+
 /** hello 里报的浏览器名。展示用 —— 路由不靠它猜，靠 bridge 的 connectionId + instanceId。 */
 function browserName(): string {
   const brands = (navigator as { userAgentData?: { brands?: { brand: string }[] } })
@@ -226,7 +257,7 @@ export class NativeConnection {
     }
     this.socket = socket;
     socket.onopen = () => {
-      void instanceId().then((id) => {
+      void Promise.all([instanceId(), profileName()]).then(([id, profile]) => {
         if (this.socket !== socket) {
           return; // 等 ID 的这一下 socket 已经被 disconnect() 或重连换掉了
         }
@@ -235,6 +266,7 @@ export class NativeConnection {
           role: "extension",
           browser: browserName(),
           instanceId: id,
+          profile,
         }));
       });
       this.connectedAt = Date.now();
@@ -404,7 +436,8 @@ export class NativeConnection {
   private startPing(): void {
     this.stopPing();
     this.pingTimer = setInterval(() => {
-      this.send({ type: "event", method: "lg:keepalive.ping", params: {} });
+      // 带上 profile 名：bridge 靠心跳刷新它，`lg:profile.set` 后 20 秒内全链路生效
+      this.send({ type: "event", method: "lg:keepalive.ping", params: { profile: cachedProfileName ?? "" } });
     }, PING_INTERVAL_MS);
   }
 

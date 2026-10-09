@@ -197,7 +197,7 @@ function renderBridge(reply: Record<string, unknown>): void {
 
   const info = reply.info as {
     pid?: number; port?: number; uptimeSeconds?: number; logPath?: string;
-    connections?: { browser: string; idleSeconds: number; instanceId?: string }[];
+    connections?: { browser: string; idleSeconds: number; instanceId?: string; profile?: string }[];
   } | undefined;
   if (info === undefined) {
     bridgeList.append(line(
@@ -211,7 +211,8 @@ function renderBridge(reply: Record<string, unknown>): void {
   // 只摆本浏览器自己的连接，别的浏览器的槽位不展示（用户：服务只展示自己的信息）
   const ownId = String(reply.ownInstanceId ?? "");
   for (const conn of (info.connections ?? []).filter((c) => c.instanceId === ownId)) {
-    bridgeList.append(line(conn.browser, `${conn.idleSeconds}s`));
+    const label = conn.profile ? `${conn.browser} (${conn.profile})` : conn.browser;
+    bridgeList.append(line(label, `${conn.idleSeconds}s`));
   }
   bridgeList.append(line(msg("panelBridgeLogPath"), String(info.logPath ?? "")));
 }

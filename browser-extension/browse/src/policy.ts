@@ -134,6 +134,7 @@ export const FEATURES: Feature[] = [
     id: "diagnostics",
     methods: ["lg:system.info", "lg:idle.state", "lg:browser.info"],
   },
+  { id: "profile", methods: ["lg:profile.get", "lg:profile.set"] },
   { id: "power", methods: ["lg:power.keepAwake", "lg:power.release"] },
   { id: "notifications", methods: ["lg:notifications.show", "lg:notifications.clear"] },
   {
