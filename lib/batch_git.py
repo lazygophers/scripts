@@ -1020,7 +1020,7 @@ def _push_heal(repo: Path, target: str, r: Reporter, *, force: bool = False, rou
 def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
     """构造单仓库同步检测函数。
 
-    branch=None → 双向同步该仓库当前分支：领先推上去、落后快进、分叉预演后合并推送；
+    branch=None → 双向同步该仓库当前分支：领先推上去、落后快进、分叉预演后合并推送；若远端同名分支不存在，则 push -u 创建；
     branch=<name> → 硬对齐到 origin/<branch>：本地领先默认 skip，--force 才 reset 丢弃。
     两模式 dirty → fail。detect 把 (target, remote_ref, ahead, behind, action) 塞进
     plan.detail 供 execute 复用；action ∈ align（reset 硬对齐）/ push / merge_push。
@@ -1029,6 +1029,21 @@ def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
         # detail 编码: target|remote_ref|ahead|behind|action
         target, remote_ref, ahead_s, behind_s, action = plan.detail.split("|")
         ahead, behind = int(ahead_s), int(behind_s)
+        if action == "create_remote":
+            r.step(f"push -u {target} → {remote_ref} …")
+            push = _run_exec(["git", "push", "-u", "origin", target],
+                             label=repo.name, r=r, cwd=str(repo), check=False,
+                             timeout=NET_TIMEOUT)
+            if push.returncode != 0:
+                return "fail", _extract_error(
+                    (push.stderr or "") + (push.stdout or ""),
+                    push.returncode,
+                    f"创建 {remote_ref}",
+                )
+            sha_p = _run(["git", "rev-parse", "--short", target],
+                         cwd=str(repo), check=False, capture_output=True)
+            sha = (sha_p.stdout or "").strip()
+            return "ok", f"创建远端分支 {remote_ref} ({sha})"
         cur_p = _run(["git", "branch", "--show-current"],
                      cwd=str(repo), check=False, capture_output=True)
         if (cur_p.stdout or "").strip() != target:
@@ -1094,9 +1109,21 @@ def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
                       cwd=str(repo), check=False, capture_output=True)
         remote_exists = remote.returncode == 0
 
-        # 远端无 → 无法对齐, skip (本地再领先也无意义)
+        # 远端不存在时，只同步当前分支；指定分支模式仍要求已有远端分支。
         if not remote_exists:
-            return RepoPlan(status="skip", detail=f"无 {remote_ref}")
+            if branch is not None:
+                return RepoPlan(status="skip", detail=f"无 {remote_ref}")
+            if local.returncode != 0:
+                return RepoPlan(status="fail", detail=f"无本地 {target}，无法创建 {remote_ref}")
+            dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
+                         cwd=str(repo), check=False, capture_output=True)
+            if dirty.returncode != 0:
+                return RepoPlan(status="fail", detail=_dirty_detail(repo))
+            return RepoPlan(
+                status="ok",
+                detail=f"{target}|{remote_ref}|0|0|create_remote",
+                execute=_execute,
+            )
 
         # 本地缺 → detect 内自动创建本地追踪分支 (与 execute 共用同一语义)
         if local.returncode != 0:
@@ -1158,7 +1185,7 @@ def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
 
 
 def sync_branch_all(branch: str | None = None, *, force: bool = False) -> int:
-    """批量同步分支：硬对齐到 origin/<branch>（branch=None 同步各仓库当前分支）。"""
+    """批量同步分支：当前分支模式会创建缺失的远端同名分支；指定分支模式硬对齐到 origin/<branch>。"""
     if branch is None:
         title = "同步当前分支 → origin/<当前分支>"
     else:

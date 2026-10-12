@@ -14,7 +14,7 @@ class SyncBranchCli(BaseCli):
 
     @timed_cli
     def current(self, force: bool = False):
-        """同步各仓库当前分支（硬对齐 origin/<当前分支>）
+        """双向同步各仓库当前分支；远端同名分支不存在时自动创建
 
         用法: sync_branch current [--force]
         """

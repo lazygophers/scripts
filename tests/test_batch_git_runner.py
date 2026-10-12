@@ -815,12 +815,45 @@ class TestSyncFactoryDetect(unittest.TestCase):
         self.assertEqual(plan.status, "skip")
         self.assertIn("detached", plan.detail)
 
-    def test_missing_remote_ref_is_skipped(self) -> None:
-        fake = FakeRun({"git rev-parse --verify -q origin/main": _cp(1)})
+    def test_missing_remote_ref_pushes_local_branch(self) -> None:
+        fake = FakeRun({
+            "git branch --show-current": _cp(0, "dev\n"),
+            "git rev-parse --verify -q origin/dev": _cp(1),
+            "git rev-parse --short dev": _cp(0, "abc1234\n"),
+        })
         with mock.patch.object(bg, "_run", fake):
-            plan = _plan_of(bg._sync_one_factory("main", False))
-        self.assertEqual(plan.status, "skip")
-        self.assertIn("无 origin/main", plan.detail)
+            plan = _plan_of(bg._sync_one_factory(None, False))
+            self.assertEqual(plan.status, "ok")
+            status, detail = plan.execute(Path("/repo"), plan, _r(), Path("/"))
+        self.assertEqual(status, "ok")
+        self.assertIn("origin/dev", detail)
+        self.assertTrue(fake.ran("git push -u origin dev"))
+        self.assertFalse(fake.ran("git reset"))
+
+    def test_missing_remote_ref_without_local_branch_fails(self) -> None:
+        fake = FakeRun({
+            "git branch --show-current": _cp(0, "dev\n"),
+            "git rev-parse --verify -q dev": _cp(1),
+            "git rev-parse --verify -q origin/dev": _cp(1),
+        })
+        with mock.patch.object(bg, "_run", fake):
+            plan = _plan_of(bg._sync_one_factory(None, False))
+        self.assertEqual(plan.status, "fail")
+        self.assertIn("dev", plan.detail)
+        self.assertFalse(fake.ran("git push"))
+
+    def test_missing_remote_ref_push_failure_is_reported(self) -> None:
+        fake = FakeRun({
+            "git branch --show-current": _cp(0, "dev\n"),
+            "git rev-parse --verify -q origin/dev": _cp(1),
+            "git push -u origin dev": _cp(1, stderr="fatal: denied"),
+        })
+        with mock.patch.object(bg, "_run", fake):
+            plan = _plan_of(bg._sync_one_factory(None, False))
+            self.assertEqual(plan.status, "ok")
+            status, detail = plan.execute(Path("/repo"), plan, _r(), Path("/"))
+        self.assertEqual(status, "fail")
+        self.assertIn("denied", detail)
 
     def test_missing_local_branch_is_created(self) -> None:
         fake = FakeRun({
