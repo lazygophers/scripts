@@ -549,12 +549,17 @@ def stale_trigger(folder: str) -> Path | None:
     递归进去——实测它们占 60-97% 的文件数，rglob 全枚举再过滤等于白
     扫），每文件只 stat 一次。
     """
-    root = Path(folder)
+    root = Path(folder).expanduser().resolve()
     graph = root / "graphify-out" / "graph.json"
     if not graph.is_file():
         return None
     gm = graph.stat().st_mtime
     excluded = STALE_EXCLUDED_DIRS | WATCH_EXCLUDED_DIRS
+    try:
+        ignored = _ignore_matcher(root)
+    except Exception:
+        # graphwatch 未安装 graphify 时仍能显示基础新鲜度；固定目录排除照常生效。
+        ignored = lambda _path: False
     import stat as _stat
 
     newest: tuple[float, Path] | None = None
@@ -564,8 +569,11 @@ def stale_trigger(folder: str) -> Path | None:
             dot = name.rfind(".")
             if dot <= 0 or dot == len(name) - 1:
                 continue  # 无扩展名（含 .DS_Store 这类 dotfile）不在监听范围
+            path = Path(dirpath) / name
+            if ignored(path):
+                continue
             try:
-                st = os.stat(os.path.join(dirpath, name))
+                st = os.stat(path)
             except OSError:
                 continue
             if _stat.S_ISREG(st.st_mode) and st.st_mtime > gm:

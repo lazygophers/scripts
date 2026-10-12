@@ -1434,10 +1434,24 @@ class TestFreshnessEdges(GraphwatchCase):
         # 产物/依赖目录整棵剪掉：里面的新文件不算源码改动
         self.assertIsNone(graphwatch.stale_trigger(str(repo)))
 
-    def test_stale_trigger_prunes_tmp_log_bak(self):
+    def test_stale_trigger_respects_gitignore(self):
         import os
 
-        from lib import graphwatch_daemon
+        repo = self.mkdir()
+        (repo / "a.py").write_text("x\n", encoding="utf-8")
+        (repo / ".gitignore").write_text("vendor/\n", encoding="utf-8")
+        vendor = repo / "vendor" / "pkg"
+        vendor.mkdir(parents=True)
+        (vendor / "dep.py").write_text("x\n", encoding="utf-8")
+        g = repo / "graphify-out"
+        g.mkdir()
+        (g / "graph.json").write_text("{}", encoding="utf-8")
+        future = time.time() + 100
+        os.utime(vendor / "dep.py", (future, future))
+        self.assertIsNone(graphwatch.stale_trigger(str(repo)))
+
+    def test_stale_trigger_prunes_tmp_log_bak(self):
+        import os
 
         repo = self.mkdir()
         (repo / "a.py").write_text("x\n", encoding="utf-8")
