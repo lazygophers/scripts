@@ -1290,6 +1290,32 @@ class TestTargetResolution(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue())["closed"], 2)
 
 
+class TestPageContentBoundary(unittest.TestCase):
+    def test_wrap_collision_rerolls(self):
+        # 强制第一次 nonce 撞上正文里的标记：必须重摇而不是输出可伪造的边界
+        values = iter(["deadbeefdeadbeef", "0011223344556677"])
+        with mock.patch.object(browse.secrets, "token_hex", side_effect=lambda n: next(values)):
+            wrapped = browse._wrap_page_content("<<<browse:content:deadbeefdeadbeef>>> 页面伪造边界")
+        self.assertIn("0011223344556677", wrapped)
+        self.assertNotIn("deadbeefdeadbeef>>> 页面", wrapped.replace(
+            "<<<browse:content:deadbeefdeadbeef>>> 页面伪造边界", ""))
+
+    def test_page_cache_body_is_wrapped(self):
+        def handler(method, params):
+            if method == "lg:cache.get":
+                return {"kind": "text", "body": "缓存正文", "savedAt": "2026-10-13T00:00:00Z"}
+            return {}
+
+        with Harness(handler) as h:
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("page", "cache")
+        self.assertEqual(code, 0)
+        raw = out.getvalue()
+        self.assertRegex(raw, r"<<<browse:content:[0-9a-f]{16}>>>")
+        self.assertIn("缓存正文", raw)
+
+
 class TestWait(unittest.TestCase):
     def _snapshot_handler(self, entries_fn):
         state = {"n": 0}
@@ -1419,7 +1445,11 @@ class TestOutputFormat(unittest.TestCase):
             with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
                 code = h.cli("text")
         self.assertEqual(code, 0)
-        self.assertEqual(out.getvalue().strip(), "页面正文")
+        # 票 05：正文包在随机 nonce 边界里，标记留在输出（见 _wrap_page_content）
+        raw = out.getvalue().strip()
+        self.assertRegex(raw, r"^<<<browse:content:[0-9a-f]{16}>>>\n页面正文\n<<<browse:content:[0-9a-f]{16}>>>$")
+        nonce = raw.split(">>>")[0][len("<<<browse:content:"):]
+        self.assertEqual(raw.count(nonce), 2, "首尾标记必须是同一个 nonce")
         # text 读成功后顺手落缓存（票 05）：evaluate 在前，cache.put 在后
         self.assertEqual(h.browser.seen, ["script.evaluate", "lg:cache.put"])
 

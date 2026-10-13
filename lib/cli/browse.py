@@ -39,6 +39,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import secrets
 import os
 import pathlib
 import re
@@ -1441,6 +1442,19 @@ async def _cmd_upload(params: dict, opts: dict, sock: pathlib.Path, browser: str
     print_result(result, table=_want_table(opts))
 
 
+def _wrap_page_content(body: str) -> str:
+    """页面正文包一层随机 nonce 边界（content boundary，2026-10-13 票 05）。
+
+    标记**留在输出里**给读它的模型看：nonce 是本进程随机生成的，页面内容猜不到
+    也就伪造不了「页面内容到此为止」的边界，提示注入没法借正文冒充边界外的可信
+    指令。正文里撞上同一个标记就重摇（2^-64 的事，防御性兜底）。
+    """
+    while True:
+        marker = f"<<<browse:content:{secrets.token_hex(8)}>>>"
+        if marker not in body:
+            return f"{marker}\n{body}\n{marker}"
+
+
 async def _cmd_eval_wrapped(verb: str, params: dict, opts: dict, sock: pathlib.Path,
                            browser: str) -> None:
     """text / html / back / forward：一段写死的 JS 包一层 script.evaluate（spec 3.1）。"""
@@ -1449,7 +1463,10 @@ async def _cmd_eval_wrapped(verb: str, params: dict, opts: dict, sock: pathlib.P
                                            sock, browser=browser))
     value = result.get("result", {}).get("value")
     if verb in ("text", "html"):
-        sys.stdout.write(f"{value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)}\n")
+        # 页面正文包 nonce 边界（票 05）：见 _wrap_page_content
+        out = (_wrap_page_content(value) if isinstance(value, str)
+               else json.dumps(value, ensure_ascii=False))
+        sys.stdout.write(f"{out}\n")
         # 页面缓存（票 05）：读成功顺手落一份；失败不影响本次读（结果已在 stdout）
         if isinstance(value, str):
             await execute("lg:cache.put", {"kind": verb, "body": value,
@@ -1742,6 +1759,14 @@ async def _dispatch_friendly(name: str, params: dict, opts: dict, sock: pathlib.
         return EXIT_OK
 
     # ---- 名词组
+    if name == "page cache":
+        # 缓存里的页面正文同样包 nonce 边界（票 05）；别的字段原样
+        await _resolve_target(params, opts, sock, browser)
+        result = _outcome_or_die(await execute("lg:cache.get", params, sock, browser=browser))
+        if isinstance(result.get("body"), str):
+            result = {**result, "body": _wrap_page_content(result["body"])}
+        print_result(result, table=_want_table(opts))
+        return EXIT_OK
     if name in NET_ROUTE_METHODS:
         if name == "net route add":
             await _resolve_target(params, opts, sock, browser)
