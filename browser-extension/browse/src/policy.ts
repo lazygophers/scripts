@@ -118,6 +118,11 @@ export const FEATURES: Feature[] = [
     ],
   },
   { id: "clipboard", methods: ["lg:clipboard.read", "lg:clipboard.write"] },
+  {
+    // chrome.debugger Runtime 域：只有显式 start 才 attach（handlers/console.ts）
+    id: "console",
+    methods: ["lg:console.start", "lg:console.read", "lg:console.stop"],
+  },
   { id: "search", methods: ["lg:search.query"] },
   { id: "wauth", methods: ["lg:wauth.attach", "lg:wauth.detach", "lg:wauth.complete"] },
   {
@@ -419,6 +424,7 @@ export const RISKY_METHODS: Record<string, string> = {
   "lg:capture.recordTab": "captureMedia",
   "lg:capture.recordDesktop": "captureMedia",
   "lg:clipboard.read": "readClipboard",
+  "lg:console.start": "attachDebugger",
   "lg:proxy.set": "setProxy",
   "lg:userScripts.register": "registerUserScript",
 };

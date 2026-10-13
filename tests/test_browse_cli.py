@@ -1437,13 +1437,7 @@ class TestBrowserLabels(unittest.TestCase):
 
 
 class TestResolveBrowserAlias(unittest.TestCase):
-    """--browser 的展示名（arc）翻译成槽位名（chromium）。"""
-
-    def _patch_env(self, info, labels):
-        execute = mock.AsyncMock(return_value={"status": "ok", "result": info})
-        return mock.patch.multiple(
-            browse, execute=execute, _conn_pids=mock.DEFAULT, _browser_labels=mock.DEFAULT,
-        ), labels
+    """--browser 的真实进程名（arc）翻译成传输槽位（chromium）。"""
 
     def test_alias_translated_to_slot(self):
         info = {"port": 9330, "connections": [
@@ -1474,3 +1468,101 @@ class TestResolveBrowserAlias(unittest.TestCase):
         with mock.patch.object(browse, "execute", mock.AsyncMock(
                 return_value={"status": "failed", "error": "timeout"})):
             self.assertEqual(browse._resolve_browser_alias(pathlib.Path("/tmp/s"), "arc"), "arc")
+
+    def test_real_chromium_precedes_legacy_chromium_slot(self):
+        info = {"port": 9330, "connections": [
+            {"browser": "chromium", "peerPort": 51000},
+            {"browser": "chromium-2", "peerPort": 52000},
+        ]}
+        with mock.patch.object(browse, "execute", mock.AsyncMock(
+                return_value={"status": "ok", "result": info})), \
+             mock.patch.object(browse, "_conn_pids", return_value={51000: 111, 52000: 222}), \
+             mock.patch.object(browse, "_browser_labels", return_value={111: "arc", 222: "chromium"}):
+            self.assertEqual(browse._resolve_browser_alias(pathlib.Path("/tmp/s"), "chromium"), "chromium-2")
+            self.assertEqual(browse._resolve_browser_alias(pathlib.Path("/tmp/s"), "arc"), "chromium")
+
+    def test_duplicate_real_browser_name_is_ambiguous(self):
+        info = {"port": 9330, "connections": [
+            {"browser": "chromium", "peerPort": 51000},
+            {"browser": "chromium-2", "peerPort": 52000},
+        ]}
+        with mock.patch.object(browse, "execute", mock.AsyncMock(
+                return_value={"status": "ok", "result": info})), \
+             mock.patch.object(browse, "_conn_pids", return_value={51000: 111, 52000: 222}), \
+             mock.patch.object(browse, "_browser_labels", return_value={111: "arc", 222: "arc"}):
+            with self.assertRaisesRegex(browse.UsageError, "多个 arc.*chromium.*chromium-2"):
+                browse._resolve_browser_alias(pathlib.Path("/tmp/s"), "arc")
+
+    def test_open_resolves_arc_only_after_ensure_daemon(self):
+        info = {"port": 9330, "connections": [{"browser": "chromium", "peerPort": 51000}]}
+        seen = []
+        def ensure(sock):
+            seen.append("ensure")
+            return True
+        async def execute(method, params, sock, *, browser="", **kwargs):
+            seen.append((method, browser))
+            if method == "lg:bridge.info":
+                return {"status": "ok", "result": info}
+            if method == "browsingContext.create":
+                return {"status": "ok", "result": {"context": "42"}}
+            return {"status": "ok", "result": {"groups": []}}
+        with mock.patch.object(browse, "ensure_daemon", side_effect=ensure), \
+             mock.patch.object(browse, "execute", side_effect=execute), \
+             mock.patch.object(browse, "_conn_pids", return_value={51000: 111}), \
+             mock.patch.object(browse, "_browser_labels", return_value={111: "arc"}), \
+             mock.patch("sys.stdout", io.StringIO()):
+            self.assertEqual(browse._main(["browse", "open", "about:blank", "--browser", "arc", "--no-group"]), 0)
+        self.assertEqual(seen[:3], ["ensure", ("lg:bridge.info", ""), ("browsingContext.create", "chromium")])
+
+    def test_silent_bridge_info_fails_within_bound(self):
+        async def never_reply(reader, cmd_id):
+            await asyncio.Future()
+        with mock.patch.object(browse, "connect", mock.AsyncMock(return_value=(mock.AsyncMock(), mock.Mock(drain=mock.AsyncMock()), 1))), \
+             mock.patch.object(browse, "_await_reply", side_effect=never_reply), \
+             mock.patch.object(browse, "BRIDGE_INFO_TIMEOUT", 0.01):
+            outcome = asyncio.run(asyncio.wait_for(
+                browse.execute("lg:bridge.info", {}, pathlib.Path("/tmp/s")), 0.5))
+        self.assertEqual(outcome["status"], "failed")
+        self.assertIn("超时", outcome["message"])
+
+    def test_open_silent_connection_returns_timeout(self):
+        async def silent(method, params):
+            await asyncio.Future()
+        with Harness(silent) as h, \
+             mock.patch.object(browse, "OPEN_REPLY_TIMEOUT", 0.01), \
+             mock.patch("sys.stderr", io.StringIO()) as err:
+            self.assertEqual(h.cli("open", "about:blank"), 1)  # EXIT_FAILED，指令已发但结果未知
+            self.assertIn("browsingContext.create", err.getvalue())
+            self.assertIn("结果未知", err.getvalue())
+
+    def test_slot_selector_bypasses_brand_collision(self):
+        info = {"port": 9330, "connections": [
+            {"browser": "arc", "peerPort": 51000},
+            {"browser": "arc-2", "peerPort": 52000},
+        ]}
+        with mock.patch.object(browse, "execute", mock.AsyncMock(
+                return_value={"status": "ok", "result": info})), \
+             mock.patch.object(browse, "_conn_pids", return_value={51000: 111, 52000: 222}), \
+             mock.patch.object(browse, "_browser_labels", return_value={111: "arc", 222: "arc"}):
+            self.assertEqual(browse._resolve_browser_alias(pathlib.Path("/tmp/s"), "slot:arc"), "arc")
+            with self.assertRaisesRegex(browse.UsageError, "没有传输槽位"):
+                browse._resolve_browser_alias(pathlib.Path("/tmp/s"), "slot:missing")
+
+    def test_status_prints_selectable_names_without_using_profile_as_identity(self):
+        conns = [{"browser": "chromium", "peerPort": 51000, "profile": "工作"},
+                 {"browser": "chromium-2", "peerPort": 52000, "profile": "arc"}]
+        with mock.patch.object(browse, "ensure_daemon", return_value=True), \
+             mock.patch.object(browse, "execute", mock.AsyncMock(return_value={
+                 "status": "ok", "result": {"port": 9330, "connections": conns}})), \
+             mock.patch.object(browse, "_conn_pids", return_value={51000: 111, 52000: 222}), \
+             mock.patch.object(browse, "_browser_labels", return_value={111: "arc", 222: "chromium"}) as labels, \
+             mock.patch.object(browse, "is_ai_shell_env", return_value=True), \
+             mock.patch("lib.browse_install.install_status", return_value=[]), \
+             mock.patch("sys.stdout", io.StringIO()) as out:
+            self.assertEqual(browse._cmd_status([]), 0)
+            self.assertEqual(out.getvalue(), "arc | arc (工作)\nchromium | chromium (arc)\n")
+            labels.return_value = {111: "arc", 222: "arc"}
+            out.seek(0)
+            out.truncate()
+            self.assertEqual(browse._cmd_status([]), 0)
+            self.assertEqual(out.getvalue(), "slot:chromium | arc (工作)\nslot:chromium-2 | arc (arc)\n")

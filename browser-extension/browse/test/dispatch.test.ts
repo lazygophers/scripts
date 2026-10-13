@@ -32,6 +32,10 @@ const V1 = [
   "storage.setLocalStorage",
   "network.subscribe",
   "network.unsubscribe",
+  // 2026-10-13 网页控制台采集（chrome.debugger Runtime 域）
+  "lg:console.start",
+  "lg:console.read",
+  "lg:console.stop",
   "lg:history.search",
   "lg:history.delete",
   "lg:downloads.start",

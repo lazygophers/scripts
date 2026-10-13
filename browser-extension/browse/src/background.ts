@@ -2,6 +2,7 @@ import { answerConfirm, askUser, windowClosed } from "./confirm-ui.ts";
 import { setEventSink } from "./events.ts";
 import { setConfirmHook } from "./handlers/confirm.ts";
 import { invalidateTab } from "./handlers/cache.ts";
+import { consoleForget, consoleNavigate, consoleReset } from "./handlers/console.ts";
 import { desktopSourcePicked } from "./handlers/capture.ts";
 import { listenGcm } from "./handlers/gcm.ts";
 import { listenNotifications } from "./handlers/notify.ts";
@@ -30,6 +31,7 @@ function paintBadge(): void {
 const connection = new NativeConnection(
   (next) => {
     state = next;
+    if (next === "disconnected") consoleReset(); // bridge 断了，debugger 会话全摘
     paintBadge();
   },
   (count) => {
@@ -110,10 +112,17 @@ listenPrinting();
 chrome.windows?.onRemoved.addListener(windowClosed);
 
 // 页面缓存（票 05）：导航/刷新（status=loading）清该页，tab 关了整页清。
+// console 采集同步：导航清环（采集继续），关 tab 摘会话。
 chrome.tabs?.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === "loading") void invalidateTab(tabId);
+  if (changeInfo.status === "loading") {
+    void invalidateTab(tabId);
+    consoleNavigate(tabId);
+  }
 });
-chrome.tabs?.onRemoved.addListener((tabId) => void invalidateTab(tabId));
+chrome.tabs?.onRemoved.addListener((tabId) => {
+  void invalidateTab(tabId);
+  consoleForget(tabId);
+});
 
 // A service worker restart (install, browser start, idle eviction) re-runs this
 // file, so connecting at module scope is the whole lifecycle handling needed.

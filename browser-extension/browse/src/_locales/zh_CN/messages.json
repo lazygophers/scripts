@@ -198,6 +198,12 @@
   "settingsFeatNetwork": {
     "message": "网络事件监听"
   },
+  "settingsFeatConsole": {
+    "message": "控制台采集"
+  },
+  "settingsFeatConsoleDesc": {
+    "message": "对指定页面显式开始/读取/停止 console 输出和未捕获 JS 异常的采集；每页上限 500 条，页面离开 browse 分组即停止。开始前的历史无法找回。"
+  },
   "settingsFeatHistory": {
     "message": "历史记录"
   },

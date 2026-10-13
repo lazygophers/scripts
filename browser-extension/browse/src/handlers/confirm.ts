@@ -28,6 +28,7 @@ export type RiskyAction =
   | "readPage"
   | "captureMedia"
   | "readClipboard"
+  | "attachDebugger"
   | "adoptTab"
   | "setProxy"
   | "registerUserScript";

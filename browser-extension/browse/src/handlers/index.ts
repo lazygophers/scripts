@@ -22,6 +22,7 @@ import {
   pageCaptureSaveMhtml,
 } from "./capture.ts";
 import { clipboardRead, clipboardWrite } from "./clipboard.ts";
+import { consoleRead, consoleStart, consoleStop } from "./console.ts";
 import {
   downloadsCancel,
   downloadsList,
@@ -152,6 +153,11 @@ export const HANDLERS: Record<string, Handler> = {
   "lg:clipboard.read": clipboardRead,
   "lg:clipboard.write": clipboardWrite,
 
+  // 网页控制台采集（2026-10-13）：chrome.debugger Runtime 域，显式 start 才 attach。
+  "lg:console.start": consoleStart,
+  "lg:console.read": consoleRead,
+  "lg:console.stop": consoleStop,
+
   "lg:search.query": searchQuery,
   "lg:idle.state": idleState,
   "lg:system.info": systemInfo,
@@ -230,6 +236,8 @@ const PAGE_METHODS = new Set([
   "lg:tabs.ungroup",
   "lg:pageCapture.saveMhtml",
   "lg:capture.recordTab",
+  "lg:console.start",
+  "lg:console.read",
 ]);
 
 /** 这条指令的域名策略要不要跟解析出的页面目标走：页面方法，或显式给了 context / matchUrl。 */
@@ -248,7 +256,8 @@ function wantsContext(method: string, params: Record<string, unknown>): boolean 
 // lg:tabs.group 是命名的原语（CLI 的 browse open --group / group add 靠它把页面
 // 放进 browse/<name> 组）——第一次成组时目标页必然还没有归属，拦它就是死锁。
 // 它等同于用户手动拖标签进组，是授权动作本身。
-const OWNERSHIP_EXEMPT = new Set(["lg:tabs.adopt", "lg:tabs.group"]);
+// lg:console.stop 同理是清场动作：归属撤销后仍要能停掉采集、释放 debugger。
+const OWNERSHIP_EXEMPT = new Set(["lg:tabs.adopt", "lg:tabs.group", "lg:console.stop"]);
 
 async function enforceOwnership(
   method: string,

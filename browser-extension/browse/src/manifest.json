@@ -71,7 +71,8 @@
     "userScripts",
     "declarativeContent",
     "proxy",
-    "gcm"
+    "gcm",
+    "debugger"
   ],
   "host_permissions": [
     "<all_urls>"

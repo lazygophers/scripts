@@ -171,6 +171,9 @@ METHODS: dict[str, tuple[str, ...]] = {
     "lg:wauth.detach": (),
     "lg:wauth.complete": ("request", "kind"),
     "lg:printing.respond": ("request",),
+    "lg:console.start": (),
+    "lg:console.read": ("limit", "level"),
+    "lg:console.stop": ("context",),
 }
 
 # 这些 --flag 是 CLI 自己的，不进 params。都与线上参数名不冲突（对着 METHODS 的
@@ -207,6 +210,8 @@ GROUP_PREFIX = "browse/"
 GROUP_COLORS = ("grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange")
 
 DEFAULT_WAIT_TIMEOUT = 30.0
+BRIDGE_INFO_TIMEOUT = 2.0
+OPEN_REPLY_TIMEOUT = 30.0
 WAIT_POLL = 0.2
 # `wait --idle` 的「网络安静」定义：连续这么久没有新网络事件
 WAIT_IDLE_GAP = 0.5
@@ -303,6 +308,11 @@ NOUN_GROUPS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
         "tab": ("lg:capture.recordTab", ()),
         "desktop": ("lg:capture.recordDesktop", ()),
         "stop": ("lg:capture.recordStop", ("recording",)),
+    },
+    "console": {
+        "start": ("lg:console.start", ()),
+        "read": ("lg:console.read", ("limit", "level")),
+        "stop": ("lg:console.stop", ()),
     },
 }
 
@@ -689,22 +699,28 @@ def daemon_stop(sock: pathlib.Path) -> int:
 
 # ---------------------------------------------------------------- 发指令
 async def execute(method: str, params: dict, sock: pathlib.Path, *,
-                  duration: float | None = None, stream=None, browser: str = "") -> dict:
+                  duration: float | None = None, stream=None, browser: str = "",
+                  timeout: float | None = None) -> dict:
     """发一条指令，等回包。返回 `{"status": "ok"|"failed", ...}`。
 
     `duration` 只对 `network.subscribe` 有意义：拿到订阅后继续读事件，一行一个 JSON
     打到 `stream`，到点再用 daemon 发的 `sub-N` 退订（那个 id 拿到什么就回什么，不能
     自己缓存或去解析扩展的内部 id）。
     """
+    timeout = BRIDGE_INFO_TIMEOUT if method == browse_bridge.INFO_METHOD and timeout is None else timeout
     try:
-        reader, writer, _ = await connect("cli", sock, browser=browser)
+        reader, writer, _ = await asyncio.wait_for(
+            connect("cli", sock, browser=browser), timeout)
+    except asyncio.TimeoutError:
+        return {"status": "failed", "error": ERR_NOT_CONNECTED,
+                "message": f"连 daemon 超时（{sock}，{timeout:g}s）"}
     except (OSError, ProtocolError) as exc:
         return {"status": "failed", "error": ERR_NOT_CONNECTED,
                 "message": f"连不上 daemon（{sock}）: {exc}"}
     try:
         writer.write(pack(command(1, method, params), MAX_INCOMING_FRAME_BYTES))
-        await writer.drain()
-        reply = await _await_reply(reader, 1)
+        await asyncio.wait_for(writer.drain(), timeout)
+        reply = await asyncio.wait_for(_await_reply(reader, 1), timeout)
         if reply.get("type") == "error":
             return {"status": "failed", "error": reply.get("error", ""),
                     "message": reply.get("message", "")}
@@ -713,6 +729,9 @@ async def execute(method: str, params: dict, sock: pathlib.Path, *,
             await _stream_events(reader, writer, result.get("subscription"), duration,
                                  stream or sys.stdout)
         return {"status": "ok", "result": result}
+    except asyncio.TimeoutError:
+        return {"status": "failed", "error": "timeout",
+                "message": f"等浏览器回复 {method} 超时（{timeout:g}s）；指令可能已执行，结果未知"}
     except (OSError, ProtocolError, asyncio.IncompleteReadError) as exc:
         return {"status": "failed", "error": ERR_NOT_CONNECTED,
                 "message": f"和 daemon 的连接断了: {exc}"}
@@ -933,8 +952,13 @@ profile 组（多 profile 区分连接）
 rec 组（录制）
   browse rec tab | rec desktop | rec stop <录制号>
 
+console 组（页面控制台日志；start 显式 attach debugger）
+  browse console start --context <id>      开始收集
+  browse console read --context <id> [--limit N] [--level error]   一行一条 JSON
+  browse console stop --context <id>       停止并释放
+
 底层透传
-  browse api <module> <action> [参数]    全部 74 个扩展方法都在；lg: 前缀可省
+  browse api <module> <action> [参数]    全部 77 个扩展方法都在；lg: 前缀可省
   （例：browse api gcm token <entity>）
 
 管理
@@ -1137,8 +1161,8 @@ async def _tabs(sock: pathlib.Path, browser: str, all_: bool = False) -> list[di
         "browsingContext.getTree", {"all": True} if all_ else {}, sock, browser=browser))
     return [c for c in result.get("contexts", []) if not c.get("parent")]
 
-async def _tab_groups(sock: pathlib.Path, browser: str) -> list[dict]:
-    result = _outcome_or_die(await execute("lg:tabs.groups", {}, sock, browser=browser))
+async def _tab_groups(sock: pathlib.Path, browser: str, *, timeout: float | None = None) -> list[dict]:
+    result = _outcome_or_die(await execute("lg:tabs.groups", {}, sock, browser=browser, timeout=timeout))
     return result.get("groups", [])
 
 
@@ -1195,7 +1219,8 @@ async def _cmd_open(params: dict, opts: dict, sock: pathlib.Path, browser: str) 
         raise UsageError("`browse open <url>` 要给网址")
     extra = {k: params.pop(k) for k in ("type", "background") if k in params}
     context = _outcome_or_die(
-        await execute("browsingContext.create", {"url": url, **extra}, sock, browser=browser)
+        await execute("browsingContext.create", {"url": url, **extra}, sock,
+                      browser=browser, timeout=OPEN_REPLY_TIMEOUT)
     )["context"]
     # `--no-group` 被 split_tokens 统一折成 opts["group"] = False（所有 --no-x 都走这条），
     # 所以判的是 opts 而不是某个 noGroup 参数。
@@ -1208,13 +1233,14 @@ async def _cmd_open(params: dict, opts: dict, sock: pathlib.Path, browser: str) 
     full = _full_group_name(str(opts.get("group") or _default_group_name(url)))
     color = params.pop("color", None) or _group_color(full)
     params_g = {"context": context, "title": full, "color": color}
-    hits = [g for g in await _tab_groups(sock, browser) if g.get("title") == full]
+    hits = [g for g in await _tab_groups(sock, browser, timeout=OPEN_REPLY_TIMEOUT) if g.get("title") == full]
     if len(hits) > 1:
         where = ", ".join(f"窗口 {g.get('window')}" for g in hits)
         raise UsageError(f"{full} 在 {where} 各有一组，分不清新页进哪个；换个组名或 --no-group")
     if hits:
         params_g["group"] = str(hits[0]["group"])
-    grouped = _outcome_or_die(await execute("lg:tabs.group", params_g, sock, browser=browser))
+    grouped = _outcome_or_die(await execute("lg:tabs.group", params_g, sock,
+                                            browser=browser, timeout=OPEN_REPLY_TIMEOUT))
     print_result({"context": context, "group": grouped.get("title"), "color": grouped.get("color")},
                  table=_want_table(opts))
 
@@ -1501,11 +1527,10 @@ async def _cmd_wait_idle(sock: pathlib.Path, browser: str, timeout: float) -> in
 
 
 def _resolve_browser_alias(sock: pathlib.Path, browser: str) -> str:
-    """`--browser` 的展示名（arc/chrome…）→ 槽位名（chromium/chrome-2…）。
+    """`--browser` 的可选名（arc / slot:chromium）→ 传输槽位。
 
-    路由认的是 hello 自报的槽位名；展示名是 CLI 从进程路径识别的，两者在
-    Arc 这类不自报品牌的分支上对不上。已经是槽位名或认不出就原样返回，
-    认不出时 daemon 会报错并列出都有谁。
+    优先信进程身份；`slot:` 前缀直指传输槽位（status 给的歧义消解名）。
+    真实进程名认不出时保留原值，daemon 报错会列出都有谁。
     """
     if not browser:
         return browser
@@ -1513,30 +1538,41 @@ def _resolve_browser_alias(sock: pathlib.Path, browser: str) -> str:
 
     outcome = asyncio.run(execute(browse_bridge.INFO_METHOD, {}, sock))
     if outcome["status"] != "ok":
+        # 查询不到就不翻译，daemon 的报错会列出实际连着的名字
         return browser
     info = outcome["result"]
     conns = info.get("connections", [])
-    if browser in {c["browser"] for c in conns}:
-        return browser
     port_to_pid = _conn_pids(info.get("port", 0), conns)
     labels = _browser_labels({p for p in port_to_pid.values()})
+    if browser.startswith("slot:"):
+        slot = browser[5:]
+        if slot not in {c["browser"] for c in conns}:
+            raise UsageError(f"没有传输槽位 {slot}")
+        return slot
+    matches = []
     for conn in conns:
         pid = port_to_pid.get(conn.get("peerPort", 0))
         if pid and labels.get(pid) == browser:
-            return conn["browser"]
+            matches.append(conn["browser"])
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise UsageError(f"多个 {browser} 浏览器连接（{', '.join('slot:' + slot for slot in sorted(matches))}），请明确指定")
+    # 无真实同名连接时保留旧传输槽位写法。
     return browser
 
 
 def _cmd_any(tokens: list[str]) -> int:
     name, params, opts = route(tokens)
     sock = _sock_of(opts)
-    browser = _resolve_browser_alias(sock, browser_of(opts))
-    duration = parse_duration(opts["duration"]) if "duration" in opts else None
-    if duration is not None and "network.subscribe" not in name and name != "net watch":
-        raise UsageError("--duration 只对 `browse net watch`（和 api network subscribe）有意义")
+    requested_browser = browser_of(opts)
     if not ensure_daemon(sock):
         print_error({"error": ERR_NOT_CONNECTED, "message": f"daemon 起不来：{sock}（{SPAWN_HINT}）"})
         return EXIT_NOT_CONNECTED
+    browser = _resolve_browser_alias(sock, requested_browser)
+    duration = parse_duration(opts["duration"]) if "duration" in opts else None
+    if duration is not None and "network.subscribe" not in name and name != "net watch":
+        raise UsageError("--duration 只对 `browse net watch`（和 api network subscribe）有意义")
 
     async def go() -> int:
         try:
@@ -1869,17 +1905,18 @@ def _cmd_status(tokens: list[str]) -> int:
 
     port_to_pid = _conn_pids(info.get("port", 0), conns) if conns else {}
     labels = _browser_labels({p for p in port_to_pid.values()}) if port_to_pid else {}
+    names = [labels.get(port_to_pid.get(c.get("peerPort", 0))) or c["browser"] for c in conns]
+    selectors = [name if names.count(name) == 1 else f"slot:{c['browser']}"
+                 for c, name in zip(conns, names)]
     if is_ai_shell_env():
-        # AI 终端：数据出口走竖线行——槽位名（--browser 路由要用的）| 展示名（含 profile）。
+        # AI 终端：数据出口走竖线行——可选进程名（--browser）| 展示名（含 profile）。
         # pid/时长/心跳对模型是纯耗 token，砍掉
-        for conn in conns:
-            pid = port_to_pid.get(conn.get("peerPort", 0))
-            name = (labels.get(pid) or conn["browser"]) if pid else conn["browser"]
+        for conn, name, selector in zip(conns, names, selectors):
             profile = conn.get("profile", "")
             display = f"{name} ({profile})" if profile else name
-            print(f"{conn['browser']} | {display}")
+            print(f"{selector} | {display}")
     else:
-        for conn in conns:
+        for conn, selector in zip(conns, selectors):
             pid = port_to_pid.get(conn.get("peerPort", 0))
             # hello 报的名字在 Chromium 分支间会撞车，进程路径识别到的名字更真
             name = (labels.get(pid) or conn["browser"]) if pid else conn["browser"]
@@ -1887,7 +1924,7 @@ def _cmd_status(tokens: list[str]) -> int:
             name = f"{name} ({profile})" if profile else name
             pid_note = f" · pid {pid}" if pid else ""
             report.ok(
-                f"{name}: 插件已连接 · connectionId {conn['connectionId']}"
+                f"{name}: 插件已连接 · --browser {selector} · connectionId {conn['connectionId']}"
                 f"{pid_note} · 已连 {conn['sinceSeconds']} 秒 · 心跳 {conn['idleSeconds']} 秒前")
     if running and not conns:
         report.err("没有任何插件连着：扩展加载后会自动连 bridge（装完/升级扩展要重新加载一次）")
