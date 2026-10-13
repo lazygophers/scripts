@@ -15,6 +15,7 @@
   browse close 'example.com/*'              # 匹配到的全部关掉；--group 调研 关整组
   browse screenshot                         # 存 ~/Downloads/browse-<时间戳>.png 并打路径
   browse data history '关键词'               # 历史；data 组还有 cookie/书签/下载/阅读清单
+  browse batch @plan.json --bail          # JSON 数组一次跑完（{"method","args"}）
   browse net watch --match-url '*/api/*' --duration 30s   # 事件流 JSONL
   browse api gcm token <entity>             # 底层透传，参数形状直接跟扩展 handler
   browse run 'goto https://a.com' 'click 登录'            # 并发批量
@@ -1121,6 +1122,69 @@ def _cmd_daemon(tokens: list[str]) -> int:
     raise UsageError(f"bridge 只有 start / stop / status / log / run：{action!r}")
 
 
+def _resolve_batch_command(name: str, args: dict) -> tuple[str, dict]:
+    """batch 条目的命令名 → 底层方法。友好名（含三段式 net route add）和底层名都收。"""
+    if name in NET_ROUTE_METHODS:
+        return NET_ROUTE_METHODS[name], dict(args)
+    if name in FLAT_SIMPLE:
+        return FLAT_SIMPLE[name][0], dict(args)
+    head, _, action = name.partition(" ")
+    entry = NOUN_GROUPS.get(head, {}).get(action)
+    if entry is not None:
+        return entry[0], dict(args)
+    if name in METHODS:
+        return name, dict(args)
+    raise UsageError(
+        f"batch 不认识这条命令: {name}（友好名如 goto/click/net route add，或底层方法名）")
+
+
+def _cmd_batch(tokens: list[str]) -> int:
+    """`browse batch @file.json [--bail] [--concurrency N]`：JSON 数组一次跑完。
+
+    每项 `{"method": <友好名|底层名>, "args": {...}}`。args 原样进 params——
+    click/fill 的 text= 默认前缀这类友好层的活不在这里做，selector 要写全。
+    默认全跑完；`--bail` 首错停（失败后未提交的标 skipped）。
+    """
+    raw, flags = split_tokens(tokens)
+    if not raw or not raw[0].startswith("@"):
+        raise UsageError("要写成 `browse batch @file.json [--bail] [--concurrency N]`")
+    path = pathlib.Path(raw[0][1:])
+    try:
+        spec = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise UsageError(f"读不了 batch 文件 {path}: {exc}") from exc
+    if (not isinstance(spec, list) or not spec
+            or not all(isinstance(item, dict) for item in spec)):
+        raise UsageError('batch 文件要是非空 JSON 数组，每项 {"method": ..., "args": {...}}')
+    items: list[tuple[str, dict]] = []
+    for i, entry in enumerate(spec):
+        method, args = entry.get("method"), entry.get("args", {})
+        if not isinstance(method, str) or not isinstance(args, dict):
+            raise UsageError(f"batch 第 {i} 项不对：method 要字符串，args 要对象")
+        try:
+            items.append(_resolve_batch_command(method, args))
+        except UsageError as exc:
+            raise UsageError(f"batch 第 {i} 项: {exc}") from exc
+
+    sock = _sock_of(flags)
+    concurrency = int(flags.get("concurrency", DEFAULT_CONCURRENCY))
+    if concurrency < 1:
+        raise UsageError(f"--concurrency 至少是 1：{concurrency}")
+    fail_fast = flags.get("bail", False) is True
+    if not ensure_daemon(sock):
+        print_error({"error": ERR_NOT_CONNECTED, "message": f"daemon 起不来：{sock}（{SPAWN_HINT}）"})
+        return EXIT_NOT_CONNECTED
+    outcomes = asyncio.run(run_batch(items, sock, concurrency=concurrency, fail_fast=fail_fast,
+                                     browser=browser_of(flags)))
+    report = [{"index": i, "command": spec[i].get("method"), **outcome}
+              for i, outcome in enumerate(outcomes)]
+    sys.stdout.write(json_dumps(report) + "\n")
+    if not fail_fast:
+        return EXIT_OK
+    failed = next((o for o in outcomes if o["status"] == "failed"), None)
+    return EXIT_OK if failed is None else exit_code_for(failed)
+
+
 def _cmd_run(tokens: list[str]) -> int:
     raw, flags = split_tokens(tokens)
     sock = _sock_of(flags)
@@ -2092,6 +2156,8 @@ def _main(argv: list[str]) -> int:
             return _cmd_status(tokens[1:])
         if tokens[0] == "run":
             return _cmd_run(tokens[1:])
+        if tokens[0] == "batch":
+            return _cmd_batch(tokens[1:])
         if tokens[0] == "stop":
             return _cmd_stop(tokens[1:])
         if tokens[0] == "audit":

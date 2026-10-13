@@ -511,6 +511,67 @@ class TestSubscribeStream(unittest.TestCase):
         self.assertEqual(unsubscribed, {"subscription": "net-1"})
 
 
+class TestBatch(unittest.TestCase):
+    def _spec_file(self, spec) -> str:
+        fh = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        json.dump(spec, fh)
+        fh.close()
+        self.addCleanup(os.unlink, fh.name)
+        return fh.name
+
+    def test_batch_runs_everything_by_default_and_reports_in_order(self):
+        path = self._spec_file([
+            {"method": "goto", "args": {"url": "https://a.com"}},
+            {"method": "net route list", "args": {}},
+            {"method": "browsingContext.reload", "args": {}},
+        ])
+        with Harness(lambda m, p: {"url": p.get("url")}) as h:
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out):
+                code = h.cli("batch", f"@{path}", "--concurrency", "1")
+        self.assertEqual(code, 0)
+        report = json.loads(out.getvalue())
+        self.assertEqual([r["status"] for r in report], ["ok"] * 3)
+        self.assertEqual([r["command"] for r in report],
+                         ["goto", "net route list", "browsingContext.reload"])
+        self.assertEqual(h.browser.seen,
+                         ["browsingContext.navigate", "lg:net.routeList", "browsingContext.reload"])
+
+    def test_batch_bail_stops_at_first_failure(self):
+        path = self._spec_file([
+            {"method": "goto", "args": {"url": "https://ok.com"}},
+            {"method": "goto", "args": {"url": "https://bad.com"}},
+            {"method": "goto", "args": {"url": "https://after.com"}},
+        ])
+
+        def handler(method, params):
+            return ("timeout", "第二条炸") if params["url"] == "https://bad.com" else {}
+
+        with Harness(handler) as h:
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("batch", f"@{path}", "--bail", "--concurrency", "1")
+        self.assertEqual(code, 1)
+        report = json.loads(out.getvalue())
+        self.assertEqual([r["status"] for r in report], ["ok", "failed", "skipped"])
+
+    def test_batch_rejects_bad_files_and_commands_with_the_entry_number(self):
+        with self.assertRaises(browse.UsageError):
+            browse._cmd_batch(["nosuch.json"])
+        with self.assertRaises(browse.UsageError) as ctx:
+            browse._cmd_batch([f"@{self._spec_file([{'method': 'frobnicate'}])}"])
+        self.assertIn("batch 第 0 项", str(ctx.exception))
+        with self.assertRaises(browse.UsageError) as ctx:
+            browse._cmd_batch([f"@{self._spec_file([{'method': 1}])}"])
+        self.assertIn("method 要字符串", str(ctx.exception))
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            fh.write("{not json")
+            bad = fh.name
+        self.addCleanup(os.unlink, bad)
+        with self.assertRaises(browse.UsageError):
+            browse._cmd_batch([f"@{bad}"])
+
+
 class TestRunBatch(unittest.TestCase):
     def _items(self, n: int) -> list[str]:
         return [f"goto https://{i}.com" for i in range(n)]
