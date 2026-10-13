@@ -1,4 +1,4 @@
-import { CommandError, asString } from "../protocol.ts";
+import { CommandError, asString, querySettle } from "../protocol.ts";
 import { ownGroupIds } from "./ownership.ts";
 
 /** A resolved target: a tab, optionally narrowed to one of its frames. */
@@ -67,7 +67,7 @@ export async function resolveContext(
   }
 
   // own scope 只看自己的组：先拿组 id（ensureOwn 借机重建组+重启认领），再过滤。
-  const every = await chrome.tabs.query({});
+  const every = await querySettle(chrome.tabs.query({}), "chrome.tabs.query");
   let tabs = every;
   if (scope === "own") {
     const groups = await ownGroupIds();
@@ -101,7 +101,8 @@ export async function resolveContext(
   }
 
   if (scope === "all") {
-    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [active] = await querySettle(
+      chrome.tabs.query({ active: true, currentWindow: true }), "chrome.tabs.query");
     if (active?.id === undefined) {
       throw new CommandError("no such frame", "no active tab");
     }

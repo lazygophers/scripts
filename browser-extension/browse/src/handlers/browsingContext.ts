@@ -1,4 +1,4 @@
-import { CommandError, optionalString, requireString } from "../protocol.ts";
+import { CommandError, optionalString, querySettle, requireString } from "../protocol.ts";
 import { formatContext, requireApi, resolveContextOnce, type Target } from "./context.ts";
 import { ownGroupIds } from "./ownership.ts";
 
@@ -25,7 +25,7 @@ export async function browsingContextGetTree(
 
   // 归属（票 02）：默认只列 browse/* 组里的 tab；all: true 才列全浏览器。
   // 只读判定，不建任何组。
-  let tabs = await chrome.tabs.query({});
+  let tabs = await querySettle(chrome.tabs.query({}), "chrome.tabs.query");
   if (params.all !== true) {
     const groups = await ownGroupIds();
     tabs = groups.size === 0 ? [] : tabs.filter((t) => t.groupId !== undefined && groups.has(t.groupId));

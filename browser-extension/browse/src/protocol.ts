@@ -102,3 +102,28 @@ export function isCommand(value: unknown): value is Command {
     typeof c.method === "string"
   );
 }
+
+/**
+ * Arc 的 MV3 service worker 里 tabs/tabGroups 的 query promise 永不 settle
+ * （实测 2026-10-13：tabs.create、chrome.system.cpu 正常，query 全部挂起，
+ * 指令无回包直到 CLI 30s 超时）。race 一个兜底超时把挂死变明确报错；
+ * 正常浏览器 query 毫秒级返回，10s 绰绰有余。
+ */
+export const QUERY_TIMEOUT_MS = 10_000;
+
+export function querySettle<T>(p: Promise<T>, what: string, ms = QUERY_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new CommandError(
+      "timeout",
+      `${what} did not settle within ${ms}ms; Arc's tabs/tabGroups query is known to hang`,
+    )), ms);
+  });
+  // 超时后原 promise 若再落败，不能变成 unhandled rejection。
+  p.catch(() => undefined);
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  });
+}

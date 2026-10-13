@@ -1,4 +1,4 @@
-import { CommandError, optionalString } from "../protocol.ts";
+import { CommandError, optionalString, querySettle } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
 import { requireApi, resolveContextOnce, type Target } from "./context.ts";
 import { isOwnTab, recordVisit } from "./ownership.ts";
@@ -53,7 +53,7 @@ export async function tabsUngroup(
   requireApi("tabs.ungroup", "ungrouping tabs");
   const group = optionalString(params.group, "group", ", a group id from lg:tabs.group");
   if (group !== undefined) {
-    const tabs = await chrome.tabs.query({ groupId: groupIdOf(group) });
+    const tabs = await querySettle(chrome.tabs.query({ groupId: groupIdOf(group) }), "chrome.tabs.query");
     if (tabs.length === 0) {
       throw new CommandError("invalid argument", `no such group ${group}`);
     }
@@ -79,11 +79,11 @@ export async function tabsGroups(
   if (color !== undefined && !COLORS.has(color)) {
     throw new CommandError("invalid argument", `color must be one of ${[...COLORS].join(", ")}`);
   }
-  const found = await chrome.tabGroups.query({
+  const found = await querySettle(chrome.tabGroups.query({
     ...(title === undefined ? {} : { title }),
     ...(color === undefined ? {} : { color: color as `${chrome.tabGroups.Color}` }),
-  });
-  const tabs = await chrome.tabs.query({});
+  }), "chrome.tabGroups.query");
+  const tabs = await querySettle(chrome.tabs.query({}), "chrome.tabs.query");
   return {
     groups: found.map((group) => ({
       group: String(group.id),
@@ -180,7 +180,7 @@ export async function tabsAdopt(
   }
   await confirm({ action: "adoptTab", method: "lg:tabs.adopt", url: tab.url ?? null });
   const full = `browse/${name}`;
-  const found = (await chrome.tabGroups.query({ title: full }))[0];
+  const found = (await querySettle(chrome.tabGroups.query({ title: full }), "chrome.tabGroups.query"))[0];
   if (found !== undefined) {
     await chrome.tabs.group({ tabIds: [target.tabId], groupId: found.id });
   } else {

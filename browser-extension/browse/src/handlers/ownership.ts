@@ -1,4 +1,4 @@
-import { CommandError } from "../protocol.ts";
+import { CommandError, querySettle } from "../protocol.ts";
 
 /**
  * 页面归属（票 02 设计；2026-09-28 二改：多组）。
@@ -85,7 +85,7 @@ export async function recordVisit(url: string | null | undefined, group: string)
 
 /** 现存所有 `browse/*` 组的 id。每次现场查——组随时被用户增删，懒判不缓存。 */
 export async function ownGroupIds(): Promise<Set<number>> {
-  const groups = await chrome.tabGroups.query({}).catch(() => []);
+  const groups = await querySettle(chrome.tabGroups.query({}), "chrome.tabGroups.query").catch(() => []);
   return new Set(groups.filter((g) => g.title?.startsWith(GROUP_PREFIX)).map((g) => g.id));
 }
 
@@ -130,7 +130,7 @@ export async function reclaim(): Promise<void> {
   if (registry.length === 0) {
     return;
   }
-  const tabs = await chrome.tabs.query({});
+  const tabs = await querySettle(chrome.tabs.query({}), "chrome.tabs.query");
   const byGroup = new Map<string, number[]>();
   for (const tab of tabs) {
     const hit = registry.find((e) => e.u === canonical(tab.url));
@@ -150,7 +150,7 @@ export async function reclaim(): Promise<void> {
   }
   for (const [name, tabIds] of byGroup) {
     const full = GROUP_PREFIX + name;
-    const found = (await chrome.tabGroups.query({ title: full }))[0];
+    const found = (await querySettle(chrome.tabGroups.query({ title: full }), "chrome.tabGroups.query"))[0];
     const groupId = found !== undefined
       ? found.id
       : await chrome.tabs.group({ tabIds: [tabIds[0]!] })
