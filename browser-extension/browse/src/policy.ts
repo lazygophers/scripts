@@ -99,7 +99,7 @@ export const FEATURES: Feature[] = [
   },
   { id: "network", methods: ["network.subscribe", "network.unsubscribe"] },
   { id: "history", methods: ["lg:history.search", "lg:history.delete"] },
-  { id: "snapshot", methods: ["lg:page.snapshot"] },
+  { id: "snapshot", methods: ["lg:page.snapshot", "lg:page.lifecycle"] },
   { id: "cache", methods: ["lg:cache.put", "lg:cache.get", "lg:cache.list"] },
   {
     id: "downloads",

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { pageSnapshot, type SnapshotEntry } from "../src/handlers/page.ts";
+import { pageLifecycle, pageSnapshot, type SnapshotEntry } from "../src/handlers/page.ts";
 import { clearChrome, installChrome, ownSession, page, resetRefs, scriptingMock } from "./mock.ts";
 
 const HTML = `
@@ -195,6 +195,91 @@ test("delta reports only what changed since the previous snapshot", async () => 
     // And the removed ref is exactly Cancel's, taken from the baseline above.
     const gone = first.delta.added.find((e) => e.text === "Cancel")?.ref;
     assert.deepEqual(second.delta.removed, [gone]);
+  } finally {
+    clearChrome();
+  }
+});
+
+test("lifecycle: load on a settled document resolves immediately", async () => {
+  resetRefs();
+  const dom = page(HTML);
+  installChrome({
+    ...ownSession(),
+    tabs: { query: async () => [{ id: 1, url: "https://example.test/page", active: true, groupId: 500 }] },
+    scripting: scriptingMock(),
+  });
+  try {
+    // jsdom still reports "loading" right after construction (the readyState
+    // transition rides the async load event), so pin it the way a settled
+    // document looks.
+    Object.defineProperty(dom.window.document, "readyState", {
+      configurable: true,
+      get: () => "complete",
+    });
+    const result = await pageLifecycle({ waitFor: "load", timeout: 1000 });
+    assert.deepEqual(result, { readyState: "complete", timedOut: false });
+  } finally {
+    clearChrome();
+  }
+});
+
+test("lifecycle: domcontentloaded fires when readyState turns interactive", async () => {
+  resetRefs();
+  const dom = page(HTML);
+  let state = "loading";
+  Object.defineProperty(dom.window.document, "readyState", {
+    configurable: true,
+    get: () => state,
+  });
+  installChrome({
+    ...ownSession(),
+    tabs: { query: async () => [{ id: 1, url: "https://example.test/page", active: true, groupId: 500 }] },
+    scripting: scriptingMock(),
+  });
+  try {
+    const pending = pageLifecycle({ waitFor: "domcontentloaded", timeout: 5000 });
+    state = "interactive";
+    dom.window.document.dispatchEvent(new dom.window.Event("readystatechange"));
+    const result = await pending;
+    assert.deepEqual(result, { readyState: "interactive", timedOut: false });
+  } finally {
+    clearChrome();
+  }
+});
+
+test("lifecycle: a stuck page times out and reports where it got to", async () => {
+  resetRefs();
+  const dom = page(HTML);
+  Object.defineProperty(dom.window.document, "readyState", {
+    configurable: true,
+    get: () => "interactive",
+  });
+  installChrome({
+    ...ownSession(),
+    tabs: { query: async () => [{ id: 1, url: "https://example.test/page", active: true, groupId: 500 }] },
+    scripting: scriptingMock(),
+  });
+  try {
+    const result = await pageLifecycle({ waitFor: "load", timeout: 20 });
+    assert.deepEqual(result, { readyState: "interactive", timedOut: true });
+  } finally {
+    clearChrome();
+  }
+});
+
+test("lifecycle rejects anything but load/domcontentloaded", async () => {
+  resetRefs();
+  page(HTML);
+  installChrome({
+    ...ownSession(),
+    tabs: { query: async () => [{ id: 1, url: "https://example.test/page", active: true, groupId: 500 }] },
+    scripting: scriptingMock(),
+  });
+  try {
+    await assert.rejects(
+      pageLifecycle({ waitFor: "networkidle" }),
+      /waitFor must be "load" or "domcontentloaded"/,
+    );
   } finally {
     clearChrome();
   }

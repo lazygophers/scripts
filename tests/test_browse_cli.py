@@ -1287,6 +1287,49 @@ class TestWait(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("永不出来", err.getvalue())
 
+    def test_wait_load_is_one_lifecycle_roundtrip(self):
+        calls = []
+
+        def handler(method, params):
+            if method == "lg:page.lifecycle":
+                calls.append(params)
+                return {"readyState": "complete", "timedOut": False}
+            return {}
+
+        with Harness(handler) as h:
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("wait", "load", "--timeout", "5s")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 1, "事件级 wait 不该轮询")
+        self.assertEqual(calls[0]["waitFor"], "load")
+        self.assertEqual(calls[0]["timeout"], 5000)
+
+    def test_wait_domcontentloaded_accepts_interactive(self):
+        def handler(method, params):
+            if method == "lg:page.lifecycle":
+                return {"readyState": "interactive", "timedOut": False}
+            return {}
+
+        with Harness(handler) as h:
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                code = h.cli("wait", "domcontentloaded")
+        self.assertEqual(code, 0)
+
+    def test_wait_load_timeout_exits_1_with_ready_state(self):
+        def handler(method, params):
+            if method == "lg:page.lifecycle":
+                return {"readyState": "loading", "timedOut": True}
+            return {}
+
+        with Harness(handler) as h:
+            err = io.StringIO()
+            with mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", err):
+                code = h.cli("wait", "load", "--timeout", "500ms")
+        self.assertEqual(code, 1)
+        self.assertIn("load", err.getvalue())
+        self.assertIn("loading", err.getvalue())
+
     def test_wait_text_polls_the_page_body(self):
         calls = []
 

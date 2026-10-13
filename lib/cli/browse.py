@@ -120,6 +120,7 @@ METHODS: dict[str, tuple[str, ...]] = {
     "lg:tabs.groups": (),
     "lg:tabs.updateGroup": ("group",),
     "lg:page.snapshot": (),
+    "lg:page.lifecycle": ("waitFor",),
     # 页面缓存（票 05）：put 是 text/html 包装的顺手写，get 走 `browse page cache`
     "lg:cache.put": ("kind", "body"),
     "lg:cache.get": (),
@@ -231,6 +232,7 @@ API_ONLY = frozenset({
     "lg:wauth.attach", "lg:wauth.detach", "lg:wauth.complete",
     "lg:printing.respond",
     "lg:cache.list",
+    "lg:page.lifecycle",
     "lg:permissions.contains",
     "lg:audit.read", "lg:audit.clear",
 })
@@ -906,7 +908,7 @@ HELP = """browse — 用命令行驱动浏览器扩展
   browse text                            正文纯文字（给人和 AI 读的）
   browse html                            页面源码
   browse eval <js>                       在页面里跑一段 JS 拿返回值（别名 script）
-  browse wait <目标>                     等元素出现；--gone 等消失 / --text 文字 / --url 通配 / --idle 网络安静
+  browse wait <目标>                     等元素出现；--gone 等消失 / --text 文字 / --url 通配 / --idle 网络安静；目标直接写 load / domcontentloaded / networkidle 等页面事件
   browse back                              后退（forward 前进；页面 JS 调不动跨域历史时会失败）
   browse reload                            刷新（--ignore-cache 跳过缓存）
   browse activate                          把某个标签页提到前台
@@ -1413,6 +1415,17 @@ async def _cmd_wait(params: dict, opts: dict, sock: pathlib.Path, browser: str) 
             raise UsageError("`wait` 只能给一个元素条件")
         params["target"] = gone_value
         gone_value = True
+    # `wait load` / `wait domcontentloaded` / `wait networkidle`：事件级目标，
+    # 不是按文字找元素。字面量覆盖了「等出现文字 load」这种罕见用法——要等
+    # 那个字面量写 `wait 'text=load'`。
+    if gone_value is not True and str(params.get("target", "")) in _LIFECYCLE_TARGETS:
+        want = params.pop("target")
+        if want == "networkidle":
+            return await _cmd_wait_idle(sock, browser,
+                                        parse_duration(opts["timeout"]) if "timeout" in opts
+                                        else DEFAULT_WAIT_TIMEOUT)
+        return await _cmd_wait_lifecycle(
+            want, {k: v for k, v in params.items() if k == "context"}, opts, sock, browser)
     modes = [m for m, on in (("target", params.get("target")),
                              ("text", params.get("text")),
                              ("url", opts.get("url"))) if on not in (None, True, False)]
@@ -1478,6 +1491,28 @@ async def _wait_url_or_text(mode: str, text_cond, opts: dict, params: dict,
         return None
     value = result.get("result", {}).get("value")
     return str(text_cond) in (value if isinstance(value, str) else "")
+
+
+# `wait` 的字面量生命周期目标（spec 7 之外的补充，对齐 agent-browser 的 wait 面）
+_LIFECYCLE_TARGETS = ("load", "domcontentloaded", "networkidle")
+
+
+async def _cmd_wait_lifecycle(want: str, params: dict, opts: dict, sock: pathlib.Path,
+                              browser: str) -> int:
+    """`wait load|domcontentloaded`：一次往返等 readyState 事件，不轮询。"""
+    timeout = parse_duration(opts["timeout"]) if "timeout" in opts else DEFAULT_WAIT_TIMEOUT
+    try:
+        result = _outcome_or_die(await execute(
+            "lg:page.lifecycle", {"waitFor": want, "timeout": int(timeout * 1000), **params},
+            sock, browser=browser))
+    except _CommandFailed as exc:
+        reporter(stderr=True).err(f"wait {want} 失败: {exc}")
+        return EXIT_FAILED
+    if result.get("timedOut") is True:
+        reporter(stderr=True).err(
+            f"等 {want} 超过 {timeout:g}s（readyState 停在 {result.get('readyState')!r}）")
+        return EXIT_FAILED
+    return EXIT_OK
 
 
 async def _cmd_wait_idle(sock: pathlib.Path, browser: str, timeout: float) -> int:

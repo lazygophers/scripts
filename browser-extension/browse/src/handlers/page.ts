@@ -1,3 +1,4 @@
+import { CommandError, asString } from "../protocol.ts";
 import { resolveContextOnce } from "./context.ts";
 import { runInPage, type PageResult } from "./inject.ts";
 
@@ -41,6 +42,74 @@ export async function pageSnapshot(
   const delta = params.delta === true;
   const target = await resolveContextOnce(params);
   return runInPage(target, "ISOLATED", pageCollect, [limit, delta]);
+}
+
+/**
+ * `lg:page.lifecycle` — wait for a document lifecycle milestone. Read-only,
+ * no confirm: `waitFor` is one of `load` / `domcontentloaded` (mapped to
+ * `complete` / `interactive` readyState below; readyState only moves forward,
+ * so `complete` satisfies an `interactive` wait).
+ *
+ * This is deliberately its own ISOLATED-world handler rather than
+ * `script.evaluate` + `document.readyState`: the latter runs in MAIN world and
+ * takes the eval confirm — a wait command should not pop confirmations.
+ *
+ * Returns the readyState the page ended on; if `timeout` (ms) elapses first,
+ * that is wherever the page got to, and the CLI decides whether it counts.
+ */
+export async function pageLifecycle(
+  params: Record<string, unknown>,
+): Promise<{ readyState: string; timedOut: boolean }> {
+  const waitFor = asString(params.waitFor, "waitFor");
+  if (waitFor !== "load" && waitFor !== "domcontentloaded") {
+    throw new CommandError(
+      "invalid argument",
+      `waitFor must be "load" or "domcontentloaded", got ${JSON.stringify(waitFor)}`,
+    );
+  }
+  const timeout = typeof params.timeout === "number" && params.timeout > 0
+    ? params.timeout
+    : 30000;
+  const target = await resolveContextOnce(params);
+  return runInPage(target, "ISOLATED", pageReadyState,
+    [waitFor === "load" ? "complete" : "interactive", timeout]);
+}
+
+/**
+ * Runs inside the page (same serialisation rules as pageCollect: closes over
+ * nothing, helpers stay nested).
+ */
+export async function pageReadyState(
+  want: string,
+  timeoutMs: number,
+): Promise<PageResult<{ readyState: string; timedOut: boolean }>> {
+  try {
+    const readyState = await new Promise<string>((resolve) => {
+      const check = (): void => {
+        if (document.readyState === "complete" || document.readyState === want) {
+          cleanup();
+          resolve(document.readyState);
+        }
+      };
+      const onTimeout = (): void => {
+        cleanup();
+        resolve(document.readyState);
+      };
+      const cleanup = (): void => {
+        document.removeEventListener("readystatechange", check);
+        clearTimeout(timer);
+      };
+      const timer = setTimeout(onTimeout, timeoutMs);
+      document.addEventListener("readystatechange", check);
+      check();
+    });
+    const timedOut = want === "complete"
+      ? readyState !== "complete"
+      : readyState !== "complete" && readyState !== "interactive";
+    return { ok: true, value: { readyState, timedOut } };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 export interface SnapshotEntry {

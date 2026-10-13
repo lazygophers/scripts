@@ -41,7 +41,7 @@ import {
   powerKeepAwake,
   powerRelease,
 } from "./notify.ts";
-import { pageSnapshot } from "./page.ts";
+import { pageLifecycle, pageSnapshot } from "./page.ts";
 import {
   permissionsContains,
   permissionsGetAll,
@@ -121,6 +121,7 @@ export const HANDLERS: Record<string, Handler> = {
   "lg:history.delete": historyDelete,
 
   "lg:page.snapshot": pageSnapshot,
+  "lg:page.lifecycle": pageLifecycle,
 
   // 页面缓存（票 05）：dumb storage，语义在 CLI 的 text/html 包装侧
   "lg:cache.put": cachePut,
@@ -232,6 +233,7 @@ const PAGE_METHODS = new Set([
   "storage.getLocalStorage",
   "storage.setLocalStorage",
   "lg:page.snapshot",
+  "lg:page.lifecycle",
   "lg:tabs.group",
   "lg:tabs.ungroup",
   "lg:pageCapture.saveMhtml",
