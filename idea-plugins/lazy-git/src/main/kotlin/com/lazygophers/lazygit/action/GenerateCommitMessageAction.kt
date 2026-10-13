@@ -37,7 +37,11 @@ class GenerateCommitMessageAction :
             (ui as? com.intellij.vcs.commit.ChangesViewCommitWorkflowUi)?.inclusionModel?.addInclusion(all)
             all
         }
-        val diff = IncludedChangesDiff.build(changes)
+        // Git4Idea 的 ContentRevision.content 必须在后台线程读取。
+        var diff = ""
+        val completed = ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            Runnable { diff = IncludedChangesDiff.build(changes) }, "读取变更内容", true, project)
+        if (!completed) return
         if (diff.isBlank()) {
             notify(project, "当前没有任何变更", NotificationType.WARNING)
             return

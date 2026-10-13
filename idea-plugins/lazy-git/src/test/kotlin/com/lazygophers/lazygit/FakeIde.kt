@@ -38,6 +38,7 @@ class MemoryCredentialStore : com.intellij.credentialStore.CredentialStore {
 class FakeProgressManager : ProgressManager() {
     var indicator: ProgressIndicator = FakeIndicator()
     val ranTasks = mutableListOf<Task>()
+    var inSynchronousProgress = false
 
     /** 用例里预置 indicator（如取消态）；null 恢复默认。run(Task) 时优先用它。 */
     var presetIndicator: ProgressIndicator? = null
@@ -79,7 +80,11 @@ class FakeProgressManager : ProgressManager() {
     }
     override fun runProcessWithProgressSynchronously(
         runnable: Runnable, progressTitle: String, cancellable: Boolean, project: Project?,
-    ): Boolean { runnable.run(); return true }
+    ): Boolean {
+        inSynchronousProgress = true
+        try { runnable.run() } finally { inSynchronousProgress = false }
+        return true
+    }
     override fun <T, E : Exception> runProcessWithProgressSynchronously(
         computable: com.intellij.openapi.util.ThrowableComputable<T, E>, progressTitle: String,
         cancellable: Boolean, project: Project?,

@@ -185,6 +185,26 @@ class GenerateCommitMessageActionTest {
     // ---- actionPerformed：AI 任务后台执行 ----
 
     @Test
+    fun `actionPerformed reads revision content inside synchronous progress`() {
+        aiReady()
+        respond = { exchange -> sse(exchange, "data: [DONE]") }
+        val fp: FilePath = LocalFilePath("a.kt", false)
+        fun revision(): ContentRevision = object : ContentRevision {
+            override fun getContent(): String {
+                assertTrue(FakeIde.progressManager.inSynchronousProgress)
+                return "content"
+            }
+            override fun getFile(): FilePath = fp
+            override fun getRevisionNumber(): VcsRevisionNumber = VcsRevisionNumber.NULL
+        }
+        action().actionPerformed(event(mapOf(
+            CommonDataKeys.PROJECT.name to fakeProject(),
+            VcsDataKeys.COMMIT_WORKFLOW_UI.name to uiProxy(listOf(Change(revision(), revision()))),
+        )))
+        assertEquals(1, FakeIde.progressManager.ranTasks.size)
+    }
+
+    @Test
     fun `actionPerformed runs the ai task and the model answers`() {
         aiReady()
         respond = { exchange ->
