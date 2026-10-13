@@ -115,6 +115,12 @@
   "settingsDenyHint": {
     "message": "一行一个域名，连窗都不弹，直接拒。写 example.com 会把 a.example.com 这类子域一起拒掉。"
   },
+  "settingsAllow": {
+    "message": "只许这些网站"
+  },
+  "settingsAllowHint": {
+    "message": "一行一个域名。非空时 browse 只能操作名单内的网站；空着 = 不限制。写 example.com 会连 a.example.com 一起放行。"
+  },
   "settingsApproved": {
     "message": "不再询问的网站"
   },
@@ -224,6 +230,9 @@
   },
   "settingsNavDeny": {
     "message": "拒绝名单"
+  },
+  "settingsNavAllow": {
+    "message": "白名单"
   },
   "settingsNavAudit": {
     "message": "审计日志"

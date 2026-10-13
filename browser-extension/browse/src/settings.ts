@@ -90,6 +90,10 @@ export function render(config: BrowseConfig, path: string): void {
   if (deny) {
     deny.value = config.deny_domains.join("\n");
   }
+  const allow = byId<HTMLTextAreaElement>("allow");
+  if (allow) {
+    allow.value = config.allow_domains.join("\n");
+  }
   const audit = byId<HTMLInputElement>("audit");
   if (audit) {
     audit.checked = config.audit;
@@ -282,6 +286,7 @@ export function readForm(): Partial<BrowseConfig> {
     // 那是最松的模式，静静地把用户设成它是这条路上最不能犯的错。
     confirm_mode: (checked?.value ?? "") as BrowseConfig["confirm_mode"],
     deny_domains: parseDomains(byId<HTMLTextAreaElement>("deny")?.value ?? ""),
+    allow_domains: parseDomains(byId<HTMLTextAreaElement>("allow")?.value ?? ""),
     audit: byId<HTMLInputElement>("audit")?.checked === true,
     audit_retention_days: Number.parseInt(retention?.value ?? "", 10),
     disabled_features,

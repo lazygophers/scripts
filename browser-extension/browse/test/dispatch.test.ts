@@ -5,7 +5,7 @@ import { confirm, setConfirmHook, type ConfirmRequest } from "../src/handlers/co
 import { HANDLERS, dispatch } from "../src/handlers/index.ts";
 import { FEATURE_OF, riskyAction } from "../src/policy.ts";
 import { resetOwnership } from "../src/handlers/ownership.ts";
-import { clearChrome, installChrome, ownWorld, rejectsWith, storageMock } from "./mock.ts";
+import { clearChrome, installChrome, ownWorld, rejectsWith, scriptingMock, storageMock } from "./mock.ts";
 
 test.afterEach(() => resetOwnership());
 
@@ -225,6 +225,57 @@ test("审计写不进去也不能把指令搞挂", async () => {
 });
 
 // ------------------------------------------------ 策略目标（CONTEXT.md）：隐式页面目标也算数
+
+test("allow_domains 非空时名单外域名被拒，名单内放行，空名单不启用", async () => {
+  // 名单内域名：白名单放行。页面函数在 Node 里没有 document 会炸，但那是
+  // handler 的错——错误码不是 lg:user rejected 就证明闸门放行了
+  ownWorld([{ id: 3, url: "https://ok.test/x", groupId: 500, active: true }], {
+    local: { "browse:config": { allow_domains: ["ok.test"] } },
+    extra: { scripting: scriptingMock() },
+  });
+  await assert.rejects(
+    () => dispatch("input.click", { selector: "css=a" }),
+    (err: { code?: string }) => err.code !== "lg:user rejected",
+  );
+  clearChrome();
+
+  // 名单外域名：白名单在 dispatch 上拦住，handler 一步不走
+  ownWorld([{ id: 3, url: "https://else.test/x", groupId: 500, active: true }], {
+    local: { "browse:config": { allow_domains: ["ok.test"] } },
+  });
+  const denied = await rejectsWith(
+    () => dispatch("input.click", { selector: "css=a" }),
+    "lg:user rejected",
+  );
+  assert.match(denied.message, /不在白名单/);
+  const [entry] = await read();
+  assert.equal(entry?.domain, "else.test");
+  assert.equal(entry?.result, "denied");
+  clearChrome();
+
+  // 空名单：不启用，域名随它去（同样只验闸门放行）
+  ownWorld([{ id: 3, url: "https://any.test/x", groupId: 500, active: true }], {
+    local: { "browse:config": { allow_domains: [] } },
+    extra: { scripting: scriptingMock() },
+  });
+  await assert.rejects(
+    () => dispatch("input.click", { selector: "css=a" }),
+    (err: { code?: string }) => err.code !== "lg:user rejected",
+  );
+  clearChrome();
+});
+
+test("deny 优先于 allow：同域名两边都在时按拒绝处理", async () => {
+  ownWorld([{ id: 3, url: "https://both.test/x", groupId: 500, active: true }], {
+    local: { "browse:config": { deny_domains: ["both.test"], allow_domains: ["both.test"] } },
+  });
+  const err = await rejectsWith(
+    () => dispatch("input.click", { selector: "css=a" }),
+    "lg:user rejected",
+  );
+  assert.match(err.message, /拒绝名单/);
+  clearChrome();
+});
 
 test("deny_domains 拦得住隐式页面目标：context / matchUrl / 当前标签页", async () => {
   // 归属规则下活动页兜底只看自己的组，所以 bank.test 也得是组里的页面

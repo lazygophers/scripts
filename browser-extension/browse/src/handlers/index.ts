@@ -1,5 +1,5 @@
 import { record } from "../audit.ts";
-import { domainOf, enforceDenyList, enforceFeatureToggles, policyUrlFromParams, riskyAction } from "../policy.ts";
+import { domainOf, enforceAllowList, enforceDenyList, enforceFeatureToggles, policyUrlFromParams, riskyAction } from "../policy.ts";
 import { CommandError } from "../protocol.ts";
 import { auditClear, auditRead } from "./audit.ts";
 import { dropContextCache, resolveContextOnce, targetUrl } from "./context.ts";
@@ -374,6 +374,7 @@ export async function dispatch(
       const url = await resolvePolicyTarget(method, params);
       domain = domainOf(url);
       await enforceDenyList(method, url);
+      await enforceAllowList(method, url);
       await enforceFeatureToggles(method, url);
       await enforceOwnership(method, params);
     } catch (err) {

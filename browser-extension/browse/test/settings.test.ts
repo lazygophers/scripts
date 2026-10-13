@@ -72,6 +72,7 @@ function settle(): Promise<void> {
 const CONFIG = {
   confirm_mode: "per_domain",
   deny_domains: ["bank.test"],
+  allow_domains: [],
   approved_domains: ["shop.test"],
   audit: true,
   audit_retention_days: 7,
@@ -105,6 +106,7 @@ test("daemon 一句话都不用说：设置页能读、能改能存、坏草稿�
 
   const saved = data["browse:config"] as {
     deny_domains: string[];
+    allow_domains: string[];
     audit: boolean;
     approved_domains: string[];
   };
@@ -196,6 +198,7 @@ test("the form round-trips a config through render and readForm", async () => {
   assert.deepEqual(readForm(), {
     confirm_mode: "per_domain",
     deny_domains: ["bank.test"],
+  allow_domains: [],
     audit: true,
     audit_retention_days: 7,
     disabled_features: ["downloads"],

@@ -25,6 +25,8 @@ export const CONFIRM_MODES: ConfirmMode[] = ["silent", "per_domain", "always"];
 export interface BrowseConfig {
   confirm_mode: ConfirmMode;
   deny_domains: string[];
+  /** 正向白名单：非空时，有页面目标的命令只许操作名单内域名。空 = 不启用。 */
+  allow_domains: string[];
   approved_domains: string[];
   audit: boolean;
   audit_retention_days: number;
@@ -35,6 +37,7 @@ export interface BrowseConfig {
 export const DEFAULTS: BrowseConfig = {
   confirm_mode: "silent",
   deny_domains: [],
+  allow_domains: [],
   approved_domains: [],
   audit: true,
   audit_retention_days: 7,
@@ -214,6 +217,7 @@ function normalise(raw: unknown): BrowseConfig {
   return {
     confirm_mode: mode,
     deny_domains: normaliseDomains(got.deny_domains),
+    allow_domains: normaliseDomains(got.allow_domains),
     approved_domains: normaliseDomains(got.approved_domains),
     audit: got.audit !== false,
     audit_retention_days: days,
@@ -375,6 +379,38 @@ export async function enforceDenyList(
         `${domain} 命中拒绝名单（deny_domains: ${pattern}），${method} 未执行`,
       );
     }
+  }
+}
+
+/**
+ * 正向白名单这一关（2026-10-13，browse-enhance 票 04）。与拒绝名单对称：非空时，
+ * 有页面目标的命令必须落在名单内，否则拒。没有页面目标的全局动作（无 url）不拦
+ * ——它们本来就没有目标域，与 deny_domains 同一口径。
+ *
+ * 边界：子资源 / 页面内 fetch 不在命令层管辖（要拦那个得上 declarativeNetRequest
+ * 的会话级规则，会波及用户在 browse 之外的正常浏览）。白名单管的是 browse 自己
+ * 的动作面。
+ *
+ * 存储读坏时 getConfig 退到 ON_ERROR（allow 为空）——与 deny 同语义：最严的
+ * 「全拒」会把修配置的路也堵死，这里沿既有约定（confirm always）而不是全拒。
+ */
+export async function enforceAllowList(
+  method: string,
+  url: string | null,
+): Promise<void> {
+  const { allow_domains: allow } = await getConfig();
+  if (allow.length === 0) {
+    return;
+  }
+  const domain = domainOf(url);
+  if (domain === null) {
+    return;
+  }
+  if (!allow.some((pattern) => domainMatches(domain, pattern))) {
+    throw new CommandError(
+      "lg:user rejected",
+      `${domain} 不在白名单（allow_domains: ${allow.join(", ")}），${method} 未执行`,
+    );
   }
 }
 

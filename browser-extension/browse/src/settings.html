@@ -14,6 +14,7 @@
           <a href="#mode" data-i18n="settingsNavMode">Mode</a>
           <a href="#features" data-i18n="settingsNavFeatures">Features</a>
           <a href="#deny" data-i18n="settingsNavDeny">Deny list</a>
+          <a href="#allow" data-i18n="settingsNavAllow">Allow list</a>
           <a href="#audit" data-i18n="settingsNavAudit">Audit log</a>
           <a href="#approved" data-i18n="settingsNavApproved">No-confirm sites</a>
         </nav>
@@ -64,6 +65,12 @@
             <h2 data-i18n="settingsDeny">Always refused</h2>
             <p class="hint" data-i18n="settingsDenyHint">One domain per line.</p>
             <textarea id="deny" rows="4" spellcheck="false"></textarea>
+          </section>
+
+          <section id="allow">
+            <h2 data-i18n="settingsAllow">Only these domains</h2>
+            <p class="hint" data-i18n="settingsAllowHint">One domain per line. Empty = no restriction.</p>
+            <textarea id="allow" rows="4" spellcheck="false"></textarea>
           </section>
 
           <section id="audit">
