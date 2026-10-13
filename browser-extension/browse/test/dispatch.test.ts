@@ -53,6 +53,10 @@ const V1 = [
   // than in the 5.1 block.
   "lg:page.snapshot",
   "lg:page.lifecycle",
+  "lg:net.routeAdd",
+  "lg:net.routeRemove",
+  "lg:net.routeList",
+  "lg:net.routeClear",
   // 2026-09-16 扩容面（spec 外追加，扩展端 handlers/index.ts 逐条对齐）
   "lg:downloads.open",
   "lg:pageCapture.saveMhtml",

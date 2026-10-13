@@ -98,6 +98,10 @@ export const FEATURES: Feature[] = [
     ],
   },
   { id: "network", methods: ["network.subscribe", "network.unsubscribe"] },
+  {
+    id: "netroute",
+    methods: ["lg:net.routeAdd", "lg:net.routeRemove", "lg:net.routeList", "lg:net.routeClear"],
+  },
   { id: "history", methods: ["lg:history.search", "lg:history.delete"] },
   { id: "snapshot", methods: ["lg:page.snapshot", "lg:page.lifecycle"] },
   { id: "cache", methods: ["lg:cache.put", "lg:cache.get", "lg:cache.list"] },
@@ -425,6 +429,7 @@ export const RISKY_METHODS: Record<string, string> = {
   "lg:capture.recordDesktop": "captureMedia",
   "lg:clipboard.read": "readClipboard",
   "lg:console.start": "attachDebugger",
+  "lg:net.routeAdd": "netRoute",
   "lg:proxy.set": "setProxy",
   "lg:userScripts.register": "registerUserScript",
 };

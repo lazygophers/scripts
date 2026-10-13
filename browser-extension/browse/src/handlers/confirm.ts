@@ -29,6 +29,7 @@ export type RiskyAction =
   | "captureMedia"
   | "readClipboard"
   | "attachDebugger"
+  | "netRoute"
   | "adoptTab"
   | "setProxy"
   | "registerUserScript";

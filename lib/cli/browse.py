@@ -109,6 +109,10 @@ METHODS: dict[str, tuple[str, ...]] = {
     "storage.setLocalStorage": ("key", "value"),
     "network.subscribe": (),
     "network.unsubscribe": ("subscription",),
+    "lg:net.routeAdd": ("pattern",),
+    "lg:net.routeRemove": ("id",),
+    "lg:net.routeList": (),
+    "lg:net.routeClear": (),
     "lg:history.search": ("text",),
     "lg:history.delete": ("url",),
     "lg:downloads.start": ("url",),
@@ -444,6 +448,56 @@ def route(tokens: list[str]) -> tuple[str, dict, dict]:
         method = resolve_api(tokens[1], tokens[2])
         params, opts = _bind_params(method, *split_tokens(tokens[3:]))
         return f"api {method}", params, opts
+
+    if head == "net" and tokens[1:2] == ["route"]:
+        sub = tokens[2] if len(tokens) > 2 else ""
+        if sub == "add":
+            positional, flags = split_tokens(tokens[3:])
+            if not positional:
+                raise UsageError("要写成 `browse net route add <url 模式> --mock <内容|@文件> | --abort`")
+            params = {"pattern": positional[0]}
+            mock = flags.pop("mock", None)
+            abort = flags.pop("abort", None)
+            if (mock is None) == (abort in (None, False)):
+                raise UsageError("`net route add` 要正好给一个动作：--mock <内容|@文件> 或 --abort")
+            if abort is True:
+                params["action"] = "abort"
+            else:
+                # _coerce 会把 --mock '{"ok":true}' 解析成 dict——按类型还原成
+                # 要发给页面的字符串（dict/list 重新紧凑序列化）
+                body = mock if isinstance(mock, str) else json.dumps(
+                    mock, ensure_ascii=False, separators=(",", ":"))
+                if body.startswith("@"):
+                    path = pathlib.Path(body[1:])
+                    try:
+                        raw = path.read_bytes()
+                    except OSError as exc:
+                        raise UsageError(f"读不了 mock 文件 {path}: {exc}") from exc
+                    if len(raw) > 1024 * 1024:
+                        raise UsageError(f"mock 文件 {path} 有 {len(raw)} 字节，上限 1MB")
+                    body = raw.decode("utf-8", errors="replace")
+                params["action"] = "mock"
+                params["body"] = body
+            # split_tokens 已把 --status/--headers 按形态解析好，直接过
+            for key in ("status", "headers"):
+                if key in flags:
+                    params[key] = flags.pop(key)
+            opts = {key: flags.pop(key) for key in list(flags) if key in CLI_FLAGS}
+            params.update(flags)
+            for key in ("context",):
+                if isinstance(params.get(key), (int, float)):
+                    params[key] = str(params[key])
+            return "net route add", params, opts
+        if sub == "remove":
+            method = "lg:net.routeRemove"
+            params, opts = _bind_params(method, *split_tokens(tokens[3:]))
+            return "net route remove", params, opts
+        if sub in ("list", "clear"):
+            method = "lg:net.routeList" if sub == "list" else "lg:net.routeClear"
+            params, opts = _bind_params(method, *split_tokens(tokens[3:]))
+            return f"net route {sub}", params, opts
+        raise UsageError("没有这条指令: net route " + sub
+                         + "（net route 组有: add / remove / list / clear）")
 
     if head in NOUN_GROUPS:
         group = NOUN_GROUPS[head]
@@ -943,6 +997,8 @@ net 组（网络）
   browse net watch --match-url '*/api/*' --duration 30s    事件流一行一个 JSON
   browse net unwatch <订阅号>
   browse net proxy | proxy-set <模式> | proxy-clear
+  browse net route add <url 模式> --mock <内容|@文件> | --abort    拦请求：mock 假响应或直接断
+  browse net route list | remove <规则号> | clear
 
 sys 组（浏览器/系统杂项）
   browse sys info | idle | notify <标题> <正文> | notify-clear <id>
@@ -1093,12 +1149,23 @@ def _cmd_run(tokens: list[str]) -> int:
     return EXIT_OK if failed is None else exit_code_for(failed)
 
 
+# net route 四条（三段式，NOUN_GROUPS 的两段式装不下）
+NET_ROUTE_METHODS = {
+    "net route add": "lg:net.routeAdd",
+    "net route remove": "lg:net.routeRemove",
+    "net route list": "lg:net.routeList",
+    "net route clear": "lg:net.routeClear",
+}
+
+
 def _runnable(name: str, params: dict) -> tuple[str, dict]:
     """`run` 只吃一步能发出去的命令；多步的（open/close/wait…）单条跑，报参数错误。"""
     if name.startswith("api "):
         return name[4:], params
     if name in FLAT_SIMPLE:
         return FLAT_SIMPLE[name][0], params
+    if name in NET_ROUTE_METHODS:
+        return NET_ROUTE_METHODS[name], params
     head, _, action = name.partition(" ")
     entry = NOUN_GROUPS.get(head, {}).get(action)
     if entry is not None:
@@ -1675,6 +1742,13 @@ async def _dispatch_friendly(name: str, params: dict, opts: dict, sock: pathlib.
         return EXIT_OK
 
     # ---- 名词组
+    if name in NET_ROUTE_METHODS:
+        if name == "net route add":
+            await _resolve_target(params, opts, sock, browser)
+        result = _outcome_or_die(await execute(NET_ROUTE_METHODS[name], params, sock,
+                                               browser=browser))
+        print_result(result, table=_want_table(opts))
+        return EXIT_OK
     head, _, action = name.partition(" ")
     if head == "group":
         return await _cmd_group_special(action, params, opts, sock, browser)

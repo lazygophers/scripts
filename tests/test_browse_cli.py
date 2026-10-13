@@ -210,6 +210,43 @@ class TestParsing(unittest.TestCase):
         # 裸 text 匹配不受 ref 字段影响（text= 前缀路径）
         self.assertTrue(browse._snapshot_hit(entries, "text=Sa"))
 
+    def test_route_net_route_add_mock(self):
+        _, params, _ = browse.route(["net", "route", "add", "https://api.test/v1/*",
+                                     "--mock", '{"ok":true}'])
+        self.assertEqual(params["pattern"], "https://api.test/v1/*")
+        self.assertEqual(params["action"], "mock")
+        self.assertEqual(params["body"], '{"ok":true}')
+
+    def test_route_net_route_add_mock_at_file(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            fh.write('{"hello": 1}')
+            path = fh.name
+        try:
+            _, params, _ = browse.route(["net", "route", "add", "*", "--mock", f"@{path}",
+                                         "--status", "503"])
+        finally:
+            os.unlink(path)
+        self.assertEqual(params["body"], '{"hello": 1}')
+        self.assertEqual(params["status"], 503)
+
+    def test_route_net_route_add_abort(self):
+        _, params, _ = browse.route(["net", "route", "add", "*tracker*", "--abort"])
+        self.assertEqual(params, {"pattern": "*tracker*", "action": "abort"})
+
+    def test_route_net_route_misc(self):
+        self.assertEqual(browse.route(["net", "route", "remove", "rule-3"])[0], "net route remove")
+        self.assertEqual(browse.route(["net", "route", "list"])[0], "net route list")
+        self.assertEqual(browse.route(["net", "route", "clear"])[0], "net route clear")
+        with self.assertRaises(browse.UsageError):
+            browse.route(["net", "route", "add", "x"])
+        with self.assertRaises(browse.UsageError):
+            browse.route(["net", "route", "frobnicate"])
+
+    def test_route_net_route_plain_mock_string_not_parsed(self):
+        # 不含 JSON 语法的字符串保持原文，不进 _coerce 的 JSON 分支
+        _, params, _ = browse.route(["net", "route", "add", "*", "--mock", "plain body"])
+        self.assertEqual(params["body"], "plain body")
+
     def test_route_aliases(self):
         self.assertEqual(browse.route(["navigate", "https://a.com"])[0], "goto")
         self.assertEqual(browse.route(["shot"])[0], "screenshot")
@@ -1084,6 +1121,7 @@ class TestFriendlyMapping(unittest.TestCase):
         "lg:tabs.updateGroup", "lg:cache.put",
         "network.subscribe", "network.unsubscribe", "lg:pageCapture.saveMhtml",
         "input.upload",
+        *browse.NET_ROUTE_METHODS.values(),
     })
 
     def test_every_method_is_friendly_or_api_only(self):

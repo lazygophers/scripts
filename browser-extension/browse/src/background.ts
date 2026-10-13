@@ -3,6 +3,7 @@ import { setEventSink } from "./events.ts";
 import { setConfirmHook } from "./handlers/confirm.ts";
 import { invalidateTab } from "./handlers/cache.ts";
 import { consoleForget, consoleNavigate, consoleReset } from "./handlers/console.ts";
+import { netRuleArm, netRuleForget, netRuleReset } from "./handlers/netrule.ts";
 import { desktopSourcePicked } from "./handlers/capture.ts";
 import { listenGcm } from "./handlers/gcm.ts";
 import { listenNotifications } from "./handlers/notify.ts";
@@ -31,7 +32,10 @@ function paintBadge(): void {
 const connection = new NativeConnection(
   (next) => {
     state = next;
-    if (next === "disconnected") consoleReset(); // bridge 断了，debugger 会话全摘
+    if (next === "disconnected") { // bridge 断了，debugger 会话全摘
+      consoleReset();
+      netRuleReset();
+    }
     paintBadge();
   },
   (count) => {
@@ -122,12 +126,15 @@ chrome.tabs?.onUpdated.addListener((tabId, changeInfo) => {
 chrome.tabs?.onRemoved.addListener((tabId) => {
   void invalidateTab(tabId);
   consoleForget(tabId);
+  netRuleForget(tabId);
 });
 
 // A service worker restart (install, browser start, idle eviction) re-runs this
 // file, so connecting at module scope is the whole lifecycle handling needed.
 paintBadge();
 connection.connect();
+// 服务重启后把持久化的 net 路由重新武装（attach 不能跨重启存活）
+void netRuleArm();
 
 chrome.runtime.onStartup.addListener(() => {
   // 浏览器完整启动是「停止」状态的唯一自动解除点（CONTEXT.md）；连不上由

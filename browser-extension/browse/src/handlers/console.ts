@@ -2,6 +2,7 @@ import { clean } from "../redact.ts";
 import { CommandError } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
 import { requireApi, resolveContextOnce, targetUrl, type Target } from "./context.ts";
+import { acquireDebugger, forgetDebugger, releaseDebugger } from "./dbg.ts";
 import { isOwnTab } from "./ownership.ts";
 
 /**
@@ -189,6 +190,8 @@ const onEvent = (
 const onDetach = (source: { tabId?: number }, _reason: string): void => {
   if (source.tabId !== undefined) {
     sessions.delete(source.tabId);
+    // 共享管理器（dbg.ts）的计数一并作废，下次 acquire 会重新 attach
+    forgetDebugger(source.tabId);
   }
 };
 
@@ -206,7 +209,7 @@ function attachDebuggerListeners(): void {
 /** 摘掉一个 tab 的采集（detach + 删会话）。detach 失败原样抛。 */
 async function forget(tabId: number): Promise<void> {
   sessions.delete(tabId);
-  await chrome.debugger.detach({ tabId });
+  await releaseDebugger(tabId);
 }
 
 // ---------------------------------------------------------------- handlers
@@ -241,7 +244,8 @@ export async function consoleStart(
   }
   attachDebuggerListeners();
   try {
-    await chrome.debugger.attach({ tabId: target.tabId }, "1.3");
+    // console 和 net 路由合租同一个 attach（dbg.ts 计数）
+    await acquireDebugger(target.tabId);
   } catch (err) {
     throw new CommandError(
       "unsupported operation",
@@ -322,6 +326,7 @@ export async function consoleStop(
 /** tab 关了：摘掉采集（background.ts 的 onRemoved 调）。 */
 export function consoleForget(tabId: number): void {
   sessions.delete(tabId);
+  forgetDebugger(tabId);
   void chrome.debugger?.detach({ tabId }).catch(() => {});
 }
 
@@ -344,6 +349,11 @@ export function consoleReset(): void {
 
 /** 测试钩子：回到「没采集、没监听」的初始状态。 */
 export function resetConsole(): void {
+  const tabs = [...sessions.keys()];
   sessions.clear();
   listenersAttached = false;
+  // dbg.ts 的引用计数是模块级状态，测试间不清会越积越多（同 resetNetRules）
+  for (const tabId of tabs) {
+    forgetDebugger(tabId);
+  }
 }

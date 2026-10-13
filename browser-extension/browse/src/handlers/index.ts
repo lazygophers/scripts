@@ -36,6 +36,12 @@ import { profileGet, profileSet } from "./profile.ts";
 import { inputClick, inputKey, inputScroll, inputType, inputUpload } from "./input.ts";
 import { networkSubscribe, networkUnsubscribe } from "./network.ts";
 import {
+  netRouteAdd,
+  netRouteClear,
+  netRouteList,
+  netRouteRemove,
+} from "./netrule.ts";
+import {
   notificationsClear,
   notificationsShow,
   powerKeepAwake,
@@ -116,6 +122,11 @@ export const HANDLERS: Record<string, Handler> = {
 
   "network.subscribe": networkSubscribe,
   "network.unsubscribe": networkUnsubscribe,
+
+  "lg:net.routeAdd": netRouteAdd,
+  "lg:net.routeRemove": netRouteRemove,
+  "lg:net.routeList": netRouteList,
+  "lg:net.routeClear": netRouteClear,
 
   "lg:history.search": historySearch,
   "lg:history.delete": historyDelete,
@@ -234,6 +245,10 @@ const PAGE_METHODS = new Set([
   "storage.setLocalStorage",
   "lg:page.snapshot",
   "lg:page.lifecycle",
+  "lg:net.routeAdd",
+  "lg:net.routeRemove",
+  "lg:net.routeList",
+  "lg:net.routeClear",
   "lg:tabs.group",
   "lg:tabs.ungroup",
   "lg:pageCapture.saveMhtml",
