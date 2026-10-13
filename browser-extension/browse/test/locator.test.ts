@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
+
+type Any = Record<string, unknown>;
 import { locateInPage, pageErrorCode, parseLocator } from "../src/locator.ts";
 
 /** Install a jsdom document as the globals `locateInPage` reads off the realm. */
@@ -161,4 +163,39 @@ test("pageErrorCode maps page-side messages back to BiDi codes", () => {
   assert.equal(pageErrorCode(new Error("no such element: css=b")), "no such element");
   assert.equal(pageErrorCode(new Error("invalid argument: js= ...")), "invalid argument");
   assert.equal(pageErrorCode(new Error("boom")), "unknown error");
+});
+
+test("@eN parses as the ref scheme, not css", () => {
+  assert.deepEqual(parseLocator("@e3"), { scheme: "ref", value: "@e3" });
+  // Anything ref-shaped but off-pattern stays a css selector's business.
+  assert.deepEqual(parseLocator("@e"), { scheme: "css", value: "@e" });
+  assert.deepEqual(parseLocator("@ex"), { scheme: "css", value: "@ex" });
+});
+
+test("ref= resolves through the page's registry, and misses fail fast", async () => {
+  const dom = page(`<button id="b">Save</button>`);
+  const el = dom.window.document.getElementById("b")!;
+  (globalThis as Any).__browseRefs = {
+    next: 2,
+    refs: new WeakMap([[el, "@e1"]]),
+    els: new Map([["@e1", new WeakRef(el)]]),
+    last: null,
+  };
+  try {
+    const [hit] = await locateInPage("ref", "@e1", NO_WAIT);
+    assert.equal(hit, el);
+    // The ref is unknown: no wait loop, straight to no such element.
+    await assert.rejects(
+      locateInPage("ref", "@e9", NO_WAIT),
+      /no such element: ref @e9 no longer resolves; take a fresh snapshot/,
+    );
+    // A detached element is as good as gone even though the WeakRef still holds it.
+    el.remove();
+    await assert.rejects(
+      locateInPage("ref", "@e1", NO_WAIT),
+      /no such element/,
+    );
+  } finally {
+    delete (globalThis as Any).__browseRefs;
+  }
 });

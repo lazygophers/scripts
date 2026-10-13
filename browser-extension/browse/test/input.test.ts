@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { inputClick, inputKey, inputScroll, inputType, inputUpload, pageInput, pageUpload } from "../src/handlers/input.ts";
+import { pageSnapshot } from "../src/handlers/page.ts";
 import { setConfirmHook, type ConfirmRequest } from "../src/handlers/confirm.ts";
-import { clearChrome, installChrome, ownSession, page, rejectsWith, scriptingMock } from "./mock.ts";
+import { clearChrome, installChrome, ownSession, page, rejectsWith, resetRefs, scriptingMock } from "./mock.ts";
 import type { JSDOM } from "jsdom";
 
 type Any = Record<string, unknown>;
@@ -394,4 +395,42 @@ test("upload forwards locate options", async () => {
   const { dom } = setup(`<input id="f" type="file">`);
   void dom;
   await inputUpload({ selector: "#f", dataBase64: btoa("x"), index: 0, timeout: 200 });
+});
+test("click @eN goes through the ref registry set up by snapshot", async () => {
+  // One page, one world: snapshot hands out the ref, the click resolves it.
+  resetRefs();
+  const { dom, calls } = setup(`<button id="go">Go</button><a href="/x" id="lnk">x</a>`);
+  // jsdom lays nothing out (0×0 boxes would be invisible to the snapshot).
+  (dom.window as unknown as { Element: { prototype: Element } }).Element.prototype
+    .getBoundingClientRect = function (this: Element) {
+    const hidden = (this as HTMLElement).style?.display === "none";
+    return { width: hidden ? 0 : 100, height: hidden ? 0 : 20 } as DOMRect;
+  };
+  (globalThis as Any).getComputedStyle = (el: Element) =>
+    (dom.window as unknown as { getComputedStyle: (e: Element) => CSSStyleDeclaration })
+      .getComputedStyle(el);
+  const seen: string[] = [];
+  dom.window.document.querySelector("#go")!
+    .addEventListener("click", (e) => seen.push(`${e.type}:${e.isTrusted}`));
+  const snap = await pageSnapshot({}) as Any;
+  const ref = (snap.elements as Any[]).find((e) => e.text === "Go")?.ref;
+  assert.match(String(ref), /^@e\d+$/);
+  const before = calls.length;
+  const result = (await inputClick({ selector: String(ref) })) as Any;
+  assert.deepEqual(seen, ["click:false"]);
+  assert.deepEqual(result.element, ["<button#go>"]);
+  // The click itself never re-parses css: the page function still runs once,
+  // but no locator string beyond the ref crosses the wire.
+  assert.ok(calls.length > before);
+  clearChrome();
+});
+
+test("a stale ref is a hard miss, not a silent css fallback", async () => {
+  resetRefs();
+  setup(`<button id="go">Go</button>`);
+  await assert.rejects(
+    inputClick({ selector: "@e9" }),
+    /no such element: ref @e9 no longer resolves; take a fresh snapshot/,
+  );
+  clearChrome();
 });

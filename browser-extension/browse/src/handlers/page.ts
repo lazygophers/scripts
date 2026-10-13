@@ -10,19 +10,37 @@ import { runInPage, type PageResult } from "./inject.ts";
  * *not* go through the locator, so there is no waiting to switch off: it reads
  * the DOM as it stands right now.
  *
+ * Every entry also carries a `ref` (`@e1`, `@e2`, …) that stays valid as long
+ * as the element stays in the document — `browse click @e3` resolves straight
+ * to the element, no re-parsing of css/xpath (see page-locate.ts's registry).
+ *
+ * `delta: true` compares against the previous snapshot in the same page load
+ * and returns only `added` / `removed` / `changed` — the first call in a load
+ * reports everything as added.
+ *
  * `limit` (default 200) caps the list. A feed page has thousands of anchors and
  * a list that long answers nobody's question.
  */
 const DEFAULT_LIMIT = 200;
 
+export interface SnapshotDelta {
+  added: SnapshotEntry[];
+  removed: string[];
+  changed: SnapshotEntry[];
+}
+
 export async function pageSnapshot(
   params: Record<string, unknown>,
-): Promise<{ elements: SnapshotEntry[]; truncated: boolean }> {
+): Promise<{ elements: SnapshotEntry[]; truncated: boolean } | {
+  delta: SnapshotDelta;
+  truncated: boolean;
+}> {
   const limit = typeof params.limit === "number" && params.limit > 0
     ? Math.floor(params.limit)
     : DEFAULT_LIMIT;
+  const delta = params.delta === true;
   const target = await resolveContextOnce(params);
-  return runInPage(target, "ISOLATED", pageCollect, [limit]);
+  return runInPage(target, "ISOLATED", pageCollect, [limit, delta]);
 }
 
 export interface SnapshotEntry {
@@ -33,6 +51,8 @@ export interface SnapshotEntry {
   text: string;
   css: string;
   xpath: string;
+  /** Stable per page load: the same element keeps this ref across snapshots. */
+  ref: string;
 }
 
 /**
@@ -41,8 +61,24 @@ export interface SnapshotEntry {
  */
 export function pageCollect(
   limit: number,
-): PageResult<{ elements: SnapshotEntry[]; truncated: boolean }> {
+  delta: boolean,
+): PageResult<{ elements: SnapshotEntry[]; truncated: boolean } | {
+  delta: SnapshotDelta;
+  truncated: boolean;
+}> {
   try {
+    // The ref registry lives on globalThis (page-locate.js puts it there); a
+    // serialised function cannot import it. Recreating it here would reset
+    // every ref, so only build one when it is genuinely missing.
+    const g = globalThis as unknown as Record<string, unknown>;
+    let reg = g.__browseRefs as
+      | { next: number; refs: WeakMap<Element, string>; els: Map<string, WeakRef<Element>>; last: Array<{ ref: string; text: string; css: string }> | null }
+      | undefined;
+    if (reg === undefined) {
+      reg = { next: 1, refs: new WeakMap(), els: new Map(), last: null };
+      g.__browseRefs = reg;
+    }
+
     const SELECTOR = [
       "a[href]",
       "button",
@@ -146,13 +182,42 @@ export function pageCollect(
         truncated = true;
         break;
       }
+      let ref = reg.refs.get(el);
+      if (ref === undefined) {
+        ref = `@e${reg.next}`;
+        reg.next += 1;
+        reg.refs.set(el, ref);
+        reg.els.set(ref, new WeakRef(el));
+      }
       elements.push({
         tag: el.tagName.toLowerCase(),
         role: role(el),
         text: label(el),
         css: cssPath(el),
         xpath: xpath(el),
+        ref,
       });
+    }
+
+    const prev = reg.last;
+    reg.last = elements.map((e) => ({ ref: e.ref, text: e.text, css: e.css }));
+    if (delta) {
+      const prevRefs = new Set((prev ?? []).map((e) => e.ref));
+      const current = new Map(elements.map((e) => [e.ref, e]));
+      return {
+        ok: true,
+        value: {
+          truncated,
+          delta: {
+            added: elements.filter((e) => !prevRefs.has(e.ref)),
+            removed: (prev ?? []).filter((e) => !current.has(e.ref)).map((e) => e.ref),
+            changed: elements.filter((e) => {
+              const before = (prev ?? []).find((p) => p.ref === e.ref);
+              return before !== undefined && (before.text !== e.text || before.css !== e.css);
+            }),
+          },
+        },
+      };
     }
     return { ok: true, value: { elements, truncated } };
   } catch (err) {

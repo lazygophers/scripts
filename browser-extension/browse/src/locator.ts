@@ -16,7 +16,7 @@
 // Type-only: this module must carry no runtime import (see above).
 import type { ErrorCode } from "./protocol.ts";
 
-export type Scheme = "css" | "text" | "text*" | "xpath" | "js";
+export type Scheme = "css" | "text" | "text*" | "xpath" | "js" | "ref";
 
 export interface Locator {
   scheme: Scheme;
@@ -42,6 +42,11 @@ const SCHEMES: readonly string[] = ["css", "text", "text*", "xpath", "js"];
  * is then a CSS selector, which is what `a[href="x=1"]` needs.
  */
 export function parseLocator(selector: string): Locator {
+  // `@eN` is a snapshot ref (page-locate.ts's registry), not a CSS selector —
+  // and it carries no `=`, so it cannot collide with the prefix scheme below.
+  if (/^@e\d+$/.test(selector)) {
+    return { scheme: "ref", value: selector };
+  }
   const eq = selector.indexOf("=");
   const prefix = eq > 0 ? selector.slice(0, eq) : "";
   if (SCHEMES.includes(prefix)) {
@@ -132,6 +137,22 @@ export async function locateInPage(
     return out;
   };
 
+  const byRef = (): Element[] => {
+    const reg = (globalThis as unknown as Record<string, unknown>).__browseRefs as
+      | { els: Map<string, WeakRef<Element>> }
+      | undefined;
+    const held = reg?.els.get(value)?.deref();
+    // `isConnected`: a detached element can linger in a WeakRef, but acting on
+    // it (clicking a removed node) is never what the caller meant — treat it as
+    // gone, same as a navigation having torn the registry down.
+    if (held === undefined || !held.isConnected) {
+      throw new Error(
+        `no such element: ref ${value} no longer resolves; take a fresh snapshot`,
+      );
+    }
+    return [held];
+  };
+
   const byJs = (): Element[] => {
     const result: unknown = new Function(`return (${value})`)();
     if (!(result instanceof Element)) {
@@ -143,6 +164,11 @@ export async function locateInPage(
   };
 
   const match = (): Element[] => {
+    // A lost ref can never come back (the registry only sheds entries), so it
+    // fails fast instead of entering the wait loop. It must also stay outside
+    // the try: a miss is `no such element`, not the `invalid argument` the
+    // catch wraps locator syntax errors into.
+    if (scheme === "ref") return byRef();
     try {
       if (scheme === "css") return Array.from(document.querySelectorAll(value));
       if (scheme === "xpath") return byXPath();

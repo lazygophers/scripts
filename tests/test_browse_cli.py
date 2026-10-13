@@ -189,6 +189,27 @@ class TestParsing(unittest.TestCase):
         _, params, _ = browse.route(["fill", "css=input", "名字"])
         self.assertEqual(params["selector"], "css=input")
 
+    def test_route_ref_selector_is_not_wrapped_in_text(self):
+        # `@e3` 是快照 ref，直接透传给扩展侧的 ref scheme
+        _, params, _ = browse.route(["click", "@e3"])
+        self.assertEqual(params["selector"], "@e3")
+        _, params, _ = browse.route(["fill", "@e3", "名字"])
+        self.assertEqual(params["selector"], "@e3")
+
+    def test_snapshot_delta_flag_reaches_the_method(self):
+        _, params, _ = browse.route(["snapshot", "--delta"])
+        self.assertEqual(params.get("delta"), True)
+
+    def test_snapshot_hit_matches_ref_exactly(self):
+        entries = [
+            {"text": "Go", "css": "#go", "ref": "@e1"},
+            {"text": "Save", "css": "#save", "ref": "@e2"},
+        ]
+        self.assertTrue(browse._snapshot_hit(entries, "@e2"))
+        self.assertFalse(browse._snapshot_hit(entries, "@e9"))
+        # 裸 text 匹配不受 ref 字段影响（text= 前缀路径）
+        self.assertTrue(browse._snapshot_hit(entries, "text=Sa"))
+
     def test_route_aliases(self):
         self.assertEqual(browse.route(["navigate", "https://a.com"])[0], "goto")
         self.assertEqual(browse.route(["shot"])[0], "screenshot")

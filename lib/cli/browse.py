@@ -7,8 +7,8 @@
   browse list --url '*example.com*'          # 只列出网址匹配的标签页
   browse list --group 调研                   # 只列出分组匹配的标签页
   browse goto https://example.com           # 当前页跳转（别名 navigate）
-  browse snapshot                           # 这一页能点/能填的元素 + 可用定位符
-  browse click '登录'                        # 按可见文字点（不写前缀默认 text=）
+  browse snapshot                           # 这一页能点/能填的元素；每条带稳定 ref，可 click @e3
+  browse click '登录'                        # 按可见文字点（不写前缀默认 text=）；也可 click @e3 直达
   browse fill 'css=input[name=user]' '我的名字'
   browse text                               # 正文纯文字；html 拿源码
   browse wait '提交' | browse wait --text 完成 | browse wait --url '*ok*'
@@ -321,7 +321,9 @@ GROUP_SPECIAL = frozenset({"list", "add", "rename", "color", "dissolve"})
 
 # 定位符前缀（locator.ts 的 SCHEMES）；友好层的 click/fill 不写前缀默认按可见文字
 # 找（与旧写法的 css= 默认不同，spec 3.1）
-_LOCATOR_PREFIXES = ("css=", "text=", "text*=", "xpath=", "js=")
+_LOCATOR_PREFIXES = ("css=", "text=", "text*=", "xpath=", "js=", "@")
+# 尾部的 "@" 是快照 ref（`@e3`，见 locator.ts 的 ref scheme）：也是现成定位符，
+# 不能再套 text= 默认前缀。
 
 # 管理命令：不属于三层里的任何一层（spec 2）
 MANAGEMENT = frozenset({"status", "install", "uninstall", "audit", "bridge", "daemon",
@@ -900,7 +902,7 @@ HELP = """browse — 用命令行驱动浏览器扩展
   browse fill <目标> <文字>               填输入框
   browse upload <选择器> <文件>            给 <input type=file> 上传本地文件（默认按 CSS 找；≤768KB）
   browse screenshot [文件]               截当前视口，默认存 ~/Downloads；--base64 才吐 base64
-  browse snapshot                        这一页能点/能填的元素 + 可用定位符
+  browse snapshot                        这一页能点/能填的元素 + 定位符 + 稳定 ref；--delta 只吐变化
   browse text                            正文纯文字（给人和 AI 读的）
   browse html                            页面源码
   browse eval <js>                       在页面里跑一段 JS 拿返回值（别名 script）
@@ -1396,6 +1398,8 @@ def _snapshot_hit(entries: list[dict], target: str) -> bool:
         return any(str(target[4:]) in str(e.get("css", "")) for e in entries)
     if target.startswith("xpath="):
         return any(str(target[6:]) in str(e.get("xpath", "")) for e in entries)
+    if target.startswith("@e"):
+        return any(str(e.get("ref", "")) == target for e in entries)
     if target.startswith("js="):
         raise UsageError("`wait` 不支持 js= 定位符（页面里跑任意 JS 不是等待该干的事）")
     return any(target in str(e.get("text", "")) for e in entries)

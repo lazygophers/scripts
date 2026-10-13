@@ -16,6 +16,17 @@ test("importing the injectable file exposes locateInPage on the page global", as
   assert.equal(typeof g.__browseLocate, "function");
 });
 
+test("ensureRefRegistry initialises once and re-injection does not reset it", async () => {
+  const { ensureRefRegistry } = await import("../src/page-locate.ts");
+  delete g.__browseRefs;
+  const first = ensureRefRegistry();
+  first.next = 7; // as if three refs had been handed out
+  const second = ensureRefRegistry();
+  assert.equal(second, first, "re-injection must keep the existing registry");
+  assert.equal(second.next, 7);
+});
+
 afterEach(() => {
   delete g.__browseLocate;
+  delete g.__browseRefs;
 });

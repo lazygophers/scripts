@@ -1,4 +1,5 @@
 import { locateInPage } from "../src/locator.ts";
+import { ensureRefRegistry } from "../src/page-locate.ts";
 
 // The browser-neutral halves of the scaffolding live in the shared layer; they
 // are re-exported here so every test keeps importing one file.
@@ -11,6 +12,15 @@ import {
 } from "../../shared/test/mock.ts";
 
 export { clearChrome, installChrome, page, rejectsWith, storageMock };
+
+/**
+ * Drop the element-ref registry on the test global. The real thing dies with
+ * the page's ISOLATED world on navigation; tests create fresh jsdom pages per
+ * case, so without this the refs of one page leak into the next.
+ */
+export function resetRefs(): void {
+  delete (globalThis as Any).__browseRefs;
+}
 
 type Any = Record<string, unknown>;
 
@@ -30,6 +40,7 @@ export function scriptingMock(): {
       calls.push(injection);
       if (Array.isArray(injection.files)) {
         (globalThis as Any).__browseLocate = locateInPage;
+        ensureRefRegistry();
         return [{ result: undefined }];
       }
       const func = injection.func as (...args: unknown[]) => unknown;
