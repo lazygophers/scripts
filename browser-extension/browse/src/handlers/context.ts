@@ -1,5 +1,5 @@
 import { CommandError, asString, querySettle } from "../protocol.ts";
-import { ownGroupIds } from "./ownership.ts";
+import { filterOwnTabs } from "./ownership.ts";
 
 /** A resolved target: a tab, optionally narrowed to one of its frames. */
 export interface Target {
@@ -70,8 +70,7 @@ export async function resolveContext(
   const every = await querySettle(chrome.tabs.query({}), "chrome.tabs.query");
   let tabs = every;
   if (scope === "own") {
-    const groups = await ownGroupIds();
-    tabs = every.filter((tab) => tab.groupId !== undefined && groups.has(tab.groupId));
+    tabs = await filterOwnTabs(every);
   }
 
   if (matchUrl !== undefined) {

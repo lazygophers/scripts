@@ -1,6 +1,6 @@
 import { CommandError, optionalString, querySettle, requireString } from "../protocol.ts";
 import { formatContext, requireApi, resolveContextOnce, type Target } from "./context.ts";
-import { ownGroupIds } from "./ownership.ts";
+import { filterOwnTabs } from "./ownership.ts";
 
 interface ContextInfo {
   context: string;
@@ -27,8 +27,7 @@ export async function browsingContextGetTree(
   // 只读判定，不建任何组。
   let tabs = await querySettle(chrome.tabs.query({}), "chrome.tabs.query");
   if (params.all !== true) {
-    const groups = await ownGroupIds();
-    tabs = groups.size === 0 ? [] : tabs.filter((t) => t.groupId !== undefined && groups.has(t.groupId));
+    tabs = await filterOwnTabs(tabs);
   }
   const wanted = root === undefined ? tabs : tabs.filter((t) => String(t.id) === root);
   if (root !== undefined && wanted.length === 0) {

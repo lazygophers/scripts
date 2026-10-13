@@ -1,7 +1,10 @@
-import { CommandError, optionalString, querySettle } from "../protocol.ts";
+import { CommandError, optionalString, queriesHang, querySettle } from "../protocol.ts";
 import { confirm } from "./confirm.ts";
 import { requireApi, resolveContextOnce, type Target } from "./context.ts";
 import { isOwnTab, recordVisit } from "./ownership.ts";
+
+/** 与 ownership.ts 的 GROUP_PREFIX 同值；那边没导出，降级登记要剥前缀。 */
+const GROUP_PREFIX = "browse/";
 
 /** `chrome.tabGroups` 接受的颜色是固定的一套，不是任意 CSS 色。 */
 const COLORS = new Set(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]);
@@ -16,13 +19,22 @@ function groupIdOf(raw: string): number {
 /** `lg:tabs.group`（私有方法）：把标签页放进分组。不传 `group` 就新建一组。 */
 export async function tabsGroup(
   params: Record<string, unknown>,
-): Promise<{ group: string; title: string; color: string }> {
+): Promise<{ group: string; title: string; color: string; "lg:degraded"?: boolean }> {
   requireApi("tabs.group", "grouping tabs");
   const target = await requireTabOnly(params);
   const title = optionalString(params.title, "title");
   const color = optionalString(params.color, "color");
   if (color !== undefined && !COLORS.has(color)) {
     throw new CommandError("invalid argument", `color must be one of ${[...COLORS].join(", ")}`);
+  }
+  // 降级（Arc）：query 挂死，建不了也验不了真组；只登记归属并如实标记。
+  if (await queriesHang()) {
+    const tab = await chrome.tabs.get(target.tabId).catch(() => null);
+    if (tab === null) {
+      throw new CommandError("no such frame", `no such tab ${target.tabId}`);
+    }
+    await recordVisit(tab.url, title?.startsWith(GROUP_PREFIX) ? title.slice(GROUP_PREFIX.length) : title ?? "default");
+    return { group: "", title: title ?? "browse/default", color: color ?? "", "lg:degraded": true };
   }
   const group = optionalString(params.group, "group", ", a group id from lg:tabs.group");
   const groupId = await chrome.tabs.group({
@@ -72,8 +84,12 @@ export async function tabsUngroup(
  */
 export async function tabsGroups(
   params: Record<string, unknown>,
-): Promise<{ groups: { group: string; title: string; color: string; collapsed: boolean; window: number; tabs: number[] }[] }> {
+): Promise<{ groups: { group: string; title: string; color: string; collapsed: boolean; window: number; tabs: number[] }[]; "lg:degraded"?: boolean }> {
   requireApi("tabGroups", "listing tab groups");
+  // 降级（Arc）：query 挂死，列不出组；空清单 + 标记，CLI 的 open 依赖这条先行。
+  if (await queriesHang()) {
+    return { groups: [], "lg:degraded": true };
+  }
   const title = optionalString(params.title, "title");
   const color = optionalString(params.color, "color");
   if (color !== undefined && !COLORS.has(color)) {

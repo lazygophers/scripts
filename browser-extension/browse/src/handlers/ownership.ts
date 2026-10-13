@@ -1,4 +1,4 @@
-import { CommandError, querySettle } from "../protocol.ts";
+import { CommandError, queriesHang, querySettle } from "../protocol.ts";
 
 /**
  * 页面归属（票 02 设计；2026-09-28 二改：多组）。
@@ -83,19 +83,54 @@ export async function recordVisit(url: string | null | undefined, group: string)
 
 // ---------------------------------------------------------------- 归属判定
 
+/**
+ * 降级归属（Arc：query 全挂，组员身份判不了）：登记表 canonical(url) 命中即
+ * 自己的，组名取登记值。「拖出组即撤权」在此退化为「登记表没有 = 不归属」；
+ * URL 变了（origin+path 对不上）同样失效。
+ */
+async function registryGroupNameOf(tab: chrome.tabs.Tab): Promise<string | null> {
+  const c = canonical(tab.url);
+  if (c === null) {
+    return null;
+  }
+  return (await loadRegistry()).find((e) => e.u === c)?.g ?? null;
+}
+
 /** 现存所有 `browse/*` 组的 id。每次现场查——组随时被用户增删，懒判不缓存。 */
 export async function ownGroupIds(): Promise<Set<number>> {
   const groups = await querySettle(chrome.tabGroups.query({}), "chrome.tabGroups.query").catch(() => []);
   return new Set(groups.filter((g) => g.title?.startsWith(GROUP_PREFIX)).map((g) => g.id));
 }
 
-/** 一个 tab 是不是自己的页面：在任意 `browse/*` 组里。 */
+/** 一个 tab 是不是自己的页面：在任意 `browse/*` 组里；query 挂死降级为登记表命中。 */
 export async function isOwnTab(tab: chrome.tabs.Tab): Promise<boolean> {
+  if (await queriesHang()) {
+    return (await registryGroupNameOf(tab)) !== null;
+  }
   return tab.groupId !== undefined && (await ownGroupIds()).has(tab.groupId);
+}
+
+/**
+ * own scope 的 tab 过滤（resolveContext / getTree 共用）：正常按组员身份，
+ * query 挂死降级为登记表 canonical(url) 匹配。
+ */
+export async function filterOwnTabs(tabs: chrome.tabs.Tab[]): Promise<chrome.tabs.Tab[]> {
+  if (await queriesHang()) {
+    const reg = new Set((await loadRegistry()).map((e) => e.u));
+    return tabs.filter((t) => {
+      const c = canonical(t.url);
+      return c !== null && reg.has(c);
+    });
+  }
+  const groups = await ownGroupIds();
+  return tabs.filter((tab) => tab.groupId !== undefined && groups.has(tab.groupId));
 }
 
 /** tab 所在组的组名（去 browse/ 前缀）；不在组里或不是自己的组返回 null。 */
 async function ownGroupNameOf(tab: chrome.tabs.Tab): Promise<string | null> {
+  if (await queriesHang()) {
+    return registryGroupNameOf(tab);
+  }
   if (tab.groupId === undefined) {
     return null;
   }
@@ -126,6 +161,10 @@ export async function enforceOwnTab(tabId: number): Promise<void> {
  * 组，逐个收，单个失败不拖垮整批。
  */
 export async function reclaim(): Promise<void> {
+  // 降级（Arc）：query 挂死，认领不回组也建不了组——登记表匹配就是全部归属，跳过。
+  if (await queriesHang()) {
+    return;
+  }
   const registry = await loadRegistry();
   if (registry.length === 0) {
     return;

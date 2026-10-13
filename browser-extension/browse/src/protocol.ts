@@ -111,6 +111,39 @@ export function isCommand(value: unknown): value is Command {
  */
 export const QUERY_TIMEOUT_MS = 10_000;
 
+/**
+ * 归属降级的开关（Arc 无组降级，2026-10-13）：query 挂死/失败的环境里，
+ * 组员身份判不了，调用方退回登记表匹配。探针一次、缓存整个 SW 生命周期
+ * ——降级路径本身是 fail closed（登记表没有就拒），误判最多退回登记表语义。
+ */
+let hangProbe: Promise<boolean> | undefined;
+
+export function queriesHang(): Promise<boolean> {
+  hangProbe ??= (async () => {
+    // API 缺失不算挂死：让正常路径的 requireApi / 原生报错去说话。
+    if (typeof chrome.tabs?.query !== "function") {
+      return false;
+    }
+    try {
+      await querySettle(chrome.tabs.query({}), "chrome.tabs.query (capability probe)", 3_000);
+      return false;
+    } catch {
+      return true;
+    }
+  })();
+  return hangProbe;
+}
+
+/** 测试钩子：清探针缓存。 */
+export function resetQueryProbe(): void {
+  hangProbe = undefined;
+}
+
+/** 测试钩子：预置探针结果，降级用例不必等真超时。 */
+export function seedQueryProbe(hangs: boolean): void {
+  hangProbe = Promise.resolve(hangs);
+}
+
 export function querySettle<T>(p: Promise<T>, what: string, ms = QUERY_TIMEOUT_MS): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
