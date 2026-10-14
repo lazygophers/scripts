@@ -16,6 +16,7 @@
   browse screenshot                         # 存 ~/Downloads/browse-<时间戳>.png 并打路径
   browse data history '关键词'               # 历史；data 组还有 cookie/书签/下载/阅读清单
   browse batch @plan.json --bail          # JSON 数组一次跑完（{"method","args"}）
+  browse mcp                              # 起一个 MCP server（stdio JSON-RPC）
   browse net watch --match-url '*/api/*' --duration 30s   # 事件流 JSONL
   browse api gcm token <entity>             # 底层透传，参数形状直接跟扩展 handler
   browse run 'goto https://a.com' 'click 登录'            # 并发批量
@@ -2158,6 +2159,9 @@ def _main(argv: list[str]) -> int:
             return _cmd_run(tokens[1:])
         if tokens[0] == "batch":
             return _cmd_batch(tokens[1:])
+        if tokens[0] == "mcp":
+            from lib.browse_mcp import serve  # 惰性：mcp 只在真用到时才进导入图
+            return serve()
         if tokens[0] == "stop":
             return _cmd_stop(tokens[1:])
         if tokens[0] == "audit":
