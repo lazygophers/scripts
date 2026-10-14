@@ -352,6 +352,16 @@ class TestOpenAndClose(unittest.TestCase):
         self.assertEqual([m for m, _ in calls], ["browsingContext.create"])
         self.assertIsNone(json.loads(out)["group"])
 
+    def test_foreground_flag_overrides_the_background_default(self):
+        """默认 background:true；--foreground 才前台。"""
+        handler = lambda m, p: {"context": "42"} if m == "browsingContext.create" else {}
+        rc, _, _, calls = call(["open", "https://a.com", "--no-group"], handler)
+        self.assertEqual(rc, 0)
+        self.assertIs(calls[0][1]["background"], True)
+        rc, _, _, calls = call(["open", "https://a.com", "--no-group", "--foreground"], handler)
+        self.assertEqual(rc, 0)
+        self.assertIs(calls[0][1]["background"], False)
+
     def test_without_no_group_the_tab_joins_the_default_group(self):
         handler = lambda m, p: {"context": "42"} if m == "browsingContext.create" else {}
         _rc, _out, _err, calls = call(["open", "https://a.com"], handler)

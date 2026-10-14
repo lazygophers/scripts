@@ -42,12 +42,16 @@ export async function browsingContextGetTree(
  * `browsingContext.create`. 在当前窗口开页面并返回 context id。**不负责成组**：
  * CLI 用 `browse open --group <用途>` 把页面放进 `browse/<用途>` 组；不传时按 URL
  * 主机名命名（例如 `browse/a.com`）。页面进了 browse/* 组才取得归属（票 02）。
+ *
+ * 默认后台（不抢焦点，2026-10-14 起默认值翻转）：agent 开页不该打断用户正在用的
+ * 页。`background: false` 才前台；点击/填表/快照对后台 tab 照常工作，只有截图
+ * 会自动激活（captureVisibleTab 只拍活动 tab）。
  */
 export async function browsingContextCreate(
   params: Record<string, unknown>,
 ): Promise<{ context: string }> {
   const url = optionalString(params.url, "url");
-  const background = params.background === true;
+  const background = params.background !== false;
   const tab = await chrome.tabs.create({
     ...(url === undefined ? {} : { url }),
     active: !background,

@@ -953,7 +953,7 @@ HELP = """browse — 用命令行驱动浏览器扩展
   browse click '登录'
 
 常用·平铺
-  browse open <url>                      开新标签页；自动进分组（--group 名字 / --no-group 不分）
+  browse open <url>                      开新标签页；默认后台不抢焦点（--foreground 前台）；自动进分组（--group 名字 / --no-group 不分）
   browse close [网址通配]                 关匹配到的所有页；--group <名字> 关整组；不给关当前页
   browse goto <url>                      原地跳转（别名 navigate）
   browse list                            所有标签页：id / 标题 / 网址 / 分组 / 窗口
@@ -1354,7 +1354,12 @@ async def _cmd_open(params: dict, opts: dict, sock: pathlib.Path, browser: str) 
     url = params.pop("url", None)
     if not isinstance(url, str) or not url:
         raise UsageError("`browse open <url>` 要给网址")
-    extra = {k: params.pop(k) for k in ("type", "background") if k in params}
+    # 默认后台开页（不抢焦点）；--foreground 才前台。旧 --background 旗标保留
+    # 兼容但不再改变行为（默认已经是后台）。
+    params.pop("background", None)
+    extra = {"background": params.pop("foreground", None) is not True}
+    if "type" in params:
+        extra["type"] = params.pop("type")
     context = _outcome_or_die(
         await execute("browsingContext.create", {"url": url, **extra}, sock,
                       browser=browser, timeout=OPEN_REPLY_TIMEOUT)

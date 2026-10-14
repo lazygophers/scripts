@@ -1,18 +1,18 @@
-test("create opens a tab in the current window; grouping is the CLI's job", async () => {
+test("create opens a background tab in the current window; grouping is the CLI's job", async () => {
   const { calls } = tabsMock();
   assert.deepEqual(await browsingContextCreate({ url: "https://x.test/" }), {
     context: "99",
   });
-  assert.deepEqual(calls[0], { create: { url: "https://x.test/", active: true } });
+  assert.deepEqual(calls[0], { create: { url: "https://x.test/", active: false } });
   assert.equal(calls.some((call) => "group" in call || "windowCreate" in call), false,
                "扩展不成组不建窗口；组名归 CLI 的 browse open --group");
   clearChrome();
 });
 
-test("create background opens without focusing", async () => {
+test("create with background:false focuses the tab", async () => {
   const { calls } = tabsMock();
-  await browsingContextCreate({ url: "https://x.test/", background: true });
-  assert.deepEqual(calls[0], { create: { url: "https://x.test/", active: false } });
+  await browsingContextCreate({ url: "https://x.test/", background: false });
+  assert.deepEqual(calls[0], { create: { url: "https://x.test/", active: true } });
   clearChrome();
 });
 
@@ -284,10 +284,10 @@ test("navigate that never completes rejects after its timeout", async () => {
   clearChrome();
 });
 
-test("create without a url opens a blank active tab", async () => {
+test("create without a url opens a blank background tab", async () => {
   const { calls } = tabsMock();
   assert.deepEqual(await browsingContextCreate({}), { context: "99" });
-  assert.deepEqual(calls[0], { create: { active: true } });
+  assert.deepEqual(calls[0], { create: { active: false } });
   clearChrome();
 });
 

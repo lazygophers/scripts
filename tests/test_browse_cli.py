@@ -1247,6 +1247,7 @@ class TestGroupNaming(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual([m for m, _ in calls],
                          ["browsingContext.create", "lg:tabs.groups", "lg:tabs.group"])
+        self.assertIs(calls[0][1]["background"], True, "默认后台开页不抢焦点")
         self.assertEqual(calls[-1][1]["title"], "browse/a.com")
         self.assertEqual(calls[-1][1]["context"], "42")
 
