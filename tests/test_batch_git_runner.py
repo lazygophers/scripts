@@ -531,6 +531,140 @@ class TestMergeAll(unittest.TestCase):
             self.assertEqual(bg.merge_all("canary", ["merge_canary"]), 1)
 
 
+# ── rebase factory ────────────────────────────────────────────────────
+
+class TestRebaseFactory(unittest.TestCase):
+    def test_fetch_failure_fails_the_repo(self) -> None:
+        fake = FakeRun({"git fetch": _cp(1, stderr="fatal: 无法连接")})
+        with mock.patch.object(bg, "_run", fake):
+            plan = _plan_of(bg._rebase_one_factory("canary", False, False, []))
+        self.assertEqual(plan.status, "fail")
+        self.assertIn("fetch origin 失败", plan.detail)
+
+    def test_detached_head_is_skipped(self) -> None:
+        with mock.patch.object(bg, "_run", FakeRun()), \
+             mock.patch.object(bg, "_get_current_branch", return_value=""):
+            plan = _plan_of(bg._rebase_one_factory("canary", False, False, []))
+        self.assertEqual(plan.status, "skip")
+        self.assertIn("detached", plan.detail)
+
+    def test_already_on_target_is_skipped(self) -> None:
+        with mock.patch.object(bg, "_run", FakeRun()), \
+             mock.patch.object(bg, "_get_current_branch", return_value="canary"):
+            plan = _plan_of(bg._rebase_one_factory("canary", False, False, []))
+        self.assertEqual(plan.status, "skip")
+        self.assertIn("已在 canary", plan.detail)
+
+    def test_missing_remote_base_is_skipped_without_creation(self) -> None:
+        fake = FakeRun({"git show-ref": _cp(1)})
+        with mock.patch.object(bg, "_run", fake), \
+             mock.patch.object(bg, "_get_current_branch", return_value="feat"):
+            plan = _plan_of(bg._rebase_one_factory("canary", False, False, []))
+        self.assertEqual(plan.status, "skip")
+        self.assertIn("无远端 canary", plan.detail)
+        self.assertIn("不自动创建", plan.detail)
+
+    def test_dirty_worktree_fails_before_execute(self) -> None:
+        # rebase 前置：干净工作区。脏仓 fail，不 stash
+        fake = FakeRun({"git diff --quiet HEAD": _cp(1)})
+        with mock.patch.object(bg, "_run", fake), \
+             mock.patch.object(bg, "_get_current_branch", return_value="feat"):
+            plan = _plan_of(bg._rebase_one_factory("canary", False, False, []))
+        self.assertEqual(plan.status, "fail")
+        self.assertIn("未提交改动", plan.detail)
+        self.assertIsNone(plan.execute)
+
+    def test_master_sentinel_resolves_the_real_main_branch(self) -> None:
+        fake = FakeRun()
+        with mock.patch.object(bg, "_run", fake), \
+             mock.patch.object(bg, "_get_current_branch", return_value="feat"), \
+             mock.patch.object(bg, "_resolve_main_branch", return_value="main") as res:
+            plan = _plan_of(bg._rebase_one_factory("master", False, False, []))
+        res.assert_called_once()
+        self.assertEqual(plan.status, "ok")
+        self.assertTrue(fake.ran("git show-ref --verify --quiet refs/remotes/origin/main"))
+
+    def test_dry_run_stops_before_execute(self) -> None:
+        with mock.patch.object(bg, "_run", FakeRun()), \
+             mock.patch.object(bg, "_get_current_branch", return_value="feat"):
+            plan = _plan_of(bg._rebase_one_factory("canary", True, False, []))
+        self.assertEqual(plan.status, "skip")
+        self.assertIsNone(plan.execute)
+
+    def test_execute_runs_the_rebase_subcommand(self) -> None:
+        fake = FakeRun()
+        with mock.patch.object(bg, "_run", fake), \
+             mock.patch.object(bg, "_get_current_branch", return_value="feat"):
+            status, detail = _exec_plan(bg._rebase_one_factory("canary", False, False, ["--no-check"]))
+        self.assertEqual(status, "ok")
+        self.assertTrue(fake.ran("rebase_canary --no-check"))
+
+    def test_execute_reports_the_subcommand_exit_code(self) -> None:
+        fake = FakeRun({"rebase_canary": _cp(3)})
+        with mock.patch.object(bg, "_run", fake), \
+             mock.patch.object(bg, "_get_current_branch", return_value="feat"):
+            status, detail = _exec_plan(bg._rebase_one_factory("canary", False, False, []))
+        self.assertEqual(status, "fail")
+        self.assertIn("退出码 3", detail)
+
+    def test_auto_commit_runs_before_the_rebase(self) -> None:
+        fake = FakeRun()
+        with mock.patch.object(bg, "_run", fake), \
+             mock.patch.object(bg, "_get_current_branch", return_value="feat"), \
+             mock.patch("lib.commit_wf._has_changes", return_value=(True, "M x")), \
+             mock.patch("lib.commit_wf.run_commit", return_value=0) as commit:
+            status, _ = _exec_plan(bg._rebase_one_factory("canary", False, True, []))
+        self.assertEqual(status, "ok")
+        commit.assert_called_once()
+
+    def test_auto_commit_failure_stops_the_rebase(self) -> None:
+        fake = FakeRun()
+        with mock.patch.object(bg, "_run", fake), \
+             mock.patch.object(bg, "_get_current_branch", return_value="feat"), \
+             mock.patch("lib.commit_wf._has_changes", return_value=(True, "M x")), \
+             mock.patch("lib.commit_wf.run_commit", return_value=1):
+            status, detail = _exec_plan(bg._rebase_one_factory("canary", False, True, []))
+        self.assertEqual(status, "fail")
+        self.assertIn("自动提交失败", detail)
+        self.assertFalse(fake.ran("rebase_canary"))
+
+
+class TestRebaseAll(unittest.TestCase):
+    def test_dry_run_flag_reaches_the_factory(self) -> None:
+        captured = {}
+
+        def spy(target, dry_run, auto_commit, extra):
+            captured.update(target=target, dry_run=dry_run, auto_commit=auto_commit, extra=extra)
+            return lambda *a: RepoPlan(status="skip")
+
+        with mock.patch.object(bg, "_rebase_one_factory", side_effect=spy), \
+             mock.patch.object(bg.BatchRunner, "run", return_value=BatchResult()):
+            rc = bg.rebase_all("canary", ["rebase_canary", "--dry-run", "--stay"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(captured["target"], "canary")
+        self.assertTrue(captured["dry_run"])
+        self.assertEqual(captured["extra"], ["--stay"])
+
+    def test_auto_commit_is_consumed_and_not_passed_through(self) -> None:
+        captured = {}
+
+        def spy(target, dry_run, auto_commit, extra):
+            captured.update(auto_commit=auto_commit, extra=extra)
+            return lambda *a: RepoPlan(status="skip")
+
+        with mock.patch.object(bg, "_rebase_one_factory", side_effect=spy), \
+             mock.patch.object(bg.BatchRunner, "run", return_value=BatchResult()):
+            bg.rebase_all("canary", ["rebase_canary", "--auto-commit"])
+        self.assertTrue(captured["auto_commit"])
+        self.assertNotIn("--auto-commit", captured["extra"])
+
+    def test_failure_returns_one(self) -> None:
+        failed = BatchResult(total=1, failed=[RepoResult("a", "/a", "fail")])
+        with mock.patch.object(bg, "_rebase_one_factory", return_value=lambda *a: RepoPlan("skip")), \
+             mock.patch.object(bg.BatchRunner, "run", return_value=failed):
+            self.assertEqual(bg.rebase_all("canary", ["rebase_canary"]), 1)
+
+
 # ── switch factory ────────────────────────────────────────────────────
 
 class TestSwitchFactoryExecute(unittest.TestCase):

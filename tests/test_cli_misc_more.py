@@ -28,6 +28,9 @@ class TestGitwfEntries(unittest.TestCase):
         "merge_test": ("merge", "test"), "push_canary": ("push", "canary"),
         "push_dev": ("push", "dev"), "push_develop": ("push", "develop"),
         "push_master": ("push", "master"), "push_test": ("push", "test"),
+        "rebase_canary": ("rebase", "canary"), "rebase_dev": ("rebase", "dev"),
+        "rebase_develop": ("rebase", "develop"), "rebase_master": ("rebase", "master"),
+        "rebase_test": ("rebase", "test"),
     }
 
     def _spawned(self, entry_name: str, argv: list[str]):
@@ -43,7 +46,8 @@ class TestGitwfEntries(unittest.TestCase):
                 self.assertEqual((cli._name, cli._action, cli._target), (name, action, target))
 
     def test_branch_entries_take_the_branch_from_argv(self):
-        for name, action in (("merge_branch", "merge"), ("push_branch", "push")):
+        for name, action in (("merge_branch", "merge"), ("push_branch", "push"),
+                             ("rebase_branch", "rebase")):
             with self.subTest(entry=name):
                 cli = self._spawned(name, [name, "feature/x"])
                 self.assertEqual((cli._action, cli._target), (action, "feature/x"))

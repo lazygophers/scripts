@@ -544,6 +544,126 @@ class TestRunMergeWorkflow(FlowCase):
         r.kv.assert_called_once()
 
 
+class TestRunRebaseWorkflow(FlowCase):
+    """rebase_* 方向：基底 target → current，不推送。"""
+
+    def _run(self, fake: FakeGit, argv: list[str], *, base_exists: bool = True,
+             tty: bool = False) -> int:
+        with mock.patch.object(gw, "_git", fake), \
+             mock.patch.object(gw, "_resolve_target", return_value=("canary", None)), \
+             mock.patch.object(gw, "_remote_branch_exists", return_value=base_exists), \
+             mock.patch.object(gw.sys.stdin, "isatty", return_value=tty):
+            return gw.run_rebase_workflow("rebase_canary", "canary", argv)
+
+    def test_happy_path_rebases_current_onto_target(self) -> None:
+        fake = FakeGit({"branch --show-current": _p(0, "feature\n")})
+        rc = self._run(fake, ["rebase_canary"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(fake.ran("rebase origin/canary"))
+        self.assertFalse(fake.ran("checkout"))
+
+    def test_same_branch_skips(self) -> None:
+        fake = FakeGit({"branch --show-current": _p(0, "canary\n")})
+        rc = self._run(fake, ["rebase_canary"])
+        self.assertEqual(rc, 0)
+        self.assertFalse(fake.ran("rebase origin"))
+
+    def test_cannot_read_current_branch_returns_one(self) -> None:
+        fake = FakeGit({"branch --show-current": _p(1, "", "fatal")})
+        self.assertEqual(self._run(fake, ["rebase_canary"]), 1)
+
+    def test_dry_run_returns_zero_without_touching_git(self) -> None:
+        fake = FakeGit({"branch --show-current": _p(0, "feature\n")})
+        rc = self._run(fake, ["rebase_canary", "--dry-run", "--auto-commit"])
+        self.assertEqual(rc, 0)
+        self.assertFalse(fake.ran("rebase origin"))
+        self.assertFalse(fake.ran("fetch"))
+
+    def test_fetch_failure_returns_one(self) -> None:
+        fake = FakeGit({"branch --show-current": _p(0, "feature\n"), "fetch origin": _p(1, stderr="no net")})
+        rc = self._run(fake, ["rebase_canary"])
+        self.assertEqual(rc, 1)
+        self.assertFalse(fake.ran("rebase origin"))
+
+    def test_missing_base_branch_refuses_without_creating_it(self) -> None:
+        fake = FakeGit({"branch --show-current": _p(0, "feature\n")})
+        rc = self._run(fake, ["rebase_canary"], base_exists=False)
+        self.assertEqual(rc, 1)
+        self.assertFalse(fake.ran("rebase origin"))
+        self.assertFalse(fake.ran("push"))
+
+    def test_conflict_non_interactive_aborts(self) -> None:
+        fake = FakeGit({
+            "branch --show-current": _p(0, "feature\n"),
+            "rebase origin/canary": _p(1),
+        })
+        rc = self._run(fake, ["rebase_canary"], tty=False)
+        self.assertEqual(rc, 1)
+        self.assertTrue(fake.ran("rebase --abort"))
+
+    def test_conflict_interactive_resolved(self) -> None:
+        fake = FakeGit({
+            "branch --show-current": _p(0, "feature\n"),
+            "rebase origin/canary": _p(1),
+        })
+        with mock.patch("builtins.input", return_value=""):
+            rc = self._run(fake, ["rebase_canary"], tty=True)
+        self.assertEqual(rc, 0)
+        self.assertTrue(fake.ran("rebase --continue"))
+
+    def test_conflict_interactive_continue_failure_leaves_state(self) -> None:
+        # --continue 仍失败 → 报错退出但不擅自 abort（用户解决到一半的现场保留）
+        fake = FakeGit({
+            "branch --show-current": _p(0, "feature\n"),
+            "rebase origin/canary": _p(1),
+            "rebase --continue": _p(1),
+        })
+        with mock.patch("builtins.input", return_value=""):
+            rc = self._run(fake, ["rebase_canary"], tty=True)
+        self.assertEqual(rc, 1)
+        self.assertFalse(fake.ran("rebase --abort"))
+
+    def test_dirty_worktree_returns_one(self) -> None:
+        fake = FakeGit({"branch --show-current": _p(0, "feature\n")})
+        with mock.patch.object(gw, "check_bit_clean", side_effect=gw.GitError("工作区不干净")):
+            rc = self._run(fake, ["rebase_canary"])
+        self.assertEqual(rc, 1)
+        self.assertFalse(fake.ran("rebase origin"))
+
+    def test_auto_commit_runs_commit_when_dirty(self) -> None:
+        fake = FakeGit({"branch --show-current": _p(0, "feature\n")})
+        with mock.patch("lib.commit_wf._has_changes", return_value=(True, "M x")), \
+             mock.patch("lib.commit_wf.run_commit", return_value=0) as rc_commit:
+            rc = self._run(fake, ["rebase_canary", "--auto-commit"])
+        self.assertEqual(rc, 0)
+        rc_commit.assert_called_once()
+
+    def test_auto_commit_failure_aborts(self) -> None:
+        fake = FakeGit({"branch --show-current": _p(0, "feature\n")})
+        with mock.patch("lib.commit_wf._has_changes", return_value=(True, "M x")), \
+             mock.patch("lib.commit_wf.run_commit", return_value=2):
+            rc = self._run(fake, ["rebase_canary", "--auto-commit"])
+        self.assertEqual(rc, 1)
+
+    def test_auto_commit_noop_when_clean(self) -> None:
+        fake = FakeGit({"branch --show-current": _p(0, "feature\n")})
+        with mock.patch("lib.commit_wf._has_changes", return_value=(False, "")), \
+             mock.patch("lib.commit_wf.run_commit") as rc_commit:
+            rc = self._run(fake, ["rebase_canary", "--auto-commit"])
+        self.assertEqual(rc, 0)
+        rc_commit.assert_not_called()
+
+    def test_remote_default_hint_is_reported(self) -> None:
+        fake = FakeGit({"branch --show-current": _p(0, "main\n")})
+        r = mock.MagicMock()
+        with mock.patch.object(gw, "_git", fake), \
+             mock.patch.object(gw, "reporter", return_value=r), \
+             mock.patch.object(gw, "_resolve_target", return_value=("main", "main")):
+            rc = gw.run_rebase_workflow("rebase_master", "master", ["rebase_master"])
+        self.assertEqual(rc, 0)  # current == target → 早退
+        r.kv.assert_called_once()
+
+
 class TestGitShim(unittest.TestCase):
     def test_git_prepends_the_git_binary(self) -> None:
         with mock.patch.object(gw, "run_logged", return_value=_p(0)) as rl:
@@ -564,6 +684,12 @@ class TestThinWrappers(unittest.TestCase):
              mock.patch.object(gw, "run_workflow", return_value=0) as wf:
             gw.push_to("canary")
         self.assertTrue(wf.call_args[1]["stay_on_target"])
+
+    def test_rebase_to_uses_sys_argv_by_default(self) -> None:
+        with mock.patch.object(gw.sys, "argv", ["rebase_canary", "--dry-run"]), \
+             mock.patch.object(gw, "run_rebase_workflow", return_value=0) as wf:
+            gw.rebase_to("canary")
+        self.assertEqual(wf.call_args[0][2], ["canary", "--dry-run"])
 
 
 if __name__ == "__main__":

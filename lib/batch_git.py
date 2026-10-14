@@ -809,6 +809,113 @@ def merge_all(
     return 1 if result.failed else 0
 
 
+def _rebase_one_factory(target: str, dry_run: bool, auto_commit: bool, extra: list[str]) -> DetectFn:
+    """构造 rebase 单仓库检测函数（捕获 target/dry_run/auto_commit/extra）。
+
+    detect 阶段只读判定: fetch origin + 当前分支可获取 + 当前 != target + 远端 target
+    存在 + 工作区干净; 命中则返回带 execute 的 plan。rebase 需要干净工作区，
+    脏仓直接 fail（不 stash，防丢上下文）；远端基底不存在直接 skip（不自动创建）。
+    execute 串行执行：先（按需）auto-commit, 再调 `rebase_{target}` 子进程。
+    """
+    def _execute(repo: Path, plan: RepoPlan, r: Reporter, _root: Path) -> tuple[str, str]:
+        if auto_commit:
+            from lib.commit_wf import _has_changes, run_commit
+            has, _ = _has_changes(cwd=str(repo))
+            if has:
+                cur = _get_current_branch(cwd=str(repo)) or "?"
+                r.step(f"--auto-commit 自动提交 {cur}")
+                rc = run_commit(cwd=str(repo))
+                if rc != 0:
+                    return "fail", f"自动提交失败（退出码 {rc}）"
+        cmd = _single_repo_cmd("rebase", target)
+        r.step(f"执行 {' '.join(cmd)} …")
+        rc = _run_exec([*cmd, *extra], label=repo.name, r=r, cwd=str(repo), check=False,
+                       env={**os.environ, "_GITWF_BATCH": "1"}).returncode
+        if rc == 0:
+            return "ok", ""
+        return "fail", f"{' '.join(cmd)} 退出码 {rc}"
+
+    def _detect(repo: Path, r: Reporter, _root: Path) -> RepoPlan:
+        r.step("fetch origin …")
+        p = _run(["git", "fetch", "origin"], cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
+        if p.returncode != 0:
+            err = ((p.stdout or '') + (p.stderr or '')).strip()
+            r.err(f"fetch origin 失败: {err[:200]}")
+            return RepoPlan(status="fail", detail=f"fetch origin 失败: {err[:120]}")
+
+        current_branch = _get_current_branch(cwd=str(repo))
+        if not current_branch:
+            return RepoPlan(status="skip", detail="无法获取当前分支（detached HEAD）")
+        r.info(f"当前分支: {current_branch}")
+
+        def _p(**kw):
+            return RepoPlan(branch=current_branch, **kw)
+
+        if current_branch == target:
+            return _p(status="skip", detail=f"已在 {target}")
+
+        # target 哨兵 "master" 语义=主分支, 逐仓探真实主分支再判远端存在性
+        effective_target = (
+            _resolve_main_branch(repo) if target == _MAIN_SENTINEL else target
+        )
+        ref_check = _run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{effective_target}"],
+            cwd=str(repo), check=False, capture_output=True,
+        )
+        if ref_check.returncode != 0:
+            return _p(status="skip", detail=f"无远端 {effective_target}（rebase 需已存在的基底，不自动创建）")
+
+        # rebase 前置条件：干净工作区（与 switch 同款判定：diff --quiet HEAD，
+        # 覆盖暂存+未暂存；untracked 不挡 rebase）
+        diff_p = _run(["git", "diff", "--quiet", "HEAD"], cwd=str(repo), check=False, capture_output=True)
+        if diff_p.returncode != 0:
+            err = _dirty_detail(repo) or "工作区有未提交改动"
+            r.err(f"未提交变更 → 跳过: {err}")
+            return _p(status="fail", detail=err)
+
+        r.ok(f"可变基 origin/{effective_target} → {current_branch}")
+
+        if dry_run:
+            return _p(status="skip", detail=f"条件满足（dry-run 模式，不执行 rebase_{target}）")
+
+        return _p(status="ok", execute=_execute)
+
+    return _detect
+
+
+def rebase_all(
+    target: str,
+    argv: list[str] | None = None,
+) -> int:
+    """批量 rebase：扫描 Git 仓库，逐个把当前分支变基到 target（不推送）。
+
+    解析 --dry-run / --auto-commit；其余参数透传给单仓 rebase_{target}。
+    批量模式自动执行，无确认门（confirm=False）。
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog=f"rebase_{target}",
+        description=f"批量 rebase：扫描 Git 仓库，逐个执行 rebase_{target}（变基当前分支到 {target}，不推送）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--dry-run", action="store_true", help="仅检查条件并预览仓库列表，不执行 rebase")
+    parser.add_argument("--auto-commit", action="store_true",
+                        help="工作区有未提交变更时, 在 execute 段先提交再 rebase")
+    parsed, extra = parser.parse_known_args(argv[1:] if argv is not None else None)
+    # --auto-commit 仅批量层消费, 不透传子进程（子进程会再次判定导致重复提交）
+    extra = [a for a in extra if a != "--auto-commit"]
+
+    result = BatchRunner().run(CallbackBatchOperation(
+        title=f"rebase_{target} 批量变基",
+        root=Path(".").resolve(),
+        confirm=False,
+        detect_fn=_rebase_one_factory(target, parsed.dry_run, parsed.auto_commit, extra),
+        ignore_op="merge",
+    ))
+    return 1 if result.failed else 0
+
+
 def _switch_one_factory(target: str) -> DetectFn:
     """构造 switch_branch 单仓库检测函数（捕获 target）。
 

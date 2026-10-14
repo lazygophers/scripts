@@ -1,13 +1,17 @@
-"""merge*/push* 系列的统一实现（fire）
+"""merge*/push*/rebase* 系列的统一实现（fire）
 
 每个入口把 action 与 target 分支显式传进来:
   merge_canary/merge_dev/merge_develop/merge_master/merge_test  → merge_to / merge_all
   push_canary/push_dev/push_develop/push_master/push_test       → push_to / push_all
-  merge_branch/push_branch → 分支名来自必填首参（例: merge_branch feature/x）
+  rebase_canary/rebase_dev/rebase_develop/rebase_master/rebase_test → rebase_to / rebase_all
+  merge_branch/push_branch/rebase_branch → 分支名来自必填首参（例: merge_branch feature/x）
 
 自动识别单仓/批量:
-  - 当前目录是 git 仓库（有 .git）→ 单仓: merge_to / push_to
-  - 非 git 目录 → 进批量扫描（merge_all / push_all）
+  - 当前目录是 git 仓库（有 .git）→ 单仓: merge_to / push_to / rebase_to
+  - 非 git 目录 → 进批量扫描（merge_all / push_all / rebase_all）
+
+rebase_* 与 merge_* 同方向（target 为基底、留在 current），但**不推送**：
+rebase 重写提交，推送需 force，留给用户手动。
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ from lib.fire_base import BaseCli, run_cli, timed_cli
 
 
 class GitWfCli(BaseCli):
-    """merge*/push* 统一入口（action+target 由入口函数传入）"""
+    """merge*/push*/rebase* 统一入口（action+target 由入口函数传入）"""
 
     def __init__(self, name: str, action: str, target: str) -> None:
         super().__init__()
@@ -62,6 +66,12 @@ class GitWfCli(BaseCli):
                 return merge_to(self._target, argv)
             from lib.batch_git import merge_all
             return merge_all(self._target, argv)
+        if self._action == "rebase":
+            if single:
+                from lib.git_workflow import rebase_to
+                return rebase_to(self._target, argv)
+            from lib.batch_git import rebase_all
+            return rebase_all(self._target, argv)
         # push
         if single:
             from lib.git_workflow import push_to
@@ -145,3 +155,27 @@ def push_master() -> None:
 
 def push_test() -> None:
     _run("push_test", "push", "test")
+
+
+def rebase_branch() -> None:
+    _run("rebase_branch", "rebase", None)
+
+
+def rebase_canary() -> None:
+    _run("rebase_canary", "rebase", "canary")
+
+
+def rebase_dev() -> None:
+    _run("rebase_dev", "rebase", "dev")
+
+
+def rebase_develop() -> None:
+    _run("rebase_develop", "rebase", "develop")
+
+
+def rebase_master() -> None:
+    _run("rebase_master", "rebase", "master")
+
+
+def rebase_test() -> None:
+    _run("rebase_test", "rebase", "test")

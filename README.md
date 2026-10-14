@@ -47,6 +47,10 @@ inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.z
 | `merge_develop` / `merge_dev` / `merge_test` | 同上, 目标分别为 develop / dev / test | `merge_develop` |
 | `merge_master` | 合并当前分支 → 主分支(master/main 自动识别), 留在目标 | `merge_master` |
 | `merge_branch` | 合并当前分支 → 指定分支(分支名必填首参) | `merge_branch feature/x` |
+| `rebase_canary` | 把当前分支变基到 canary, 留在当前分支(**不推送** — rebase 重写提交) | `rebase_canary [--dry-run]` |
+| `rebase_develop` / `rebase_dev` / `rebase_test` | 同上, 基底分别为 develop / dev / test | `rebase_develop` |
+| `rebase_master` | 变基到主分支(master/main 自动识别), 不推送 | `rebase_master` |
+| `rebase_branch` | 变基到指定分支(分支名必填首参), 不推送 | `rebase_branch feature/x` |
 | `push_canary` | 合并当前分支 → canary, 推送后切回原分支 | `push_canary [--stay]` |
 | `push_develop` / `push_dev` / `push_test` | 同上, 目标分别为 develop / dev / test |  |
 | `push_master` | 同上, 目标为主分支(自动识别) |  |

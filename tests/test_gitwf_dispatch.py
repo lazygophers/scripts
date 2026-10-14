@@ -17,6 +17,7 @@ class TestEntryFunctions(unittest.TestCase):
         expected = {
             "merge_branch", "merge_canary", "merge_dev", "merge_develop", "merge_master", "merge_test",
             "push_branch", "push_canary", "push_dev", "push_develop", "push_master", "push_test",
+            "rebase_branch", "rebase_canary", "rebase_dev", "rebase_develop", "rebase_master", "rebase_test",
         }
         for name in expected:
             self.assertTrue(callable(getattr(gitwf, name, None)), f"缺少入口函数 {name}")
@@ -29,8 +30,10 @@ class TestEntryFunctions(unittest.TestCase):
             "push_develop": ("push", "develop"),
             "push_dev": ("push", "dev"),
             "push_test": ("push", "test"),
-            "merge_branch": ("merge", None),
-            "push_branch": ("push", None),
+            "rebase_canary": ("rebase", "canary"),
+            "rebase_master": ("rebase", "master"),
+            "rebase_develop": ("rebase", "develop"),
+            "rebase_branch": ("rebase", None),
         }
         for name, (action, target) in cases.items():
             with patch.object(gitwf, "_run") as m_run:
@@ -60,6 +63,16 @@ class TestDispatchHere(unittest.TestCase):
         self.assertEqual(mock_push.call_args[0][0], "develop")
 
 
+    @patch("lib.git_workflow.rebase_to", return_value=0)
+    def test_here_rebase(self, mock_rebase):
+        cli = gitwf.GitWfCli("rebase_canary", "rebase", "canary")
+        with patch("sys.argv", ["rebase_canary"]):
+            rc = cli.here()
+        self.assertEqual(rc, 0)
+        mock_rebase.assert_called_once()
+        self.assertEqual(mock_rebase.call_args[0][0], "canary")
+
+
 class TestDispatchAll(unittest.TestCase):
     """`all` 子命令 → 批量 merge_all / push_all"""
 
@@ -80,6 +93,15 @@ class TestDispatchAll(unittest.TestCase):
         self.assertEqual(rc, 0)
         mock_push_all.assert_called_once()
         self.assertEqual(mock_push_all.call_args[0][0], "test")
+
+    @patch("lib.batch_git.rebase_all", return_value=0)
+    def test_all_rebase(self, mock_rebase_all):
+        cli = gitwf.GitWfCli("rebase_master", "rebase", "master")
+        with patch("sys.argv", ["rebase_master"]):
+            rc = cli.all()
+        self.assertEqual(rc, 0)
+        mock_rebase_all.assert_called_once()
+        self.assertEqual(mock_rebase_all.call_args[0][0], "master")
 
 
 class TestDispatchAuto(unittest.TestCase):

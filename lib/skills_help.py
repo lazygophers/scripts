@@ -125,6 +125,16 @@ COMMAND_SKILLS: dict[str, list[str]] = {
         "合入自动识别的默认分支（master/main）: 单仓 `merge_master here`；批量 `merge_master all`；自动 `merge_master auto`。",
     ],
     "merge_test": ["单仓合入: `merge_test here`；批量: `merge_test all`；自动: `merge_test auto`。"],
+    "rebase_canary": ["变基当前分支到 canary（不推送）: `rebase_canary here`；批量: `rebase_canary all`；自动: `rebase_canary auto`。"],
+    "rebase_branch": [
+        "变基当前分支到指定分支（分支名是必填首参，不推送）: `rebase_branch feat/x`（单仓）；批量: `rebase_branch feat/x all`；自动: `rebase_branch feat/x auto`。",
+    ],
+    "rebase_dev": ["变基当前分支到 dev（不推送）: `rebase_dev here`；批量: `rebase_dev all`；自动: `rebase_dev auto`。"],
+    "rebase_develop": ["变基当前分支到 develop（不推送）: `rebase_develop here`；批量: `rebase_develop all`；自动: `rebase_develop auto`。"],
+    "rebase_master": [
+        "变基到自动识别的默认分支（master/main，不推送）: 单仓 `rebase_master here`；批量 `rebase_master all`；自动 `rebase_master auto`。",
+    ],
+    "rebase_test": ["变基当前分支到 test（不推送）: `rebase_test here`；批量: `rebase_test all`；自动: `rebase_test auto`。"],
     "mr": [
         "用本地 diff 上下文 + AI 生成标题/正文创建 PR/MR: `mr create`。",
         "需要检测到的 gh/glab 提供方，并向外发布前确认。",

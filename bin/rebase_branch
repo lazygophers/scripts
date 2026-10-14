@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""rebase_branch 薄壳入口 — 把当前分支变基到指定分支（基底 = 分支名首参，不推送）"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.gitwf import rebase_branch as main
+
+raise SystemExit(main())

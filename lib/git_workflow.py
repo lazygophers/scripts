@@ -495,6 +495,153 @@ def merge_to(target: str, argv: list[str] | None = None) -> int:
     return run_merge_workflow(script_name, target, passthrough)
 
 
+def run_rebase_workflow(
+    script_name: str,
+    default_branch: str | None,
+    argv: list[str],
+) -> int:
+    """rebase_* 流程：把当前分支变基到目标分支（基底 = target → current）。
+
+    与 merge_* 同方向（target 为基底，完成后留在 current），但**不推送**：
+    rebase 逐提交重写当前分支的 SHA，已推送过的分支重写后普通 push 会被拒，
+    推送（需要 --force-with-lease）留给用户手动执行。
+
+    步骤：
+    1. --auto-commit（有未提交变更时先提交）
+    2. 本地工作区干净检查（rebase 前置条件）
+    3. fetch 并确认远端存在目标分支（不自动创建 —— rebase 需要已存在的基底）
+    4. git rebase origin/<target>
+    5. 冲突：非交互 abort 回滚；交互等用户解决后 rebase --continue
+    """
+    global _STEP_COUNTER
+    _STEP_COUNTER = 0
+
+    auto_detect = default_branch == "master"
+    parser = argparse.ArgumentParser(
+        description="把当前分支变基到目标分支（基底 = target → 当前分支，不推送）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="示例:\n"
+               f"  {script_name}           # 变基到 {default_branch if not auto_detect else '远端默认分支'}\n"
+               f"  {script_name} --dry-run # 仅预览，不执行",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="仅预览，不执行实际操作")
+    parser.add_argument("--auto-commit", action="store_true",
+                        help="当前分支有未提交变更时，自动调 commit 提交后再继续")
+    parser.add_argument("target_arg", nargs="?", default=default_branch if not auto_detect else None,
+                        help=f"基底分支（当前分支将被变基到它；默认: {default_branch if not auto_detect else '远端默认分支'}）")
+    parsed = parser.parse_args(argv[1:])
+
+    r = reporter(stderr=True)
+    script_dir = Path(__file__).resolve().parent
+
+    resolved_target, default_hint = _resolve_target(
+        parsed.target_arg,
+        auto_detect=auto_detect,
+        r=r,
+    )
+    target_branch = resolved_target
+    if default_hint:
+        r.kv("远端默认分支", {"远端 HEAD": default_hint})
+
+    p = _git(["branch", "--show-current"], r=r, title="当前分支")
+    current_branch = (p.stdout or "").strip()
+    if p.returncode != 0 or not current_branch:
+        r.err(f"无法获取当前分支: {(p.stdout or '') + (p.stderr or '')}".rstrip())
+        return 1
+
+    r.panel(
+        f"Git 变基工作流：{script_name}",
+        f"[cyan]当前分支[/cyan]  {current_branch}\n"
+        f"[cyan]基底分支[/cyan]  {target_branch}  →  变基到当前（不推送）",
+        style="blue",
+    )
+
+    if current_branch == target_branch:
+        r.warn(f"当前已是 {target_branch}，跳过操作")
+        return 0
+
+    if parsed.dry_run:
+        r.rule("演练模式", style="yellow")
+        steps = []
+        if parsed.auto_commit:
+            steps.append(("自动提交", "若有未提交变更，调 commit（lib）"))
+        steps += [
+            ("干净检查", "check_bit_clean"),
+            ("更新基底", f"git fetch origin，确认 origin/{target_branch} 存在（不自动创建）"),
+            ("变基", f"git rebase origin/{target_branch}（当前分支 {current_branch}）"),
+        ]
+        for i, (name, detail) in enumerate(steps, 1):
+            r.step(f"[{i}] {name}: {detail}")
+        r.ok("演练完成，无实际变更")
+        return 0
+
+    try:
+        # 步骤0：--auto-commit 先处理未提交变更
+        if parsed.auto_commit:
+            from lib.commit_wf import _has_changes, run_commit
+            has, _ = _has_changes()
+            if has:
+                _step(f"检测到未提交变更，--auto-commit 自动提交 {current_branch}", r)
+                rc = run_commit()
+                if rc != 0:
+                    raise GitError(f"自动提交失败（退出码 {rc}），中止工作流")
+
+        # 步骤1：rebase 要求干净工作区
+        _step("检查工作区是否干净", r)
+        check_bit_clean()
+
+        # 步骤2：fetch 并确认基底存在（与 merge_* 不同：不自动创建远端分支）
+        _step(f"更新基底 {target_branch}（git fetch origin）", r)
+        fetch = _git(["fetch", "origin"], r=r, title="fetch origin", timeout=NET_TIMEOUT)
+        if fetch.returncode != 0:
+            raise GitError(f"git fetch origin 失败: {((fetch.stdout or '') + (fetch.stderr or '')).strip()[:200]}")
+        if not _remote_branch_exists(target_branch):
+            raise GitError(f"远端不存在 {target_branch}，rebase 需要已存在的基底分支（不自动创建）")
+
+        # 步骤3：变基。冲突：非交互 abort 回滚；交互等用户解决后 --continue
+        _step(f"变基 {current_branch} → 基底 origin/{target_branch}", r)
+        rebase = _git(["rebase", f"origin/{target_branch}"], r=r, title="执行变基", show_ok=True, timeout=DEFAULT_TIMEOUT)
+        if rebase.returncode != 0:
+            if sys.stdin.isatty():
+                r.warn("检测到变基冲突：请手动解决后（git add …）按回车继续")
+                input()
+                cont = _git(["rebase", "--continue"], r=r, title="继续变基", show_ok=True)
+            else:
+                r.err("检测到变基冲突：非交互模式下无法继续，已回滚（git rebase --abort）")
+                _git(["rebase", "--abort"], r=r, title="回滚变基")
+                _notify_done("变基冲突未解决", script_dir=script_dir)
+                raise GitError("变基冲突未解决，已回滚")
+            if cont.returncode != 0:
+                _notify_done("变基冲突未解决", script_dir=script_dir)
+                raise GitError("变基未完成，请手动 git rebase --continue 或 --abort")
+
+        r.panel(
+            "变基完成",
+            f"origin/{target_branch}  →  {current_branch}\n"
+            f"留在 {current_branch} · 重写过的提交推送需 --force-with-lease",
+            style="green",
+        )
+        _notify_done(f"已把 {current_branch} 变基到 {target_branch}", script_dir=script_dir)
+        return 0
+
+    except GitError as e:
+        r.err(str(e))
+        return 1
+
+
+def rebase_to(target: str, argv: list[str] | None = None) -> int:
+    """把当前分支变基到目标分支（基底 = target），留在当前分支。
+
+    供薄壳 (bin/rebase_canary 等) 直接调用。与 merge_* 同方向但**不推送**：
+    rebase 重写提交，推送需要 force，留给用户手动。
+    """
+    if argv is None:
+        argv = sys.argv
+    script_name = os.environ.get("_SCRIPT_NAME", f"rebase-{target}")
+    passthrough = [target, *argv[1:]]
+    return run_rebase_workflow(script_name, target, passthrough)
+
+
 def push_to(target: str, argv: list[str] | None = None) -> int:
     """合并当前分支 → target 并推送, 完成后切回原分支 (除非 --stay)。
 
