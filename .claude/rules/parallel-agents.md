@@ -14,6 +14,10 @@
   `npm --prefix browser-extension/browse run typecheck` 能拦住；并发改 TS 后
   必跑，不许只跑各自的测试文件（跑法见 testing.md「改完 TypeScript 文件先做
   单文件冒烟，再跑全套 typecheck」）。
+- **多 agent prompt 里的产物路径复制粘贴，不手写。** 2026-10-14 round2 方向二的
+  subagent prompt 把输出目录混写成 `design-demos/` 与 `round2/` 两套，实际落点靠
+  事后核对才确认。分发前把每条 prompt 里的路径互相对一遍：同一产物只能有一个名字；
+  路径直接抄上一条消息或 `ls` 输出，不凭记忆敲。
 - **一个文件混进两个任务的改动，按 hunk 拆干净再 commit**：`git diff -- <file>`
   看全量，python 按 `@@` 拆 hunk，挑着 `git apply --cached`，分次 commit。
   `git add -p` 是交互式的，agent 用不了；hunk 拆分是同文件双任务唯一的干净路

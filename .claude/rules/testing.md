@@ -64,7 +64,11 @@ python3 -m unittest discover -s tests -q   # 串行，调试单个用例时更�
   仓内函数同理：给共享函数加形参后，grep 所有手写替身同步加参——`lib/cli/browse.py` 的
   `execute` 加参后测试里的 `fake_execute` 没跟，单模块全绿、全量并行回归才炸 3 个
   （2026-10-14，commit 25ae53a）。
-- **派子 agent 跑测试前确认它带本地执行工具。** Explore 类只读 agent 没有 Bash，`npm --prefix browser-extension/*/ test` 跑不了，白等一轮。跑测试派 general-purpose，或主对话自己跑。
+- **跑进程的活一律 `subagent_type: general-purpose`。** 机械判据：任务动词是跑/编译/
+  测试/typecheck/装依赖，就派 general-purpose 或主对话自己跑。默认 `claude` 类型和
+  Explore 类只读 agent 都不带 Bash——2026-10-14 派默认类型跑 npm build+test，白等
+  一轮才发现它只有 ToolSearch/SendMessage/WebFetch/WebSearch/只读 MCP。前一条
+  「确认它带本地执行工具」因为要人脑确认没防住，改成按类型选就不用确认。
 
 ## 别写慢测试
 
