@@ -24,7 +24,7 @@ def call(tokens, handler=None, *, daemon=True):
     """跑一条 `browse <tokens>`，返回 (退出码, stdout, stderr, 调用过的方法列表)。"""
     calls: list[tuple[str, dict]] = []
 
-    async def fake_execute(method, params, sock, duration=None, browser=""):
+    async def fake_execute(method, params, sock, duration=None, browser="", timeout=None):
         calls.append((method, dict(params)))
         got = handler(method, params) if handler else {}
         if isinstance(got, dict) and "status" in got:
@@ -547,7 +547,7 @@ class TestWaitMore(unittest.TestCase):
 
     def test_gone_value_becomes_the_target(self):
         # 同上，只能直接调：`--gone <值>` 在 route 那层就被折成位置参数了
-        async def fake_execute(method, params, sock, duration=None, browser=""):
+        async def fake_execute(method, params, sock, duration=None, browser="", timeout=None):
             return {"status": "ok", "result": {"elements": []}}
 
         with mock.patch.object(browse, "execute", fake_execute), \
