@@ -396,7 +396,7 @@ def run_merge_workflow(
         steps += [
             ("干净检查", "check_bit_clean"),
             ("更新当前分支", f"git pull/push {current_branch}"),
-            ("更新目标分支", f"git pull {target_branch}"),
+            ("更新目标分支", f"git pull {target_branch}（不推送）"),
             ("预演冲突", f"target {target_branch} → current {current_branch}"),
             ("合并", f"git merge {target_branch} → {current_branch}"),
         ]
@@ -428,10 +428,11 @@ def run_merge_workflow(
             r.warn(f"远端无 {current_branch}，跳过同步当前分支")
 
         # 步骤3：更新目标分支为最新
-        if not _ensure_remote_branch_exists(target_branch, r=r):
-            raise GitError(f"自动创建 {target_branch} 分支失败（可能无推送权限或网络问题）")
-        _step(f"更新目标分支 {target_branch}（checkout 后 pull，不查未提交）", r)
-        update_branch(target_branch, r=r, check_after_pull=False)
+        # 目标分支只是被合并进来的来源：只拉不推，远端没有也不替用户创建
+        if not _remote_branch_exists(target_branch):
+            raise GitError(f"远端不存在 origin/{target_branch}，无可合并的分支")
+        _step(f"更新目标分支 {target_branch}（checkout 后 pull，不推送，不查未提交）", r)
+        update_branch(target_branch, r=r, check_after_pull=False, push=False)
 
         # 切回当前分支（update_branch 可能停在 target 上）
         p = _git(["branch", "--show-current"])

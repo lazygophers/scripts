@@ -146,7 +146,7 @@ def _fetch_shape(bit_cmd: str, remote: str, branch: str, r: Reporter | None = No
     return (True, ahead, behind)
 
 
-def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", r: Reporter | None = None, check_after_pull: bool = True) -> None:
+def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", r: Reporter | None = None, check_after_pull: bool = True, push: bool = True) -> None:
     """更新分支：切换到目标分支，fetch 判形后按形态同步（同步则跳过，双向差异最小化网络往返）。
 
     - 已同步（ahead=behind=0）：跳过 pull/push
@@ -155,6 +155,9 @@ def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", 
     - 分叉：merge-tree 预演，无冲突 pull(merge)+push，有冲突 GitError 中止
     - 远端无分支：push -u 创建（现状）
     - push 被拒（fetch 后远端又变动）：重同步一轮，最多 2 轮
+
+    push=False 时只拉不推（merge_* 里被合并进来的目标分支）：远端无分支直接报错不创建，
+    本地领先/分叉合并后的提交留在本地，不 push。
 
     check_after_pull=False 时跳过 pull 后的 check_bit_clean（用于切到目标分支后，
     工作区可能因 gitignore/行尾等残留显示"脏"但无实质改动的场景；合并后的检查
@@ -170,6 +173,8 @@ def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", 
             remote_exists, ahead, behind = _fetch_shape(bit_cmd, remote, branch)
 
             if not remote_exists:
+                if not push:
+                    raise GitError(f"远端不存在 {remote}/{branch}，无可合并的分支（只拉不推，不自动创建）")
                 _report(r, "warn", f"远端不存在 {remote}/{branch}，将先 push -u 创建该分支")
                 _run_git_retry(
                     [bit_cmd, "push", "-u", remote, branch],
@@ -210,6 +215,11 @@ def update_branch(branch: str, *, bit_cmd: str = "git", remote: str = "origin", 
                 if check_after_pull:
                     check_bit_clean(bit_cmd=bit_cmd)
                 did_pull = True
+
+            if not push:
+                if ahead > 0:
+                    _report(r, "warn", f"{branch} 本地领先 {remote}/{branch} {ahead} 个提交，只拉不推，保留在本地")
+                return
 
             if ahead > 0 or did_pull:
                 push_cmd = [bit_cmd, "push", remote, branch]

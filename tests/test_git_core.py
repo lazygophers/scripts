@@ -236,6 +236,47 @@ class TestUpdateBranch(unittest.TestCase):
 
     @patch("lib.git.check_bit_clean")
     @patch("lib.git.retry_command")
+    @patch("lib.git.run")
+    def test_no_push_ahead_only_skips_push(self, mock_run, mock_retry, mock_clean):
+        mock_run.side_effect = self._shape_runs(shape="2\t0")
+        r = MagicMock()
+        update_branch("dev", r=r, push=False)
+        mock_retry.assert_not_called()
+        r.warn.assert_called_once()
+
+    @patch("lib.git.check_bit_clean")
+    @patch("lib.git.retry_command")
+    @patch("lib.git.run")
+    def test_no_push_behind_pulls_only(self, mock_run, mock_retry, mock_clean):
+        mock_run.side_effect = self._shape_runs(shape="0\t3")
+        mock_retry.return_value = _retry(True, "")
+        update_branch("dev", push=False)
+        cmds = [c.args[0] for c in mock_retry.call_args_list]
+        self.assertEqual(cmds, [["git", "pull", "--ff-only", "origin", "dev"]])
+
+    @patch("lib.git.check_bit_clean")
+    @patch("lib.git.retry_command")
+    @patch("lib.git.run")
+    def test_no_push_diverged_merges_locally_only(self, mock_run, mock_retry, mock_clean):
+        mock_run.side_effect = self._shape_runs(shape="1\t2") + [_proc(0, "tree\n")]  # merge-tree 干净
+        mock_retry.return_value = _retry(True, "")
+        update_branch("dev", push=False)
+        cmds = [c.args[0] for c in mock_retry.call_args_list]
+        self.assertEqual(len(cmds), 1)
+        self.assertIn("pull", cmds[0])
+        self.assertNotIn("push", cmds[0])
+
+    @patch("lib.git.check_bit_clean")
+    @patch("lib.git.retry_command")
+    @patch("lib.git.run")
+    def test_no_push_missing_remote_raises(self, mock_run, mock_retry, mock_clean):
+        mock_run.side_effect = self._shape_runs(exists=False) + [_proc(0, "dev\n")]
+        with self.assertRaises(GitError):
+            update_branch("dev", push=False)
+        mock_retry.assert_not_called()
+
+    @patch("lib.git.check_bit_clean")
+    @patch("lib.git.retry_command")
     @patch("lib.git._switch_to_branch")
     @patch("lib.git.run")
     def test_switches_when_on_other_branch(self, mock_run, mock_switch, mock_retry, mock_clean):

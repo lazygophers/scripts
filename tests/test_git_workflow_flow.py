@@ -393,7 +393,8 @@ class TestRunMergeWorkflow(FlowCase):
         with mock.patch.object(gw, "_git", fake), \
              mock.patch.object(gw, "_resolve_target", return_value=("canary", None)), \
              mock.patch.object(gw, "_ensure_remote_branch_exists", return_value=True), \
-             mock.patch.object(gw, "_remote_branch_exists", return_value=remote_has_current), \
+             mock.patch.object(gw, "_remote_branch_exists",
+                               side_effect=lambda b, **_: b == "canary" or remote_has_current), \
              mock.patch("lib.ui.ask_confirm", return_value=confirm_stop), \
              mock.patch.object(gw.sys.stdin, "isatty", return_value=tty):
             return gw.run_merge_workflow("merge_canary", "canary", argv)
@@ -469,14 +470,27 @@ class TestRunMergeWorkflow(FlowCase):
         self.assertEqual(rc, 1)
         self.assertTrue(fake.ran("merge --abort"))
 
-    def test_target_branch_creation_failure_returns_one(self) -> None:
+    def test_missing_remote_target_fails_without_creating(self) -> None:
+        # 目标分支只是合并来源：远端没有就报错，不 push -u 替用户创建
         fake = FakeGit({"branch --show-current": _p(0, "feature\n")})
         with mock.patch.object(gw, "_git", fake), \
              mock.patch.object(gw, "_resolve_target", return_value=("canary", None)), \
-             mock.patch.object(gw, "_remote_branch_exists", return_value=True), \
-             mock.patch.object(gw, "_ensure_remote_branch_exists", return_value=False):
+             mock.patch.object(gw, "_remote_branch_exists", side_effect=lambda b, **_: b != "canary"), \
+             mock.patch.object(gw, "_ensure_remote_branch_exists") as ensure, \
+             mock.patch.object(gw, "update_branch"):
             rc = gw.run_merge_workflow("merge_canary", "canary", ["merge_canary"])
         self.assertEqual(rc, 1)
+        ensure.assert_not_called()
+        self.assertFalse(fake.ran("push"))
+
+    def test_target_branch_updated_without_push(self) -> None:
+        fake = FakeGit({"branch --show-current": _p(0, "feature\n")})
+        with mock.patch.object(gw, "update_branch") as ub:
+            rc = self._run(fake, ["merge_canary"])
+        self.assertEqual(rc, 0)
+        calls = {c.args[0]: c.kwargs for c in ub.call_args_list}
+        self.assertIs(calls["canary"]["push"], False)
+        self.assertNotIn("push", calls["feature"])
 
     def test_dirty_worktree_returns_one(self) -> None:
         fake = FakeGit({"branch --show-current": _p(0, "feature\n")})
