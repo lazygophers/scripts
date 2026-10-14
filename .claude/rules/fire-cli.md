@@ -15,3 +15,13 @@
   显式 `--context '"123"'` 的老写法不受影响。新接 `lg:` 方法时，参数凡是 id
   语义（context/root/tabId）都登记进 `STRING_NUMERIC_PARAMS`，别靠调用方自己
   加引号；测试传 context 也写字符串（`context: "7"` 不写 `7`）。
+
+- **gitwf 报参数错误时，先核对仓库状态再决定是否重试。** 2026-10-14 实测
+  `merge_canary here --dry-run` 进入 workflow 后，fire 对返回的 int 继续消费
+  残留参数，报 `Could not consume arg: --dry-run`、退出 2。裸
+  `merge_canary --dry-run` 则被 `lib/cli_flags.py::consume_dry_run` 提前拦截，
+  打印 no-op、退出 0；不能用裸 flag 冒烟替代子命令组合测试。定位入口见
+  `lib/cli/gitwf.py::GitWfCli` 与 `lib/fire_base.py::run_cli`。错误退出不代表
+  workflow 未执行；结合 workflow 输出与实际 Git 状态判断，勿自动重试或用
+  `|| true` 掩盖失败。将来修复参数消费时，用隔离仓库的 CLI 测试同时断言
+  workflow 效果与退出码；本次 dry-run 复现没有验证真实 merge 的副作用。
