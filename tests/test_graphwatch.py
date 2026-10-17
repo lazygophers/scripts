@@ -278,6 +278,34 @@ class TestCliRebuild(GraphwatchCase):
         finally:
             graphwatch_rebuild._release_rebuild_lock(lock)
 
+    def test_busy_directory_logs_rebuild_fail_reason(self):
+        # 失败原因必须落统一日志：daemon 模式 stderr 无人接收，只 print 的话
+        # 日志分析只能看到 rc=1 猜原因
+        from lib import graphwatch_rebuild
+
+        repo = self.mkdir()
+        lock = graphwatch_rebuild._acquire_rebuild_lock(repo)
+        try:
+            with unittest.mock.patch.object(graphwatch_rebuild, "_log") as mock_log:
+                self.assertEqual(graphwatch_rebuild.rebuild(str(repo)), 1)
+            events = [c.args[0] for c in mock_log.record.call_args_list]
+            self.assertIn("graphwatch.rebuild_fail", events)
+        finally:
+            graphwatch_rebuild._release_rebuild_lock(lock)
+
+    def test_import_sets_graph_cap_default(self):
+        # graphify 512 MiB 上限会拒读大仓的 graph.json（orca 实测 1.4GB，
+        # 2026-10-17 连续 16 次重建失败），导入本模块须放宽默认
+        import importlib
+
+        from lib import graphwatch_rebuild
+
+        with unittest.mock.patch.dict(os.environ):
+            os.environ.pop("GRAPHIFY_MAX_GRAPH_BYTES", None)
+            importlib.reload(graphwatch_rebuild)
+            self.assertEqual(os.environ.get("GRAPHIFY_MAX_GRAPH_BYTES"), "2GB")
+        importlib.reload(graphwatch_rebuild)
+
 
 class TestConfigEdges(GraphwatchCase):
     def test_default_home_without_env(self):

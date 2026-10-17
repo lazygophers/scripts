@@ -31,6 +31,11 @@ _semantic_backoff: dict[Path, float] = {}
 
 _EMPTY = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 0, "output_tokens": 0}
 
+# graphify 新版对 graph.json 有 512 MiB 读取上限（security.py 的 SSRF 护栏），
+# 大仓（orca 实测 1.4 GB）每次重建在 _load_existing_graph 就抛 ValueError。
+# graphwatch 管的图都是自己产出的，放宽到 2GB；用户显式设了 env 则尊重原值。
+os.environ.setdefault("GRAPHIFY_MAX_GRAPH_BYTES", "2GB")
+
 
 def _acquire_rebuild_lock(root: Path):
     """非阻塞获取目录级重建锁；正在构建时返回 None。"""
@@ -148,6 +153,8 @@ def rebuild(folder: str, force: bool = False) -> int:
     lock = _acquire_rebuild_lock(root)
     if lock is None:
         print(f"[graphwatch] {root}: 已在构建，不排队等待", file=sys.stderr)
+        _log.record("graphwatch.rebuild_fail", logger="graphwatch-daemon", level="error",
+                    folder=str(root), reason="已在构建，锁被占")
         return 1
     try:
         return _rebuild_unlocked(root, force=force)
@@ -223,6 +230,10 @@ def _rebuild_unlocked(root: Path, force: bool = False) -> int:
     )
     if G.number_of_nodes() == 0:
         print(f"[graphwatch] {root}: 图为空，拒绝写出（防覆盖已有图）", file=sys.stderr)
+        # stderr 在 daemon 模式无人接收，失败原因必须落统一日志（用户 2026-10-17 要求）
+        _log.record("graphwatch.rebuild_fail", logger="graphwatch-daemon", level="error",
+                    folder=str(root), reason="图为空，拒绝写出",
+                    new_nodes=len(nodes), deleted=len(deleted))
         return 1
     _stage(f"合并图谱 {G.number_of_nodes()} 节点", t0)
     communities = cluster(G)

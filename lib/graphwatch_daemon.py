@@ -323,13 +323,13 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
 
     _log.install_excepthook("graphwatch-daemon")
 
-    def _dlog(msg: str) -> None:
+    def _dlog(msg: str, level: str = "info") -> None:
         # 落盘走统一日志（lib/log.py）；前台跑时 stderr 照旧直接给用户看。
         # 服务模式 plist 已不再重定向 stderr，文件里只有这一份。
         import datetime
 
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        _log.record("daemon", logger="graphwatch-daemon", msg=msg)
+        _log.record("daemon", logger="graphwatch-daemon", msg=msg, level=level)
         print(f"[{stamp}] {msg}", file=sys.stderr)
 
     listeners: dict[str, object] = {}
@@ -379,14 +379,14 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
                 rc = runner(folder)
             except Exception as e:  # noqa: BLE001
                 # 带堆栈：上游 graphify 抛的 KeyError 之类只有类型+消息定位不到行
-                _dlog(f"{kind}异常: {folder}: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+                _dlog(f"{kind}异常: {folder}: {type(e).__name__}: {e}\n{traceback.format_exc()}", level="error")
                 rc = 1
             with work_cv:
                 in_flight.discard(folder)
                 redo = folder in dirty
                 dirty.discard(folder)
             if rc != 0:
-                _dlog(f"{kind}失败（rc={rc}）: {folder}")
+                _dlog(f"{kind}失败（rc={rc}）: {folder}", level="error")
                 sent = notifier.fire(folder, f"graphwatch {kind}失败", f"{folder}\n{kind}退出码 {rc}，稍后变更会重试")
                 _dlog(f"失败通知{'已发送' if sent else '发送失败（系统通知不可用）'}: {folder}")
             else:
