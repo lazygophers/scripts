@@ -211,10 +211,12 @@ def run_commit(
         final_msg = msg
     else:
         prompt = _build_prompt(status_lines, cwd=cwd)
+        final_msg = ""
         if _lazygophers_enabled():
             r.step("LAZYGOPHERS /chat/compate 生成 message（禁 thinking）")
             final_msg = _generate_via_lazygophers(prompt, system_prompt=_COMMIT_SYSTEM)
-        else:
+        if not final_msg:
+            # API 400/网络失败返回空串，回退 claude CLI 而不是取消提交
             final_msg = generate_via_claude(prompt, system_prompt=_COMMIT_SYSTEM)
         if not final_msg:
             r.err("生成 message 失败，已取消提交")

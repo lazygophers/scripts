@@ -65,6 +65,36 @@ class TestRunCommit(unittest.TestCase):
         rc = run_commit()
         self.assertEqual(rc, 1)
 
+    @patch.dict("lib.commit_wf.os.environ",
+                {"LAZYGOPHERS_SCRIPTS_BASE_URL": "http://x", "LAZYGOPHERS_SCRIPTS_TOKEN": "t"})
+    @patch("lib.commit_wf.generate_via_claude")
+    @patch("lib.commit_wf._generate_via_lazygophers")
+    @patch("lib.commit_wf.run")
+    @patch("lib.commit_wf._has_changes")
+    def test_lazygophers_empty_falls_back_to_claude(self, mock_has, mock_run, mock_lazy, mock_gen):
+        # API 400/网络失败时 _generate_via_lazygophers 返回空串，不能就此取消提交
+        mock_has.return_value = (True, ["M  file.py"])
+        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+        mock_lazy.return_value = ""
+        mock_gen.return_value = "fix: 回退生成"
+        rc = run_commit()
+        self.assertEqual(rc, 0)
+        mock_gen.assert_called_once()
+
+    @patch.dict("lib.commit_wf.os.environ",
+                {"LAZYGOPHERS_SCRIPTS_BASE_URL": "http://x", "LAZYGOPHERS_SCRIPTS_TOKEN": "t"})
+    @patch("lib.commit_wf.generate_via_claude")
+    @patch("lib.commit_wf._generate_via_lazygophers")
+    @patch("lib.commit_wf.run")
+    @patch("lib.commit_wf._has_changes")
+    def test_lazygophers_ok_skips_claude(self, mock_has, mock_run, mock_lazy, mock_gen):
+        mock_has.return_value = (True, ["M  file.py"])
+        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+        mock_lazy.return_value = "fix: api 生成"
+        rc = run_commit()
+        self.assertEqual(rc, 0)
+        mock_gen.assert_not_called()
+
     @patch("lib.commit_wf.run")
     @patch("lib.commit_wf._has_changes")
     def test_empty_staged_calls_bit_add(self, mock_has, mock_run):
