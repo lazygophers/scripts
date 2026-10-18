@@ -69,6 +69,11 @@ python3 -m unittest discover -s tests -q   # 串行，调试单个用例时更�
   Explore 类只读 agent 都不带 Bash——2026-10-14 派默认类型跑 npm build+test，白等
   一轮才发现它只有 ToolSearch/SendMessage/WebFetch/WebSearch/只读 MCP。前一条
   「确认它带本地执行工具」因为要人脑确认没防住，改成按类型选就不用确认。
+- **idea-plugin gradle 测试的网络断流不是代码错。** Maven Central 间歇 TLS
+  断流会把 `./gradlew test` 炸成失败，日志特征是 `Could not resolve` /
+  `Connection reset` / TLS handshake；2026-10-18 实测同一份代码连跑三次
+  1h23m 挂 → 2m31s 挂 → 20s 过。先 `curl -sI <日志里的依赖 URL>` 验证
+  网络再原样重试，别按失败去改代码，也别把第一次挂当成回归。
 
 ## 别写慢测试
 

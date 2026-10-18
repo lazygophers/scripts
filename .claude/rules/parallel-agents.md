@@ -2,7 +2,9 @@
 
 2026-10-13 browse console 任务（commit 5605451）实测：多个 agent 并发改扩展，
 各自报完成，合并后才发现重复 import、manifest.json 重复键、接口漂移（一方改
-签名另一方按旧签名写测试），全部靠终态核对去重后才全绿。
+签名另一方按旧签名写测试），全部靠终态核对去重后才全绿。2026-10-18
+/ponytail-audit 修复（两 agent 并行修 20 条发现）再证一次：各 agent 自报
+全绿，合并后靠主对话 ruff + 终态评审兜出 3 处 lint 残留。
 
 - **汇聚点文件指定单一 owner**：`manifest.json`、`handlers/index.ts`、
   `test/mock.ts` 这类多方都要动的文件，开工前指给一个 agent 独占，其余 agent
@@ -23,3 +25,13 @@
   `git add -p` 是交互式的，agent 用不了；hunk 拆分是同文件双任务唯一的干净路
   （2026-10-14 票 07 的 mcp 入口与临时插进来的 `open` 默认后台同落
   `lib/cli/browse.py`，拆成 7a18ac0 / 21a2fe8 两个 commit）。
+- **lint 属于 agent 交付，不是主对话收尾**：`tests/run.py` 不跑 ruff/mypy，
+  CI 也没有独立 lint job（ruff 只在 checkwork 里 warn-only），修复 agent
+  没被要求跑 ruff 时，unused import / import 排序残留只有主对话评审才暴露
+  （2026-10-18 /ponytail-audit，3 处）。修复 Python 的 agent 任务书写明交付 =
+  `python3 tests/run.py` 相关模块绿 + `ruff check <改动文件>`；TS 是
+  typecheck，Kotlin 是 `gradlew test`（见 testing.md 各条）。
+- **审计→修复的交接用 file:line 任务书**：/ponytail-audit 报告的 file:line
+  整条抄进 agent 任务书，一条一修，20 条零返工（2026-10-18 实测）。审计阶段
+  把位置钉死，修复 agent 不再定位只改；比「agent 自己找问题自己修」少一层
+  定位漂移，也天然按文件分区（和上面的单一 owner 规则衔接）。
