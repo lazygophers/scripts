@@ -10,11 +10,13 @@ object IncludedChangesDiff {
             val before = change.beforeRevision?.content
             val after = change.afterRevision?.content
             val path = (change.afterRevision ?: change.beforeRevision)?.file?.path ?: "(unknown)"
-            if (before == null || after == null) {
+            // 新增文件 beforeRevision 为空、删除文件 afterRevision 为空：按空内容参与 diff，
+            // 否则整个文件被判成 binary，模型看不到新增了什么
+            if (before == null && after == null) {
                 "diff --git a/$path b/$path\n(binary or unavailable; file: $path)"
             } else {
                 "diff --git a/$path b/$path\n--- a/$path\n+++ b/$path\n" +
-                    simpleDiff(before, after)
+                    simpleDiff(before ?: "", after ?: "")
             }
         }
     }

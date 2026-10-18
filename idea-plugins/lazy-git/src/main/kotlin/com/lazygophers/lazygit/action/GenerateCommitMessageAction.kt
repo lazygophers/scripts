@@ -78,7 +78,13 @@ class GenerateCommitMessageAction :
                     return
                 }
                 val message = generated.toString().trim()
-                if (message.isNotEmpty() && !indicator.isCanceled) {
+                if (indicator.isCanceled) return
+                if (message.isEmpty()) {
+                    // 流中途出错（鉴权失败等）时每行解析失败被静默丢弃，只有空结果——必须给用户反馈
+                    SwingUtilities.invokeLater {
+                        notify(project, "AI 生成失败：模型没有返回内容（检查 API Key / endpoint / 余额）", NotificationType.ERROR)
+                    }
+                } else {
                     SwingUtilities.invokeLater {
                         if (!writeMessage(ui, message)) {
                             notify(project, "生成成功，但无法写入 commit message（IDE API 不兼容）", NotificationType.ERROR)

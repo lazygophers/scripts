@@ -44,17 +44,19 @@ class IncludedChangesDiffTest {
     }
 
     @Test
-    fun `an added file has no before revision and is still reported`() {
+    fun `an added file has no before revision and shows its full content`() {
         val diff = IncludedChangesDiff.build(listOf(change("src/new.kt", null, "hello")))
         assertTrue(diff.startsWith("diff --git a/src/new.kt b/src/new.kt"))
-        assertTrue(diff.contains("binary or unavailable"))
+        assertTrue(diff.contains("+hello"))
+        assertTrue(!diff.contains("binary or unavailable"))
     }
 
     @Test
-    fun `a deleted file falls back to the before path`() {
+    fun `a deleted file keeps its before content`() {
         val diff = IncludedChangesDiff.build(listOf(change("src/gone.kt", "bye", null)))
         assertTrue(diff.contains("src/gone.kt"))
-        assertTrue(diff.contains("binary or unavailable"))
+        assertTrue(diff.contains("-bye"))
+        assertTrue(!diff.contains("binary or unavailable"))
     }
 
     @Test
