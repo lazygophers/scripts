@@ -29,7 +29,6 @@ import signal
 import socket
 import struct
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.parse
@@ -117,18 +116,25 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> dict:
 
 
 def save_config(data: dict, path: pathlib.Path = CONFIG_PATH) -> None:
-    """写 YAML 配置：属主 root、权限 0600（里面有明文密码和 TOTP 密钥）。"""
+    """写 YAML 配置：属主 root、权限 0600、原子换名（里面有明文密码和 TOTP 密钥）。"""
     import yaml
 
     path.parent.mkdir(parents=True, exist_ok=True)
     text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-    # 先建 0600 再写，避免密码在 umask 宽松时短暂可读
+    # 同目录临时文件 0600 建档，写完 fsync 再 os.replace——读者永远看不到半截文件
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     except PermissionError as e:
         raise NeedRoot(f"写不了 {path}（只有 root 能写），命令前面加 sudo") from e
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
     os.chmod(path, 0o600)
     if is_root():
         os.chown(path, 0, 0)  # 已经存在的旧文件也顺手收归 root
@@ -828,5 +834,3 @@ def _drive(mgmt: ManagementClient, proc, reporter, *, username: str, password: s
             else:
                 reporter.step(f"VPN 状态: {name}{('；详情: ' + detail) if detail else ''}")
 
-    proc.wait()
-    return proc.returncode or 0, connected_ever, last_otp_counter

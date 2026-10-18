@@ -124,6 +124,13 @@ class TestConfigIO(unittest.TestCase):
             ovpn.save_config({"a": 1}, self.path)
         chown.assert_called_once_with(self.path, 0, 0)
 
+    def test_save_leaves_no_temp_file_behind(self) -> None:
+        """原子写：os.replace 后同目录不残留临时文件。"""
+        with mock.patch.object(ovpn, "is_root", return_value=False):
+            ovpn.save_config({"a": 1}, self.path)
+        leftovers = [p.name for p in self.path.parent.iterdir() if p.name != self.path.name]
+        self.assertEqual(leftovers, [])
+
 
 class TestSecureConfig(unittest.TestCase):
     def setUp(self) -> None:

@@ -374,6 +374,21 @@ class TestRead(ConnectionCase):
             self.assertEqual([p.name for p in written], ["q3.pdf"])
             self.assertEqual(written[0].read_bytes(), b"%PDF-1.4")
 
+    def test_duplicate_attachment_names_do_not_overwrite(self):
+        """同封邮件两个同名附件：都落盘、内容各自正确（后者加 -2 后缀）。"""
+        msg = EmailMessage()
+        msg["Subject"] = "重复附件"
+        msg.set_content("x")
+        msg.add_attachment(b"first", maintype="application", subtype="octet-stream", filename="a.pdf")
+        msg.add_attachment(b"second", maintype="application", subtype="octet-stream", filename="a.pdf")
+        self.imap = FakeIMAP(messages={b"7": msg.as_bytes()})
+        mail.imaplib.IMAP4_SSL = lambda *a, **kw: self.imap
+        with tempfile.TemporaryDirectory() as d:
+            written = mail.save_attachments("me@gmail.com", _profile(), "7", pathlib.Path(d))
+            self.assertEqual([p.name for p in written], ["a.pdf", "a-2.pdf"])
+            self.assertEqual(written[0].read_bytes(), b"first")
+            self.assertEqual(written[1].read_bytes(), b"second")
+
     def test_attachment_filename_cannot_escape_the_target_dir(self):
         msg = EmailMessage()
         msg["Subject"] = "坏文件名"

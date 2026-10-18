@@ -115,16 +115,17 @@ class TestInjectDryRunIsolated(unittest.TestCase):
 
 
 class TestNRejectsDangerousIsolated(unittest.TestCase):
-    """bin/n 拒绝危险字符 (不实际 say)。fire 重构后用 `n say <content>`。"""
+    """bin/n：特殊字符无害（say 列表参数执行、无 shell），仅长度受限。
+    SCRIPTS_NO_SAY=1 静音，不真出声。"""
 
-    def test_rejects_semicolon(self):
+    def test_accepts_semicolon(self):
         env = {"PATH": os.environ.get("PATH", ""), "HOME": tempfile.mkdtemp(),
-               "PYTHONPATH": str(REPO_ROOT)}
+               "PYTHONPATH": str(REPO_ROOT), "SCRIPTS_NO_SAY": "1"}
         p = subprocess.run(
             [sys.executable, str(BIN_DIR / "n"), "say", "msg; rm -rf /"],
             capture_output=True, text=True, env=env, timeout=10,
         )
-        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
     def test_rejects_overlong(self):
         env = {"PATH": os.environ.get("PATH", ""), "HOME": tempfile.mkdtemp(),

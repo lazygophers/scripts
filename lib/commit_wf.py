@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -134,6 +135,20 @@ def _debug_dump(url: str, payload: dict, raw: bytes | None = None) -> None:
     rr.output(raw.decode("utf-8", "replace") if raw else "(无)", force=True)
 
 
+_LOCK_STALE_SECS = 30
+
+
+def _clean_stale_lock(*, cwd: str | None = None) -> None:
+    """清掉残龄超过 30s 的 index.lock。新锁可能是别的进程正在用的活锁，不能碰。"""
+    lock_path = f"{cwd}/.git/index.lock" if cwd else ".git/index.lock"
+    try:
+        if time.time() - os.path.getmtime(lock_path) < _LOCK_STALE_SECS:
+            return
+    except OSError:
+        return  # 锁不存在，无可清理
+    run(["rm", "-f", lock_path], check=False, cwd=cwd)
+
+
 def _has_changes(*, cwd: str | None = None) -> tuple[bool, list[str]]:
     """返回 (有无变更, status --short 行)。"""
     staged = run(["git", "diff", "--cached", "--name-only"], check=False, capture_output=True, cwd=cwd)
@@ -174,16 +189,6 @@ def run_commit(
         r.kv("dry-run", {"分支": branch, "消息": msg or "（自动生成）"})
         return 0
 
-    # 预清理 stale index.lock（上次 git 进程崩溃残留）。
-    # 不等操作失败再清——index.lock 存在时 add/commit 全连锁失败。
-    lock_path = ".git/index.lock"
-    if cwd:
-        lock_path = f"{cwd}/.git/index.lock"
-    from os.path import exists
-    if exists(lock_path):
-        r.step("检测到残留 index.lock，自动清理")
-        run(["rm", "-f", lock_path], check=False, cwd=cwd)
-
     # 暂存区为空 → bit add .（index.lock 冲突自动清理重试）
     if not staged:
         for add_attempt in range(2):
@@ -193,7 +198,7 @@ def run_commit(
                 break
             add_err = (add_p.stderr or "") + (add_p.stdout or "")
             if "index.lock" in add_err and add_attempt == 0:
-                run(["rm", "-f", ".git/index.lock"], check=False, cwd=cwd)
+                _clean_stale_lock(cwd=cwd)
                 continue
             r.err(f"暂存失败：{add_err.strip()[:300]}")
             return 1
@@ -243,7 +248,7 @@ def run_commit(
             return 0
         last_err = ((p.stderr or "") + (p.stdout or "")).strip()
         if "index.lock" in last_err:
-            run(["rm", "-f", ".git/index.lock"], check=False, cwd=cwd)
+            _clean_stale_lock(cwd=cwd)
         if attempt < 2:
             r.warn(f"提交失败，重试 {attempt + 2}/3：{last_err[:200]}")
             continue

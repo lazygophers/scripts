@@ -726,14 +726,14 @@ class TestSwitchFactoryExecute(unittest.TestCase):
 
 
 class TestSwitchFactoryDetect(unittest.TestCase):
-    def test_fetch_failure_only_warns(self) -> None:
+    def test_fetch_failure_fails_like_merge_factory(self) -> None:
         fake = FakeRun({"git fetch": _cp(1, stdout="超时")})
         r = _r()
         with mock.patch.object(bg, "_run", fake), \
              mock.patch.object(bg, "_get_current_branch", return_value="other"):
             plan = bg._switch_one_factory("feat")(Path("/repo"), r, Path("/"))
-        r.warn.assert_called_once()
-        self.assertEqual(plan.status, "ok")
+        self.assertEqual(plan.status, "fail")
+        self.assertIn("超时", plan.detail)
 
     def test_already_on_target_and_behind_gets_sync_behind(self) -> None:
         fake = FakeRun({"git rev-list": _cp(0, "0\t3\n")})
@@ -989,24 +989,34 @@ class TestSyncFactoryDetect(unittest.TestCase):
         self.assertEqual(status, "fail")
         self.assertIn("denied", detail)
 
-    def test_missing_local_branch_is_created(self) -> None:
+    def test_missing_local_branch_is_created_in_execute(self) -> None:
+        """detect 只标记 create_align，建分支挪到 execute 阶段。"""
         fake = FakeRun({
             "git rev-parse --verify -q main": _cp(1),
-            "git rev-list": _cp(0, "0\t1\n"),
+            "git rev-list": _cp(0, "1\n"),
         })
         with mock.patch.object(bg, "_run", fake):
             plan = _plan_of(bg._sync_one_factory("main", False))
         self.assertEqual(plan.status, "ok")
+        self.assertIn("create_align", plan.detail)
+        self.assertFalse(fake.ran("git switch -c"))
+        with mock.patch.object(bg, "_run", fake):
+            status, _ = plan.execute(Path("/repo"), plan, _r(), Path("/"))
+        self.assertEqual(status, "ok")
         self.assertTrue(fake.ran("git switch -c main origin/main"))
 
-    def test_local_branch_creation_failure_fails(self) -> None:
+    def test_local_branch_creation_failure_fails_in_execute(self) -> None:
         fake = FakeRun({
             "git rev-parse --verify -q main": _cp(1),
             "git switch -c": _cp(1, stderr="fatal: 创建失败"),
         })
         with mock.patch.object(bg, "_run", fake):
             plan = _plan_of(bg._sync_one_factory("main", False))
-        self.assertEqual(plan.status, "fail")
+        self.assertEqual(plan.status, "ok")
+        with mock.patch.object(bg, "_run", fake):
+            status, detail = plan.execute(Path("/repo"), plan, _r(), Path("/"))
+        self.assertEqual(status, "fail")
+        self.assertIn("创建失败", detail)
 
     def test_dirty_worktree_fails(self) -> None:
         fake = FakeRun({

@@ -18,7 +18,6 @@ from lib.git import (
     branch_session,
     check_bit_clean,
     ensure_tool_exists,
-    fetch_and_check_branch,
     get_current_branch,
     remote_branch_exists,
     update_branch,
@@ -416,12 +415,12 @@ class TestToolAndRemoteHelpers(unittest.TestCase):
         mock_run.return_value = _proc(2)
         self.assertFalse(remote_branch_exists("dev"))
 
-    @patch("lib.git.remote_branch_exists", return_value=True)
     @patch("lib.git.run")
-    def test_fetch_and_check_branch(self, mock_run, mock_exists):
-        self.assertTrue(fetch_and_check_branch("dev", cwd="/repo"))
-        self.assertEqual(mock_run.call_args[0][0], ["git", "fetch", "origin"])
-        mock_exists.assert_called_once_with("dev", remote="origin", cwd="/repo")
+    def test_remote_branch_exists_passes_args(self, mock_run):
+        mock_run.return_value = _proc(0)
+        self.assertTrue(remote_branch_exists("dev", cwd="/repo"))
+        self.assertEqual(mock_run.call_args[0][0],
+                         ["git", "ls-remote", "--exit-code", "--heads", "origin", "dev"])
 
 
 class TestFetchAllWithoutProgress(unittest.TestCase):
@@ -429,7 +428,7 @@ class TestFetchAllWithoutProgress(unittest.TestCase):
 
     @patch("lib.git.progress", return_value=None)
     @patch("lib.git.retry_command")
-    @patch("lib.git._list_top_repos")
+    @patch("lib.batch_git.scan_repos")
     def test_success_path(self, mock_list, mock_retry, mock_prog):
         mock_list.return_value = [Path("/t/r1")]
         mock_retry.return_value = _retry(True, "")
@@ -437,7 +436,7 @@ class TestFetchAllWithoutProgress(unittest.TestCase):
 
     @patch("lib.git.progress", return_value=None)
     @patch("lib.git.retry_command")
-    @patch("lib.git._list_top_repos")
+    @patch("lib.batch_git.scan_repos")
     def test_failure_path(self, mock_list, mock_retry, mock_prog):
         mock_list.return_value = [Path("/t/r1")]
         mock_retry.return_value = _retry(False, "net error")

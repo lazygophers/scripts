@@ -25,23 +25,11 @@ class TestSayContent(unittest.TestCase):
         mock_run_logged.return_value = MagicMock(returncode=1)
         assert say_content("Test message") == 1
 
-    def test_filter_dangerous_semicolon(self):
-        assert say_content("message; rm -rf /") == 1
-
-    def test_filter_dangerous_pipe(self):
-        assert say_content("message | cat /etc/passwd") == 1
-
-    def test_filter_dangerous_ampersand(self):
-        assert say_content("message & background_task") == 1
-
-    def test_filter_dangerous_dollar(self):
-        assert say_content("message $HOME") == 1
-
-    def test_filter_dangerous_backtick(self):
-        assert say_content("message `whoami`") == 1
-
-    def test_filter_dangerous_single_quote(self):
-        assert say_content("message'test") == 1
+    def test_shell_metacharacters_are_harmless(self):
+        """say 是列表参数执行、无 shell，特殊字符原样传给 say。"""
+        with patch("lib.notify.run_logged", return_value=MagicMock(returncode=0)) as m:
+            assert say_content("a;b|c&d$e`f'g") == 0
+        assert m.call_args[0][0] == ["say", "a;b|c&d$e`f'g"]
 
     @patch("lib.notify.run_logged")
     def test_length_500_ok(self, mock_run):
@@ -78,9 +66,6 @@ class TestSayContent(unittest.TestCase):
         call_kwargs = mock_run_logged.call_args[1]
         assert call_kwargs["check"] is False
         assert call_kwargs["capture_output"] is True
-
-    def test_multiple_dangerous(self):
-        assert say_content("msg; ls | cat & echo $HOME `whoami` 'test'") == 1
 
     @patch("lib.notify.run_logged")
     def test_boundary_500(self, mock_run):

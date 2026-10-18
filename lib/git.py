@@ -252,36 +252,10 @@ def remote_branch_exists(branch: str, *, remote: str = "origin", cwd: str | None
     return p.returncode == 0
 
 
-def fetch_and_check_branch(
-    branch: str,
-    *,
-    remote: str = "origin",
-    cwd: str | None = None,
-) -> bool:
-    """fetch origin 并检查分支是否存在。返回 True 表示分支存在。"""
-    run(["git", "fetch", remote], check=False, capture_output=True, cwd=cwd, timeout=NET_TIMEOUT)
-    return remote_branch_exists(branch, remote=remote, cwd=cwd)
-
-
 # ── fetch_all 薄壳入口 ────────────────────────────
 
 import os  # noqa: E402, I001
 from lib.ui import progress, reporter  # noqa: E402, I001
-
-
-_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
-
-
-def _list_top_repos(root: Path) -> list[Path]:
-    """列出 root 下顶层（一层）的安全命名 git 仓库。"""
-    repos: list[Path] = []
-    for name in sorted(os.listdir(root)):
-        if name.startswith(".") or not _SAFE_NAME_RE.match(name):
-            continue
-        p = root / name
-        if p.is_dir() and (p / ".git").exists():
-            repos.append(p)
-    return repos
 
 
 def fetch_all(root: Path = Path(".")) -> int:
@@ -291,11 +265,12 @@ def fetch_all(root: Path = Path(".")) -> int:
     输出顺序按仓库名固定，不随完成顺序抖动。
     """
     import contextlib
-    import os
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     root = root.resolve()
-    repos = _list_top_repos(root)
+    from lib.batch_git import scan_repos  # 延迟导入：batch_git 顶层反向依赖 lib.git
+
+    repos = scan_repos(root)
     failures: list[tuple[str, str]] = []
 
     r = reporter(stderr=True)

@@ -418,6 +418,7 @@ class TestSwitchFactory(unittest.TestCase):
     @patch("lib.batch_git._run")
     @patch("lib.batch_git._get_current_branch", return_value="main")
     def test_already_on_target_skips(self, _mock_br, mock_run):
+        mock_run.return_value = _mock_run(returncode=0)
         op = _switch_one_factory("main")
         r = MagicMock()
         status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
@@ -510,14 +511,14 @@ class TestSyncFactory(unittest.TestCase):
     @patch("lib.batch_git._resolve_main_branch", return_value="master")
     @patch("lib.batch_git._run")
     def test_no_local_master_creates_from_remote(self, mock_run, _mock_resolve):
-        """本地无 master + 远端有 → detect 自动创建本地 master, execute 快进。"""
+        """本地无 master + 远端有 → detect 只标记 create_align, execute 建分支后快进。"""
         mock_run.side_effect = [
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=1),   # rev-parse master (本地不存在)
             _mock_run(returncode=0),   # rev-parse origin/master (远端存在)
-            _mock_run(returncode=0),   # git switch -c master origin/master (创建成功)
+            _mock_run(stdout="5\n"),   # rev-list --count origin/master (behind 5)
             _mock_run(returncode=0),   # diff-index (干净)
-            _mock_run(stdout="0\t5\n"),  # rev-list: ahead 0, behind 5
+            _mock_run(returncode=0),   # git switch -c master origin/master (execute 建分支)
             _mock_run(stdout="master\n"),  # branch --show-current
             _mock_run(returncode=0),   # reset --hard
             _mock_run(stdout="abc1234\n"),  # rev-parse --short
@@ -531,11 +532,13 @@ class TestSyncFactory(unittest.TestCase):
     @patch("lib.batch_git._resolve_main_branch", return_value="master")
     @patch("lib.batch_git._run")
     def test_no_local_master_create_fails(self, mock_run, _mock_resolve):
-        """本地无 master + 远端有 + switch -c 失败 → fail。"""
+        """本地无 master + 远端有 + execute 阶段 switch -c 失败 → fail。"""
         mock_run.side_effect = [
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=1),   # rev-parse master (本地不存在)
             _mock_run(returncode=0),   # rev-parse origin/master (远端存在)
+            _mock_run(stdout="5\n"),   # rev-list --count origin/master
+            _mock_run(returncode=0),   # diff-index (干净)
             _mock_run(returncode=128, stderr="fatal: invalid reference"),  # switch -c 失败
         ]
         op = _sync_one_factory("master", force=False)

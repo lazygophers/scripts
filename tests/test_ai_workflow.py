@@ -255,6 +255,7 @@ class TestRunClaude(unittest.TestCase):
         self.assertEqual(args[-1], "do it")
         self.assertIn("SYS" + _SAFETY_SUFFIX, args)
         self.assertIn("--model", args)
+        self.assertNotIn("--dangerously-skip-permissions", args)
 
     @patch("lib.ai_workflow.run_no_capture", return_value=0)
     def test_settings_file_appended(self, mock_run):

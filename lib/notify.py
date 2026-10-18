@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
-from lib.exec import run, run_logged
-from lib.ui import reporter
-
 # CLI flag（--no-say/--debug/--dry-run/--help）已搬 lib/cli_flags.py；
 # 这里 re-export 一个版本周期，import 站点逐步迁过去后删除。
 from lib.cli_flags import (  # noqa: F401
@@ -20,9 +15,8 @@ from lib.cli_flags import (  # noqa: F401
     set_debug,
     set_say_disabled,
 )
-
-_DANGEROUS_RE = re.compile(r"[;|&$`']")
-
+from lib.exec import run, run_logged
+from lib.ui import reporter
 
 
 def project_done_message(suffix: str) -> str:
@@ -57,11 +51,8 @@ def notify_via_n(msg: str, *, script_dir=None) -> None:
 
 
 def say_content(content: str) -> int:
-    """播报一段文本内容, 含危险字符/长度校验。供 bin/n 薄壳调用。"""
+    """播报一段文本内容, 含长度校验。say 是列表参数执行（无 shell），只限长度。"""
     r = reporter(stderr=True)
-    if _DANGEROUS_RE.search(content):
-        r.err("n: 输入内容包含潜在的危险字符！")
-        return 1
     if len(content) > 500:
         r.err("n: 输入内容过长（最大500个字符）！")
         return 1

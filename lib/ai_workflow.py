@@ -159,7 +159,6 @@ _CLAUDE_BASE_ARGS = [
     "--disable-slash-commands",
     "--setting-sources", "",
     "--permission-mode=bypassPermissions",
-    "--dangerously-skip-permissions",
     "--tools", "Bash",
     "--settings", '{"disableThinking":true}',
 ]

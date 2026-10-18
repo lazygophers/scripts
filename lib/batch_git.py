@@ -959,7 +959,7 @@ def _switch_one_factory(target: str) -> DetectFn:
         r.step("fetch origin …")
         p = _run(["git", "fetch", "origin"], cwd=str(repo), check=False, capture_output=True, timeout=NET_TIMEOUT)
         if p.returncode != 0:
-            r.warn(f"fetch 失败: {(p.stdout or '')[:200]}")
+            return RepoPlan(status="fail", detail=_extract_error((p.stderr or "") + (p.stdout or ""), p.returncode, "fetch 失败"))
 
         current = _get_current_branch(cwd=str(repo))
         if current == target:
@@ -1136,6 +1136,15 @@ def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
         # detail 编码: target|remote_ref|ahead|behind|action
         target, remote_ref, ahead_s, behind_s, action = plan.detail.split("|")
         ahead, behind = int(ahead_s), int(behind_s)
+        if action == "create_align":
+            r.step(f"本地无 {target} → 从 {remote_ref} 创建并切换")
+            create = _run(["git", "switch", "-c", target, remote_ref],
+                          cwd=str(repo), check=False, capture_output=True)
+            if create.returncode != 0:
+                return "fail", _extract_error(
+                    (create.stderr or "") + (create.stdout or ""),
+                    create.returncode, f"创建 {target} 失败")
+            action = "align"
         if action == "create_remote":
             r.step(f"push -u {target} → {remote_ref} …")
             push = _run_exec(["git", "push", "-u", "origin", target],
@@ -1232,13 +1241,24 @@ def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
                 execute=_execute,
             )
 
-        # 本地缺 → detect 内自动创建本地追踪分支 (与 execute 共用同一语义)
+        # 本地缺 → 只标记存在性，建分支挪到 execute 阶段（detect 不改仓库状态）
         if local.returncode != 0:
-            r.step(f"本地无 {target} → 从 {remote_ref} 创建")
-            create = _run(["git", "switch", "-c", target, remote_ref],
-                          cwd=str(repo), check=False, capture_output=True)
-            if create.returncode != 0:
-                return RepoPlan(status="fail", detail=_extract_error((create.stderr or "") + (create.stdout or ""), create.returncode, f"创建 {target} 失败"))
+            r.step(f"本地无 {target}（远端 {remote_ref} 存在）→ execute 阶段创建")
+            cnt_p = _run(["git", "rev-list", "--count", remote_ref],
+                         cwd=str(repo), check=False, capture_output=True)
+            try:
+                behind = int((cnt_p.stdout or "0").split()[-1])
+            except (ValueError, IndexError):
+                behind = 0
+            dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
+                         cwd=str(repo), check=False, capture_output=True)
+            if dirty.returncode != 0:
+                return RepoPlan(status="fail", detail=_dirty_detail(repo))
+            return RepoPlan(
+                status="ok",
+                detail=f"{target}|{remote_ref}|0|{behind}|create_align",
+                execute=_execute,
+            )
 
         dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
                      cwd=str(repo), check=False, capture_output=True)

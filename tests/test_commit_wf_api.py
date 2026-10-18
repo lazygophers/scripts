@@ -197,17 +197,27 @@ class TestRunCommitBranches(unittest.TestCase):
         b.start()
         self.addCleanup(b.stop)
 
-    def test_stale_index_lock_is_removed_before_staging(self) -> None:
-        calls: list[list[str]] = []
+    def test_stale_index_lock_is_removed_fresh_one_is_kept(self) -> None:
+        """新锁（<30s）不删，旧锁（>30s）删——防误删别的进程的活锁。"""
+        import os as _os
+        import tempfile
+        import time as _time
+        from pathlib import Path
 
-        def fake(args, **_kw):
-            calls.append(list(args))
-            return _p(stdout="f.py\n")
+        with tempfile.TemporaryDirectory() as td:
+            git_dir = Path(td) / ".git"
+            git_dir.mkdir()
+            fresh = git_dir / "index.lock"
+            fresh.write_text("")
+            cw._clean_stale_lock(cwd=td)
+            self.assertTrue(fresh.exists(), "新锁不能删")
 
-        with mock.patch.object(cw, "run", fake), \
-             mock.patch("os.path.exists", return_value=True):
-            self.assertEqual(cw.run_commit("msg", cwd="/repo"), 0)
-        self.assertIn(["rm", "-f", "/repo/.git/index.lock"], calls)
+            stale = git_dir / "index.lock"
+            stale.write_text("")
+            past = _time.time() - 60
+            _os.utime(stale, (past, past))
+            cw._clean_stale_lock(cwd=td)
+            self.assertFalse(stale.exists(), "旧锁要删")
 
     def test_bit_add_retries_once_on_an_index_lock_clash(self) -> None:
         seq = [_p(stdout=""),          # _has_changes 之后的 staged 探测
@@ -223,7 +233,7 @@ class TestRunCommitBranches(unittest.TestCase):
             return seq.pop(0) if seq else _p()
 
         with mock.patch.object(cw, "run", fake), \
-             mock.patch("os.path.exists", return_value=False):
+             mock.patch("os.path.getmtime", return_value=0.0):
             self.assertEqual(cw.run_commit("msg"), 0)
         self.assertEqual(seq, [])
 
@@ -233,8 +243,7 @@ class TestRunCommitBranches(unittest.TestCase):
                 return _p(returncode=1, stderr="permission denied")
             return _p(stdout="")
 
-        with mock.patch.object(cw, "run", fake), \
-             mock.patch("os.path.exists", return_value=False):
+        with mock.patch.object(cw, "run", fake):
             self.assertEqual(cw.run_commit("msg"), 1)
 
     def test_empty_index_after_bit_add_falls_back_to_git_add(self) -> None:
@@ -246,14 +255,12 @@ class TestRunCommitBranches(unittest.TestCase):
                 return _p(stdout="abc123\n")
             return _p(stdout="")
 
-        with mock.patch.object(cw, "run", fake), \
-             mock.patch("os.path.exists", return_value=False):
+        with mock.patch.object(cw, "run", fake):
             self.assertEqual(cw.run_commit("msg"), 0)
         self.assertIn(["git", "add", "-A"], calls)
 
     def test_api_path_is_used_when_the_env_is_set(self) -> None:
         with mock.patch.object(cw, "run", return_value=_p(stdout="f.py\n")), \
-             mock.patch("os.path.exists", return_value=False), \
              mock.patch.dict(cw.os.environ, ENV), \
              mock.patch.object(cw, "_generate_via_lazygophers",
                                return_value="feat: 来自 API") as gen, \
@@ -272,7 +279,7 @@ class TestRunCommitBranches(unittest.TestCase):
             return _p(stdout="f.py\n")
 
         with mock.patch.object(cw, "run", fake), \
-             mock.patch("os.path.exists", return_value=False):
+             mock.patch("os.path.getmtime", return_value=0.0):
             self.assertEqual(cw.run_commit("msg"), 1)
         commits = [c for c in calls if c[:2] == ["bit", "commit"]]
         self.assertEqual(len(commits), 3)

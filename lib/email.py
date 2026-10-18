@@ -472,6 +472,12 @@ def save_attachments(address: str, profile: dict, uid: str, out_dir: pathlib.Pat
     for i, part in enumerate(msg.iter_attachments(), 1):
         name = pathlib.Path(part.get_filename() or f"attachment-{i}").name
         target = out_dir / name
+        # 同名附件不覆盖：追加 -2、-3… 递增后缀
+        stem, suffix = target.stem, target.suffix
+        n = 2
+        while target.exists():
+            target = out_dir / f"{stem}-{n}{suffix}"
+            n += 1
         target.write_bytes(part.get_payload(decode=True) or b"")
         written.append(target)
     return written
