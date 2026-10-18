@@ -188,6 +188,19 @@ export function desktopSourcePicked(streamId: unknown): boolean {
   return true;
 }
 
+/**
+ * picker 小窗被直接关掉 = 没选（同 confirm 弹窗的 windowClosed）：立刻按 null
+ * resolve，不让 recordDesktop 等满超时。background 的 windows.onRemoved 调。
+ */
+export function pickerClosed(windowId: number): boolean {
+  if (pickerWindow !== undefined && pickerWindow === windowId && pickerResolve !== null) {
+    pickerResolve(null);
+    pickerWindow = undefined;
+    return true;
+  }
+  return false;
+}
+
 /** `lg:capture.recordStop`：收流、封 webm。默认存成下载文件，save=false 回 base64。 */
 export async function captureRecordStop(
   params: Record<string, unknown>,

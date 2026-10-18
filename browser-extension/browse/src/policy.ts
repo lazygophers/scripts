@@ -457,6 +457,7 @@ export const RISKY_METHODS: Record<string, string> = {
   "script.evaluate": "evalMainWorld",
   "script.callFunction": "evalMainWorld",
   "lg:downloads.start": "download",
+  "lg:downloads.open": "openFile",
   "lg:tabs.adopt": "adoptTab",
   "lg:history.search": "readHistory",
   "lg:history.delete": "writeHistory",

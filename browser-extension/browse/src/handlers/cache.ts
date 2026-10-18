@@ -24,6 +24,11 @@ interface Entry {
 
 type Store = Record<string, Entry[]>;
 
+// 本 SW 生命周期里有缓存的 tabId：invalidateTab 先查它，不在集合里就不必整读
+// browse:pagecache（导航事件每个 tab 都发，大 key 读一遍只为发现没东西可删）。
+// SW 重启集合为空，自动退回原逻辑。put 成功时加入，失效/删除时移除。
+const knownTabs = new Set<string>();
+
 async function load(): Promise<Store> {
   const got = (await chrome.storage.local.get(KEY)) as Record<string, unknown>;
   const raw = got[KEY];
@@ -84,6 +89,7 @@ export async function cachePut(params: Record<string, unknown>): Promise<{ cache
     const ring = [{ at: Date.now(), kind, body }, ...(store[String(tabId)] ?? [])].slice(0, RING);
     store[String(tabId)] = ring;
     await save(enforceGlobalCap(store));
+    knownTabs.add(String(tabId));
     return { cached: ring.length };
   } catch {
     return { cached: 0 };
@@ -125,13 +131,23 @@ export async function cacheList(): Promise<{
 
 /** 页面动了/关了就清（background.ts 的事件监听调）。永不抛。 */
 export async function invalidateTab(tabId: number): Promise<void> {
+  const key = String(tabId);
+  if (!knownTabs.has(key)) {
+    return; // 本 SW 没给它写过缓存：storage 里多半也没有，不值得整读大 key
+  }
   try {
     const store = await load();
-    if (String(tabId) in store) {
-      delete store[String(tabId)];
+    if (key in store) {
+      delete store[key];
       await save(store);
     }
+    knownTabs.delete(key);
   } catch {
     // 缓存失效失败无害：下一份 put 会重新覆盖。
   }
+}
+
+/** 测试钩子：knownTabs 是模块级状态，用例间要清。 */
+export function resetPageCache(): void {
+  knownTabs.clear();
 }

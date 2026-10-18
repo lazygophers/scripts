@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  contextUrl,
   formatContext,
   globToRegExp,
   parseContext,
@@ -97,14 +96,6 @@ test("formatContext is the inverse of parseContext, and frame 0 is the tab", () 
   assert.equal(formatContext(12, 3), "12.3");
   assert.equal(formatContext(12, 0), "12");
   assert.deepEqual(parseContext(formatContext(12, 3)), { tabId: 12, frameId: 3 });
-});
-
-test("lg:context.url answers with the page the command would land on", async () => {
-  withOwnTabs();
-  // This is what the daemon asks before applying deny_domains to input.* /
-  // script.*, whose params carry no url at all.
-  assert.deepEqual(await contextUrl({}), { url: "https://b.test/orders/7" });
-  assert.deepEqual(await contextUrl({ context: "1" }), { url: "https://a.test/login" });
 });
 
 test("glob is anchored and only * and ? are special", () => {

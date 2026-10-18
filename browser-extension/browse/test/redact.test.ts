@@ -56,6 +56,19 @@ test("普通文本一个字都不动", () => {
   assert.equal(redact(plain), plain);
 });
 
+test("查询串里的凭据：参数名保留，值抹掉", () => {
+  assert.equal(
+    redact("https://x.test/reset?token=abcdefghij1234"),
+    `https://x.test/reset?token=${REDACTED}`,
+  );
+  assert.equal(
+    redact("https://x.test/cb?state=1&api_key=abcdefghijklmnop&x=2"),
+    `https://x.test/cb?state=1&api_key=${REDACTED}&x=2`,
+  );
+  // 短值（<4）不像凭据，不动
+  assert.equal(redact("https://x.test/?code=ab"), "https://x.test/?code=ab");
+});
+
 test("字段名启发式：像凭据的名字整值抹掉，不看内容", () => {
   for (const key of ["password", "api_key", "accessKey", "token", "cookie", "jwt", "signature"]) {
     assert.equal(isSensitiveKey(key), true, key);

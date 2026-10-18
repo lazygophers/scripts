@@ -1,6 +1,7 @@
 import { emitEvent } from "../events.ts";
 import { CommandError, optionalString } from "../protocol.ts";
 import { globToRegExp, requireApi } from "./context.ts";
+import { ownGroupIds } from "./ownership.ts";
 
 /**
  * `network.subscribe` / `network.unsubscribe`: **metadata only** (spec 5.4 #3).
@@ -78,6 +79,7 @@ export async function networkUnsubscribe(
 export function networkReset(): void {
   subscriptions.clear();
   pending.clear();
+  ownCache.clear();
   detach();
 }
 
@@ -91,9 +93,46 @@ function matching(url: string, type: string): string[] {
   return hits;
 }
 
-// 返回 undefined 而不是 void：onBeforeRequest 的监听签名允许返回一个拦截结果，这里从不拦。
+// 归属过滤（2026-10-18）：订阅只看自己组里 tab 的流量。tabId→归属缓存几秒，
+// 每个请求都查 tabGroups 付不起；撤销归属最迟几秒生效。
+const OWN_TTL = 2_000;
+const ownCache = new Map<number, { own: boolean; at: number }>();
+
+async function isOwnTabId(tabId: number): Promise<boolean> {
+  if (tabId < 0) {
+    return false; // 非 tab 请求（service worker、预取等）没有归属
+  }
+  const hit = ownCache.get(tabId);
+  if (hit !== undefined && Date.now() - hit.at < OWN_TTL) {
+    return hit.own;
+  }
+  let own = false;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    own = tab.groupId !== undefined && (await ownGroupIds()).has(tab.groupId);
+  } catch {
+    own = false; // tab 已不在：没有归属
+  }
+  ownCache.set(tabId, { own, at: Date.now() });
+  return own;
+}
+
+async function matchingOwned(url: string, type: string, tabId: number): Promise<string[]> {
+  if (!(await isOwnTabId(tabId))) {
+    return [];
+  }
+  return matching(url, type);
+}
+
+// webRequest 的监听签名是同步的（可返回 BlockingResponse）：归属过滤是异步的，
+// 包一层同步壳，内部异步跑，从不拦截所以返回 undefined。
 const onBeforeRequest = (details: chrome.webRequest.OnBeforeRequestDetails): undefined => {
-  if (matching(details.url, details.type).length === 0) return;
+  void handleBeforeRequest(details);
+  return undefined;
+};
+
+const handleBeforeRequest = async (details: chrome.webRequest.OnBeforeRequestDetails): Promise<void> => {
+  if ((await matchingOwned(details.url, details.type, details.tabId)).length === 0) return;
   pending.set(details.requestId, {
     url: details.url,
     method: details.method,
@@ -109,10 +148,10 @@ const onSendHeaders = (details: chrome.webRequest.OnBeforeSendHeadersDetails): v
   if (entry) entry.requestHeaders = details.requestHeaders ?? [];
 };
 
-const onCompleted = (details: chrome.webRequest.OnCompletedDetails): void => {
+const onCompleted = async (details: chrome.webRequest.OnCompletedDetails): Promise<void> => {
   const entry = pending.get(details.requestId);
   pending.delete(details.requestId);
-  const subs = matching(details.url, details.type);
+  const subs = await matchingOwned(details.url, details.type, details.tabId);
   if (subs.length === 0) return;
   emitEvent("network.responseCompleted", {
     subscriptions: subs,
@@ -135,10 +174,10 @@ const onCompleted = (details: chrome.webRequest.OnCompletedDetails): void => {
   });
 };
 
-const onErrorOccurred = (details: chrome.webRequest.OnErrorOccurredDetails): void => {
+const onErrorOccurred = async (details: chrome.webRequest.OnErrorOccurredDetails): Promise<void> => {
   const entry = pending.get(details.requestId);
   pending.delete(details.requestId);
-  const subs = matching(details.url, details.type);
+  const subs = await matchingOwned(details.url, details.type, details.tabId);
   if (subs.length === 0) return;
   emitEvent("network.fetchError", {
     subscriptions: subs,

@@ -63,6 +63,9 @@ export async function downloadsOpen(
   if (typeof id !== "number") {
     throw new CommandError("invalid argument", "id must be the numeric download id");
   }
+  // 打开下载产物 = 在本机执行一个来路不明的文件，与 download 本身同级的高危
+  const [item] = await chrome.downloads.search({ id });
+  await confirm({ action: "openFile", method: "lg:downloads.open", url: item?.url ?? null });
   await chrome.downloads.open(id);
   return { opened: id };
 }

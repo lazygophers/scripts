@@ -27,6 +27,9 @@ function setup(): { fire: Record<string, Listener[]>; events: Event[] } {
     },
   });
   installChrome({
+    // 归属过滤：tabId → 组 500（自己的页面）；tabGroups.query 是 ownGroupIds 的数据源
+    tabs: { get: async (id: number) => ({ id, groupId: 500 }) },
+    tabGroups: { query: async () => [{ id: 500, title: "browse/default" }] },
     webRequest: {
       onBeforeRequest: hook("onBeforeRequest"),
       onSendHeaders: hook("onSendHeaders"),
@@ -45,15 +48,18 @@ function teardown(): void {
   clearChrome();
 }
 
-function emit(fire: Record<string, Listener[]>, name: string, details: Any): void {
-  for (const fn of fire[name] ?? []) fn(details);
+async function emit(fire: Record<string, Listener[]>, name: string, details: Any): Promise<void> {
+  for (const fn of fire[name] ?? []) {
+    fn(details); // onBeforeRequest 是同步壳（webRequest 签名），等微任务排空
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 test("a completed request becomes one metadata event, with no body field", async () => {
   const { fire, events } = setup();
   const { subscription } = await networkSubscribe({ matchUrl: "*/api/*" });
 
-  emit(fire, "onBeforeRequest", {
+  await emit(fire, "onBeforeRequest", {
     requestId: "1",
     url: "https://a.test/api/orders",
     method: "GET",
@@ -61,13 +67,13 @@ test("a completed request becomes one metadata event, with no body field", async
     tabId: 7,
     timeStamp: 1000,
   });
-  emit(fire, "onSendHeaders", {
+  await emit(fire, "onSendHeaders", {
     requestId: "1",
     url: "https://a.test/api/orders",
     type: "xmlhttprequest",
     requestHeaders: [{ name: "Accept", value: "application/json" }],
   });
-  emit(fire, "onCompleted", {
+  await emit(fire, "onCompleted", {
     requestId: "1",
     url: "https://a.test/api/orders",
     method: "GET",
@@ -100,7 +106,7 @@ test("a completed request becomes one metadata event, with no body field", async
 test("a request outside the glob produces nothing", async () => {
   const { fire, events } = setup();
   await networkSubscribe({ matchUrl: "*/api/*" });
-  emit(fire, "onCompleted", {
+  await emit(fire, "onCompleted", {
     requestId: "2",
     url: "https://a.test/static/app.js",
     method: "GET",
@@ -118,19 +124,35 @@ test("a request outside the glob produces nothing", async () => {
 test("the types filter narrows further", async () => {
   const { fire, events } = setup();
   await networkSubscribe({ types: ["xmlhttprequest"] });
-  const base = { url: "https://a.test/x", method: "GET", tabId: -1, timeStamp: 1, statusCode: 200, fromCache: false, responseHeaders: [] };
-  emit(fire, "onCompleted", { ...base, requestId: "3", type: "image" });
+  const base = { url: "https://a.test/x", method: "GET", tabId: 7, timeStamp: 1, statusCode: 200, fromCache: false, responseHeaders: [] };
+  await emit(fire, "onCompleted", { ...base, requestId: "3", type: "image" });
   assert.equal(events.length, 0);
-  emit(fire, "onCompleted", { ...base, requestId: "4", type: "xmlhttprequest" });
+  await emit(fire, "onCompleted", { ...base, requestId: "4", type: "xmlhttprequest" });
   assert.equal(events.length, 1);
-  assert.equal((events[0]!.params.request as Any).context, null);
+  assert.equal((events[0]!.params.request as Any).context, "7");
+  teardown();
+});
+
+test("requests outside owned tabs are dropped: no tab, foreign group, negative tabId", async () => {
+  const { fire, events } = setup();
+  const chrome = (globalThis as Any).chrome as Any;
+  chrome.tabs.get = async (id: number) => {
+    if (id === 8) throw new Error("gone"); // tab 已关
+    return { id, groupId: 999 }; // tab 9 在别人的组
+  };
+  await networkSubscribe({});
+  for (const [id, tabId] of [["n1", 9], ["n2", 8], ["n3", -1]] as const) {
+    await emit(fire, "onBeforeRequest", { requestId: id, url: "https://a.test/x", method: "GET", type: "script", tabId, timeStamp: 1 });
+    await emit(fire, "onCompleted", { requestId: id, url: "https://a.test/x", method: "GET", type: "script", tabId, timeStamp: 2, statusCode: 200, fromCache: false, responseHeaders: [] });
+  }
+  assert.equal(events.length, 0);
   teardown();
 });
 
 test("a failed request emits fetchError with the browser's error text", async () => {
   const { fire, events } = setup();
   await networkSubscribe({});
-  emit(fire, "onErrorOccurred", {
+  await emit(fire, "onErrorOccurred", {
     requestId: "5",
     url: "https://a.test/gone",
     method: "GET",
@@ -148,7 +170,7 @@ test("two subscriptions both get tagged on one event", async () => {
   const { fire, events } = setup();
   const a = await networkSubscribe({ matchUrl: "*/api/*" });
   const b = await networkSubscribe({});
-  emit(fire, "onCompleted", {
+  await emit(fire, "onCompleted", {
     requestId: "6",
     url: "https://a.test/api/x",
     method: "GET",
@@ -173,7 +195,7 @@ test("unsubscribe detaches the listeners once the last one goes", async () => {
   });
   assert.equal(fire.onCompleted?.length, 0);
 
-  emit(fire, "onCompleted", { requestId: "7", url: "x", type: "script", tabId: -1 });
+  await emit(fire, "onCompleted", { requestId: "7", url: "x", type: "script", tabId: -1 });
   assert.equal(events.length, 0);
   teardown();
 });
@@ -216,12 +238,12 @@ test("events with no matching subscription or unknown request are dropped silent
   await networkSubscribe({ matchUrl: "*/api/*", types: ["script"] });
 
   // 请求 URL 不匹配订阅：onBeforeRequest 直接丢弃，onCompleted 也无订阅命中
-  fire.onBeforeRequest?.forEach((fn) => fn({ url: "https://b.test/x", type: "script", requestId: "r1" }));
-  fire.onCompleted?.forEach((fn) => fn({ url: "https://b.test/x", type: "script", requestId: "r1", statusCode: 200, fromCache: false, tabId: 3 }));
+  await emit(fire, "onBeforeRequest", { url: "https://b.test/x", type: "script", requestId: "r1" });
+  await emit(fire, "onCompleted", { url: "https://b.test/x", type: "script", requestId: "r1", statusCode: 200, fromCache: false, tabId: 3 });
   // onSendHeaders 对未知 request：no-op
-  fire.onSendHeaders?.forEach((fn) => fn({ requestId: "ghost", requestHeaders: [{ name: "h", value: "v" }] }));
+  await emit(fire, "onSendHeaders", { requestId: "ghost", requestHeaders: [{ name: "h", value: "v" }] });
   // onErrorOccurred 无匹配：静默
-  fire.onErrorOccurred?.forEach((fn) => fn({ url: "https://b.test/x", type: "script", requestId: "r1", error: "x", tabId: 3 }));
+  await emit(fire, "onErrorOccurred", { url: "https://b.test/x", type: "script", requestId: "r1", error: "x", tabId: 3 });
 
   assert.equal(events.filter((e) => e.method === "lg:network.request").length, 0);
   teardown();
@@ -231,14 +253,10 @@ test("completed request emits full metadata with headers, duration and negative 
   const { fire, events } = setup();
   await networkSubscribe({});
 
-  fire.onBeforeRequest?.forEach((fn) =>
-    fn({ url: "https://a.test/x", type: "script", requestId: "r9", timeStamp: 1000, method: "GET", tabId: 7 }));
-  fire.onSendHeaders?.forEach((fn) =>
-    fn({ requestId: "r9", requestHeaders: [{ name: "a", value: "1" }, { name: "b" }] }));
-  fire.onCompleted?.forEach((fn) =>
-    fn({ url: "https://a.test/x", type: "script", requestId: "r9", statusCode: 200, fromCache: true, tabId: 7, timeStamp: 1500, responseHeaders: [{ name: "c", value: "2" }, { name: "d" }] }));
-  fire.onErrorOccurred?.forEach((fn) =>
-    fn({ url: "https://a.test/x", type: "script", requestId: "r9", error: "boom", tabId: -1, timeStamp: 1500 }));
+  await emit(fire, "onBeforeRequest", { url: "https://a.test/x", type: "script", requestId: "r9", timeStamp: 1000, method: "GET", tabId: 7 });
+  await emit(fire, "onSendHeaders", { requestId: "r9", requestHeaders: [{ name: "a", value: "1" }, { name: "b" }] });
+  await emit(fire, "onCompleted", { url: "https://a.test/x", type: "script", requestId: "r9", statusCode: 200, fromCache: true, tabId: 7, timeStamp: 1500, responseHeaders: [{ name: "c", value: "2" }, { name: "d" }] });
+  await emit(fire, "onErrorOccurred", { url: "https://a.test/x", type: "script", requestId: "r9", error: "boom", tabId: 7, timeStamp: 1500 });
 
   const completed = events.filter((e) => e.method === "network.responseCompleted");
   assert.equal(completed.length, 1);
@@ -254,15 +272,14 @@ test("completed request emits full metadata with headers, duration and negative 
 
   const failed = events.filter((e) => e.method === "network.fetchError");
   assert.equal(failed.length, 1);
-  assert.equal((failed[0]?.params.request as Any).context, null, "tabId < 0 报 null");
+  assert.equal((failed[0]?.params.request as Any).context, "7");
   teardown();
 });
 
 test("completed without a prior onBeforeRequest still emits with fallbacks", async () => {
   const { fire, events } = setup();
   await networkSubscribe({});
-  fire.onCompleted?.forEach((fn) =>
-    fn({ url: "https://a.test/x", type: "script", requestId: "zz", statusCode: 200, fromCache: false, tabId: 1, timeStamp: 42 }));
+  await emit(fire, "onCompleted", { url: "https://a.test/x", type: "script", requestId: "zz", statusCode: 200, fromCache: false, tabId: 1, timeStamp: 42 });
   const completed = events.filter((e) => e.method === "network.responseCompleted");
   assert.equal(completed.length, 1);
   const req = completed[0]?.params.request as Any;

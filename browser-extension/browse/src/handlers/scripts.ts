@@ -15,6 +15,21 @@ function stringArray(value: unknown, name: string): string[] {
   return value as string[];
 }
 
+/** 本 SW 生命周期内经 lg:userScripts.register 注册的 id（断连清理用）。 */
+const registeredIds = new Set<string>();
+
+/**
+ * bridge 断开：本扩展注册的 userScripts 全部撤销（先例 netrule 的 netRuleReset）。
+ * 重连不自动恢复——脚本要重新 register。只清自己注册过的：用户手动建的脚本不动。
+ */
+export function userScriptsDisconnect(): void {
+  if (registeredIds.size === 0) {
+    return;
+  }
+  registeredIds.clear();
+  void chrome.userScripts?.reset().catch(() => {});
+}
+
 export async function userScriptsRegister(
   params: Record<string, unknown>,
 ): Promise<{ registered: string }> {
@@ -40,6 +55,7 @@ export async function userScriptsRegister(
       ...(params.allFrames === undefined ? {} : { allFrames: params.allFrames === true }),
     },
   ]);
+  registeredIds.add(id);
   return { registered: id };
 }
 
@@ -54,12 +70,14 @@ export async function userScriptsUnregister(
   requireApi("userScripts", "unregistering user scripts");
   const id = requireString(params.name, "name");
   await chrome.userScripts.unregister({ id });
+  registeredIds.delete(id);
   return { unregistered: id };
 }
 
 export async function userScriptsReset(): Promise<{ reset: true }> {
   requireApi("userScripts", "resetting user scripts");
   await chrome.userScripts.reset();
+  registeredIds.clear();
   return { reset: true };
 }
 

@@ -174,6 +174,16 @@ describe("downloadsOpen", () => {
     const { calls, api } = downloadsApi();
     chromeWith({ downloads: api });
     assert.deepEqual(await downloadsOpen({ id: 11 }), { opened: 11 });
-    assert.deepEqual(calls[0], { fn: "open", arg: 11 });
+    // 确认前会先 search 拿下载的 URL；动手的那条是 open
+    assert.deepEqual(calls.find((c) => c.fn === "open"), { fn: "open", arg: 11 });
+  });
+
+  it("confirm-gated: a denial happens before the file is opened", async () => {
+    // 打开 = 在本机执行文件，和 download 一样必须在动手前问
+    const { calls, api } = downloadsApi();
+    chromeWith({ downloads: api }, { ...DEFAULTS, confirm_mode: "always" });
+    setConfirmHook(async () => false);
+    await rejectsWith(() => downloadsOpen({ id: 11 }), "lg:user rejected");
+    assert.equal(calls.some((c) => c.fn === "open"), false);
   });
 });

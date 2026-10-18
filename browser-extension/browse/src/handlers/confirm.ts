@@ -23,6 +23,7 @@ export type RiskyAction =
   | "writeLocalStorage"
   | "evalMainWorld"
   | "download"
+  | "openFile"
   | "readHistory"
   | "writeHistory"
   | "readPage"

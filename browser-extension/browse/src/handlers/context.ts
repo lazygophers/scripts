@@ -120,22 +120,16 @@ export async function resolveContext(
 }
 
 /**
- * `lg:context.url` — the daemon asking which page a command would land on.
- *
- * Not a capability: the CLI cannot spell it. `input.*` and `script.*` carry no
- * url in their params, so the daemon has no way to apply `deny_domains`
- * (spec 4.3) to them without asking. The rule for *which* page is right here in
- * `resolveContext`; copying it into Python would drift the first time it
- * changes.
+ * The page URL of a target, for the audit/confirm record. Frame targets
+ * (context `<tabId>.<frameId>`) resolve the frame's own URL via
+ * `webNavigation.getAllFrames` —— tab.url 只是主 frame，拿不到 frame 级策略目标。
+ * Frame 查不到就 null，调用方 fail closed。Never throws.
  */
-export async function contextUrl(
-  params: Record<string, unknown>,
-): Promise<{ url: string | null }> {
-  return { url: await targetUrl(await resolveContext(params)) };
-}
-
-/** The page URL of a target, for the audit/confirm record. Never throws. */
 export async function targetUrl(target: Target): Promise<string | null> {
+  if (target.frameId !== undefined) {
+    const frames = await chrome.webNavigation?.getAllFrames({ tabId: target.tabId }).catch(() => null);
+    return frames?.find((f) => f.frameId === target.frameId && !f.errorOccurred)?.url ?? null;
+  }
   const tab = await chrome.tabs.get(target.tabId).catch(() => null);
   return tab?.url ?? null;
 }

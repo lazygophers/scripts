@@ -293,6 +293,44 @@ test("deny_domains 拦得住隐式页面目标：context / matchUrl / 当前标�
   clearChrome();
 });
 
+test("frame 目标按 frame 自己的 URL 过闸：好页面嵌坏 iframe，deny 拦 frame 级 script.evaluate", async () => {
+  // tab 7 主页是好的；frame 5（iframe）是坏域名。归属仍按 tab 判（7 在组里）
+  ownWorld([{ id: 7, url: "https://good.test/page", groupId: 500, active: true }], {
+    local: { "browse:config": { deny_domains: ["evil.test"] } },
+    extra: {
+      webNavigation: {
+        getAllFrames: async () => [
+          { frameId: 0, url: "https://good.test/page", errorOccurred: false },
+          { frameId: 5, url: "https://evil.test/iframe", errorOccurred: false },
+        ],
+      },
+    },
+  });
+  const err = await rejectsWith(
+    () => dispatch("script.evaluate", { context: "7.5", expression: "1" }),
+    "lg:user rejected",
+  );
+  assert.match(err.message, /拒绝名单/);
+  const [entry] = await read();
+  assert.equal(entry?.domain, "evil.test", "审计记的是 frame 的域名");
+  clearChrome();
+});
+
+test("frame 查不到（getAllFrames 挂了 / frameId 不存在）就 fail closed 拒绝", async () => {
+  ownWorld([{ id: 7, url: "https://good.test/page", groupId: 500, active: true }], {
+    extra: {
+      webNavigation: {
+        getAllFrames: async () => [{ frameId: 0, url: "https://good.test/page", errorOccurred: false }],
+      },
+    },
+  });
+  await rejectsWith(() => dispatch("script.evaluate", { context: "7.5", expression: "1" }), "no such frame");
+  // webNavigation 缺席同样拒：`chrome.webNavigation?.` 短路成 null → fail closed
+  ownWorld([{ id: 7, url: "https://good.test/page", groupId: 500, active: true }], {});
+  await rejectsWith(() => dispatch("script.evaluate", { context: "7.5", expression: "1" }), "no such frame");
+  clearChrome();
+});
+
 test("页面方法读不到目标 URL 就 fail closed 拒绝，不带着 null 放行", async () => {
   ownWorld([], {
     extra: {

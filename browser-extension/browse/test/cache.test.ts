@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cacheGet, cacheList, cachePut, invalidateTab } from "../src/handlers/cache.ts";
+import { cacheGet, cacheList, cachePut, invalidateTab, resetPageCache } from "../src/handlers/cache.ts";
 import { resetOwnership } from "../src/handlers/ownership.ts";
 import { clearChrome, ownWorld, rejectsWith } from "./mock.ts";
 
 test.afterEach(() => {
   resetOwnership();
+  resetPageCache();
   clearChrome();
 });
 
@@ -115,6 +116,33 @@ test("invalidateTab swallows broken storage", async () => {
     },
   });
   await assert.doesNotReject(() => invalidateTab(7));
+});
+
+test("invalidateTab on a tab the SW never cached skips the big storage read", async () => {
+  let reads = 0;
+  ownWorld([{ id: 7, url: "https://a.test/", groupId: 500, active: true }], {
+    extra: {
+      storage: {
+        local: {
+          get: async (key: string) => {
+            reads += 1;
+            return key === "browse:pagecache" ? { "7": [{ at: 1, kind: "text", body: "x" }] } : {};
+          },
+          set: async () => {},
+          remove: async () => {},
+        },
+        session: { get: async () => ({}), set: async () => {} },
+      },
+    },
+  });
+  // 本 SW 没 put 过 tab 8：不整读 browse:pagecache
+  await invalidateTab(8);
+  assert.equal(reads, 0);
+  // put 过 tab 7：真读真删（put 自身的 load 也读一次，这里只数 invalidate 的）
+  await cachePut({ context: "7", kind: "text", body: "x" });
+  reads = 0;
+  await invalidateTab(7);
+  assert.equal(reads, 1);
 });
 
 test("cacheList tolerates a tab entry with an empty ring", async () => {

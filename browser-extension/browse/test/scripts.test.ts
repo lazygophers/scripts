@@ -8,6 +8,7 @@ import {
   userScriptsRegister,
   userScriptsReset,
   userScriptsUnregister,
+  userScriptsDisconnect,
   userScriptsWorld,
 } from "../src/handlers/scripts.ts";
 import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
@@ -99,6 +100,16 @@ describe("userScripts", () => {
     assert.deepEqual(await userScriptsReset(), { reset: true });
     assert.equal(s.reset, 1);
     await rejectsWith(() => userScriptsUnregister({}), "invalid argument");
+  });
+
+  it("userScriptsDisconnect resets what this SW registered, and nothing when idle", async () => {
+    const s = usWorld();
+    await userScriptsRegister({ name: "mine", js: "1", matches: ["https://a.example/*"] });
+    userScriptsDisconnect(); // bridge 断开：撤销（reset 是浏览器级的全清）
+    assert.equal(s.reset, 1);
+    s.reset = 0;
+    userScriptsDisconnect(); // 没有本 SW 注册的脚本了：不碰 API
+    assert.equal(s.reset, 0);
   });
 
   it("configures the USER_SCRIPT world", async () => {

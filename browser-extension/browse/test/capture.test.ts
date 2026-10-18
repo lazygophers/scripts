@@ -7,6 +7,7 @@ import {
   captureRecordStop,
   captureRecordTab,
   desktopSourcePicked,
+  pickerClosed,
   ensureOffscreen,
   offscreenDocuments,
   pageCaptureSaveMhtml,
@@ -294,6 +295,16 @@ describe("captureRecordDesktop", () => {
     // 等 picker 窗口建好再回传：desktopSourcePicked 要有人在等才返回 true
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(desktopSourcePicked(undefined), true);
+    await rejectsWith(() => pending, "lg:user rejected");
+  });
+
+  it("closing the picker window resolves immediately as a refusal, not the full timeout", async () => {
+    desktopChrome();
+    const pending = captureRecordDesktop({});
+    await new Promise((resolve) => setImmediate(resolve));
+    // chromeWith 的第二遍 install 把 create 覆盖成固定返回窗口 21：picker 就是 21
+    assert.equal(pickerClosed(21), true, "picker 窗口关掉即放行");
+    assert.equal(pickerClosed(99), false, "别的窗口不认");
     await rejectsWith(() => pending, "lg:user rejected");
   });
 

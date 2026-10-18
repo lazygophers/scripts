@@ -96,10 +96,21 @@ async function registryGroupNameOf(tab: chrome.tabs.Tab): Promise<string | null>
   return (await loadRegistry()).find((e) => e.u === c)?.g ?? null;
 }
 
-/** 现存所有 `browse/*` 组的 id。每次现场查——组随时被用户增删，懒判不缓存。 */
+/**
+ * 现存所有 `browse/*` 组的 id。带 2 秒 TTL 缓存（2026-10-18，console 采集降 IPC）：
+ * 组员身份是归属真源，撤销归属最迟 2 秒生效，与懒判语义兼容。
+ */
+let groupIdsCache: { ids: Set<number>; at: number } | null = null;
+const GROUP_IDS_TTL = 2_000;
+
 export async function ownGroupIds(): Promise<Set<number>> {
+  if (groupIdsCache !== null && Date.now() - groupIdsCache.at < GROUP_IDS_TTL) {
+    return groupIdsCache.ids;
+  }
   const groups = await querySettle(chrome.tabGroups.query({}), "chrome.tabGroups.query").catch(() => []);
-  return new Set(groups.filter((g) => g.title?.startsWith(GROUP_PREFIX)).map((g) => g.id));
+  const ids = new Set(groups.filter((g) => g.title?.startsWith(GROUP_PREFIX)).map((g) => g.id));
+  groupIdsCache = { ids, at: Date.now() };
+  return ids;
 }
 
 /** 一个 tab 是不是自己的页面：在任意 `browse/*` 组里；query 挂死降级为登记表命中。 */
@@ -188,14 +199,19 @@ export async function reclaim(): Promise<void> {
     await chrome.storage.local.set({ [REGISTRY_KEY]: kept });
   }
   for (const [name, tabIds] of byGroup) {
-    const full = GROUP_PREFIX + name;
-    const found = (await querySettle(chrome.tabGroups.query({ title: full }), "chrome.tabGroups.query"))[0];
-    const groupId = found !== undefined
-      ? found.id
-      : await chrome.tabs.group({ tabIds: [tabIds[0]!] })
-          .then((id) => chrome.tabGroups.update(id, { title: full, color: "blue" }).then(() => id));
-    for (const tabId of tabIds) {
-      await chrome.tabs.group({ tabIds: [tabId], groupId }).catch(() => undefined);
+    // 单个失败不拖垮整批：建组本身也会挂（特殊页/窗口状态），包住整组
+    try {
+      const full = GROUP_PREFIX + name;
+      const found = (await querySettle(chrome.tabGroups.query({ title: full }), "chrome.tabGroups.query"))[0];
+      const groupId = found !== undefined
+        ? found.id
+        : await chrome.tabs.group({ tabIds: [tabIds[0]!] })
+            .then((id) => chrome.tabGroups.update(id, { title: full, color: "blue" }).then(() => id));
+      for (const tabId of tabIds) {
+        await chrome.tabs.group({ tabIds: [tabId], groupId }).catch(() => undefined);
+      }
+    } catch {
+      // 该组建不起来：跳过，下一组照常认领
     }
   }
 }
@@ -203,6 +219,7 @@ export async function reclaim(): Promise<void> {
 /** 测试钩子：保留导出兼容旧名（多组后无缓存可清）。 */
 export function resetOwnership(): void {
   reclaimed = false;
+  groupIdsCache = null; // TTL 缓存跟着清，用例间不串世界
 }
 
 let reclaimed = false;

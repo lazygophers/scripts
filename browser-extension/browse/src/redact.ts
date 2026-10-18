@@ -41,6 +41,10 @@ export const PATTERNS: Record<string, RegExp> = {
 // HTTP 认证方案：方案名保留，凭据部分抹掉，这样日志里还看得出「用了 Bearer」
 const AUTH_SCHEME = /\b(Bearer|Basic|Token|Digest)\s+[A-Za-z0-9\-._~+/=]{8,}/g;
 
+// 查询串里的凭据：参数名保留（日志里还看得出是哪个参数），值抹掉
+const QUERY_SECRET =
+  /([?&](?:token|api_?key|access_?key|signature|session|code|secret|password|auth)=[^&\s]{4,})/gi;
+
 // 字段名启发式：命中就把整个值抹掉，不管值长什么样
 const SENSITIVE_KEY =
   /pass(word|wd)?|secret|token|credential|api[_-]?key|access[_-]?key|private[_-]?key|auth|cookie|session|signature|jwt/i;
@@ -51,7 +55,9 @@ export function redact(text: string): string {
   for (const pattern of Object.values(PATTERNS)) {
     out = out.replace(pattern, REDACTED);
   }
-  return out.replace(AUTH_SCHEME, (_match, scheme: string) => `${scheme} ${REDACTED}`);
+  return out
+    .replace(AUTH_SCHEME, (_match, scheme: string) => `${scheme} ${REDACTED}`)
+    .replace(QUERY_SECRET, (_match, pair: string) => pair.replace(/=.*/, `=${REDACTED}`));
 }
 
 /** 超长就截断，并标出砍掉多少字符。 */

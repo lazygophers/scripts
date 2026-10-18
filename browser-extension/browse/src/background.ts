@@ -4,10 +4,11 @@ import { setConfirmHook } from "./handlers/confirm.ts";
 import { invalidateTab } from "./handlers/cache.ts";
 import { consoleForget, consoleNavigate, consoleReset } from "./handlers/console.ts";
 import { netRuleArm, netRuleForget, netRuleReset } from "./handlers/netrule.ts";
-import { desktopSourcePicked } from "./handlers/capture.ts";
+import { desktopSourcePicked, pickerClosed } from "./handlers/capture.ts";
 import { listenGcm } from "./handlers/gcm.ts";
 import { listenNotifications } from "./handlers/notify.ts";
 import { listenPrinting } from "./handlers/printing.ts";
+import { userScriptsDisconnect } from "./handlers/scripts.ts";
 import { listenUi } from "./handlers/ui.ts";
 import { listenWauth } from "./handlers/wauth.ts";
 import { NativeConnection, instanceId, type ConnectionState } from "./native-port.ts";
@@ -35,6 +36,7 @@ const connection = new NativeConnection(
     if (next === "disconnected") { // bridge 断了，debugger 会话全摘
       consoleReset();
       netRuleReset();
+      userScriptsDisconnect(); // 本 SW 注册的 userScripts 一并撤销，重连不自动恢复
     }
     paintBadge();
   },
@@ -113,7 +115,11 @@ listenPrinting();
 
 // Closing the dialog without choosing is a refusal — the daemon must not be
 // left waiting out its full timeout for a window that no longer exists.
-chrome.windows?.onRemoved.addListener(windowClosed);
+// picker 小窗同理：关掉就是没选，立刻放行等待中的 recordDesktop。
+chrome.windows?.onRemoved.addListener((windowId) => {
+  windowClosed(windowId);
+  pickerClosed(windowId);
+});
 
 // 页面缓存（票 05）：导航/刷新（status=loading）清该页，tab 关了整页清。
 // console 采集同步：导航清环（采集继续），关 tab 摘会话。
