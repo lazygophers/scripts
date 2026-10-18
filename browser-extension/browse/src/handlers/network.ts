@@ -1,7 +1,7 @@
 import { emitEvent } from "../events.ts";
 import { CommandError, optionalString } from "../protocol.ts";
 import { globToRegExp, requireApi } from "./context.ts";
-import { ownGroupIds } from "./ownership.ts";
+import { isOwnTab } from "./ownership.ts";
 
 /**
  * `network.subscribe` / `network.unsubscribe`: **metadata only** (spec 5.4 #3).
@@ -79,7 +79,6 @@ export async function networkUnsubscribe(
 export function networkReset(): void {
   subscriptions.clear();
   pending.clear();
-  ownCache.clear();
   detach();
 }
 
@@ -93,35 +92,23 @@ function matching(url: string, type: string): string[] {
   return hits;
 }
 
-// 归属过滤（2026-10-18）：订阅只看自己组里 tab 的流量。tabId→归属缓存几秒，
-// 每个请求都查 tabGroups 付不起；撤销归属最迟几秒生效。
-const OWN_TTL = 2_000;
-const ownCache = new Map<number, { own: boolean; at: number }>();
-
+// 归属过滤（2026-10-18）：订阅只看自己组里 tab 的流量。判定走 ownership 的
+// isOwnTab（组员身份带 2 秒 TTL 缓存），撤销归属最迟 2 秒生效。
 async function isOwnTabId(tabId: number): Promise<boolean> {
   if (tabId < 0) {
     return false; // 非 tab 请求（service worker、预取等）没有归属
   }
-  const hit = ownCache.get(tabId);
-  if (hit !== undefined && Date.now() - hit.at < OWN_TTL) {
-    return hit.own;
-  }
-  let own = false;
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    own = tab.groupId !== undefined && (await ownGroupIds()).has(tab.groupId);
-  } catch {
-    own = false; // tab 已不在：没有归属
-  }
-  ownCache.set(tabId, { own, at: Date.now() });
-  return own;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  return tab !== null && isOwnTab(tab);
 }
 
 async function matchingOwned(url: string, type: string, tabId: number): Promise<string[]> {
-  if (!(await isOwnTabId(tabId))) {
+  // 先过订阅正则（纯同步、绝大多数请求在这里返回），归属 IPC 只为命中者付
+  const subs = matching(url, type);
+  if (subs.length === 0 || !(await isOwnTabId(tabId))) {
     return [];
   }
-  return matching(url, type);
+  return subs;
 }
 
 // webRequest 的监听签名是同步的（可返回 BlockingResponse）：归属过滤是异步的，

@@ -228,13 +228,20 @@ class TestRunCommitBranches(unittest.TestCase):
                _p(stdout="abc123\n")]  # rev-parse
 
         def fake(args, **_kw):
-            if args[:3] == ["rm", "-f", ".git/index.lock"]:
-                return _p()
             return seq.pop(0) if seq else _p()
 
-        with mock.patch.object(cw, "run", fake), \
-             mock.patch("os.path.getmtime", return_value=0.0):
-            self.assertEqual(cw.run_commit("msg"), 0)
+        import os as _os
+        import tempfile
+        import time as _time
+        with tempfile.TemporaryDirectory() as td:
+            lock = pathlib.Path(td) / ".git" / "index.lock"
+            lock.parent.mkdir()
+            lock.write_text("")
+            past = _time.time() - 60
+            _os.utime(lock, (past, past))
+            with mock.patch.object(cw, "run", fake):
+                self.assertEqual(cw.run_commit("msg", cwd=td), 0)
+            self.assertFalse(lock.exists(), "残龄超 30s 的锁要清掉再重试")
         self.assertEqual(seq, [])
 
     def test_bit_add_hard_failure_aborts(self) -> None:
@@ -278,12 +285,20 @@ class TestRunCommitBranches(unittest.TestCase):
                 return _p(returncode=1, stderr="fatal: index.lock exists")
             return _p(stdout="f.py\n")
 
-        with mock.patch.object(cw, "run", fake), \
-             mock.patch("os.path.getmtime", return_value=0.0):
-            self.assertEqual(cw.run_commit("msg"), 1)
+        import os as _os
+        import tempfile
+        import time as _time
+        with tempfile.TemporaryDirectory() as td:
+            lock = pathlib.Path(td) / ".git" / "index.lock"
+            lock.parent.mkdir()
+            lock.write_text("")
+            past = _time.time() - 60
+            _os.utime(lock, (past, past))
+            with mock.patch.object(cw, "run", fake):
+                self.assertEqual(cw.run_commit("msg", cwd=td), 1)
+            self.assertFalse(lock.exists(), "三次重试间要清残锁")
         commits = [c for c in calls if c[:2] == ["bit", "commit"]]
         self.assertEqual(len(commits), 3)
-        self.assertIn(["rm", "-f", ".git/index.lock"], calls)
 
 
 class TestBuildPromptTruncation(unittest.TestCase):

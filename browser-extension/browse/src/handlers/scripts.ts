@@ -20,7 +20,8 @@ const registeredIds = new Set<string>();
 
 /**
  * bridge 断开：本扩展注册的 userScripts 全部撤销（先例 netrule 的 netRuleReset）。
- * 重连不自动恢复——脚本要重新 register。只清自己注册过的：用户手动建的脚本不动。
+ * 重连不自动恢复——脚本要重新 register。chrome.userScripts.reset() 清空全部
+ * userScripts（含用户手动建的），所以只在注册过时才调；从未注册就不动任何东西。
  */
 export function userScriptsDisconnect(): void {
   if (registeredIds.size === 0) {

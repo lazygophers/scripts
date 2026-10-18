@@ -7,6 +7,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from lib.ai_env import json_dumps
 from lib.ai_workflow import current_branch, generate_via_claude
@@ -146,7 +147,7 @@ def _clean_stale_lock(*, cwd: str | None = None) -> None:
             return
     except OSError:
         return  # 锁不存在，无可清理
-    run(["rm", "-f", lock_path], check=False, cwd=cwd)
+    Path(lock_path).unlink(missing_ok=True)
 
 
 def _has_changes(*, cwd: str | None = None) -> tuple[bool, list[str]]:

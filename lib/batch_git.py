@@ -1231,39 +1231,29 @@ def _sync_one_factory(branch: str | None, force: bool) -> DetectFn:
                 return RepoPlan(status="skip", detail=f"无 {remote_ref}")
             if local.returncode != 0:
                 return RepoPlan(status="fail", detail=f"无本地 {target}，无法创建 {remote_ref}")
-            dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
-                         cwd=str(repo), check=False, capture_output=True)
-            if dirty.returncode != 0:
-                return RepoPlan(status="fail", detail=_dirty_detail(repo))
+
+        # 三条路径（create_remote / create_align / 正常同步）都要求干净工作区
+        dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
+                     cwd=str(repo), check=False, capture_output=True)
+        if dirty.returncode != 0:
+            return RepoPlan(status="fail", detail=_dirty_detail(repo))
+
+        if not remote_exists:
             return RepoPlan(
                 status="ok",
                 detail=f"{target}|{remote_ref}|0|0|create_remote",
                 execute=_execute,
             )
 
-        # 本地缺 → 只标记存在性，建分支挪到 execute 阶段（detect 不改仓库状态）
+        # 本地缺 → 只标记存在性，建分支挪到 execute 阶段（detect 不改仓库状态）；
+        # 分支建在 remote_ref 顶端，ahead/behind 恒为 0，不必再走 rev-list
         if local.returncode != 0:
             r.step(f"本地无 {target}（远端 {remote_ref} 存在）→ execute 阶段创建")
-            cnt_p = _run(["git", "rev-list", "--count", remote_ref],
-                         cwd=str(repo), check=False, capture_output=True)
-            try:
-                behind = int((cnt_p.stdout or "0").split()[-1])
-            except (ValueError, IndexError):
-                behind = 0
-            dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
-                         cwd=str(repo), check=False, capture_output=True)
-            if dirty.returncode != 0:
-                return RepoPlan(status="fail", detail=_dirty_detail(repo))
             return RepoPlan(
                 status="ok",
-                detail=f"{target}|{remote_ref}|0|{behind}|create_align",
+                detail=f"{target}|{remote_ref}|0|0|create_align",
                 execute=_execute,
             )
-
-        dirty = _run(["git", "diff-index", "--quiet", "HEAD", "--"],
-                     cwd=str(repo), check=False, capture_output=True)
-        if dirty.returncode != 0:
-            return RepoPlan(status="fail", detail=_dirty_detail(repo))
 
         counts_p = _run(
             ["git", "rev-list", "--left-right", "--count", f"{target}...{remote_ref}"],

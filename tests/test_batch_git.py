@@ -516,7 +516,6 @@ class TestSyncFactory(unittest.TestCase):
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=1),   # rev-parse master (本地不存在)
             _mock_run(returncode=0),   # rev-parse origin/master (远端存在)
-            _mock_run(stdout="5\n"),   # rev-list --count origin/master (behind 5)
             _mock_run(returncode=0),   # diff-index (干净)
             _mock_run(returncode=0),   # git switch -c master origin/master (execute 建分支)
             _mock_run(stdout="master\n"),  # branch --show-current
@@ -527,7 +526,7 @@ class TestSyncFactory(unittest.TestCase):
         r = MagicMock()
         status, detail = _run_op(op, Path("/repo"), r, Path("/root"))
         self.assertEqual(status, "ok")
-        self.assertIn("快进", detail)
+        self.assertIn("已在最新", detail)  # 建在 remote 顶端，ahead/behind 恒 0
 
     @patch("lib.batch_git._resolve_main_branch", return_value="master")
     @patch("lib.batch_git._run")
@@ -537,7 +536,6 @@ class TestSyncFactory(unittest.TestCase):
             _mock_run(returncode=0),   # fetch
             _mock_run(returncode=1),   # rev-parse master (本地不存在)
             _mock_run(returncode=0),   # rev-parse origin/master (远端存在)
-            _mock_run(stdout="5\n"),   # rev-list --count origin/master
             _mock_run(returncode=0),   # diff-index (干净)
             _mock_run(returncode=128, stderr="fatal: invalid reference"),  # switch -c 失败
         ]
