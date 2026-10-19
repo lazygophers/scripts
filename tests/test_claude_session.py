@@ -12,9 +12,10 @@ from lib.claude_session import filter_sessions, list_sessions
 from lib.cli.claude_session import COLUMNS, _emit, _parse_args
 
 try:
-    from lib.claude_session import list_session_logs
+    from lib.claude_session import list_session_logs, filter_session_logs
 except ImportError:
     list_session_logs = None
+    filter_session_logs = None
 
 NOW = int(time.time() * 1000)
 
@@ -330,6 +331,79 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual(ids, ["B"])
         finally:
             import shutil; shutil.rmtree(root)
+
+
+class FilterSessionLogsTest(unittest.TestCase):
+    """filter_session_logs(rows, grep) 消歧 + 子串过滤。"""
+
+    def _row(self, sid, *, cwd, summary="", first="", last=None):
+        return {"sessionId": sid, "start": "t0", "last": "t1",
+                "cwd": cwd, "git_branch": "main", "kind": "user",
+                "summary": summary, "first_message": first,
+                "last_messages": last or []}
+
+    def test_project_basename_collision_upgrades_to_parent(self):
+        rows = [self._row("a", cwd="/home/me/proj"),
+                self._row("b", cwd="/work/proj"),
+                self._row("c", cwd="/x/other")]
+        out = filter_session_logs(rows)
+        self.assertEqual({r["sessionId"]: r["project"] for r in out},
+                         {"a": "me/proj", "b": "work/proj", "c": "other"})
+
+    def test_project_same_cwd_keeps_bare_basename(self):
+        rows = [self._row("a", cwd="/a/proj"),
+                self._row("b", cwd="/a/proj")]
+        out = filter_session_logs(rows)
+        self.assertEqual({r["sessionId"]: r["project"] for r in out},
+                         {"a": "proj", "b": "proj"})
+
+    def test_project_empty_cwd_becomes_dash(self):
+        rows = [self._row("a", cwd="")]
+        self.assertEqual(filter_session_logs(rows)[0]["project"], "-")
+
+    def test_grep_matches_summary(self):
+        rows = [self._row("a", cwd="/r1", summary="alpha summary"),
+                self._row("b", cwd="/r2", summary="other")]
+        out = filter_session_logs(rows, grep="alpha")
+        self.assertEqual([r["sessionId"] for r in out], ["a"])
+
+    def test_grep_matches_first_message(self):
+        rows = [self._row("a", cwd="/r1", first="hello world"),
+                self._row("b", cwd="/r2", first="goodbye")]
+        out = filter_session_logs(rows, grep="hello")
+        self.assertEqual([r["sessionId"] for r in out], ["a"])
+
+    def test_grep_matches_last_messages_element(self):
+        rows = [self._row("a", cwd="/r1", last=["one", "two", "three"]),
+                self._row("b", cwd="/r2", last=["four"])]
+        out = filter_session_logs(rows, grep="two")
+        self.assertEqual([r["sessionId"] for r in out], ["a"])
+
+    def test_grep_is_case_insensitive(self):
+        rows = [self._row("a", cwd="/r1", summary="Hello World"),
+                self._row("b", cwd="/r2", first="ALPHA start")]
+        self.assertEqual([r["sessionId"] for r in
+                          filter_session_logs(rows, grep="hello")], ["a"])
+        self.assertEqual([r["sessionId"] for r in
+                          filter_session_logs(rows, grep="alpha")], ["b"])
+
+    def test_grep_no_match_returns_empty(self):
+        rows = [self._row("a", cwd="/r", summary="x", first="y",
+                           last=["z"])]
+        self.assertEqual(filter_session_logs(rows, grep="nope"), [])
+
+    def test_grep_none_returns_all_enriched(self):
+        rows = [self._row("a", cwd="/r", summary="s", first="f",
+                           last=["l"])]
+        out = filter_session_logs(rows)
+        self.assertEqual([r["sessionId"] for r in out], ["a"])
+        self.assertEqual(out[0]["project"], "r")
+
+    def test_filter_does_not_mutate_input(self):
+        rows = [self._row("a", cwd="/a/proj")]
+        before = json.dumps(rows, sort_keys=True)
+        filter_session_logs(rows)
+        self.assertEqual(json.dumps(rows, sort_keys=True), before)
 
 
 if __name__ == "__main__":

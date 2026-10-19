@@ -199,3 +199,39 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
             "last_messages": last_messages,
         })
     return out
+
+
+def filter_session_logs(rows: list[dict], grep: str | None = None) -> list[dict]:
+    """在 list_session_logs() 输出上加项目消歧并按 grep 过滤。
+
+    项目消歧复用 list_sessions() 规则：basename 组里出现过 >1 个不同 cwd
+    才升级成 parent/name；消歧后给每条加 project 字段。
+    grep 子串（不区分大小写）命中 summary / first_message / last_messages
+    任一元素即保留；grep 为空/None 不过滤。
+    """
+    cwds_by_base: dict[str, set[str]] = defaultdict(set)
+    for r in rows:
+        cwd = r.get("cwd") or ""
+        if cwd:
+            cwds_by_base[PurePath(cwd).name].add(cwd)
+    enriched: list[dict] = []
+    for r in rows:
+        cwd = r.get("cwd") or ""
+        p = PurePath(cwd) if cwd else None
+        project = (f"{p.parent.name}/{p.name}"
+                   if p and len(cwds_by_base[p.name]) > 1
+                   else (p.name if p else "-"))
+        nr = dict(r)
+        nr["project"] = project
+        enriched.append(nr)
+    if not grep:
+        return enriched
+    needle = grep.lower()
+    kept = []
+    for r in enriched:
+        if (needle in (r.get("summary") or "").lower()
+                or needle in (r.get("first_message") or "").lower()
+                or any(needle in (m or "").lower()
+                       for m in r.get("last_messages") or [])):
+            kept.append(r)
+    return kept
