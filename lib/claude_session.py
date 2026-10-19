@@ -93,3 +93,150 @@ def filter_sessions(sessions: list[dict], session_kw: str | None = None,
         else:
             sessions = [s for s in sessions if s["project"] == project]
     return sessions
+
+
+_PROJECTS_ROOT = Path.home() / ".claude" / "projects"
+
+# Cap per-file read to bound memory + wall-clock on huge conversation files.
+# Most metadata (sessionId, cwd, timestamps, title) lives in the first few KB;
+# 5 MB covers even very long sessions while skipping the tail of gigabyte-scale logs.
+_MAX_JSONL_BYTES = 5 * 1024 * 1024
+
+
+def _user_text_blocks(record: dict) -> str:
+    """从 type=user 记录里拼接 text 块；跳过 tool_use/tool_result/image/thinking。"""
+    msg = record.get("message") or {}
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)
+
+
+def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
+                      tail: int = 3) -> list[dict]:
+    """Scan projects_root/<hash>/<uuid>.jsonl, return core fields per session.
+
+    Each row: sessionId / start / last / cwd / git_branch / kind /
+    summary / first_message / last_messages. Corrupt files are skipped.
+    Files larger than ``_MAX_JSONL_BYTES`` are truncated to the first N bytes
+    so a multi-hundred-MB conversation log does not dominate wall-clock.
+    """
+    out = []
+    if not projects_root.exists():
+        return out
+    for jsonl in sorted(projects_root.glob("*/*.jsonl")):
+        records = []
+        try:
+            if jsonl.stat().st_size > _MAX_JSONL_BYTES:
+                with jsonl.open("rb") as fh:
+                    text = fh.read(_MAX_JSONL_BYTES).decode("utf-8", errors="replace")
+            else:
+                text = jsonl.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        except OSError:
+            continue
+        if not records:
+            continue
+
+        # Single-pass: collect all fields in one sweep over records.
+        start_ts = ""
+        last_ts = ""
+        session_id = ""
+        cwd = ""
+        git_branch = ""
+        kind = ""
+        summary = ""
+        user_texts: list[str] = []
+
+        for r in records:
+            if not isinstance(r, dict):
+                continue
+            if not start_ts and r.get("timestamp"):
+                start_ts = r["timestamp"]
+            last_ts = r.get("timestamp", last_ts)
+            if not session_id and r.get("sessionId"):
+                session_id = r["sessionId"]
+            if not cwd and r.get("cwd"):
+                cwd = r["cwd"]
+            if not git_branch and r.get("gitBranch"):
+                git_branch = r["gitBranch"]
+            if not kind and r.get("kind"):
+                kind = r["kind"]
+            if not summary and r.get("type") == "custom-title" and r.get("customTitle"):
+                summary = r["customTitle"]
+            if r.get("type") == "user":
+                user_texts.append(_user_text_blocks(r))
+
+        if not summary:
+            for r in records:
+                if isinstance(r, dict) and r.get("type") == "ai-title" and r.get("aiTitle"):
+                    summary = r["aiTitle"]
+                    break
+
+        out.append((last_ts, start_ts, {
+            "sessionId": session_id,
+            "start": start_ts,
+            "last": last_ts,
+            "cwd": cwd,
+            "git_branch": git_branch,
+            "kind": kind,
+            "summary": summary,
+            "first_message": user_texts[0] if user_texts else "",
+            "last_messages": user_texts[-tail:] if user_texts else [],
+        }))
+    # last desc, start desc, sessionId asc (ISO-8601 strings compare lexicographically)
+    out.sort(key=lambda t: t[2]["sessionId"])
+    out.sort(key=lambda t: t[1], reverse=True)
+    out.sort(key=lambda t: t[0], reverse=True)
+    return [row for _, _, row in out]
+
+
+def filter_session_logs(rows: list[dict], grep: str | None = None) -> list[dict]:
+    """在 list_session_logs() 输出上加项目消歧并按 grep 过滤。
+
+    项目消歧复用 list_sessions() 规则：basename 组里出现过 >1 个不同 cwd
+    才升级成 parent/name；消歧后给每条加 project 字段。
+    grep 子串（不区分大小写）命中 summary / first_message / last_messages
+    任一元素即保留；grep 为空/None 不过滤。
+    """
+    cwds_by_base: dict[str, set[str]] = defaultdict(set)
+    for r in rows:
+        cwd = r.get("cwd") or ""
+        if cwd:
+            cwds_by_base[PurePath(cwd).name].add(cwd)
+    enriched: list[dict] = []
+    for r in rows:
+        cwd = r.get("cwd") or ""
+        p = PurePath(cwd) if cwd else None
+        project = (f"{p.parent.name}/{p.name}"
+                   if p and len(cwds_by_base[p.name]) > 1
+                   else (p.name if p else "-"))
+        nr = dict(r)
+        nr["project"] = project
+        enriched.append(nr)
+    if not grep:
+        return enriched
+    needle = grep.lower()
+    kept = []
+    for r in enriched:
+        if (needle in (r.get("summary") or "").lower()
+                or needle in (r.get("first_message") or "").lower()
+                or any(needle in (m or "").lower()
+                       for m in r.get("last_messages") or [])):
+            kept.append(r)
+    return kept
