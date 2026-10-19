@@ -36,6 +36,7 @@ from lib.graphwatch_daemon import (  # noqa: F401
     acquire_singleton_lock,
     daemon_alive,
     ensure_graphify,
+    short_repo,
     folder_freshness,
     lock_path,
     notify,
@@ -108,7 +109,7 @@ class GraphwatchCli(BaseCli):
         if is_ai_shell_env():
             for f in folders:
                 _st, detail = folder_freshness(f)
-                print(f"{f} | {detail}")
+                print(f"{short_repo(f)} | {detail}")
             return 0
         from rich.table import Table
 
@@ -118,7 +119,7 @@ class GraphwatchCli(BaseCli):
         for f in folders:
             st, detail = folder_freshness(f)
             color = FRESHNESS_COLOR[st]
-            table.add_row(f, f"[{color}]{detail}[/{color}]")
+            table.add_row(short_repo(f), f"[{color}]{detail}[/{color}]")
         self._r.console.print(table)
         return 0
 
@@ -276,7 +277,7 @@ class GraphwatchCli(BaseCli):
 
         if is_ai_shell_env():
             for folder, fs, detail in rows:
-                print(f"{folder} | {FRESHNESS_LABEL[fs]} | {detail}")
+                print(f"{short_repo(folder)} | {FRESHNESS_LABEL[fs]} | {detail}")
             return 0
         from rich.table import Table
 
@@ -287,7 +288,7 @@ class GraphwatchCli(BaseCli):
         for folder, fs, detail in rows:
             color = FRESHNESS_COLOR[fs]
             label = FRESHNESS_LABEL[fs]
-            table.add_row(folder, f"[{color}]{label}[/{color}]", detail)
+            table.add_row(short_repo(folder), f"[{color}]{label}[/{color}]", detail)
         self._r.console.print(table)
         if log:
             lines = tail_log(log)

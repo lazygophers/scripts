@@ -146,7 +146,8 @@ class GitStateTest(Case):
         _write_meta(repo, "0" * 40)
         self.assertEqual(gw.stale(str(repo)), repo / ".git" / "HEAD")
         self.assertEqual(gw.freshness(str(repo), running=False)[0], "fail")
-        self.assertEqual(gw.freshness(str(repo), running=True)[0], "updating")
+        with unittest.mock.patch.object(gw, "_read_state", return_value=(set(), {str(repo)})):
+            self.assertEqual(gw.freshness(str(repo), running=True)[0], "queued")
 
     def test_stale_on_dirty_file_newer_than_index(self):
         repo = _git_init(self.tmp / "r")
@@ -430,7 +431,7 @@ class DaemonTest(Case):
             gw.run(stop_event="s")
         kw = rd.call_args.kwargs
         self.assertEqual((kw["name"], kw["load"], kw["stale"], kw["rebuild_runner"], kw["listener_factory"]),
-                         ("gitnexuswatch", gw.load_config, gw.stale, gw.rebuild, gw._Listener))
+                         ("gitnexuswatch", gw.load_config, gw.stale, gw._tracked_runner, gw._Listener))
         self.assertEqual(kw["lock_file"], gw.lock_path())
 
 
@@ -454,7 +455,7 @@ class CliTest(Case):
             self.assertIn(self._cli("add", str(repo)), (0, None))
             self.assertIn(self._cli("list"), (0, None))
             self.assertIn(self._cli("remove", str(repo)), (0, None))
-        self.assertIn(f"{repo} | 未构建 | 无索引（尚未构建）", buf.getvalue())
+        self.assertIn(f"{repo} | master | 未构建 | 无索引（尚未构建）", buf.getvalue())
         self.assertEqual(gw.load_config()["folders"], [])
 
     def test_rebuild_rejects_non_repo(self):
@@ -521,7 +522,8 @@ class CliTest(Case):
     def test_freshness_probes_daemon_when_not_told(self):
         repo = _git_init(self.tmp / "r")
         _write_meta(repo, "0" * 40)
-        with unittest.mock.patch.object(gw, "daemon_alive", return_value=True) as alive:
+        with unittest.mock.patch.object(gw, "daemon_alive", return_value=True) as alive, \
+                unittest.mock.patch.object(gw, "_read_state", return_value=({str(repo)}, set())):
             self.assertEqual(gw.freshness(str(repo))[0], "updating")
         alive.assert_called_once_with(gw.lock_path())
 

@@ -32,6 +32,7 @@ from lib.graphwatch_daemon import (
     STALE_EXCLUDED_DIRS,
     daemon_alive,
     run_daemon,
+    short_repo,
 )
 from lib.graphwatch_service import (
     ServiceSpec,
@@ -150,6 +151,20 @@ def git_busy(gdir: Path) -> bool:
     return any((gdir / name).exists() for name in GIT_BUSY)
 
 
+def current_branch(repo: str) -> str:
+    """git 当前分支；detached HEAD 显示短 SHA，空仓库返回 '?'。"""
+    try:
+        ref = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    except subprocess.CalledProcessError:
+        return "?"
+    if ref != "HEAD":
+        return ref
+    try:
+        return _git(repo, "rev-parse", "--short", "HEAD").strip()
+    except subprocess.CalledProcessError:
+        return "HEAD"
+
+
 def _git(repo: str, *args: str) -> str:
     return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, check=True).stdout
 
@@ -203,11 +218,18 @@ def freshness(repo: str, running: bool | None = None) -> tuple[str, str]:
     if stale(repo) is not None:
         if running is None:
             running = daemon_alive(lock_path())
-        return ("updating", "更新中（daemon 排队重建）") if running else ("fail", "索引过期")
+        if not running:
+            return "fail", "索引过期"
+        in_flight, queued = _read_state()
+        if repo in in_flight:
+            return "updating", "更新中"
+        if repo in queued:
+            return "queued", "排队等待中"
+        return "fail", "索引过期"
     import datetime
 
     ts = datetime.datetime.fromtimestamp(meta.stat().st_mtime).strftime("%m-%d %H:%M")
-    return "ok", f"新鲜（索引于 {ts}）"
+    return "ok", f"新鲜（{ts}）"
 
 
 # ── 监听：所有仓库共用一个 Observer ─────────────────────────────
@@ -247,6 +269,10 @@ class _Listener:
     def __init__(self, repo: str, debounce: float, on_change):
         from watchdog.events import FileSystemEventHandler
 
+        def queued_change():
+            _tracked_queue(repo)
+            on_change()
+
         parts = Path(repo).parts
         state = {"timer": None, "fast": False}
         guard = threading.Lock()
@@ -258,7 +284,7 @@ class _Listener:
                     if state["fast"] and not fast:
                         return  # 已排了快建，工作区写入不把它往后推
                     state["timer"].cancel()
-                t = threading.Timer(HEAD_DEBOUNCE if fast else debounce, on_change)
+                t = threading.Timer(HEAD_DEBOUNCE if fast else debounce, queued_change)
                 t.daemon = True
                 t.start()
                 state["timer"], state["fast"] = t, fast
@@ -322,6 +348,54 @@ def rebuild(repo: str, sleep=time.sleep, run=subprocess.run) -> int:
     return r.returncode
 
 
+# ── daemon 状态文件：让前台 freshness 知道哪些仓库在排队 / 正在重建 ─────
+
+_STATE_PATH = config_home() / f"{NAME}.state.json"
+_in_flight: set[str] = set()
+_queued: set[str] = set()
+_state_lock = threading.Lock()
+
+
+def _write_state() -> None:
+    """原子写：lock 旁的 .state.json，daemon 入队/出队时刷一次。"""
+    payload = {"in_flight": sorted(_in_flight), "queued": sorted(_queued)}
+    _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _STATE_PATH.with_suffix(_STATE_PATH.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+        os.replace(tmp, _STATE_PATH)
+
+
+def _read_state() -> tuple[set[str], set[str]]:
+    if not _STATE_PATH.is_file():
+        return set(), set()
+    try:
+        data = json.loads(_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set(), set()
+    return set(data.get("in_flight", [])), set(data.get("queued", []))
+
+
+def _tracked_runner(repo: str, **kw) -> int:
+    with _state_lock:
+        _queued.discard(repo)
+        _in_flight.add(repo)
+        _write_state()
+    try:
+        return rebuild(repo, **kw)
+    finally:
+        with _state_lock:
+            _in_flight.discard(repo)
+            _write_state()
+
+
+def _tracked_queue(repo: str) -> None:
+    with _state_lock:
+        if repo not in _in_flight:
+            _queued.add(repo)
+            _write_state()
+
+
 def ensure() -> None:
     try:
         import watchdog  # noqa: F401
@@ -342,7 +416,8 @@ def service_spec() -> ServiceSpec:
 
 
 def run(stop_event=None, **kw) -> None:
-    run_daemon(stop_event=stop_event, ensure=ensure, rebuild_runner=rebuild, listener_factory=_Listener,
+    run_daemon(stop_event=stop_event, ensure=ensure, rebuild_runner=_tracked_runner,
+               listener_factory=_Listener,
                name=NAME, load=load_config, lock_file=lock_path(), stale=stale, **kw)
 
 
@@ -458,20 +533,21 @@ class GitnexuswatchCli(BaseCli):
             self._r.info(f"还没有登记任何仓库。先: {NAME} add <目录>")
             return 0
         running = daemon_alive(lock_path())
-        rows = [(r, *freshness(r, running)) for r in repos]
+        rows = [(short_repo(r), current_branch(r), *freshness(r, running)) for r in repos]
         from lib.ai_env import is_ai_shell_env
 
         if is_ai_shell_env():
-            for repo, st, detail in rows:
-                print(f"{repo} | {FRESHNESS_LABEL[st]} | {detail}")
+            for repo, branch, st, detail in rows:
+                print(f"{repo} | {branch} | {FRESHNESS_LABEL[st]} | {detail}")
             return 0
         from rich.table import Table
 
         table = Table(title=f"{title}（{len(repos)} 个仓库）")
         table.add_column("仓库", style="bold")
+        table.add_column("分支")
         table.add_column("索引")
-        for repo, st, detail in rows:
+        for repo, branch, st, detail in rows:
             color = FRESHNESS_COLOR[st]
-            table.add_row(repo, f"[{color}]{detail}[/{color}]")
+            table.add_row(repo, branch, f"[{color}]{detail}[/{color}]")
         self._r.console.print(table)
         return 0

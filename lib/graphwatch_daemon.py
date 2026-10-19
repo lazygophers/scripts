@@ -36,9 +36,19 @@ def _path_ignored(path_parts: tuple[str, ...], root_parts: tuple[str, ...]) -> b
     return bool((STALE_EXCLUDED_DIRS | WATCH_EXCLUDED_DIRS) & set(path_parts[len(root_parts):]))
 
 
+def short_repo(path: str) -> str:
+    """注册表里的绝对路径压成可读形式：$HOME 下 → ~/x/y；其它保留完整。"""
+    home = str(Path.home())
+    if path == home:
+        return "~"
+    if path.startswith(home + os.sep):
+        return "~" + path[len(home):]
+    return path
+
+
 # 图谱新鲜度状态 → (列标签, 色)；list / status 共用
-FRESHNESS_LABEL: dict[str, str] = {"ok": "新鲜", "skip": "未构建", "fail": "过期", "updating": "更新中"}
-FRESHNESS_COLOR: dict[str, str] = {"ok": "green", "skip": "yellow", "fail": "red", "updating": "cyan"}
+FRESHNESS_LABEL: dict[str, str] = {"ok": "新鲜", "skip": "未构建", "fail": "过期", "queued": "排队等待中", "updating": "更新中"}
+FRESHNESS_COLOR: dict[str, str] = {"ok": "green", "skip": "yellow", "fail": "red", "queued": "cyan", "updating": "blue"}
 
 
 
@@ -615,7 +625,7 @@ def folder_freshness(folder: str, daemon_running: bool | None = None) -> tuple[s
         if daemon_running is None:
             daemon_running = daemon_alive()
         if daemon_running:
-            return "updating", "更新中（源码有变更，watch 自动重建）"
+            return "updating", "更新中"
         return "fail", "图谱过期（源码有更新改动）"
     ts = datetime.datetime.fromtimestamp(graph.stat().st_mtime).strftime("%m-%d %H:%M")
-    return "ok", f"新鲜（构建于 {ts}）"
+    return "ok", f"新鲜（{ts}）"

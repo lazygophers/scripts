@@ -920,7 +920,7 @@ class TestFreshnessUpdating(GraphwatchCase):
         repo = self._stale_repo()
         st, detail = graphwatch.folder_freshness(str(repo), daemon_running=True)
         self.assertEqual(st, "updating")
-        self.assertIn("自动重建", detail)
+        self.assertEqual(detail, "更新中")
 
     def test_stale_without_daemon_is_fail(self):
         repo = self._stale_repo()
