@@ -159,12 +159,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.project is not None:
             if args.project == "":
                 # --all -p (no value): restrict to cwd-hash subdir
-                cwd = str(Path.cwd().resolve())
+                cwd = str(Path.cwd().resolve()).rstrip("/")
                 cwd_hash = cwd.replace("/", "-")
                 target = _PROJECTS_ROOT / cwd_hash
                 if target.exists():
                     sessions = [r for r in rows
-                                if PurePath(r.get("cwd") or "") == Path(cwd)]
+                                if str(PurePath(r.get("cwd") or "")).rstrip("/") == cwd]
                 else:
                     sessions = []
             else:
