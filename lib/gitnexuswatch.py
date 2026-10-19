@@ -169,6 +169,27 @@ def _git(repo: str, *args: str) -> str:
     return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, check=True).stdout
 
 
+def _default_remote(repo: str) -> str | None:
+    """返回默认远程名称（origin > 第一个有上游的）；无远程返回 None。"""
+    try:
+        return _git(repo, "remote", "get-primary", "HEAD").strip() or "origin"
+    except subprocess.CalledProcessError:
+        try:
+            remotes = _git(repo, "remote").strip().splitlines()
+            return remotes[0] if remotes else None
+        except subprocess.CalledProcessError:
+            return None
+
+
+def _remote_has_branch(repo: str, remote: str, branch: str) -> bool:
+    """ls-remote 查远程是否还有这个分支（或 tag）。"""
+    r = subprocess.run(
+        ["git", "-C", repo, "ls-remote", "--heads", "--tags", remote, branch],
+        capture_output=True, text=True, timeout=30,
+    )
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
 def stale(repo: str) -> Path | None:
     """索引落后于工作区时返回触发它的那个路径（daemon 补课按它的 mtime 排序），新鲜则 None。
 
@@ -421,10 +442,50 @@ def run(stop_event=None, **kw) -> None:
                name=NAME, load=load_config, lock_file=lock_path(), stale=stale, **kw)
 
 
+def clean(console=None) -> tuple[int, int]:
+    """清理本地分支已不存在于远程的仓库索引。返回 (已清理数, 跳过数)。"""
+    from lib.ui import progress
+
+    repos = load_config()["folders"]
+    cleaned = 0
+    pbar = progress(console) if console else None
+    ctx = pbar if pbar else _null_ctx()
+    with ctx:
+        if pbar:
+            task = pbar.add_task("扫描仓库…", total=len(repos))
+        for repo in repos:
+            if pbar:
+                pbar.update(task, description=f"检查 {Path(repo).name}")
+            skip = True
+            if (Path(repo) / ".git").exists():
+                try:
+                    if _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() != "HEAD":
+                        branch = current_branch(repo)
+                        remote = _default_remote(repo)
+                        if remote is not None and not _remote_has_branch(repo, remote, branch):
+                            shutil.rmtree(Path(repo) / ".gitnexus", ignore_errors=True)
+                            cleaned += 1
+                            skip = False
+                except subprocess.CalledProcessError:
+                    pass
+            if skip:
+                pass  # skipped count = total - cleaned
+            if pbar:
+                pbar.advance(task)
+    return cleaned, len(repos) - cleaned
+
+
+class _NullCtx:
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
+
+_null_ctx = _NullCtx
+
+
 # ── CLI ────────────────────────────────────────────────────
 
 class GitnexuswatchCli(BaseCli):
-    """gitnexuswatch CLI。子命令：add / remove / list / rebuild / run / install / start / stop / restart / uninstall / status。"""
+    """gitnexuswatch CLI。子命令：add / remove / list / clean / rebuild / run / install / start / stop / restart / uninstall / status。"""
 
     @_cmd
     def add(self, directory: str) -> int:
@@ -444,6 +505,21 @@ class GitnexuswatchCli(BaseCli):
         """
         for repo in remove_folder(Path(directory)):
             self._r.ok(f"已注销: {repo}")
+        return 0
+
+    @_cmd
+    def clean(self) -> int:
+        """清理本地分支已不存在于远程的仓库索引（`.gitnexus/` 目录）。
+
+        用法: gitnexuswatch clean
+        """
+        cleaned, skipped = clean(self._r.console)
+        if cleaned:
+            self._r.ok(f"已清理 {cleaned} 个过期索引")
+        else:
+            self._r.info("所有索引的分支都在远程存在，无需清理")
+        if skipped:
+            self._r.info(f"跳过 {skipped} 个仓库（无远程 / detached HEAD / 空仓库）")
         return 0
 
     @_cmd

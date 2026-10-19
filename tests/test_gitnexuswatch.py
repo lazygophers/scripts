@@ -527,6 +527,46 @@ class CliTest(Case):
             self.assertEqual(gw.freshness(str(repo))[0], "updating")
         alive.assert_called_once_with(gw.lock_path())
 
+    def test_clean_removes_gitnexus_when_branch_gone(self):
+        repo = _git_init(self.tmp / "r")
+        gw.add_folder(repo)
+        meta = _write_meta(repo, _head(repo))
+        cli = gw.GitnexuswatchCli()
+        with unittest.mock.patch.object(gw, "_default_remote", return_value="origin"), \
+                unittest.mock.patch.object(gw, "_remote_has_branch", return_value=False):
+            self.assertEqual(cli.clean(), 0)
+        self.assertFalse(meta.exists(), ".gitnexus/meta.json 应被删除")
+
+    def test_clean_skips_when_branch_exists(self):
+        repo = _git_init(self.tmp / "r")
+        gw.add_folder(repo)
+        meta = _write_meta(repo, _head(repo))
+        with unittest.mock.patch.object(gw, "_default_remote", return_value="origin"), \
+                unittest.mock.patch.object(gw, "_remote_has_branch", return_value=True):
+            self.assertEqual(gw.GitnexuswatchCli().clean(), 0)
+        self.assertTrue(meta.exists(), "分支存在时索引不应动")
+
+    def test_clean_skips_no_remote_or_detached(self):
+        repo = _git_init(self.tmp / "r")
+        gw.add_folder(repo)
+        meta = _write_meta(repo, _head(repo))
+        with unittest.mock.patch.object(gw, "_default_remote", return_value=None), \
+                unittest.mock.patch.object(gw, "_remote_has_branch", return_value=False):
+            self.assertEqual(gw.GitnexuswatchCli().clean(), 0)
+        self.assertTrue(meta.exists(), "无远程的仓库不应被清理")
+
+    def test_clean_skips_detached_head(self):
+        repo = _git_init(self.tmp / "r")
+        gw.add_folder(repo)
+        meta = _write_meta(repo, _head(repo))
+        # 切到 detached HEAD
+        subprocess.run(["git", "-C", str(repo), "checkout", "--detach", "HEAD"], check=True,
+                       capture_output=True)
+        with unittest.mock.patch.object(gw, "_default_remote", return_value="origin"), \
+                unittest.mock.patch.object(gw, "_remote_has_branch", return_value=False):
+            self.assertEqual(gw.GitnexuswatchCli().clean(), 0)
+        self.assertTrue(meta.exists(), "detached HEAD 不应被清理")
+
 
 if __name__ == "__main__":
     unittest.main()
