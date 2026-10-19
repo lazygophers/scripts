@@ -35,8 +35,8 @@ from lib.graphwatch_daemon import (  # noqa: F401
     _watched_extensions,
     acquire_singleton_lock,
     daemon_alive,
+    display_repos,
     ensure_graphify,
-    short_repo,
     folder_freshness,
     lock_path,
     notify,
@@ -104,22 +104,23 @@ class GraphwatchCli(BaseCli):
         if not folders:
             self._r.info("还没有注册任何文件夹。先: graphwatch add <目录>")
             return 0
+        labels = display_repos(folders)
         from lib.ai_env import is_ai_shell_env
 
         if is_ai_shell_env():
-            for f in folders:
+            for f, lbl in zip(folders, labels):
                 _st, detail = folder_freshness(f)
-                print(f"{short_repo(f)} | {detail}")
+                print(f"{lbl} | {detail}")
             return 0
         from rich.table import Table
 
         table = Table(title=f"graphwatch 注册表（{len(folders)} 个目录）")
         table.add_column("目录", style="bold")
         table.add_column("图谱")
-        for f in folders:
+        for f, lbl in zip(folders, labels):
             st, detail = folder_freshness(f)
             color = FRESHNESS_COLOR[st]
-            table.add_row(short_repo(f), f"[{color}]{detail}[/{color}]")
+            table.add_row(lbl, f"[{color}]{detail}[/{color}]")
         self._r.console.print(table)
         return 0
 
@@ -273,11 +274,12 @@ class GraphwatchCli(BaseCli):
         for f in list_folders():
             st, detail = folder_freshness(f)
             rows.append((f, st, detail))
+        labels = display_repos([r for r, _, _ in rows])
         from lib.ai_env import is_ai_shell_env
 
         if is_ai_shell_env():
-            for folder, fs, detail in rows:
-                print(f"{short_repo(folder)} | {FRESHNESS_LABEL[fs]} | {detail}")
+            for (folder, fs, detail), lbl in zip(rows, labels):
+                print(f"{lbl} | {FRESHNESS_LABEL[fs]} | {detail}")
             return 0
         from rich.table import Table
 
@@ -285,10 +287,10 @@ class GraphwatchCli(BaseCli):
         table.add_column("目录", style="bold")
         table.add_column("图谱")
         table.add_column("详情")
-        for folder, fs, detail in rows:
+        for (folder, fs, detail), lbl in zip(rows, labels):
             color = FRESHNESS_COLOR[fs]
             label = FRESHNESS_LABEL[fs]
-            table.add_row(short_repo(folder), f"[{color}]{label}[/{color}]", detail)
+            table.add_row(lbl, f"[{color}]{label}[/{color}]", detail)
         self._r.console.print(table)
         if log:
             lines = tail_log(log)

@@ -2158,7 +2158,7 @@ class TestCliAiEnv(GraphwatchCase):
         out = _io.StringIO()
         with self._ai(), contextlib.redirect_stdout(out):
             self.assertEqual(self._cli().list(), 0)
-        self.assertIn(str(repo), out.getvalue())
+        self.assertIn(repo.name, out.getvalue())
 
         st = {"registered": False, "running": False, "pid": None}
         out2 = _io.StringIO()

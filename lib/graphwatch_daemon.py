@@ -46,6 +46,29 @@ def short_repo(path: str) -> str:
     return path
 
 
+def display_repos(paths: list[str]) -> list[str]:
+    """列表展示用：basename 互不重复时只显示 basename，重复的才补父目录区分。
+
+    `~/zhibao/go/tmtc_bg` / `~/zhibao/node/tmtc-web` → `tmtc_bg` / `tmtc-web`；
+    两个仓库都叫 `api` 时才显示 `go/api` / `node/api`，仍重复就继续往上补。
+    """
+    if not paths:
+        return []
+    parts = [Path(p).parts for p in paths]
+    # 每个路径从尾部取几段才唯一：先取 1 段（basename），冲突就加一段重来
+    depth = [1] * len(paths)
+    for _ in range(max((len(p) for p in parts), default=1)):
+        seen: dict[tuple, list[int]] = {}
+        for i, p in enumerate(parts):
+            seen.setdefault(p[-depth[i]:], []).append(i)
+        clash = [i for group in seen.values() if len(group) > 1 for i in group]
+        if not clash:
+            break
+        for i in clash:
+            depth[i] = min(depth[i] + 1, len(parts[i]))
+    return [os.sep.join(p[-d:]) for p, d in zip(parts, depth)]
+
+
 # 图谱新鲜度状态 → (列标签, 色)；list / status 共用
 FRESHNESS_LABEL: dict[str, str] = {"ok": "新鲜", "skip": "未构建", "fail": "过期", "queued": "排队等待中", "updating": "更新中"}
 FRESHNESS_COLOR: dict[str, str] = {"ok": "green", "skip": "yellow", "fail": "red", "queued": "cyan", "updating": "blue"}

@@ -455,7 +455,7 @@ class CliTest(Case):
             self.assertIn(self._cli("add", str(repo)), (0, None))
             self.assertIn(self._cli("list"), (0, None))
             self.assertIn(self._cli("remove", str(repo)), (0, None))
-        self.assertIn(f"{repo} | master | 未构建 | 无索引（尚未构建）", buf.getvalue())
+        self.assertIn(f"r | master | 未构建 | 无索引（尚未构建）", buf.getvalue())
         self.assertEqual(gw.load_config()["folders"], [])
 
     def test_rebuild_rejects_non_repo(self):

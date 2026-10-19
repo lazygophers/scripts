@@ -31,8 +31,8 @@ from lib.graphwatch_daemon import (
     FRESHNESS_LABEL,
     STALE_EXCLUDED_DIRS,
     daemon_alive,
+    display_repos,
     run_daemon,
-    short_repo,
 )
 from lib.graphwatch_service import (
     ServiceSpec,
@@ -533,7 +533,8 @@ class GitnexuswatchCli(BaseCli):
             self._r.info(f"还没有登记任何仓库。先: {NAME} add <目录>")
             return 0
         running = daemon_alive(lock_path())
-        rows = [(short_repo(r), current_branch(r), *freshness(r, running)) for r in repos]
+        labels = display_repos(repos)
+        rows = [(lbl, current_branch(r), *freshness(r, running)) for lbl, r in zip(labels, repos)]
         from lib.ai_env import is_ai_shell_env
 
         if is_ai_shell_env():
