@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
                             if PurePath(r.get("cwd") or "") == Path(cwd)]
         else:
             sessions = rows
-        _emit(sessions, fmt)
+        _emit_logs(sessions, fmt)
         return 0
 
     sessions = timed(list_sessions, label="claude_session")()

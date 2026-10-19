@@ -1,4 +1,5 @@
 """tests for lib/claude_session.py"""
+import csv
 import io
 import json
 import tempfile
@@ -9,7 +10,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 from lib.claude_session import filter_sessions, list_sessions
-from lib.cli.claude_session import COLUMNS, _emit, _parse_args
+from lib.cli.claude_session import COLUMNS, _emit, _emit_logs, _parse_args
 
 try:
     from lib.claude_session import list_session_logs, filter_session_logs
@@ -589,6 +590,115 @@ class FilterSessionLogsTest(unittest.TestCase):
         before = json.dumps(rows, sort_keys=True)
         filter_session_logs(rows)
         self.assertEqual(json.dumps(rows, sort_keys=True), before)
+
+
+class EmitLogsTest(unittest.TestCase):
+    """_emit_logs 四种格式 + 默认分流。"""
+
+    ROW = {
+        "sessionId": "sid-1",
+        "project": "myproj",
+        "start": "2026-01-01T00:00:00Z",
+        "last": "2026-01-01T01:00:00Z",
+        "cwd": "/home/me/myproj",
+        "git_branch": "main",
+        "kind": "user",
+        "summary": "my summary",
+        "first_message": "first msg",
+        "last_messages": ["last1", "last2", "last3"],
+    }
+
+    def _run(self, fmt):
+        buf = io.StringIO()
+        with patch("lib.ai_env.is_ai_shell_env", return_value=False), \
+             redirect_stdout(buf):
+            _emit_logs([self.ROW], fmt)
+        return buf.getvalue()
+
+    def test_json_is_parseable(self):
+        out = self._run("json")
+        data = json.loads(out)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["sessionId"], "sid-1")
+        self.assertEqual(data[0]["project"], "myproj")
+        self.assertIn("summary", data[0])
+
+    def test_tsv_headers_and_description(self):
+        out = self._run("tsv")
+        lines = out.strip().split("\n")
+        self.assertEqual(lines[0],
+                         "sessionId\tproject\tstart\tlast\tcwd\tgit_branch\tkind\tdescription")
+        row = lines[1]
+        self.assertIn("sid-1", row)
+        self.assertIn("myproj", row)
+        # description: 3 parts joined by \n within the tab cell
+        parts = row.split("\t")
+        desc = parts[-1]
+        self.assertIn("summary=my summary", desc)
+        self.assertIn("first=first msg", desc)
+        self.assertIn("last=last1 | last2 | last3", desc)
+
+    def test_csv_headers_and_description(self):
+        out = self._run("csv")
+        reader = csv.reader(io.StringIO(out))
+        rows = list(reader)
+        self.assertEqual(rows[0],
+                         ["sessionId", "project", "start", "last",
+                          "cwd", "git_branch", "kind", "description"])
+        row = rows[1]
+        self.assertEqual(row[0], "sid-1")
+        self.assertEqual(row[1], "myproj")
+        self.assertIn("summary=my summary", row[7])
+        self.assertIn("first=first msg", row[7])
+        self.assertIn("last=last1 | last2 | last3", row[7])
+
+    def test_table_contains_session_id(self):
+        out = self._run("table")
+        self.assertIn("sid-1", out)
+        self.assertIn("myproj", out)
+
+    def test_default_fmt_ai_shell_uses_tsv(self):
+        """main --all with is_ai_shell_env=True → tsv output."""
+        import lib.cli.claude_session as cli
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=[]), \
+             patch("lib.claude_session.list_session_logs",
+                   return_value=[self.ROW]), \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session", "--all"])
+        self.assertEqual(rc, 0)
+        self.assertIn("\t", buf.getvalue())
+
+    def test_default_fmt_human_shell_uses_table(self):
+        """main --all with is_ai_shell_env=False → Rich table output."""
+        import lib.cli.claude_session as cli
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=[]), \
+             patch("lib.claude_session.list_session_logs",
+                   return_value=[self.ROW]), \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=False), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session", "--all"])
+        self.assertEqual(rc, 0)
+        self.assertIn("sid-1", buf.getvalue())
+
+    def test_description_empty_fields(self):
+        """空字段不崩溃，description 仍有三段。"""
+        row = {"sessionId": "x", "project": "", "start": "", "last": "",
+               "cwd": "", "git_branch": "", "kind": "",
+               "summary": "", "first_message": "", "last_messages": []}
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            _emit_logs([row], "tsv")
+        out = buf.getvalue()
+        self.assertIn("summary=", out)
+        self.assertIn("first=", out)
+        self.assertIn("last=", out)
 
 
 if __name__ == "__main__":
