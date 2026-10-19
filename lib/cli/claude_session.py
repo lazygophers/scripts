@@ -17,7 +17,9 @@ from __future__ import annotations
 import argparse
 import sys
 
+from lib.claude_session import _PROJECTS_ROOT
 from lib.ui import print_tsv, timed
+from pathlib import Path, PurePath
 
 # 渲染列 → lib/claude_session.py 里的字段名
 COLUMNS = [
@@ -52,6 +54,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
                    help="精准匹配项目名；省略值 = 当前目录所属项目")
     p.add_argument("-f", "--format", choices=["json", "tsv", "csv"],
                    default=None, help="输出格式；默认 AI 环境 TSV，人类环境表格")
+    p.add_argument("--all", action="store_true",
+                   help="扫描 ~/.claude/projects/ 下的会话日志（jsonl 路径）")
     return p.parse_args(argv)
 
 
@@ -77,7 +81,7 @@ def _emit(sessions: list[dict], fmt: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from lib.claude_session import filter_sessions, list_sessions
+    from lib.claude_session import filter_sessions, filter_session_logs, list_sessions, list_session_logs
     from lib.notify import consume_debug, consume_no_say, consume_dry_run
     from lib.skills_help import consume_skills
 
@@ -86,13 +90,31 @@ def main(argv: list[str] | None = None) -> int:
             consume_debug(consume_no_say(list(sys.argv if argv is None else argv))),
             __doc__))
     args = _parse_args(argv[1:])
-    sessions = timed(list_sessions, label="claude_session")()
-    sessions = filter_sessions(sessions, session_kw=args.session,
-                               project=args.project)
     fmt = args.format
     if fmt is None:
         from lib.ai_env import is_ai_shell_env
-
         fmt = "tsv" if is_ai_shell_env() else "table"
+
+    if args.all:
+        rows = timed(list_session_logs, label="claude_session")()
+        rows = filter_session_logs(rows, grep=args.session)
+        if args.project is not None:
+            import hashlib
+            cwd = str(Path.cwd().resolve())
+            cwd_hash = hashlib.sha256(cwd.encode()).hexdigest()[:12]
+            target = _PROJECTS_ROOT / cwd_hash
+            if not target.exists():
+                sessions = []
+            else:
+                sessions = [r for r in rows
+                            if PurePath(r.get("cwd") or "") == Path(cwd)]
+        else:
+            sessions = rows
+        _emit(sessions, fmt)
+        return 0
+
+    sessions = timed(list_sessions, label="claude_session")()
+    sessions = filter_sessions(sessions, session_kw=args.session,
+                               project=args.project)
     _emit(sessions, fmt)
     return 0
