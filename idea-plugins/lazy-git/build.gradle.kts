@@ -61,6 +61,20 @@ intellijPlatform {
     }
 }
 
+// 打包产物输出到项目根 dist/ 目录（与其他插件产物统一）
+tasks.named<Zip>("buildPlugin") {
+    val distDir = file("../../dist")
+    outputs.dir(distDir)
+    doLast {
+        distDir.mkdirs()
+        copy {
+            from(archiveFile)
+            into(distDir)
+            rename { "lazy-git-${project.version}.zip" }
+        }
+    }
+}
+
 tasks.named<Test>("test") {
     useJUnitPlatform()
     dependsOn("instrumentTestSandboxJar")

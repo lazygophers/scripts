@@ -33,6 +33,10 @@ T*_*.txt
 # Worktrees
 .worktrees/
 
+# Build artifacts
+dist/
+**/key.pem
+
 # Rspress docs site (build artifacts only; package-lock.json IS tracked)
 docs/node_modules/
 docs/doc_build/

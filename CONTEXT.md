@@ -53,3 +53,13 @@
 ## git 工作流
 
 - **分支会话（branch session）**：切到目标分支（不存在则建跟踪分支）并在退出时按路径决定是否回原分支的保证。错误路径默认回滚，成功路径默认留在目标分支。回滚幂等：已在原分支则跳过。
+
+## claude_session（Claude Code 本机会话）
+
+- **进程索引（process index）**：`~/.claude/sessions/<pid>.json`（约 14 条）。每个文件一条当前在跑的 Claude Code 进程，毫秒时间戳 `startedAt` / `updatedAt`、短昵称 `name`（如 `scripts-a3`）、实时状态 `status`（busy/idle）。`bin/claude_session` 默认读这个。
+- **会话日志（session log）**：`~/.claude/projects/<hash>/<uuid>.jsonl`（2578 条 / 36 个项目）。`hash` = 项目绝对路径把 `/` 换成 `-` 前缀，例如 `/Users/luoxin/persons/scripts` → `-Users-luoxin-persons-scripts`。每条 jsonl 一行一个事件，type 决定字段集：`user` / `assistant` / `ai-title` / `custom-title` / `attachment` / `mode` / ...
+- **aiTitle**：Claude 自动生成的会话摘要（jsonl `type=ai-title` 事件的 `aiTitle` 字段，约 17599 命中）。默认标题源。
+- **customTitle**：用户手动改名的会话标题（jsonl `type=custom-title` 事件的 `customTitle` 字段，约 37 命中）。存在时优先级高于 aiTitle。
+- **`--all` flag**：`bin/claude_session --all` 把数据源从进程索引切到会话日志；其它 flag（`-p` / `--project` / `-s` / `--session` / `--grep` / `--tail` / `--format`）两层都用。
+- **`-p`（双层语义）**：进程索引层 = "仅当前 cwd 所属项目"；会话日志层 = "仅当前 cwd 映射的那个 project-hash 目录"。两者实现路径不同，名字相同，靠 `--all` 区分走哪一条。
+- **description（做的事情）**：`bin/claude_session --all` 的核心字段。嵌套对象 `{summary, first_message, last_messages}`。`summary` 取 customTitle 或 aiTitle；`first_message` = 首条 user 消息的文本内容；`last_messages` = 末 N 条 user 消息（默认 3，`--tail N` 调），按出现顺序排列。
