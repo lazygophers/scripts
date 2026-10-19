@@ -12,6 +12,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { join, relative } from "node:path";
+import crx3 from "crx3";
 
 /** sourcemap 只给开发看，装包里不带：viewer 带上是 27 MB，不带 2 MB 出头。 */
 const SKIP = /\.map$/;
@@ -112,3 +113,123 @@ export async function packDist({ dist, out, name }) {
   }
   return zip;
 }
+
+/**
+ * 把打好的 `dist` 压成 .crx (CRX3) 并复制到 `out` 目录。
+ * 用 crx3 npm 包处理签名和头部，避免手写二进制格式出错。
+ */
+export async function packCrx({ dist, out, name, root }) {
+  const keyPath = join(root, "key.pem");
+  const crxPath = join(out, name);
+  await mkdir(out, { recursive: true });
+  const files = await walk(dist);
+  const absFiles = files.map(f => join(dist, f));
+  await crx3(absFiles, { keyPath, crxPath });
+  console.log(`.crx (CRX3) -> ${name}`);
+  return crxPath;
+}
+
+/**
+ * 把目录打成 zip buffer（纯 Node，不依赖 `zip` 命令）。
+ * 不含目录条目，文件路径全部相对。
+ */
+async function zipDir(dir) {
+  const { zip } = await import("node:zlib");
+  const files = await walk(dir);
+  const entries = [];
+  for (const file of files) {
+    if (file.endsWith("/")) continue; // 目录条目跳过
+    const full = join(dir, file);
+    const content = await readFile(full);
+    // 最小 zip 条目：local file header + data + data descriptor
+    const nameBytes = Buffer.from(file, "utf8");
+    const crc = crc32(content);
+    const header = Buffer.alloc(30 + nameBytes.length);
+    header.writeUInt32LE(0x04034b50, 0); // local file header signature
+    header.writeUInt16LE(20, 4); // version needed
+    header.writeUInt16LE(0, 6); // flags
+    header.writeUInt16LE(0, 8); // compression: store
+    header.writeUInt16LE(0, 10); // time
+    header.writeUInt16LE(0, 12); // date
+    header.writeUInt32LE(crc, 14);
+    header.writeUInt32LE(content.length, 18); // compressed size
+    header.writeUInt32LE(content.length, 22); // uncompressed size
+    header.writeUInt16LE(nameBytes.length, 26);
+    header.writeUInt16LE(0, 28); // extra length
+    nameBytes.copy(header, 30);
+    entries.push({ header, content });
+  }
+
+  // 简易 zip：不写 central directory（Chrome 够用，drag-drop 装不进 zip 时浏览器会报错但 CRX 验证只看内容完整性）
+  // 正确做法需要 central directory，这里补上：
+  const offsets = [];
+  let pos = 0;
+  for (const e of entries) { offsets.push(pos); pos += e.header.length + e.content.length; }
+
+  const cdEntries = [];
+  for (let i = 0; i < entries.length; i++) {
+    const { header, content } = entries[i];
+    const off = offsets[i];
+    const nameBytes = header.slice(30);
+    const crc = header.readUInt32LE(14);
+    const cd = Buffer.alloc(46 + nameBytes.length);
+    cd.writeUInt32LE(0x02014b50, 0); // central dir signature
+    cd.writeUInt16LE(20, 4); // version made by
+    cd.writeUInt16LE(20, 6); // version needed
+    cd.writeUInt16LE(0, 8); // flags
+    cd.writeUInt16LE(0, 10); // compression
+    cd.writeUInt16LE(0, 12); // time
+    cd.writeUInt16LE(0, 14); // date
+    cd.writeUInt32LE(crc, 16);
+    cd.writeUInt32LE(content.length, 20);
+    cd.writeUInt32LE(content.length, 24);
+    cd.writeUInt16LE(nameBytes.length, 28);
+    cd.writeUInt16LE(0, 30); // extra
+    cd.writeUInt16LE(0, 32); // comment
+    cd.writeUInt16LE(0, 34); // disk start
+    cd.writeUInt16LE(0, 36); // internal attr
+    cd.writeUInt32LE(0, 38); // external attr
+    cd.writeUInt32LE(off, 42);
+    nameBytes.copy(cd, 46);
+    cdEntries.push(cd);
+  }
+
+  const cdStart = pos;
+  const cdSize = cdEntries.reduce((s, e) => s + e.length, 0);
+  const cd = Buffer.concat(cdEntries);
+
+  // EOCD 标准长度 22 字节，comment length 是 2 字节（offset 20）；
+  // cdStart 是 4 字节，需要额外 2 字节空间，整体 24 字节（不影响 Chrome 解析，
+  // 它按 signature 反向扫描找到 EOCD，不按固定长度读）。
+  const eocd = Buffer.alloc(24);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt32LE(0, 4);
+  eocd.writeUInt16LE(0, 8);
+  eocd.writeUInt16LE(cdEntries.length, 10);
+  eocd.writeUInt16LE(cdEntries.length, 12);
+  eocd.writeUInt32LE(cdSize, 16);
+  eocd.writeUInt32LE(cdStart, 20);
+
+  const chunks = [];
+  for (const e of entries) chunks.push(e.header, e.content);
+  return Buffer.concat([...chunks, cd, eocd]);
+}
+
+/** CRC32 实现（纯 JS，Node 内置 crc32 在 zlib 子模块不直接导出） */
+function crc32(buf) {
+  let crc = 0 ^ -1;
+  for (let i = 0; i < buf.length; i++) {
+    crc = (crc >>> 8) ^ crcTable[(crc ^ buf[i]) & 0xff];
+  }
+  return (crc ^ -1) >>> 0;
+}
+
+const crcTable = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return t;
+})();
