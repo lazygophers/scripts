@@ -13,6 +13,15 @@ from lib.browse_install import EXTENSIONS_ROOT
 from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.lazyhelp import _all_bins, _render_table, show_full
 
+IDEA_ROOT = pathlib.Path(__file__).resolve().parents[2] / "idea-plugins"
+
+
+def idea_plugins(root: pathlib.Path = IDEA_ROOT) -> list[pathlib.Path]:
+    """返回仓库里所有 gradle 构建的 IntelliJ 插件。"""
+    if not root.is_dir():
+        return []
+    return sorted(path for path in root.iterdir() if (path / "build.gradle.kts").is_file())
+
 
 def browser_extensions(root: pathlib.Path = EXTENSIONS_ROOT) -> list[pathlib.Path]:
     """返回仓库里所有可构建的浏览器扩展，公共构建目录除外。"""
@@ -123,9 +132,11 @@ class LazyhelpCli(BaseCli):
     @timed_cli
     def idea(self):
         """构建 idea-plugins/lazy-git IntelliJ 插件，产出可安装 zip。"""
+        return self._build_idea(IDEA_ROOT / "lazy-git")
+
+    def _build_idea(self, project: pathlib.Path) -> int:
         import subprocess
 
-        project = pathlib.Path(__file__).resolve().parents[2] / "idea-plugins" / "lazy-git"
         if not project.is_dir():
             self._r.err(f"未找到 IntelliJ 插件目录：{project}")
             return 2
@@ -145,31 +156,46 @@ class LazyhelpCli(BaseCli):
         return rc
 
     @timed_cli
-    def install(self, yes: bool = False):
-        """构建全部浏览器扩展，并安装 graphwatch 后台服务
+    def build(self, *names: str, yes: bool = False):
+        """构建浏览器扩展和 IntelliJ 插件
 
-        用法: lazyhelp install [-y]
+        用法: lazyhelp build [名字...] [-y]
 
-        每项单独确认一次，选了才装；`-y`/`--yes` 跳过确认，全部默认同意。
-        各项独立：一项失败/跳过不拦其他项，最后按「有一个真失败就非零」汇总
-        退出码（跳过不算失败）。浏览器扩展仍需在扩展页手动加载一次。
+        不带名字：全部扩展/插件逐个确认，选了才构建；`-y`/`--yes` 跳过确认。
+        带名字（目录名精确匹配，如 `lazyhelp build browse lazy-git`）：只构建
+        这几个，不再确认。各项独立：一项失败/跳过不拦其他项，有一个真失败就
+        非零退出（跳过不算失败）。浏览器扩展仍需在扩展页手动加载一次。
         """
         import subprocess
 
         from lib.browse_install import build_extension
         from lib.browse_install import main as browse_install_main
-        from lib.graphwatch import GraphwatchCli
         from lib.ui import ask_confirm
+
+        targets = [(path, "浏览器扩展") for path in browser_extensions()]
+        targets += [(path, "IDEA 插件") for path in idea_plugins()]
+        wanted = [str(name) for name in names]  # fire 会把全数字名转成 int
+        if wanted:
+            known = {path.name for path, _ in targets}
+            unknown = [name for name in wanted if name not in known]
+            if unknown:
+                self._r.err(f"未知插件：{', '.join(unknown)}；可选：{', '.join(sorted(known))}")
+                return 2
+            targets = [target for target in targets if target[0].name in wanted]
 
         failed = False
 
-        for extension in browser_extensions():
+        for extension, kind in targets:
             name = extension.name
-            if not (yes or ask_confirm(f"构建 {name} 浏览器扩展？", default=True)):
+            if not (yes or wanted or ask_confirm(f"构建 {name} {kind}？", default=True)):
                 self._r.step(f"跳过 {name}")
                 continue
 
-            self._r.rule(f"{name} extension", style="blue")
+            self._r.rule(f"{name} {kind}", style="blue")
+            if kind == "IDEA 插件":
+                if self._build_idea(extension):
+                    failed = True
+                continue
             if name == "browse":
                 if browse_install_main(["browse install", "--no-wait"]):
                     failed = True
@@ -183,13 +209,6 @@ class LazyhelpCli(BaseCli):
             else:
                 self._r.ok(f"{name} 已构建：{dist}")
                 self._r.info("在 chrome://extensions 点「加载已解压的扩展程序」，选择上面目录")
-
-        if yes or ask_confirm("装 graphwatch（知识图谱后台服务）？", default=True):
-            self._r.rule("graphwatch install", style="blue")
-            if GraphwatchCli().install():
-                failed = True
-        else:
-            self._r.step("跳过 graphwatch install")
 
         return 1 if failed else 0
 

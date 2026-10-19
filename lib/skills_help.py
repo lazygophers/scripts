@@ -103,7 +103,7 @@ COMMAND_SKILLS: dict[str, list[str]] = {
     "lazyhelp": [
         "人类可读命令目录；裸跑 `lazyhelp` 输出全部分类速查表。",
         "看某个工具的完整 --help: `lazyhelp help <工具名>`。",
-        "一次性构建全部浏览器扩展，再安装 graphwatch: `lazyhelp install`；每项单独确认，`-y` 跳过确认并全部执行。",
+        "构建浏览器扩展和 IDEA 插件: `lazyhelp build`（逐项确认，`-y` 全部同意）；只构建指定的: `lazyhelp build browse lazy-git`（不再确认）。",
         "看 AI 向指引（含可直接照抄的示例）: `<工具名> --skills`；下方目录列出全部工具。",
     ],
     "list_branch": [

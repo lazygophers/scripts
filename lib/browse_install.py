@@ -367,7 +367,7 @@ def wait_for_extension(timeout: float) -> bool:
     browse_bin = _resolve("browse") or "browse"
     deadline = time.monotonic() + timeout
     while True:
-        # 不能假设 sys.argv[0] 是 browse 自己——`lazyhelp install` 之类的调用方
+        # 不能假设 sys.argv[0] 是 browse 自己——`lazyhelp build` 之类的调用方
         # 在同一个解释器里直接喊 wait_for_extension()，argv[0] 是调用方自己的
         # 薄壳路径。跟 lib/lazyhelp.py:show_full() 一样，靠 _resolve() 找真正的
         # browse 可执行文件：仓库内优先 bin/browse，装成包之后退回 PATH 里的

@@ -375,7 +375,7 @@ class TestInstallStatus(TempHome):
 class TestWaitForExtension(unittest.TestCase):
     """回归：`wait_for_extension` 不能假设 `sys.argv[0]` 是 browse 自己。
 
-    `lazyhelp install` 在同一个解释器里直接喊这个函数，这时 argv[0] 是
+    `lazyhelp build` 在同一个解释器里直接喊这个函数，这时 argv[0] 是
     bin/lazyhelp 的路径，不是 bin/browse——之前硬编 argv[0] 会去跑
     `lazyhelp browsingContext getTree`（lazyhelp 根本不认这个子命令），
     第一次探测就失败，表现成「没等就直接超时」。
@@ -383,7 +383,7 @@ class TestWaitForExtension(unittest.TestCase):
 
     def test_probes_the_resolved_browse_binary_not_argv0(self) -> None:
         done = subprocess.CompletedProcess([], 0)
-        with unittest.mock.patch.object(sys, "argv", ["/somewhere/bin/lazyhelp", "install"]), \
+        with unittest.mock.patch.object(sys, "argv", ["/somewhere/bin/lazyhelp", "build"]), \
              unittest.mock.patch("lib.lazyhelp._resolve", return_value="/repo/bin/browse") as resolve, \
              unittest.mock.patch.object(nh.subprocess, "run", return_value=done) as run:
             connected = nh.wait_for_extension(5.0)
