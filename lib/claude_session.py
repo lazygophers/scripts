@@ -97,6 +97,11 @@ def filter_sessions(sessions: list[dict], session_kw: str | None = None,
 
 _PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 
+# Cap per-file read to bound memory + wall-clock on huge conversation files.
+# Most metadata (sessionId, cwd, timestamps, title) lives in the first few KB;
+# 5 MB covers even very long sessions while skipping the tail of gigabyte-scale logs.
+_MAX_JSONL_BYTES = 5 * 1024 * 1024
+
 
 def _user_text_blocks(record: dict) -> str:
     """从 type=user 记录里拼接 text 块；跳过 tool_use/tool_result/image/thinking。"""
@@ -117,46 +122,53 @@ def _user_text_blocks(record: dict) -> str:
 
 def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
                       tail: int = 3) -> list[dict]:
-    """扫描 projects_root/<hash>/<uuid>.jsonl，每条返回核心字段。
+    """Scan projects_root/<hash>/<uuid>.jsonl, return core fields per session.
 
-    每条字段：sessionId / start / last / cwd / git_branch / kind /
-    summary / first_message / last_messages。坏文件（OSError /
-    JSONDecodeError）跳过，不抛。first_message = 首条 type=user 文本
-    拼接；last_messages = 末 N 条 type=user 文本拼接列表；
-    summary = customTitle 优先 / aiTitle 兜底；start/last = 首末带
-    timestamp 的记录。"""
+    Each row: sessionId / start / last / cwd / git_branch / kind /
+    summary / first_message / last_messages. Corrupt files are skipped.
+    Files larger than ``_MAX_JSONL_BYTES`` are truncated to the first N bytes
+    so a multi-hundred-MB conversation log does not dominate wall-clock.
+    """
     out = []
     if not projects_root.exists():
         return out
     for jsonl in sorted(projects_root.glob("*/*.jsonl")):
+        records = []
         try:
-            lines = jsonl.read_text(encoding="utf-8").splitlines()
+            if jsonl.stat().st_size > _MAX_JSONL_BYTES:
+                with jsonl.open("rb") as fh:
+                    text = fh.read(_MAX_JSONL_BYTES).decode("utf-8", errors="replace")
+            else:
+                text = jsonl.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
         except OSError:
             continue
-        records = []
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
         if not records:
             continue
 
-        ts_records = [r for r in records
-                      if isinstance(r, dict) and r.get("timestamp")]
-        start_ts = ts_records[0]["timestamp"] if ts_records else ""
-        last_ts = ts_records[-1]["timestamp"] if ts_records else ""
-
+        # Single-pass: collect all fields in one sweep over records.
+        start_ts = ""
+        last_ts = ""
         session_id = ""
         cwd = ""
         git_branch = ""
         kind = ""
+        summary = ""
+        user_texts: list[str] = []
+
         for r in records:
             if not isinstance(r, dict):
                 continue
+            if not start_ts and r.get("timestamp"):
+                start_ts = r["timestamp"]
+            last_ts = r.get("timestamp", last_ts)
             if not session_id and r.get("sessionId"):
                 session_id = r["sessionId"]
             if not cwd and r.get("cwd"):
@@ -165,27 +177,16 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
                 git_branch = r["gitBranch"]
             if not kind and r.get("kind"):
                 kind = r["kind"]
-
-        summary = ""
-        for r in records:
-            if not isinstance(r, dict):
-                continue
-            if r.get("type") == "custom-title" and r.get("customTitle"):
+            if not summary and r.get("type") == "custom-title" and r.get("customTitle"):
                 summary = r["customTitle"]
-                break
+            if r.get("type") == "user":
+                user_texts.append(_user_text_blocks(r))
+
         if not summary:
             for r in records:
-                if not isinstance(r, dict):
-                    continue
-                if r.get("type") == "ai-title" and r.get("aiTitle"):
+                if isinstance(r, dict) and r.get("type") == "ai-title" and r.get("aiTitle"):
                     summary = r["aiTitle"]
                     break
-
-        user_records = [r for r in records
-                        if isinstance(r, dict) and r.get("type") == "user"]
-        first_message = _user_text_blocks(user_records[0]) if user_records else ""
-        last_messages = [_user_text_blocks(r)
-                         for r in user_records[-tail:] if user_records]
 
         out.append({
             "sessionId": session_id,
@@ -195,8 +196,8 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
             "git_branch": git_branch,
             "kind": kind,
             "summary": summary,
-            "first_message": first_message,
-            "last_messages": last_messages,
+            "first_message": user_texts[0] if user_texts else "",
+            "last_messages": user_texts[-tail:] if user_texts else [],
         })
     return out
 
