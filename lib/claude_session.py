@@ -93,3 +93,109 @@ def filter_sessions(sessions: list[dict], session_kw: str | None = None,
         else:
             sessions = [s for s in sessions if s["project"] == project]
     return sessions
+
+
+_PROJECTS_ROOT = Path.home() / ".claude" / "projects"
+
+
+def _user_text_blocks(record: dict) -> str:
+    """从 type=user 记录里拼接 text 块；跳过 tool_use/tool_result/image/thinking。"""
+    msg = record.get("message") or {}
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)
+
+
+def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
+                      tail: int = 3) -> list[dict]:
+    """扫描 projects_root/<hash>/<uuid>.jsonl，每条返回核心字段。
+
+    每条字段：sessionId / start / last / cwd / git_branch / kind /
+    summary / first_message / last_messages。坏文件（OSError /
+    JSONDecodeError）跳过，不抛。first_message = 首条 type=user 文本
+    拼接；last_messages = 末 N 条 type=user 文本拼接列表；
+    summary = customTitle 优先 / aiTitle 兜底；start/last = 首末带
+    timestamp 的记录。"""
+    out = []
+    if not projects_root.exists():
+        return out
+    for jsonl in sorted(projects_root.glob("*/*.jsonl")):
+        try:
+            lines = jsonl.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        records = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        if not records:
+            continue
+
+        ts_records = [r for r in records
+                      if isinstance(r, dict) and r.get("timestamp")]
+        start_ts = ts_records[0]["timestamp"] if ts_records else ""
+        last_ts = ts_records[-1]["timestamp"] if ts_records else ""
+
+        session_id = ""
+        cwd = ""
+        git_branch = ""
+        kind = ""
+        for r in records:
+            if not isinstance(r, dict):
+                continue
+            if not session_id and r.get("sessionId"):
+                session_id = r["sessionId"]
+            if not cwd and r.get("cwd"):
+                cwd = r["cwd"]
+            if not git_branch and r.get("gitBranch"):
+                git_branch = r["gitBranch"]
+            if not kind and r.get("kind"):
+                kind = r["kind"]
+
+        summary = ""
+        for r in records:
+            if not isinstance(r, dict):
+                continue
+            if r.get("type") == "custom-title" and r.get("customTitle"):
+                summary = r["customTitle"]
+                break
+        if not summary:
+            for r in records:
+                if not isinstance(r, dict):
+                    continue
+                if r.get("type") == "ai-title" and r.get("aiTitle"):
+                    summary = r["aiTitle"]
+                    break
+
+        user_records = [r for r in records
+                        if isinstance(r, dict) and r.get("type") == "user"]
+        first_message = _user_text_blocks(user_records[0]) if user_records else ""
+        last_messages = [_user_text_blocks(r)
+                         for r in user_records[-tail:] if user_records]
+
+        out.append({
+            "sessionId": session_id,
+            "start": start_ts,
+            "last": last_ts,
+            "cwd": cwd,
+            "git_branch": git_branch,
+            "kind": kind,
+            "summary": summary,
+            "first_message": first_message,
+            "last_messages": last_messages,
+        })
+    return out

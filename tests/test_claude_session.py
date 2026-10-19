@@ -11,6 +11,11 @@ from pathlib import Path
 from lib.claude_session import filter_sessions, list_sessions
 from lib.cli.claude_session import COLUMNS, _emit, _parse_args
 
+try:
+    from lib.claude_session import list_session_logs
+except ImportError:
+    list_session_logs = None
+
 NOW = int(time.time() * 1000)
 
 
@@ -32,7 +37,6 @@ class ClaudeSessionTest(unittest.TestCase):
         _write(self.dir, 2, cwd="/x/alpha", startedAt=NOW - 1000)
         _write(self.dir, 3, cwd="/y/beta", startedAt=NOW)
         rows = list_sessions(self.dir)
-        # 无 cwd 命中当前目录：alpha 组在前（项目名升序），组内 start 新→旧
         self.assertEqual([r["pid"] for r in rows], [2, 1, 3])
         self.assertEqual(rows[0]["project"], "alpha")
         self.assertEqual(rows[0]["status"], "空闲")
@@ -40,7 +44,7 @@ class ClaudeSessionTest(unittest.TestCase):
     def test_current_dir_session_pinned_top(self):
         import os
         old = os.getcwd()
-        os.chdir(self.dir)  # 测试目录本身当「当前目录」
+        os.chdir(self.dir)
         try:
             _write(self.dir, 9, cwd=str(self.dir.resolve()), startedAt=NOW - 9999)
             _write(self.dir, 1, cwd="/x/alpha", startedAt=NOW)
@@ -66,8 +70,7 @@ class ClaudeSessionTest(unittest.TestCase):
         self.assertEqual(rows[2], "proj")
 
     def test_filters(self):
-        _write(self.dir, 1, sessionId="AAAA-1", project_kw=None,
-               cwd="/a/one", name="s-1")
+        _write(self.dir, 1, sessionId="AAAA-1", cwd="/a/one", name="s-1")
         _write(self.dir, 2, sessionId="bbbb-2", cwd="/a/two")
         sessions = list_sessions(self.dir)
         self.assertEqual([r["pid"] for r in filter_sessions(
@@ -91,13 +94,10 @@ class EmitFormatTest(unittest.TestCase):
     ROW = ["n1", "sid1", "proj", "忙碌", "09-29 10:00", "09-29 11:00"]
 
     def _run(self, fmt):
-        import io
-        from contextlib import redirect_stdout
-        from unittest.mock import patch
-
         row = dict(zip((k for _, k in COLUMNS), self.ROW))
         buf = io.StringIO()
-        with patch("lib.ai_env.is_ai_shell_env", return_value=False),              redirect_stdout(buf):
+        with patch("lib.ai_env.is_ai_shell_env", return_value=False), \
+             redirect_stdout(buf):
             _emit([row], fmt)
         return buf.getvalue()
 
@@ -107,10 +107,6 @@ class EmitFormatTest(unittest.TestCase):
         out = self._run("csv")
         self.assertTrue(out.startswith("名称,"))
         self.assertIn("sid1", out)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestCliEmitAndMain(unittest.TestCase):
@@ -130,7 +126,7 @@ class TestCliEmitAndMain(unittest.TestCase):
         args = _parse_args(["-s", "abc", "-f", "json"])
         self.assertEqual((args.session, args.format), ("abc", "json"))
         args2 = _parse_args(["--project"])
-        self.assertEqual(args2.project, "")  # 省略值 = 当前目录所属项目
+        self.assertEqual(args2.project, "")
         args3 = _parse_args(["--project", "demo"])
         self.assertEqual(args3.project, "demo")
 
@@ -147,7 +143,7 @@ class TestCliEmitAndMain(unittest.TestCase):
             rc = cli.main(["claude_session", "-s", "sid1"])
         self.assertEqual(rc, 0)
         self.assertIn("sid1", buf.getvalue())
-        self.assertIn("\t", buf.getvalue())  # AI 环境 TSV
+        self.assertIn("\t", buf.getvalue())
 
         with patch("lib.claude_session.list_sessions", return_value=sessions), \
              patch("lib.cli.claude_session.timed",
@@ -157,3 +153,184 @@ class TestCliEmitAndMain(unittest.TestCase):
             rc = cli.main(["claude_session", "-f", "csv"])
         self.assertEqual(rc, 0)
         self.assertIn("sid1", buf.getvalue())
+
+
+class ListSessionLogsTest(unittest.TestCase):
+    """list_session_logs(projects_root, tail) 扫描
+    projects_root/<hash>/<uuid>.jsonl，返回核心字段。"""
+
+    def _seed(self, root: Path, uuid: str, records, hash_dir: str = "proj-hash"):
+        d = root / hash_dir
+        d.mkdir(parents=True, exist_ok=True)
+        with (d / f"{uuid}.jsonl").open("w", encoding="utf-8") as fh:
+            for r in records:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    def test_empty_dir(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self.assertEqual(list_session_logs(root), [])
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_basic_session_fields(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u1", [
+                {"type": "user", "sessionId": "S1",
+                 "timestamp": "2026-01-01T00:00:00Z",
+                 "cwd": "/repo", "gitBranch": "feat/x", "kind": "user",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "hello world"}]}},
+                {"type": "assistant",
+                 "timestamp": "2026-01-01T00:00:05Z",
+                 "message": {"role": "assistant", "content": [
+                     {"type": "text", "text": "hi"}]}},
+                {"type": "custom-title", "customTitle": "My Title",
+                 "timestamp": "2026-01-01T00:01:00Z"},
+            ])
+            [row] = list_session_logs(root)
+            self.assertEqual(row["sessionId"], "S1")
+            self.assertEqual(row["start"], "2026-01-01T00:00:00Z")
+            self.assertEqual(row["last"], "2026-01-01T00:01:00Z")
+            self.assertEqual(row["cwd"], "/repo")
+            self.assertEqual(row["git_branch"], "feat/x")
+            self.assertEqual(row["kind"], "user")
+            self.assertEqual(row["summary"], "My Title")
+            self.assertEqual(row["first_message"], "hello world")
+            self.assertEqual(row["last_messages"], ["hello world"])
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_summary_falls_back_to_ai_title(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u2", [
+                {"type": "user", "sessionId": "S2", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "go"}]}},
+                {"type": "ai-title", "aiTitle": "AI Title",
+                 "timestamp": "t1"},
+            ])
+            [row] = list_session_logs(root)
+            self.assertEqual(row["summary"], "AI Title")
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_summary_empty_when_no_titles(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u3", [
+                {"type": "user", "sessionId": "S3", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "x"}]}},
+            ])
+            [row] = list_session_logs(root)
+            self.assertEqual(row["summary"], "")
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_user_block_filters_tools_and_images(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u4", [
+                {"type": "user", "sessionId": "S4", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "first "},
+                     {"type": "tool_use", "name": "Bash", "input": {}},
+                     {"type": "tool_result",
+                      "content": [{"type": "text", "text": "x"}]},
+                     {"type": "image", "source": {}},
+                     {"type": "thinking", "thinking": "hmm"},
+                     {"type": "text", "text": "part"}]}},
+            ])
+            [row] = list_session_logs(root)
+            self.assertEqual(row["first_message"], "first part")
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_last_messages_takes_tail(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            records = [
+                {"type": "user", "sessionId": "S5", "timestamp": f"t{i}",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": f"msg{i}"}]}}
+                for i in range(5)
+            ]
+            self._seed(root, "u5", records)
+            [row] = list_session_logs(root, tail=3)
+            self.assertEqual(row["last_messages"], ["msg2", "msg3", "msg4"])
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_last_messages_default_three(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            records = [
+                {"type": "user", "sessionId": "S6", "timestamp": f"t{i}",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": f"m{i}"}]}}
+                for i in range(10)
+            ]
+            self._seed(root, "u6", records)
+            [row] = list_session_logs(root)
+            self.assertEqual(row["last_messages"], ["m7", "m8", "m9"])
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_no_user_records(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u7", [
+                {"type": "assistant", "sessionId": "S7", "timestamp": "t0",
+                 "message": {"role": "assistant", "content": [
+                     {"type": "text", "text": "yo"}]}},
+            ])
+            [row] = list_session_logs(root)
+            self.assertEqual(row["first_message"], "")
+            self.assertEqual(row["last_messages"], [])
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_bad_jsonl_skipped(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u8", [
+                {"type": "user", "sessionId": "S8", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "ok"}]}},
+            ])
+            d = root / "proj-hash"
+            with (d / "bad.jsonl").open("w", encoding="utf-8") as fh:
+                fh.write("{this is not json\n")
+            rows = list_session_logs(root)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["sessionId"], "S8")
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_corrupt_file_inside_dir_does_not_kill_others(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u9a", [
+                {"type": "user", "sessionId": "A", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "a"}]}},
+            ], hash_dir="h1")
+            self._seed(root, "u9b", [
+                {"type": "user", "sessionId": "B", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "b"}]}},
+            ], hash_dir="h2")
+            (root / "h1" / "u9a.jsonl").write_text(
+                "garbage\n", encoding="utf-8")
+            rows = list_session_logs(root)
+            ids = sorted(r["sessionId"] for r in rows)
+            self.assertEqual(ids, ["B"])
+        finally:
+            import shutil; shutil.rmtree(root)
+
+
+if __name__ == "__main__":
+    unittest.main()
