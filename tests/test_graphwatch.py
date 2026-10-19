@@ -2285,3 +2285,52 @@ class TestRegraphEdges(GraphwatchCase):
              contextlib.redirect_stderr(err):
             self.assertEqual(rb.regraph(str(repo)), 0)
         self.assertIn("图没变", err.getvalue())
+
+
+class TestDisplayRepos(GraphwatchCase):
+    def setUp(self):
+        super().setUp()
+        # short_repo 依赖 Path.home()，固定成 /h 使断言与真实 home 无关
+        patcher = unittest.mock.patch.object(graphwatch_daemon.Path, "home", return_value=Path("/h"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_unique_basenames_stay_bare(self):
+        self.assertEqual(
+            graphwatch_daemon.display_repos(["/h/zhibao/go/tmtc_bg", "/h/zhibao/node/tmtc-web"]),
+            ["tmtc_bg", "tmtc-web"],
+        )
+
+    def test_two_of_three_counts_as_majority(self):
+        # 3 个里 2 个重名即「大部分」，全员统一深度
+        self.assertEqual(
+            graphwatch_daemon.display_repos(["/h/a/x", "/h/b/x", "/h/c/y"]),
+            ["a/x", "b/x", "c/y"],
+        )
+
+    def test_minority_clash_deepens_only_the_clashing(self):
+        # 4 个里 2 个重名是少数，只给冲突的补父目录
+        self.assertEqual(
+            graphwatch_daemon.display_repos(["/h/a/x", "/h/b/x", "/h/c/y", "/h/d/z"]),
+            ["a/x", "b/x", "y", "z"],
+        )
+
+    def test_majority_clash_uses_uniform_depth(self):
+        self.assertEqual(
+            graphwatch_daemon.display_repos(["/h/go/api", "/h/node/api", "/h/other/api"]),
+            ["go/api", "node/api", "other/api"],
+        )
+
+    def test_majority_clash_strips_common_middle(self):
+        # 都叫 srv（大多数重名）→ 统一深度 3，公共的 go/ 整体抹掉
+        self.assertEqual(
+            graphwatch_daemon.display_repos(["/h/a/go/srv", "/h/b/go/srv", "/h/c/go/srv"]),
+            ["a/srv", "b/srv", "c/srv"],
+        )
+
+    def test_tilde_never_stripped(self):
+        # ~ 是 home 压缩标记，公共段抹除时保留；路径外的不受影响
+        self.assertEqual(
+            graphwatch_daemon.display_repos(["/h/x/srv", "/other/x/srv"]),
+            ["~/srv", "other/srv"],
+        )

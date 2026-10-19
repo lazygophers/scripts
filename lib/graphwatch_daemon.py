@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections import Counter
 import time
 import traceback
 from pathlib import Path
@@ -47,14 +48,27 @@ def short_repo(path: str) -> str:
 
 
 def display_repos(paths: list[str]) -> list[str]:
-    """列表展示用：basename 互不重复时只显示 basename，重复的才补父目录区分。
+    """列表展示用：basename 互不重复时只显示 basename；大多数重名时全员
+    统一到同一深度，并把各标签公共的中间段（如都带 go/）整体抹掉，
+    保持同一格式；只有少数重名时才单独给冲突的补父目录。
 
     `~/zhibao/go/tmtc_bg` / `~/zhibao/node/tmtc-web` → `tmtc_bg` / `tmtc-web`；
-    两个仓库都叫 `api` 时才显示 `go/api` / `node/api`，仍重复就继续往上补。
+    两个 `api` → `go/api` / `node/api`；大多叫 `srv` 且都在 `<x>/go/` 下 →
+    统一深度 3 再抹掉公共的 `go/` → `a/srv` / `b/srv`。
     """
     if not paths:
         return []
-    parts = [Path(p).parts for p in paths]
+    parts = [Path(short_repo(p)).parts for p in paths]
+    dup = sum(c for c in Counter(p[-1] for p in parts).values() if c > 1)
+    if dup * 2 > len(parts):
+        # 大多数 basename 重名：先找让尾部互不重复的最小统一深度
+        d = 1
+        while d < max(map(len, parts)) and len({p[-d:] for p in parts}) < len(parts):
+            d += 1
+        tuples = [p[-d:] for p in parts]
+        # 公共中间段整体抹掉（最后一段永远保留，`~` 不抹），抹同位公共值不会制造新重复
+        keep = [i for i in range(d - 1) if len({t[i] for t in tuples}) > 1 or tuples[0][i] == "~"]
+        return [os.sep.join([*(t[i] for i in keep), t[-1]]) for t in tuples]
     # 每个路径从尾部取几段才唯一：先取 1 段（basename），冲突就加一段重来
     depth = [1] * len(paths)
     for _ in range(max((len(p) for p in parts), default=1)):
