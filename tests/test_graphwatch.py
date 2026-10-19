@@ -851,7 +851,7 @@ class TestServiceControl(GraphwatchCase):
         import unittest.mock
         probed = {"runner": False}
 
-        def probe(runner=None):
+        def probe(runner=None, spec=None):
             probed["runner"] = runner is not None
             return False
 

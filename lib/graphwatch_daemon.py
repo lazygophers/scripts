@@ -70,12 +70,13 @@ def lock_path() -> Path:
     return config_home() / "graphwatch.lock"
 
 
-def acquire_singleton_lock():
+def acquire_singleton_lock(path: Path | None = None):
     """拿全局单例锁（非阻塞）。成功返回 fd，已被占返回 None。
 
     锁内容写 PID，方便排障；进程退出 fd 自动关闭、锁自动释放。
+    path 缺省是 graphwatch 的锁；gitnexuswatch 传自己的。
     """
-    p = lock_path()
+    p = path or lock_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(p, os.O_CREAT | os.O_RDWR, 0o600)
     try:
@@ -275,8 +276,13 @@ def regraph_due(now, regraph_at: str, last_day) -> bool:
 
 def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_factory=None,
                poll_interval: float = 2.0, on_started=None, notifier=None,
-               regraph_runner=None, clock=None) -> None:
+               regraph_runner=None, clock=None, name: str = "graphwatch", load=None,
+               lock_file: Path | None = None, stale=None) -> None:
     """前台守护进程：每目录一个监听线程，重建全局排队，全局单例锁防双开。
+
+    name / load / lock_file / stale 让 gitnexuswatch 共用这套队列：日志 logger 用
+    「<name>-daemon」，配置由 load() 给出（folders / debounce / rebuild_concurrency，
+    regraph_at 缺省或为空则不做每日重算图），补课判断换成 stale(folder)。
 
     监听（watchdog，轻量）与重建（graphify update 子进程，重）分离：
     重建进全局队列，由 rebuild_concurrency 个 worker 执行（默认 1 = 串行，
@@ -299,14 +305,22 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
     except ValueError:
         pass  # 非主线程（测试）：stop_event 已够用
     (ensure or ensure_graphify)()
+    if load is None:
+        def load():  # 调用时才解析 load_config，测试 patch 模块属性仍生效
+            return load_config()
+    if stale is None:
+        def stale(folder):
+            return stale_trigger(folder)
+    lock_file = lock_file or lock_path()
+    logger = f"{name}-daemon"
 
-    lock = acquire_singleton_lock()
+    lock = acquire_singleton_lock(lock_file)
     if lock is None:
         try:
-            pid = lock_path().read_text(encoding="utf-8").strip()
+            pid = lock_file.read_text(encoding="utf-8").strip()
         except OSError:
             pid = "?"
-        raise GraphwatchError(f"已有 graphwatch 实例在运行（PID {pid}，锁: {lock_path()}）")
+        raise GraphwatchError(f"已有 {name} 实例在运行（PID {pid}，锁: {lock_file}）")
 
     if rebuild_runner is None:
         rebuild_runner = _run_update
@@ -321,7 +335,7 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
 
         clock = datetime.datetime.now
 
-    _log.install_excepthook("graphwatch-daemon")
+    _log.install_excepthook(logger)
 
     def _dlog(msg: str, level: str = "info") -> None:
         # 落盘走统一日志（lib/log.py）；前台跑时 stderr 照旧直接给用户看。
@@ -329,7 +343,7 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
         import datetime
 
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        _log.record("daemon", logger="graphwatch-daemon", msg=msg, level=level)
+        _log.record("daemon", logger=logger, msg=msg, level=level)
         print(f"[{stamp}] {msg}", file=sys.stderr)
 
     listeners: dict[str, object] = {}
@@ -339,7 +353,7 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
     dirty: set[str] = set()
     change_time: dict[str, float] = {}
     regraph_pending: set[str] = set()
-    debounce_now = [float(load_config()["debounce"])]
+    debounce_now = [float(load()["debounce"])]
     last_regraph_day = None
     work_cv = threading.Condition()
 
@@ -387,7 +401,7 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
                 dirty.discard(folder)
             if rc != 0:
                 _dlog(f"{kind}失败（rc={rc}）: {folder}", level="error")
-                sent = notifier.fire(folder, f"graphwatch {kind}失败", f"{folder}\n{kind}退出码 {rc}，稍后变更会重试")
+                sent = notifier.fire(folder, f"{name} {kind}失败", f"{folder}\n{kind}退出码 {rc}，稍后变更会重试")
                 _dlog(f"失败通知{'已发送' if sent else '发送失败（系统通知不可用）'}: {folder}")
             else:
                 _dlog(f"{kind}完成: {folder}")
@@ -423,7 +437,7 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
         优先级用触发文件 mtime：graph 落后越久，越排前面。"""
         if stop_event.is_set():
             return
-        trigger = stale_trigger(folder)
+        trigger = stale(folder)
         if trigger is not None:
             try:
                 changed_at = trigger.stat().st_mtime
@@ -436,6 +450,8 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
 
     def _schedule_regraph(cfg: dict) -> None:
         nonlocal last_regraph_day
+        if not cfg.get("regraph_at"):
+            return
         now = clock()
         if not regraph_due(now, cfg["regraph_at"], last_regraph_day):
             return
@@ -447,7 +463,7 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
 
     def _reconcile() -> None:
         nonlocal last_sig
-        cfg = load_config()
+        cfg = load()
         _schedule_regraph(cfg)
         debounce = float(cfg["debounce"])
         debounce_now[0] = debounce
@@ -487,10 +503,10 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
         _dlog(f"daemon 意外错误，退出待服务管理器拉起: {type(e).__name__}: {e}")
 
     try:
-        first = load_config()
+        first = load()
         _spawn_workers(max(1, int(first["rebuild_concurrency"])))
         _reconcile()
-        _dlog(f"graphwatch daemon：{len(listeners)} 个目录在监听，重建并发 {first['rebuild_concurrency']}（Ctrl-C 退出）")
+        _dlog(f"{name} daemon：{len(listeners)} 个目录在监听，重建并发 {first['rebuild_concurrency']}（Ctrl-C 退出）")
         if on_started is not None:
             on_started()
         while not stop_event.wait(poll_interval):
@@ -520,12 +536,12 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
         for t in workers:
             t.join()
         release_singleton_lock(lock)
-        _dlog("graphwatch daemon：已退出，监听已停，锁已释放")
+        _dlog(f"{name} daemon：已退出，监听已停，锁已释放")
 
 
-def daemon_alive() -> bool:
+def daemon_alive(path: Path | None = None) -> bool:
     """本机有没有活的 graphwatch daemon：能拿到单例锁 = 没有。"""
-    fd = acquire_singleton_lock()
+    fd = acquire_singleton_lock(path)
     if fd is None:
         return True
     release_singleton_lock(fd)

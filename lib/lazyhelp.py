@@ -77,6 +77,7 @@ TOOLS: dict[str, tuple[str, str]] = {
     "n": ("文件与系统", "macOS 语音播报（`say`）"),
     "inject": ("文件与系统", "把 bin/ 注入 shell PATH（写入 ~/.zshrc 等；macOS 可选启用 Touch ID sudo）"),
     "graphwatch": ("文件与系统", "graphify 全局 watch 守护服务：注册目录自动重建知识图谱"),
+    "gitnexuswatch": ("文件与系统", "gitnexus 代码图谱保鲜守护：登记 git 仓库，改动/切分支后自动重建索引"),
 }
 
 CATEGORIES_ORDER = ["Git 工作流", "Git 协作", "构建与检查", "数据与网络", "网页检索", "进程与运行", "文件与系统"]

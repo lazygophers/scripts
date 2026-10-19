@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""gitnexuswatch — 登记 git 仓库，后台自动保持 gitnexus 代码图谱新鲜。"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from lib.cli.gitnexuswatch import main
+
+raise SystemExit(main())

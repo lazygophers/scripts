@@ -96,15 +96,18 @@ def load_config() -> dict:
     return cfg
 
 
-def save_config(cfg: dict) -> None:
-    """原子写 + 0600：临时文件写完 chmod，再 os.replace 换名（同 archery 惯例）。"""
+def save_config(cfg: dict, target: Path | None = None) -> None:
+    """原子写 + 0600：临时文件写完 chmod，再 os.replace 换名（同 archery 惯例）。
+
+    target 缺省写 graphwatch.yaml；gitnexuswatch 传自己的配置路径共用这份写法。
+    """
     import tempfile
 
     import yaml
 
-    home = config_home()
+    target = target or config_path()
+    home = target.parent
     home.mkdir(parents=True, exist_ok=True)
-    target = config_path()
     text = yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False)
     fd, tmp = tempfile.mkstemp(dir=home, prefix=".graphwatch-", suffix=".tmp")
     try:

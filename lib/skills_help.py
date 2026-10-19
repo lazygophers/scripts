@@ -147,6 +147,10 @@ COMMAND_SKILLS: dict[str, list[str]] = {
         "注册目录让 graphify 图谱自动保鲜: `graphwatch add <目录>`；`graphwatch list` 看全部。",
         "需要 graphify 库: `pip install '.[graphify]'`；服务化与 config 向导见 `graphwatch --skills`。",
     ],
+    "gitnexuswatch": [
+        "登记仓库让 gitnexus 索引自动保鲜: `gitnexuswatch add <目录>`（非 git 文件夹自动拆成里面的仓库）；`gitnexuswatch list` 看新鲜度。",
+        "后台常驻: `gitnexuswatch install`；改动静默 30 秒后重建，切分支/提交后 2 秒重建，git 操作进行中会等它结束。",
+    ],
     "ovpn": [
         "OpenVPN 连接/断开/状态/登录: `ovpn connect` / `ovpn disconnect` / `ovpn status`；凭据和 TOTP 已存好。",
         "碰配置的命令需要 root，可能经 sudo 重启自身；无特权查看用 `ovpn status`。",

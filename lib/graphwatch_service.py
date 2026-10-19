@@ -10,29 +10,47 @@ from __future__ import annotations
 import os
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from lib.graphwatch_config import GraphwatchError
 
-LAUNCHD_LABEL = "com.lazygophers.graphwatch"
+
+@dataclass(frozen=True)
+class ServiceSpec:
+    """一个守护服务的身份：服务名即 bin/<name>，launchd label、单元名都由它派生。"""
+
+    name: str
+    description: str
+    env: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def label(self) -> str:
+        return f"com.lazygophers.{self.name}"
 
 
-def script_path() -> Path:
-    """本仓 bin/graphwatch 绝对路径——服务里就跑它。"""
-    return Path(__file__).resolve().parent.parent / "bin" / "graphwatch"
+GRAPHWATCH = ServiceSpec("graphwatch", "graphwatch — graphify 全局 watch 守护",
+                         (("GRAPHIFY_VIZ_NODE_LIMIT", "50000"),))
+LAUNCHD_LABEL = GRAPHWATCH.label
 
 
-def launchd_plist_path() -> Path:
-    return Path.home() / "Library" / "LaunchAgents" / "com.lazygophers.graphwatch.plist"
+def script_path(spec: ServiceSpec = GRAPHWATCH) -> Path:
+    """本仓 bin/<name> 绝对路径——服务里就跑它。"""
+    return Path(__file__).resolve().parent.parent / "bin" / spec.name
 
 
-def launchd_plist() -> str:
+def launchd_plist_path(spec: ServiceSpec = GRAPHWATCH) -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{spec.label}.plist"
+
+
+def launchd_plist(spec: ServiceSpec = GRAPHWATCH) -> str:
     """LaunchAgent plist：KeepAlive 崩了自动拉起，RunAtLoad 登录自启。
 
     stdout/stderr 不重定向：Python 日志统一写 lib/log.py 的单一 JSONL 文件。
     """
-    exe = script_path()
-    label = LAUNCHD_LABEL
+    exe = script_path(spec)
+    label = spec.label
+    env = "".join(f"\n    <key>{k}</key><string>{v}</string>" for k, v in spec.env)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -45,8 +63,7 @@ def launchd_plist() -> str:
     <string>run</string>
   </array>
   <key>EnvironmentVariables</key>
-  <dict>
-    <key>GRAPHIFY_VIZ_NODE_LIMIT</key><string>50000</string>
+  <dict>{env}
   </dict>
   <key>KeepAlive</key>
   <dict>
@@ -58,15 +75,16 @@ def launchd_plist() -> str:
 """
 
 
-def systemd_unit() -> str:
+def systemd_unit(spec: ServiceSpec = GRAPHWATCH) -> str:
     """systemd --user 单元：Restart=always，登录自启（需 loginctl enable-linger 常驻）。"""
-    exe = script_path()
+    exe = script_path(spec)
+    env = "".join(f"Environment={k}={v}\n" for k, v in spec.env)
     return f"""[Unit]
-Description=graphwatch — graphify 全局 watch 守护
+Description={spec.description}
 After=network.target
 
 [Service]
-ExecStart={sys.executable} {exe} run
+{env}ExecStart={sys.executable} {exe} run
 Restart=always
 RestartSec=5
 
@@ -75,12 +93,12 @@ WantedBy=default.target
 """
 
 
-def schtasks_create_command() -> list[str]:
+def schtasks_create_command(spec: ServiceSpec = GRAPHWATCH) -> list[str]:
     """Windows 登录自启计划任务命令（schtasks 用户级，无需管理员）。"""
-    exe = script_path()
+    exe = script_path(spec)
     return [
         "schtasks", "/Create", "/F",
-        "/TN", "graphwatch",
+        "/TN", spec.name,
         "/SC", "ONLOGON",
         "/TR", f'"{sys.executable}" "{exe}" run',
     ]
@@ -108,24 +126,24 @@ def _sh(*cmd: str) -> list[str]:
     return ["/bin/zsh", "-c", " ".join(shlex.quote(c) for c in cmd)]
 
 
-def _launchd_gone(runner) -> bool:
-    r = runner(_sh("launchctl", "print", f"{_launchd_domain()}/{LAUNCHD_LABEL}"), check=False)
+def _launchd_gone(runner, label: str = LAUNCHD_LABEL) -> bool:
+    r = runner(_sh("launchctl", "print", f"{_launchd_domain()}/{label}"), check=False)
     return getattr(r, "returncode", 1) != 0
 
 
-def _launchd_stop(runner) -> None:
+def _launchd_stop(runner, label: str = LAUNCHD_LABEL) -> None:
     """停掉服务并从 domain 卸载：kill SIGTERM（daemon 优雅退出）→ 等消失
     → bootout。直接 bootout 会在 daemon 退出期间报 'I/O error 5'；
     plist 的 KeepAlive 只在崩溃时拉起，正常退出不复活，kill 后即静止。"""
     domain = _launchd_domain()
-    runner(_sh("launchctl", "kill", "SIGTERM", f"{domain}/{LAUNCHD_LABEL}"), check=False)
+    runner(_sh("launchctl", "kill", "SIGTERM", f"{domain}/{label}"), check=False)
     for _ in range(10):
-        if _launchd_gone(runner):
+        if _launchd_gone(runner, label):
             return
         time.sleep(0.5)
-    runner(_sh("launchctl", "bootout", f"{domain}/{LAUNCHD_LABEL}"), check=False)
+    runner(_sh("launchctl", "bootout", f"{domain}/{label}"), check=False)
     for _ in range(10):
-        if _launchd_gone(runner):
+        if _launchd_gone(runner, label):
             return
         time.sleep(0.5)
 
@@ -146,39 +164,44 @@ def _launchd_start(runner, plist: str) -> None:
 
 # ── 平台 adapter：同一组动作，各自实现 ────────────────────────
 
-class LaunchdService:
+class _Adapter:
+    def __init__(self, spec: ServiceSpec = GRAPHWATCH):
+        self.spec = spec
+
+
+class LaunchdService(_Adapter):
     """macOS launchd（现代 bootstrap/bootout API，旧 load/unload 会 rc 5）。"""
 
     def install(self, runner) -> None:
-        p = launchd_plist_path()
+        p = launchd_plist_path(self.spec)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(launchd_plist(), encoding="utf-8")
-        _launchd_stop(runner)
+        p.write_text(launchd_plist(self.spec), encoding="utf-8")
+        _launchd_stop(runner, self.spec.label)
         _launchd_start(runner, str(p))
 
     def uninstall(self, runner) -> None:
-        p = launchd_plist_path()
-        _launchd_stop(runner)
+        p = launchd_plist_path(self.spec)
+        _launchd_stop(runner, self.spec.label)
         if p.exists():
             p.unlink()
 
     def control(self, action: str, runner) -> None:
-        p = str(launchd_plist_path())
+        p = str(launchd_plist_path(self.spec))
         if action in ("stop", "restart"):
-            _launchd_stop(runner)
+            _launchd_stop(runner, self.spec.label)
         if action in ("start", "restart"):
             _launchd_start(runner, p)
 
     def registered(self, runner) -> bool:
         # 注册态 = plist 文件存在（stop 会 bootout 出 domain，但注册保留、
         # start 可重新 bootstrap）
-        return launchd_plist_path().is_file()
+        return launchd_plist_path(self.spec).is_file()
 
     def state(self, runner, state: dict, alive=None) -> dict:
-        if not _launchd_gone(runner):
+        if not _launchd_gone(runner, self.spec.label):
             import re
 
-            r = runner(_sh("launchctl", "print", f"{_launchd_domain()}/{LAUNCHD_LABEL}"), check=False)
+            r = runner(_sh("launchctl", "print", f"{_launchd_domain()}/{self.spec.label}"), check=False)
             text = getattr(r, "stdout", b"").decode(errors="replace") if isinstance(getattr(r, "stdout", None), bytes) else str(getattr(r, "stdout", "") or "")
             pid = re.search(r"^\s*pid = (\d+)", text, re.M)
             state["running"] = pid is not None
@@ -188,29 +211,33 @@ class LaunchdService:
         return state
 
 
-class SystemdService:
+class SystemdService(_Adapter):
     """Linux systemd --user（is-enabled 即磁盘注册态，无 launchd 的 domain 问题）。"""
+
+    @property
+    def unit(self) -> str:
+        return f"{self.spec.name}.service"
 
     def install(self, runner) -> None:
         unit_dir = Path.home() / ".config" / "systemd" / "user"
         unit_dir.mkdir(parents=True, exist_ok=True)
-        (unit_dir / "graphwatch.service").write_text(systemd_unit(), encoding="utf-8")
+        (unit_dir / self.unit).write_text(systemd_unit(self.spec), encoding="utf-8")
         runner(["systemctl", "--user", "daemon-reload"])
-        runner(["systemctl", "--user", "enable", "--now", "graphwatch.service"])
+        runner(["systemctl", "--user", "enable", "--now", self.unit])
 
     def uninstall(self, runner) -> None:
-        runner(["systemctl", "--user", "disable", "--now", "graphwatch.service"])
-        (Path.home() / ".config" / "systemd" / "user" / "graphwatch.service").unlink(missing_ok=True)
+        runner(["systemctl", "--user", "disable", "--now", self.unit])
+        (Path.home() / ".config" / "systemd" / "user" / self.unit).unlink(missing_ok=True)
 
     def control(self, action: str, runner) -> None:
-        runner(["systemctl", "--user", action, "graphwatch.service"])
+        runner(["systemctl", "--user", action, self.unit])
 
     def registered(self, runner) -> bool:
-        r = runner(["systemctl", "--user", "is-enabled", "graphwatch.service"])
+        r = runner(["systemctl", "--user", "is-enabled", self.unit])
         return r.returncode == 0
 
     def state(self, runner, state: dict, alive=None) -> dict:
-        r = runner(["systemctl", "--user", "show", "graphwatch.service",
+        r = runner(["systemctl", "--user", "show", self.unit,
                     "--property=MainPID,ActiveState,ExecMainStatus"])
         text = getattr(r, "stdout", b"").decode(errors="replace")
         for line in text.splitlines():
@@ -223,23 +250,23 @@ class SystemdService:
         return state
 
 
-class SchtasksService:
+class SchtasksService(_Adapter):
     """Windows 计划任务（用户级 ONLOGON；Query 本身即磁盘注册态）。"""
 
     def install(self, runner) -> None:
-        runner(schtasks_create_command())
+        runner(schtasks_create_command(self.spec))
 
     def uninstall(self, runner) -> None:
-        runner(["schtasks", "/Delete", "/F", "/TN", "graphwatch"])
+        runner(["schtasks", "/Delete", "/F", "/TN", self.spec.name])
 
     def control(self, action: str, runner) -> None:
         if action in ("stop", "restart"):
-            runner(["schtasks", "/End", "/TN", "graphwatch"], check=False)
+            runner(["schtasks", "/End", "/TN", self.spec.name], check=False)
         if action in ("start", "restart"):
-            runner(["schtasks", "/Run", "/TN", "graphwatch"])
+            runner(["schtasks", "/Run", "/TN", self.spec.name])
 
     def registered(self, runner) -> bool:
-        r = runner(["schtasks", "/Query", "/TN", "graphwatch"])
+        r = runner(["schtasks", "/Query", "/TN", self.spec.name])
         return r.returncode == 0
 
     def state(self, runner, state: dict, alive=None) -> dict:
@@ -250,58 +277,58 @@ class SchtasksService:
         return state
 
 
-def backend():
+def backend(spec: ServiceSpec = GRAPHWATCH):
     """平台分派只此一处（原来是 5 个函数各自 switch）。"""
     plat = sys.platform
     if plat == "darwin":
-        return LaunchdService()
+        return LaunchdService(spec)
     if plat.startswith("linux"):
-        return SystemdService()
-    return SchtasksService()
+        return SystemdService(spec)
+    return SchtasksService(spec)
 
 
 # ── 门面：graphwatch CLI 与测试打这里 ────────────────────────
 
-def install_service(runner=None) -> None:
+def install_service(runner=None, spec: ServiceSpec = GRAPHWATCH) -> None:
     """注册为用户级服务并立即启动。按平台走 launchd / systemd / schtasks。"""
     if runner is None:
         runner = _checked_runner()
-    backend().install(runner)
+    backend(spec).install(runner)
 
 
-def service_control(action: str, runner=None) -> None:
+def service_control(action: str, runner=None, spec: ServiceSpec = GRAPHWATCH) -> None:
     """start / stop / restart 已注册的服务。stop 不动注册。"""
     if runner is None:
         runner = _checked_runner()
     if action not in ("start", "stop", "restart"):
         raise GraphwatchError(f"未知动作 {action!r}，可用: start / stop / restart")
-    if not service_registered(runner):
-        raise GraphwatchError("服务未注册，先: graphwatch install")
-    backend().control(action, runner)
+    if not service_registered(runner, spec):
+        raise GraphwatchError(f"服务未注册，先: {spec.name} install")
+    backend(spec).control(action, runner)
 
 
-def uninstall_service(runner=None) -> None:
+def uninstall_service(runner=None, spec: ServiceSpec = GRAPHWATCH) -> None:
     """停止并删除服务注册。配置与日志不动。"""
     if runner is None:
         runner = _checked_runner()
-    backend().uninstall(runner)
+    backend(spec).uninstall(runner)
 
 
-def service_registered(runner=None) -> bool:
+def service_registered(runner=None, spec: ServiceSpec = GRAPHWATCH) -> bool:
     """服务注册态探测（磁盘态：plist / is-enabled / schtasks Query）。"""
     import subprocess
 
     if runner is None:
         def runner(cmd, **kw):
             return subprocess.run(cmd, check=False, capture_output=True, **kw)
-    return backend().registered(runner)
+    return backend(spec).registered(runner)
 
 
-def service_state(runner=None, alive=None) -> dict:
+def service_state(runner=None, alive=None, spec: ServiceSpec = GRAPHWATCH) -> dict:
     """服务执行态：注册 / 运行 / PID / 上次退出码 / 运行时长。"""
     import subprocess
 
-    state = {"registered": service_registered(runner), "running": False,
+    state = {"registered": service_registered(runner, spec), "running": False,
              "pid": "-", "last_exit": "-", "uptime": "-"}
     if not state["registered"]:
         return state
@@ -309,4 +336,4 @@ def service_state(runner=None, alive=None) -> dict:
         def runner(cmd, **kw):
             kw.setdefault("check", False)
             return subprocess.run(cmd, capture_output=True, **kw)
-    return backend().state(runner, state, alive)
+    return backend(spec).state(runner, state, alive)
