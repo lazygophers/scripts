@@ -131,6 +131,101 @@ class TestCliEmitAndMain(unittest.TestCase):
         args3 = _parse_args(["--project", "demo"])
         self.assertEqual(args3.project, "demo")
 
+    def test_parse_args_all_flag(self):
+        args = _parse_args(["--all"])
+        self.assertTrue(args.all)
+        args2 = _parse_args([])
+        self.assertFalse(args2.all)
+
+
+class MainAllFlagTest(unittest.TestCase):
+    """main() 在 --all 下的分派与 -p 过滤。"""
+
+    ROW = ["n1", "sid1", "proj", "busy", "today", "yday"]
+
+    def _row(self, **kw):
+        d = dict(zip((k for _, k in COLUMNS), self.ROW))
+        d.update(kw)
+        return d
+
+    def test_main_all_calls_list_session_logs(self):
+        import lib.cli.claude_session as cli
+        rows = [self._row()]
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=[]), \
+             patch("lib.claude_session.list_session_logs", return_value=rows), \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session", "--all"])
+        self.assertEqual(rc, 0)
+        self.assertIn("sid1", buf.getvalue())
+        self.assertIn("\t", buf.getvalue())
+
+    def test_main_without_all_keeps_old_path(self):
+        import lib.cli.claude_session as cli
+        rows = [self._row()]
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=rows) as mock_sess, \
+             patch("lib.claude_session.list_session_logs") as mock_logs, \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session"])
+        self.assertEqual(rc, 0)
+        mock_sess.assert_called_once()
+        mock_logs.assert_not_called()
+
+    def test_main_all_p_filters_by_cwd_hash(self):
+        import hashlib
+        import shutil as sh
+        import lib.cli.claude_session as cli
+
+        cwd = "/Users/me/work/myproject"
+        cwd_hash = hashlib.sha256(cwd.encode()).hexdigest()[:12]
+        # Create a temp projects_root with the expected hash dir
+        tmp_root = Path(tempfile.mkdtemp())
+        try:
+            (tmp_root / cwd_hash).mkdir()
+            rows = [
+                self._row(cwd=cwd),
+                self._row(cwd="/Users/me/other/place"),
+            ]
+            buf = io.StringIO()
+            with patch("lib.claude_session.list_sessions", return_value=[]), \
+                 patch("lib.claude_session.list_session_logs",
+                       return_value=rows), \
+                 patch("lib.cli.claude_session.timed",
+                       side_effect=lambda fn, label=None: fn), \
+                 patch.object(cli, "_PROJECTS_ROOT", tmp_root), \
+                 patch("os.getcwd", return_value=cwd), \
+                 patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+                 redirect_stdout(buf):
+                rc = cli.main(["claude_session", "--all", "-p"])
+            self.assertEqual(rc, 0)
+            output = buf.getvalue()
+            self.assertIn("sid1", output)
+            self.assertIn(cwd.split("/")[-1], output)
+        finally:
+            sh.rmtree(tmp_root)
+
+    def test_main_all_p_missing_hash_dir_returns_empty(self):
+        import lib.cli.claude_session as cli
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=[]), \
+             patch("lib.claude_session.list_session_logs",
+                   return_value=[]), \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch.object(cli, "_PROJECTS_ROOT", Path("/no/such/dir")), \
+             patch("os.getcwd", return_value="/no/such/dir"), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session", "--all", "-p"])
+        self.assertEqual(rc, 0)
+
     def test_main_filters_and_emits(self):
         import lib.cli.claude_session as cli
 
