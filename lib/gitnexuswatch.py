@@ -230,23 +230,18 @@ def stale(repo: str) -> Path | None:
     return newest[1] if newest else None
 
 
-def freshness(repo: str, running: bool | None = None) -> tuple[str, str]:
+def freshness(repo: str) -> tuple[str, str]:
+    """索引落后于工作区时不存在「过期」状态：正在重建 → 更新中，其余 → 排队等待中。"""
     meta = Path(repo) / ".gitnexus" / "meta.json"
     if not (Path(repo) / ".git").exists():
         return "fail", "不是 git 仓库（目录被移走了？）"
     if not meta.is_file():
         return "skip", "无索引（尚未构建）"
     if stale(repo) is not None:
-        if running is None:
-            running = daemon_alive(lock_path())
-        if not running:
-            return "fail", "索引过期"
-        in_flight, queued = _read_state()
+        in_flight, _queued = _read_state()
         if repo in in_flight:
             return "updating", "更新中"
-        if repo in queued:
-            return "queued", "排队等待中"
-        return "fail", "索引过期"
+        return "queued", "排队等待中"
     import datetime
 
     ts = datetime.datetime.fromtimestamp(meta.stat().st_mtime).strftime("%m-%d %H:%M")
@@ -608,9 +603,8 @@ class GitnexuswatchCli(BaseCli):
         if not repos:
             self._r.info(f"还没有登记任何仓库。先: {NAME} add <目录>")
             return 0
-        running = daemon_alive(lock_path())
         labels = display_repos(repos)
-        rows = [(lbl, current_branch(r), *freshness(r, running)) for lbl, r in zip(labels, repos)]
+        rows = [(lbl, current_branch(r), *freshness(r)) for lbl, r in zip(labels, repos)]
         from lib.ai_env import is_ai_shell_env
 
         if is_ai_shell_env():

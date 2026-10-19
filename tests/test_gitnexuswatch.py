@@ -129,7 +129,7 @@ class GitStateTest(Case):
     def test_stale_never_indexed(self):
         repo = _git_init(self.tmp / "r")
         self.assertEqual(gw.stale(str(repo)), repo / ".gitnexus" / "meta.json")
-        self.assertEqual(gw.freshness(str(repo), running=False)[0], "skip")
+        self.assertEqual(gw.freshness(str(repo))[0], "skip")
 
     def test_fresh_when_commit_matches_and_tree_clean(self):
         repo = _git_init(self.tmp / "r")
@@ -139,15 +139,16 @@ class GitStateTest(Case):
                        check=True)
         _write_meta(repo, _head(repo))
         self.assertIsNone(gw.stale(str(repo)))
-        self.assertEqual(gw.freshness(str(repo), running=False)[0], "ok")
+        self.assertEqual(gw.freshness(str(repo))[0], "ok")
 
     def test_stale_after_head_moves(self):
         repo = _git_init(self.tmp / "r")
         _write_meta(repo, "0" * 40)
         self.assertEqual(gw.stale(str(repo)), repo / ".git" / "HEAD")
-        self.assertEqual(gw.freshness(str(repo), running=False)[0], "fail")
-        with unittest.mock.patch.object(gw, "_read_state", return_value=(set(), {str(repo)})):
-            self.assertEqual(gw.freshness(str(repo), running=True)[0], "queued")
+        # 不存在「索引过期」：不在重建队列里就是排队等待中
+        self.assertEqual(gw.freshness(str(repo)), ("queued", "排队等待中"))
+        with unittest.mock.patch.object(gw, "_read_state", return_value=({str(repo)}, set())):
+            self.assertEqual(gw.freshness(str(repo))[0], "updating")
 
     def test_stale_on_dirty_file_newer_than_index(self):
         repo = _git_init(self.tmp / "r")
@@ -519,13 +520,14 @@ class CliTest(Case):
                 self.assertRaisesRegex(GraphwatchError, "watchdog 未安装"):
             gw.ensure()
 
-    def test_freshness_probes_daemon_when_not_told(self):
+    def test_freshness_never_reports_stale(self):
+        # stale 只有 queued / updating 两种去向，与 daemon 是否在跑无关
         repo = _git_init(self.tmp / "r")
         _write_meta(repo, "0" * 40)
-        with unittest.mock.patch.object(gw, "daemon_alive", return_value=True) as alive, \
+        with unittest.mock.patch.object(gw, "daemon_alive", return_value=False) as alive, \
                 unittest.mock.patch.object(gw, "_read_state", return_value=({str(repo)}, set())):
             self.assertEqual(gw.freshness(str(repo))[0], "updating")
-        alive.assert_called_once_with(gw.lock_path())
+        alive.assert_not_called()
 
     def test_clean_removes_gitnexus_when_branch_gone(self):
         repo = _git_init(self.tmp / "r")
