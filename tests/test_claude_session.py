@@ -251,6 +251,96 @@ class MainAllFlagTest(unittest.TestCase):
         self.assertIn("sid1", buf.getvalue())
 
 
+class MainGrepTailTest(unittest.TestCase):
+    """main() 在 --all 下 --grep / --tail 的过滤行为。"""
+
+    ROW = ["n1", "sid1", "proj", "busy", "today", "yday"]
+
+    def _row(self, **kw):
+        d = dict(zip((k for _, k in COLUMNS), self.ROW))
+        d.update(kw)
+        return d
+
+    def test_grep_filters_by_summary(self):
+        import lib.cli.claude_session as cli
+        rows = [self._row(summary="alpha task"), self._row(summary="beta")]
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=[]), \
+             patch("lib.claude_session.list_session_logs", return_value=rows), \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session", "--all", "--grep", "alpha"])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("sid1", out)
+        # only one row
+        self.assertEqual(out.count("sid1"), 1)
+
+    def test_grep_empty_string_means_no_filter(self):
+        import lib.cli.claude_session as cli
+        rows = [self._row(summary="alpha"), self._row(summary="beta")]
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=[]), \
+             patch("lib.claude_session.list_session_logs", return_value=rows), \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session", "--all", "--grep", ""])
+        self.assertEqual(rc, 0)
+        # both rows pass through
+        self.assertEqual(buf.getvalue().count("sid1"), 2)
+
+    def test_grep_without_all_is_rejected(self):
+        import lib.cli.claude_session as cli
+        self.assertRaises(SystemExit, lambda: cli.main(
+            ["claude_session", "--grep", "x"]))
+
+    def test_tail_without_all_is_rejected(self):
+        import lib.cli.claude_session as cli
+        self.assertRaises(SystemExit, lambda: cli.main(
+            ["claude_session", "--tail", "5"]))
+
+    def test_tail_passed_to_list_session_logs(self):
+        import lib.cli.claude_session as cli
+        rows = [self._row()]
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=[]), \
+             patch("lib.claude_session.list_session_logs",
+                   return_value=rows) as mock_logs, \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session", "--all", "--tail", "7"])
+        self.assertEqual(rc, 0)
+        mock_logs.assert_called_once()
+        kwargs = mock_logs.call_args
+        # tail should be passed as keyword argument
+        self.assertEqual(kwargs.kwargs.get("tail"), 7)
+
+    def test_grep_and_tail_combo(self):
+        import lib.cli.claude_session as cli
+        rows = [self._row(summary="alpha"), self._row(summary="beta")]
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=[]), \
+             patch("lib.claude_session.list_session_logs",
+                   return_value=rows) as mock_logs, \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(
+                ["claude_session", "--all", "--tail", "5", "--grep", "alpha"])
+        self.assertEqual(rc, 0)
+        # tail forwarded
+        self.assertEqual(mock_logs.call_args.kwargs.get("tail"), 5)
+        # grep filtered: only alpha row
+        self.assertEqual(buf.getvalue().count("sid1"), 1)
+
+
 class ListSessionLogsTest(unittest.TestCase):
     """list_session_logs(projects_root, tail) 扫描
     projects_root/<hash>/<uuid>.jsonl，返回核心字段。"""
