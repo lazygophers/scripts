@@ -189,6 +189,8 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
                     break
 
         out.append({
+            "_last_ts": last_ts,
+            "_start_ts": start_ts,
             "sessionId": session_id,
             "start": start_ts,
             "last": last_ts,
@@ -199,6 +201,10 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
             "first_message": user_texts[0] if user_texts else "",
             "last_messages": user_texts[-tail:] if user_texts else [],
         })
+    # last desc, start desc, sessionId asc (ISO-8601 strings compare lexicographically)
+    out.sort(key=lambda r: r["sessionId"])
+    out.sort(key=lambda r: r["_start_ts"], reverse=True)
+    out.sort(key=lambda r: r["_last_ts"], reverse=True)
     return out
 
 

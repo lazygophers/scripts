@@ -17,9 +17,14 @@ from __future__ import annotations
 import argparse
 import sys
 
-from lib.claude_session import _PROJECTS_ROOT
 from lib.ui import print_tsv, timed
 from pathlib import Path, PurePath
+
+_PROJECTS_ROOT = Path.home() / ".claude" / "projects"
+
+# --all 路径的字段集
+_LOG_COLUMNS = ["sessionId", "project", "start", "last", "cwd",
+                "git_branch", "kind", "description"]
 
 # 渲染列 → lib/claude_session.py 里的字段名
 COLUMNS = [
@@ -52,7 +57,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("-p", "--project", nargs="?", const="", default=None,
                    metavar="项目名",
                    help="精准匹配项目名；省略值 = 当前目录所属项目")
-    p.add_argument("-f", "--format", choices=["json", "tsv", "csv"],
+    p.add_argument("-f", "--format", choices=["json", "tsv", "csv", "table"],
                    default=None, help="输出格式；默认 AI 环境 TSV，人类环境表格")
     p.add_argument("--all", action="store_true",
                    help="扫描 ~/.claude/projects/ 下的会话日志（jsonl 路径）")
@@ -71,29 +76,16 @@ def _check_grep_tail_gated(args: argparse.Namespace) -> None:
 
 
 def _emit(sessions: list[dict], fmt: str) -> None:
-    import csv
-    import io
-
-    from lib.ai_env import json_dumps
-
-    headers = [label for label, _ in COLUMNS]
-    rows = [[str(s[key]) for _, key in COLUMNS] for s in sessions]
+    columns = COLUMNS
+    headers = [label for label, _ in columns]
+    keys = [key for _, key in columns]
     if fmt == "json":
-        print(json_dumps([dict(zip((k for _, k in COLUMNS), r))
-                          for r in rows]))
-    elif fmt == "csv":
-        buf = io.StringIO()
-        csv.writer(buf, lineterminator="\n").writerows([headers, *rows])
-        print(buf.getvalue(), end="")
-    elif fmt == "tsv":
-        print_tsv(headers, rows)
-    else:
-        _print_table(sessions)
-
-
-# --all 路径的字段集
-_LOG_COLUMNS = ["sessionId", "project", "start", "last", "cwd",
-                "git_branch", "kind", "description"]
+        from lib.ai_env import json_dumps
+        print(json_dumps([dict(zip(keys, [str(s[k]) for k in keys]))
+                          for s in sessions]))
+        return
+    prepared = [[str(s[k]) for _, k in columns] for s in sessions]
+    _render_rows(headers, prepared, fmt, title="Claude Code 会话")
 
 
 def _description(row: dict) -> str:
@@ -108,40 +100,40 @@ def _description(row: dict) -> str:
 
 
 def _emit_logs(rows: list[dict], fmt: str) -> None:
-    import csv
-    import io
-
-    from lib.ai_env import json_dumps
-
+    columns = _LOG_COLUMNS
+    headers = list(columns)
     if fmt == "json":
+        from lib.ai_env import json_dumps
         print(json_dumps(rows))
         return
-
-    headers = list(_LOG_COLUMNS)
     prepared = []
     for r in rows:
         desc = _description(r)
-        prepared.append([str(r.get(k, "")) for k in _LOG_COLUMNS[:-1]] + [desc])
+        prepared.append([str(r.get(k, "")) for k in columns[:-1]] + [desc])
+    _render_rows(headers, prepared, fmt)
 
+
+def _render_rows(headers: list[str], prepared: list[list[str]],
+                 fmt: str, title: str | None = None) -> None:
+    """Shared csv / tsv / table dispatcher. JSON handled by callers."""
+    if fmt == "csv":
+        import csv
+        import io
+        buf = io.StringIO()
+        csv.writer(buf, lineterminator="\n").writerows([headers, *prepared])
+        print(buf.getvalue(), end="")
+        return
     if fmt == "tsv":
         print_tsv(headers, prepared)
-    elif fmt == "csv":
-        buf = io.StringIO()
-        writer = csv.writer(buf, lineterminator="\n")
-        writer.writerow(headers)
-        writer.writerows(prepared)
-        print(buf.getvalue(), end="")
-    elif fmt == "table":
-        from rich.console import Console
-        from rich.table import Table
-        table = Table()
-        for h in headers:
-            table.add_column(h)
-        for vals in prepared:
-            table.add_row(*vals)
-        Console().print(table)
-    else:
-        _emit_logs(rows, "json")
+        return
+    from rich.console import Console
+    from rich.table import Table
+    table = Table(title=title)
+    for h in headers:
+        table.add_column(h)
+    for vals in prepared:
+        table.add_row(*vals)
+    Console().print(table)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -165,15 +157,20 @@ def main(argv: list[str] | None = None) -> int:
             tail=args.tail)
         rows = filter_session_logs(rows, grep=args.grep)
         if args.project is not None:
-            import hashlib
-            cwd = str(Path.cwd().resolve())
-            cwd_hash = hashlib.sha256(cwd.encode()).hexdigest()[:12]
-            target = _PROJECTS_ROOT / cwd_hash
-            if not target.exists():
-                sessions = []
+            if args.project == "":
+                # --all -p (no value): restrict to cwd-hash subdir
+                cwd = str(Path.cwd().resolve())
+                cwd_hash = cwd.replace("/", "-")
+                target = _PROJECTS_ROOT / cwd_hash
+                if target.exists():
+                    sessions = [r for r in rows
+                                if PurePath(r.get("cwd") or "") == Path(cwd)]
+                else:
+                    sessions = []
             else:
+                # --all -p demo (with value): filter by project name
                 sessions = [r for r in rows
-                            if PurePath(r.get("cwd") or "") == Path(cwd)]
+                            if r.get("project") == args.project]
         else:
             sessions = rows
         _emit_logs(sessions, fmt)

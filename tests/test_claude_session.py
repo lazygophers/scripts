@@ -138,6 +138,10 @@ class TestCliEmitAndMain(unittest.TestCase):
         args2 = _parse_args([])
         self.assertFalse(args2.all)
 
+    def test_format_choices_include_table(self):
+        args = _parse_args(["--all", "-f", "table"])
+        self.assertEqual(args.format, "table")
+
 
 class MainAllFlagTest(unittest.TestCase):
     """main() 在 --all 下的分派与 -p 过滤。"""
@@ -180,12 +184,10 @@ class MainAllFlagTest(unittest.TestCase):
         mock_logs.assert_not_called()
 
     def test_main_all_p_filters_by_cwd_hash(self):
-        import hashlib
-        import shutil as sh
         import lib.cli.claude_session as cli
 
         cwd = "/Users/me/work/myproject"
-        cwd_hash = hashlib.sha256(cwd.encode()).hexdigest()[:12]
+        cwd_hash = cwd.replace("/", "-")
         # Create a temp projects_root with the expected hash dir
         tmp_root = Path(tempfile.mkdtemp())
         try:
@@ -210,7 +212,7 @@ class MainAllFlagTest(unittest.TestCase):
             self.assertIn("sid1", output)
             self.assertIn(cwd.split("/")[-1], output)
         finally:
-            sh.rmtree(tmp_root)
+            import shutil; shutil.rmtree(tmp_root)
 
     def test_main_all_p_missing_hash_dir_returns_empty(self):
         import lib.cli.claude_session as cli
@@ -226,6 +228,28 @@ class MainAllFlagTest(unittest.TestCase):
              redirect_stdout(buf):
             rc = cli.main(["claude_session", "--all", "-p"])
         self.assertEqual(rc, 0)
+
+    def test_main_all_p_with_value_filters_by_project_name(self):
+        """--all -p demo filters rows by project field, not hash dir."""
+        import lib.cli.claude_session as cli
+        rows = [
+            self._row(summary="alpha", cwd="/Users/me/work/demo"),
+            self._row(summary="beta", cwd="/Users/me/work/other"),
+        ]
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=[]), \
+             patch("lib.claude_session.list_session_logs",
+                   return_value=rows), \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session", "--all", "-p", "demo"])
+        self.assertEqual(rc, 0)
+        output = buf.getvalue()
+        self.assertIn("sid1", output)
+        # only demo project row passes
+        self.assertEqual(output.count("sid1"), 1)
 
     def test_main_filters_and_emits(self):
         import lib.cli.claude_session as cli
@@ -515,6 +539,54 @@ class ListSessionLogsTest(unittest.TestCase):
             rows = list_session_logs(root)
             ids = sorted(r["sessionId"] for r in rows)
             self.assertEqual(ids, ["B"])
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_sort_last_desc_start_desc_session_id_asc(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            # last desc: t3 > t2 > t1
+            self._seed(root, "s1", [
+                {"type": "user", "sessionId": "sid-newest-last",
+                 "timestamp": "t3",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "x"}]}},
+                {"type": "custom-title", "customTitle": "New Last",
+                 "timestamp": "t3"},
+            ])
+            self._seed(root, "s2", [
+                {"type": "user", "sessionId": "sid-oldest-last",
+                 "timestamp": "t1",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "y"}]}},
+                {"type": "custom-title", "customTitle": "Old Last",
+                 "timestamp": "t1"},
+            ])
+            # same last (t2), start desc: t2b > t2a
+            self._seed(root, "s3", [
+                {"type": "user", "sessionId": "sid-later-start",
+                 "timestamp": "t2b",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "z"}]}},
+                {"type": "custom-title", "customTitle": "Later Start",
+                 "timestamp": "t2b"},
+            ])
+            self._seed(root, "s4", [
+                {"type": "user", "sessionId": "sid-earlier-start",
+                 "timestamp": "t2a",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "w"}]}},
+                {"type": "custom-title", "customTitle": "Earlier Start",
+                 "timestamp": "t2a"},
+            ])
+            rows = list_session_logs(root)
+            ids = [r["sessionId"] for r in rows]
+            self.assertEqual(ids, [
+                "sid-newest-last",
+                "sid-later-start",
+                "sid-earlier-start",
+                "sid-oldest-last",
+            ])
         finally:
             import shutil; shutil.rmtree(root)
 
