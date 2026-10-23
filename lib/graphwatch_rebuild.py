@@ -354,7 +354,7 @@ def _publish(G, communities: dict, root: Path, *, stage, daily: bool, changed: i
     cohesion = score_all(G, communities)
 
     # 社区名保留上次的（labels 文件是社区重命名的人工产物，daemon 不丢），只给
-    # 没名字的新社区补名——LLM 命名会参考项目根 CONTEXT.md 的术语表。
+    # 没名字的新社区补名——LLM 命名会参考项目根 GLOSSARY.md 的术语表。
     saved: dict[int, str] = {}
     labels_path = out / ".graphify_labels.json"
     if labels_path.is_file():

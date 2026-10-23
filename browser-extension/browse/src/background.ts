@@ -143,7 +143,7 @@ connection.connect();
 void netRuleArm();
 
 chrome.runtime.onStartup.addListener(() => {
-  // 浏览器完整启动是「停止」状态的唯一自动解除点（CONTEXT.md）；连不上由
+  // 浏览器完整启动是「停止」状态的唯一自动解除点（GLOSSARY.md）；连不上由
   // connect() 自己的停止守卫挡住，alarm 同理。
   connection.resume();
 });

@@ -158,7 +158,7 @@ export class NativeConnection {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private inFlight = 0;
   /**
-   * 单一「停止」状态（CONTEXT.md：停止）：用户刹车后跨 service worker 重启保持，
+   * 单一「停止」状态（GLOSSARY.md：停止）：用户刹车后跨 service worker 重启保持，
    * 持久化在 chrome.storage；浏览器完整启动（onStartup）才清除。alarm 兜底重连、
    * 退避重连、面板显示读的都是这一份 —— 以前 background.ts 还有一个并行的
    * `braked`，service worker 一被杀两者同时失忆，刹车失效，已删。
@@ -233,7 +233,7 @@ export class NativeConnection {
     });
   }
 
-  /** 浏览器完整启动：清除停止状态并恢复连接（CONTEXT.md：停止的解除条件）。 */
+  /** 浏览器完整启动：清除停止状态并恢复连接（GLOSSARY.md：停止的解除条件）。 */
   resume(): void {
     this.stopped = false;
     this.settledStopped = true;

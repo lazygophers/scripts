@@ -4,7 +4,7 @@ import { FORCED_EXTS, applyRules, fileOf, rules } from "../src/intercept.ts";
 import { clearChrome, installChrome } from "./mock.ts";
 
 /**
- * 拦截协议（CONTEXT.md）：规则生成（发端）和 file 参数解码（收端）的两端一致性。
+ * 拦截协议（GLOSSARY.md）：规则生成（发端）和 file 参数解码（收端）的两端一致性。
  * 两半在 2026-09-21 之前散在 rules.ts / page.ts，靠默契对齐 —— 现在同住 intercept.ts。
  */
 

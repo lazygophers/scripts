@@ -136,7 +136,7 @@ export async function targetUrl(target: Target): Promise<string | null> {
 
 /**
  * BiDi 把 context 嵌在 `target` 里（`script.*`），CLI 拍平了传。两种都认，拍平成
- * 同一个形状 —— dispatch 和 handler 才会解析出同一个目标（策略目标，CONTEXT.md）。
+ * 同一个形状 —— dispatch 和 handler 才会解析出同一个目标（策略目标，GLOSSARY.md）。
  */
 export function flattenTarget(params: Record<string, unknown>): Record<string, unknown> {
   const nested = params.target;

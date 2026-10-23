@@ -1,4 +1,4 @@
-"""graphwatch 产出物：社区命名（参考项目根 CONTEXT.md）+ 全套导出。
+"""graphwatch 产出物：社区命名（参考项目根 GLOSSARY.md）+ 全套导出。
 
 daemon 每轮重建在 graph.json 落盘后调 `write_artifacts()`，把 graphify 的
 html / cluster-only（GRAPH_REPORT.md）/ graphml / tree / obsidian 一次刷新。
@@ -7,7 +7,7 @@ wiki 留在 graphwatch_rebuild 里（它是 rebuild 的既有行为，且要跟 
 
 命名策略（同一次决定）：**只给没名字的社区起名**，已有名字不管是 LLM 起的还是
 人工改的一律不动。新社区先用 hub 名兜底（免费、确定性），配了 backend 再让 LLM
-参考项目根 `CONTEXT.md` 的术语表覆写，让社区名和项目自己的词汇对齐。
+参考项目根 `GLOSSARY.md` 的术语表覆写，让社区名和项目自己的词汇对齐。
 
 库函数签名以安装的 graphifyy 包为准（graphify.cluster / llm / analyze /
 report / export / exporters.html / tree_html / paths）。
@@ -31,7 +31,7 @@ BASE_URL_ENV: dict[str, str] = {
     "ollama": "OLLAMA_BASE_URL",
 }
 
-# CONTEXT.md 只取开头这些字符喂进命名 prompt：术语表都在文件前部，整篇塞进去
+# GLOSSARY.md 只取开头这些字符喂进命名 prompt：术语表都在文件前部，整篇塞进去
 # 会把 batch 的 16k 上下文挤爆（graphify/llm.py _LABEL_BATCH_SIZE 按 16k 定的）。
 CONTEXT_MAX_CHARS = 6000
 
@@ -89,8 +89,8 @@ def backend_env(cfg: dict):
 
 
 def read_glossary(root: Path) -> str:
-    """项目根 CONTEXT.md 的开头若干字符（项目术语表）。没有这个文件就返回空串。"""
-    path = Path(root) / "CONTEXT.md"
+    """项目根 GLOSSARY.md 的开头若干字符（项目术语表）。没有这个文件就返回空串。"""
+    path = Path(root) / "GLOSSARY.md"
     try:
         return path.read_text(encoding="utf-8", errors="replace")[:CONTEXT_MAX_CHARS].strip()
     except OSError:
@@ -120,7 +120,7 @@ def json_payload(text: str) -> str:
 
 
 def _llm_labels(G, communities: dict, root: Path) -> dict[int, str]:
-    """让 LLM 给这批社区起名，prompt 里带上 CONTEXT.md 的术语表。
+    """让 LLM 给这批社区起名，prompt 里带上 GLOSSARY.md 的术语表。
 
     没配 backend、prompt 建不出来、或调用/解析失败都返回空 dict——调用方已经
     有 hub 名兜底，命名失败绝不能让整轮重建失败。
@@ -140,10 +140,10 @@ def _llm_labels(G, communities: dict, root: Path) -> dict[int, str]:
 
     glossary = read_glossary(root)
     preface = (
-        "The project maintains its own glossary in CONTEXT.md. Reuse its terms and "
+        "The project maintains its own glossary in GLOSSARY.md. Reuse its terms and "
         "spelling verbatim whenever a community matches one of them; only invent a "
         "name when nothing in the glossary fits.\n\n"
-        f"<CONTEXT.md>\n{glossary}\n</CONTEXT.md>\n\n"
+        f"<GLOSSARY.md>\n{glossary}\n</GLOSSARY.md>\n\n"
         if glossary
         else ""
     )

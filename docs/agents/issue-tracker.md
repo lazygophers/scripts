@@ -11,7 +11,7 @@ This is the chosen trade-off, not an oversight. It keeps the repo clean at the c
 Practical consequences:
 
 - A spec or decision record written here **will not appear in the PR** that implements it. Link to it by path if a reviewer needs it, and expect they may not have the file.
-- Anything that must survive a fresh clone (architecture decisions others depend on, domain vocabulary) belongs in `CONTEXT.md` or `docs/adr/` instead — those are tracked. See `domain.md`.
+- Anything that must survive a fresh clone (architecture decisions others depend on, domain vocabulary) belongs in `GLOSSARY.md` or `docs/adr/` instead — those are tracked. See `domain.md`.
 - Before deleting a `.scratch/` directory, check whether any conclusion in it deserves promoting to a tracked file first.
 
 ## Conventions

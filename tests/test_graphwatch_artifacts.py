@@ -1,4 +1,4 @@
-"""graphwatch 产出物：社区命名（参考 CONTEXT.md）+ 全套导出。
+"""graphwatch 产出物：社区命名（参考 GLOSSARY.md）+ 全套导出。
 
 read_glossary 不依赖 graphify，其余用例在没装 graphifyy 的环境自动 skip。
 跑法: python3 -m unittest tests.test_graphwatch_artifacts
@@ -27,7 +27,7 @@ from lib import graphwatch_artifacts as art
 
 
 class TestReadGlossary(unittest.TestCase):
-    """CONTEXT.md 读取：缺文件不炸，超长截断。"""
+    """GLOSSARY.md 读取：缺文件不炸，超长截断。"""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -38,15 +38,15 @@ class TestReadGlossary(unittest.TestCase):
         self.assertEqual(art.read_glossary(self.root), "")
 
     def test_directory_in_place_of_file_returns_empty(self):
-        (self.root / "CONTEXT.md").mkdir()
+        (self.root / "GLOSSARY.md").mkdir()
         self.assertEqual(art.read_glossary(self.root), "")
 
     def test_reads_and_strips(self):
-        (self.root / "CONTEXT.md").write_text("\n# 术语\n\n蜂群 = 多 agent 并行\n", encoding="utf-8")
+        (self.root / "GLOSSARY.md").write_text("\n# 术语\n\n蜂群 = 多 agent 并行\n", encoding="utf-8")
         self.assertEqual(art.read_glossary(self.root), "# 术语\n\n蜂群 = 多 agent 并行")
 
     def test_truncated_to_cap(self):
-        (self.root / "CONTEXT.md").write_text("x" * (art.CONTEXT_MAX_CHARS + 500), encoding="utf-8")
+        (self.root / "GLOSSARY.md").write_text("x" * (art.CONTEXT_MAX_CHARS + 500), encoding="utf-8")
         self.assertEqual(len(art.read_glossary(self.root)), art.CONTEXT_MAX_CHARS)
 
 
@@ -178,7 +178,7 @@ class TestResolveLabels(unittest.TestCase):
 
 @unittest.skipUnless(HAS_GRAPHIFY, "graphifyy 未安装，跳过")
 class TestLlmLabels(unittest.TestCase):
-    """命名 prompt 必须带上项目根 CONTEXT.md 的术语表。"""
+    """命名 prompt 必须带上项目根 GLOSSARY.md 的术语表。"""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -201,7 +201,7 @@ class TestLlmLabels(unittest.TestCase):
         self.addCleanup(setattr, gc, "load_config", saved)
 
     def test_prompt_carries_context_md(self):
-        (self.root / "CONTEXT.md").write_text("蜂群 = 多 agent 并行协作", encoding="utf-8")
+        (self.root / "GLOSSARY.md").write_text("蜂群 = 多 agent 并行协作", encoding="utf-8")
         seen = {}
 
         def fake_call(prompt, **kw):
@@ -212,11 +212,11 @@ class TestLlmLabels(unittest.TestCase):
         out = art._llm_labels(self.G, self.communities, self.root)
         self.assertEqual(out.get(0), "蜂群调度")
         self.assertIn("蜂群 = 多 agent 并行协作", seen["prompt"])
-        self.assertIn("<CONTEXT.md>", seen["prompt"])
+        self.assertIn("<GLOSSARY.md>", seen["prompt"])
 
     def test_prompt_omits_section_when_no_context_md(self):
         self.gllm._call_llm = lambda prompt, **kw: (
-            self.assertNotIn("<CONTEXT.md>", prompt) or json.dumps({"0": "甲"})
+            self.assertNotIn("<GLOSSARY.md>", prompt) or json.dumps({"0": "甲"})
         )
         self.assertEqual(art._llm_labels(self.G, self.communities, self.root).get(0), "甲")
 

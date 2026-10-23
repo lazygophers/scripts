@@ -289,7 +289,7 @@ async function enforceOwnership(
 }
 
 /**
- * 策略目标（CONTEXT.md）：这条指令真正作用到的页面地址。显式 `url` / `domain`
+ * 策略目标（GLOSSARY.md）：这条指令真正作用到的页面地址。显式 `url` / `domain`
  * 直接用；页面方法解析 context 拿真实 tab URL —— deny / feature / 确认 / 审计
  * 共用这一份。读不到（标签页没了）就 fail closed 拒绝，绝不带着 null 放行。
  */

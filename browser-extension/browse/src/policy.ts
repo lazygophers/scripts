@@ -360,7 +360,7 @@ export function policyUrlFromParams(params: Record<string, unknown> | undefined)
  * 拒绝名单这一关。命中就抛，**一条指令都不往下走**。
  *
  * 它管的是**全部**方法，不只高危的那些：拉黑一个域名之后连导航过去都不该允许。
- * `url` 是 dispatch 解析好的**策略目标**（CONTEXT.md）——显式 `url`/`domain`，或
+ * `url` 是 dispatch 解析好的**策略目标**（GLOSSARY.md）——显式 `url`/`domain`，或
  * 页面方法解析出的真实 tab URL；不是 handler 才知道的那种事后真相。
  */
 export async function enforceDenyList(
