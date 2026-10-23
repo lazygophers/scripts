@@ -2,8 +2,25 @@
 
 from __future__ import annotations
 
+import os
+import re
+
 from lib.exec import run, shell_join
 from lib.ui import reporter
+
+# 前缀环境变量赋值（FOO=1 cmd ...）：exec 不认这一段，须拆出来走 env。
+_ENV_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
+
+
+def _split_env_prefix(cmd: list[str]) -> tuple[dict[str, str], list[str]]:
+    """拆出开头连续的 NAME=VALUE 赋值 token，返回 (env, 剩余 argv)。"""
+    env: dict[str, str] = {}
+    i = 0
+    while i < len(cmd) and _ENV_ASSIGN_RE.fullmatch(cmd[i]):
+        k, _, v = cmd[i].partition("=")
+        env[k] = v
+        i += 1
+    return env, cmd[i:]
 
 
 def run_loop(
@@ -35,6 +52,12 @@ def run_loop(
     is_infinite = infinite or count is None
     label_count = "∞" if is_infinite else str(count)
 
+    env, cmd = _split_env_prefix(cmd)
+    if not cmd:
+        r.err("命令只有环境变量赋值，缺少要执行的命令")
+        return 1
+    run_env = {**os.environ, **env} if env else None
+
     r.rule("循环执行", style="blue")
     r.kv("任务", {
         "命令": cmd_str,
@@ -52,7 +75,7 @@ def run_loop(
         nonlocal success_count, failure_count
         from lib import log as slog
         r.step(label)
-        result = run(cmd, check=False, capture_output=False)
+        result = run(cmd, check=False, capture_output=False, env=run_env)
         slog.record("loop.iter", rc=result.returncode)  # 长跑关键阶段：每轮一条，只带退出码
         if result.returncode == 0:
             success_count += 1

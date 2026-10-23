@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Tests for lib.loop.run_loop."""
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -70,7 +71,7 @@ class TestRunLoopFinite(unittest.TestCase):
         run_loop(["echo", "hello", "world", "test"], count=2)
         # 验证 run 被以完整 cmd 调用
         mock_run.assert_called_with(["echo", "hello", "world", "test"],
-                                    check=False, capture_output=False)
+                                    check=False, capture_output=False, env=None)
 
     @patch("lib.loop.run")
     @patch("lib.loop.reporter")
@@ -140,6 +141,39 @@ class TestRunLoopInfinite(unittest.TestCase):
         with self.assertRaises(KeyboardInterrupt):
             run_loop(["cmd"], count=None, force=True)
         self.assertGreaterEqual(mock_run.call_count, 3)
+
+
+class TestEnvPrefix(unittest.TestCase):
+    """前缀 NAME=VALUE 赋值拆成 env，不进 argv（exec 没有这层 shell 语义）。"""
+
+    @patch("lib.loop.run")
+    @patch("lib.loop.reporter")
+    def test_env_prefix_passed_as_env(self, mock_reporter, mock_run):
+        mock_reporter.return_value = MagicMock()
+        mock_run.return_value = _ok_result()
+        rc = run_loop(["FOO=1", "BAR=x y", "echo", "hi"], count=1)
+        self.assertEqual(rc, 0)
+        mock_run.assert_called_once_with(
+            ["echo", "hi"], check=False, capture_output=False,
+            env={**os.environ, "FOO": "1", "BAR": "x y"},
+        )
+
+    @patch("lib.loop.run")
+    @patch("lib.loop.reporter")
+    def test_assignments_after_cmd_stay_in_argv(self, mock_reporter, mock_run):
+        mock_reporter.return_value = MagicMock()
+        mock_run.return_value = _ok_result()
+        run_loop(["echo", "FOO=1"], count=1)
+        mock_run.assert_called_once_with(
+            ["echo", "FOO=1"], check=False, capture_output=False, env=None,
+        )
+
+    @patch("lib.loop.run")
+    @patch("lib.loop.reporter")
+    def test_env_only_no_command_errors(self, mock_reporter, mock_run):
+        mock_reporter.return_value = MagicMock()
+        self.assertEqual(run_loop(["FOO=1"], count=1), 1)
+        mock_run.assert_not_called()
 
 
 if __name__ == "__main__":

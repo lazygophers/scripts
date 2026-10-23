@@ -27,6 +27,10 @@ class TestSplitCountCmd(unittest.TestCase):
     def test_leading_number_is_count(self):
         self.assertEqual(lc._split_count_cmd(("3", "ls", "-l")), (3, ["ls", "-l"]))
 
+    def test_fire_int_args_coerced_to_str(self):
+        """fire 把全数字 argv 转成 int，入口统一 str() 回转。"""
+        self.assertEqual(lc._split_count_cmd((1, "echo", 42)), (1, ["echo", "42"]))
+
     def test_no_number_means_infinite(self):
         self.assertEqual(lc._split_count_cmd(("ls", "-l")), (None, ["ls", "-l"]))
 

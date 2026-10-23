@@ -12,8 +12,12 @@ from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.loop import run_loop
 
 
-def _split_count_cmd(args: tuple[str, ...]) -> tuple[int | None, list[str]]:
-    """首 token 为数字则视为 count；否则整组视为命令。"""
+def _split_count_cmd(args: tuple[str | int, ...]) -> tuple[int | None, list[str]]:
+    """首 token 为数字则视为 count；否则整组视为命令。
+
+    fire 会把全数字 argv 转成 int，统一 str() 回转（见 .claude/rules/fire-cli.md）。
+    """
+    args = tuple(str(a) for a in args)
     if args and args[0].lstrip("-").isdigit():
         return int(args[0]), list(args[1:])
     return None, list(args)
