@@ -1880,7 +1880,7 @@ class TestWorkerEdges(GraphwatchCase):
         finally:
             stop.set()
             thread.join(timeout=5)
-        self.assertIn("重建异常", buf.getvalue())
+        self.assertIn("重建未执行", buf.getvalue())
         self.assertEqual(notified, ["graphwatch 重建失败"])
 
     def test_concurrency_increase_midrun(self):
@@ -2334,3 +2334,100 @@ class TestDisplayRepos(GraphwatchCase):
             graphwatch_daemon.display_repos(["/h/x/srv", "/other/x/srv"]),
             ["~/srv", "other/srv"],
         )
+
+
+class TestDaemonBackoffAndLogging(GraphwatchCase):
+    """worker 异常路径日志不冒充 rc + 缺命令连续失败退避（2026-10-25 日志体检）。
+
+    日志断言经 mock _log.record 收集，不读磁盘；重建经 FakeListenerFactory
+    手动 fire_change 触发，不起真进程、不依赖磁盘残留。
+    """
+
+    def _captured_record(self, msgs):
+        orig = graphwatch_daemon._log.record
+
+        def rec(event, **kw):
+            msgs.append(str(kw.get("msg") or ""))
+            return orig(event, **kw)
+
+        return rec
+
+    def _start(self, fac, runner):
+        stop = threading.Event()
+        t = threading.Thread(target=graphwatch.run_daemon, kwargs=dict(
+            stop_event=stop, ensure=lambda: None, listener_factory=fac,
+            rebuild_runner=runner, poll_interval=0.05), daemon=True)
+        t.start()
+        self.addCleanup(stop.set)
+        self.addCleanup(t.join, timeout=10)
+        deadline = time.monotonic() + 5
+        while not fac.listeners and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return stop
+
+    def _wait_calls(self, calls, n, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while len(calls) < n and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return len(calls)
+
+    def test_missing_command_backs_off_then_resumes(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        calls = []
+
+        class MissingRunner:
+            def __call__(self, folder):
+                calls.append(folder)
+                raise GraphwatchError("找不到 gitnexus 命令。先装: npm i -g gitnexus")
+
+        fac = FakeListenerFactory()
+        with unittest.mock.patch("shutil.which", return_value=None) as which:
+            self._start(fac, MissingRunner())
+            fire = fac.listeners[str(repo.resolve())].fire_change
+            for i in range(graphwatch_daemon.REBUILD_BACKOFF_THRESHOLD):
+                fire()
+                self.assertEqual(self._wait_calls(calls, i + 1), i + 1)
+            # 达阈值后事件被丢弃，不再触发重建
+            fire()
+            time.sleep(0.3)
+            self.assertEqual(len(calls), graphwatch_daemon.REBUILD_BACKOFF_THRESHOLD)
+            # which 恢复后同一事件路径自动续
+            which.return_value = "/fake/bin/gitnexus"
+            fire()
+            self.assertEqual(self._wait_calls(calls, graphwatch_daemon.REBUILD_BACKOFF_THRESHOLD + 1),
+                             graphwatch_daemon.REBUILD_BACKOFF_THRESHOLD + 1)
+
+    def test_exception_logs_not_executed_without_fake_rc(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        msgs = []
+
+        class BoomRunner:
+            def __call__(self, folder):
+                raise RuntimeError("boom")
+
+        fac = FakeListenerFactory()
+        with unittest.mock.patch.object(graphwatch_daemon._log, "record",
+                                        side_effect=self._captured_record(msgs)):
+            self._start(fac, BoomRunner())
+            fac.listeners[str(repo.resolve())].fire_change()
+            deadline = time.monotonic() + 5
+            while not any("重建未执行" in m for m in msgs) and time.monotonic() < deadline:
+                time.sleep(0.02)
+        self.assertTrue(any("重建未执行" in m and ": RuntimeError: boom" in m for m in msgs), msgs)
+        self.assertFalse(any("重建失败（rc=" in m for m in msgs), msgs)
+
+    def test_nonzero_rc_still_logs_failure_with_rc(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        msgs = []
+        fac = FakeListenerFactory()
+        with unittest.mock.patch.object(graphwatch_daemon._log, "record",
+                                        side_effect=self._captured_record(msgs)):
+            self._start(fac, FakeRunner(rc=2))
+            fac.listeners[str(repo.resolve())].fire_change()
+            deadline = time.monotonic() + 5
+            while not any("重建失败（rc=2）" in m for m in msgs) and time.monotonic() < deadline:
+                time.sleep(0.02)
+        self.assertTrue(any("重建失败（rc=2）" in m for m in msgs), msgs)

@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import sys
 from collections import Counter
 import time
@@ -29,6 +31,10 @@ STALE_EXCLUDED_DIRS = frozenset({
 
 # 监听根自身之外的固定产物目录：graphwatch 的输出和 VCS 元数据
 WATCH_EXCLUDED_DIRS = frozenset({"graphify-out", ".git"})
+
+# 同一目录连续「找不到 <cmd> 命令」失败达到该次数后暂停入队重建；每轮热加载
+# 或新事件前复查 shutil.which，恢复即清零自动续（只对缺命令退避，分析报错不退避）
+REBUILD_BACKOFF_THRESHOLD = 3
 
 
 def _path_ignored(path_parts: tuple[str, ...], root_parts: tuple[str, ...]) -> bool:
@@ -401,6 +407,7 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
     change_time: dict[str, float] = {}
     regraph_pending: set[str] = set()
     debounce_now = [float(load()["debounce"])]
+    backoff: dict[str, tuple[int, str]] = {}  # folder -> (连续缺命令失败次数, 缺失命令)
     last_regraph_day = None
     work_cv = threading.Condition()
 
@@ -411,6 +418,11 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
         mtime），worker 取活按它排最旧优先；None 只标 dirty 不改时间。
         """
         with work_cv:
+            b = backoff.get(folder)
+            if b is not None and b[0] >= REBUILD_BACKOFF_THRESHOLD:
+                if shutil.which(b[1]) is None:
+                    return  # 缺命令退避中：丢弃事件，_reconcile 查到恢复后新事件再入队
+                backoff.pop(folder, None)
             if changed_at is not None:
                 change_time[folder] = changed_at
             if folder in queued or folder in in_flight:
@@ -439,18 +451,30 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
             try:
                 rc = runner(folder)
             except Exception as e:  # noqa: BLE001
-                # 带堆栈：上游 graphify 抛的 KeyError 之类只有类型+消息定位不到行
-                _dlog(f"{kind}异常: {folder}: {type(e).__name__}: {e}\n{traceback.format_exc()}", level="error")
-                rc = 1
+                # 带堆栈：上游 graphify 抛的 KeyError 之类只有类型+消息定位不到行。
+                # 重建根本没跑起来，不冒充 rc（缺失命令期间 273 条「重建失败（rc=1）」误导排障）
+                _dlog(f"{kind}未执行: {folder}: {type(e).__name__}: {e}\n{traceback.format_exc()}", level="error")
+                rc, exec_err = 1, type(e).__name__
+                m = re.search(r"找不到 (\S+) 命令", str(e))
+                if m:
+                    n, _ = backoff.get(folder, (0, m.group(1)))
+                    backoff[folder] = (n + 1, m.group(1))
+                    if n + 1 >= REBUILD_BACKOFF_THRESHOLD:
+                        _dlog(f"{kind}连续 {n + 1} 次缺命令 {m.group(1)}，暂停该目录重建直到恢复")
+            else:
+                exec_err = None
             with work_cv:
                 in_flight.discard(folder)
                 redo = folder in dirty
                 dirty.discard(folder)
             if rc != 0:
-                _dlog(f"{kind}失败（rc={rc}）: {folder}", level="error")
-                sent = notifier.fire(folder, f"{name} {kind}失败", f"{folder}\n{kind}退出码 {rc}，稍后变更会重试")
+                if exec_err is None:
+                    _dlog(f"{kind}失败（rc={rc}）: {folder}", level="error")
+                sent = notifier.fire(folder, f"{name} {kind}失败",
+                                     f"{folder}\n{kind}{exec_err or f'退出码 {rc}'}，稍后变更会重试")
                 _dlog(f"失败通知{'已发送' if sent else '发送失败（系统通知不可用）'}: {folder}")
             else:
+                backoff.pop(folder, None)
                 _dlog(f"{kind}完成: {folder}")
             if redo and not stop_event.is_set():
                 # 重建中又变了：再等一个防抖窗口才重跑，连续编辑合并成一轮
@@ -511,6 +535,9 @@ def run_daemon(stop_event=None, ensure=None, rebuild_runner=None, listener_facto
     def _reconcile() -> None:
         nonlocal last_sig
         cfg = load()
+        for f in [f for f, (_, bn) in backoff.items() if shutil.which(bn)]:
+            backoff.pop(f, None)
+            _dlog(f"缺失命令已恢复，恢复重建: {f}")
         _schedule_regraph(cfg)
         debounce = float(cfg["debounce"])
         debounce_now[0] = debounce
