@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import time
 from dataclasses import dataclass
@@ -67,6 +68,13 @@ def _repo_args(info: ProviderInfo) -> list[str]:
     if info.provider == "gh":
         return ["--repo", info.repo]
     return ["--repo", info.remote_url or info.repo]
+
+
+def _glab_env(info: ProviderInfo) -> dict[str, str] | None:
+    """glab api 子命令不吃 --repo，只认 GITLAB_HOST 选实例；自建 GitLab 时显式注入。"""
+    if info.provider != "glab" or not info.host:
+        return None
+    return {**os.environ, "GITLAB_HOST": info.host}
 
 
 def build_status_command(info: ProviderInfo, *, ref: str) -> list[str]:
@@ -192,7 +200,7 @@ def _extract_glab_status(stdout: str) -> str:
 
 def _run_status(cmd: list[str], info: ProviderInfo) -> CiStatus:
     try:
-        p = run(cmd, check=False, capture_output=True)
+        p = run(cmd, check=False, capture_output=True, env=_glab_env(info))
     except CommandTimeout as e:
         return CiStatus("error", str(e), cmd, returncode=124)
     stdout = p.stdout or ""
@@ -281,7 +289,7 @@ def play_cicd(job_id: str, *, project: str = "") -> int:
         r.err("错误: play 仅支持 GitLab manual job")
         return 2
     cmd = build_play_command(info, job_id, project=project)
-    p = run(cmd, check=False, capture_output=True)
+    p = run(cmd, check=False, capture_output=True, env=_glab_env(info))
     detail = (p.stdout or "").strip() or (p.stderr or "").strip()
     if p.returncode == 0:
         r.ok("manual job 已启用")

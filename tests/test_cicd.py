@@ -12,6 +12,7 @@ from lib.cicd import (
     CiStatus,
     PollConfig,
     _extract_glab_status,
+    _glab_env,
     _run_status,
     _validate_config,
     build_logs_command,
@@ -357,6 +358,39 @@ class TestRunStatus(unittest.TestCase):
         mock_run.return_value = MagicMock(returncode=0, stdout="[]", stderr="")
         check_run_once(_gh_info(), "123")
         self.assertIn("view", mock_run.call_args.args[0])
+
+
+class TestGlabEnv(unittest.TestCase):
+    """glab api 子命令只认 GITLAB_HOST 选实例；自建 GitLab 必须注入 host。"""
+
+    def test_glab_selfhosted_injects_gitlab_host(self):
+        env = _glab_env(_glab_info())
+        self.assertEqual(env["GITLAB_HOST"], "gitlab.example.com")
+        self.assertIn("PATH", env)
+
+    def test_gh_gets_no_env(self):
+        self.assertIsNone(_glab_env(_gh_info()))
+
+    def test_glab_without_host_gets_no_env(self):
+        info = ProviderInfo(provider="glab", host="", repo="owner/repo",
+                            remote="", remote_url="owner/repo")
+        self.assertIsNone(_glab_env(info))
+
+    @patch("lib.cicd.run")
+    def test_run_status_passes_env(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="[]", stderr="")
+        check_run_once(_glab_info(), "123")
+        self.assertEqual(
+            mock_run.call_args.kwargs["env"]["GITLAB_HOST"], "gitlab.example.com")
+
+    @patch("lib.cicd.reporter")
+    @patch("lib.cicd.resolve_provider", return_value=_glab_info())
+    @patch("lib.cicd.run")
+    def test_play_passes_env(self, mock_run, _mock_provider, _mock_reporter):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        self.assertEqual(play_cicd("90947"), 0)
+        self.assertEqual(
+            mock_run.call_args.kwargs["env"]["GITLAB_HOST"], "gitlab.example.com")
 
 
 class TestValidateConfig(unittest.TestCase):
