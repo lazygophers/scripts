@@ -1329,7 +1329,8 @@ async def _resolve_target(params: dict, opts: dict, sock: pathlib.Path, browser:
         pattern = _glob(str(opts["url"]))
         hits = [t for t in await _tabs(sock, browser) if pattern.search(t.get("url", ""))]
         if not hits:
-            have = "\n".join(f"  {t.get('context')} {t.get('url', '')}" for t in await _tabs(sock, browser))
+            have = "\n".join(f"  {t.get('context')} {t.get('url', '')}" for t in await _tabs(sock, browser)) \
+                or "  （一个标签页都没有——只搜 browse 自己的页；用 browse open 开页或 browse tab adopt 收编）"
             raise UsageError(f"--url {opts['url']} 一个都没匹配到。现在的标签页：\n{have}")
         if len(hits) > 1:
             many = "\n".join(f"  {t.get('context')} {t.get('lg:title', '')} {t.get('url', '')}" for t in hits)
@@ -1405,7 +1406,8 @@ async def _close_contexts(params: dict, opts: dict, sock: pathlib.Path, browser:
         pattern = _glob(str(target))
         hits = [t for t in await _tabs(sock, browser) if pattern.search(t.get("url", ""))]
         if not hits:
-            have = "\n".join(f"  {t.get('context')} {t.get('url', '')}" for t in await _tabs(sock, browser))
+            have = "\n".join(f"  {t.get('context')} {t.get('url', '')}" for t in await _tabs(sock, browser)) \
+                or "  （一个标签页都没有——只搜 browse 自己的页；用 browse open 开页或 browse tab adopt 收编）"
             raise UsageError(f"{target} 一个都没匹配到。现在的标签页：\n{have}")
         contexts = [t["context"] for t in hits]
     close_params = {k: v for k, v in params.items() if k != "target"}

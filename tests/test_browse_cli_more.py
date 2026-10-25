@@ -410,6 +410,17 @@ class TestOpenAndClose(unittest.TestCase):
         self.assertIn("一个都没匹配到", flat(err))
         self.assertIn("a.com/1", err)
 
+    def test_zero_match_with_no_owned_tabs_names_the_real_cause(self):
+        """归属集为空时报错不能读成「浏览器没有标签页」，要给出收编出路。"""
+        rc, _, err, _ = call(["close", "nope.com/*"], lambda m, p: tabs())
+        self.assertEqual(rc, 2)
+        self.assertIn("一个标签页都没有", flat(err))
+        self.assertIn("tab adopt", flat(err))
+        rc, _, err, _ = call(["goto", "https://x.com", "--url", "nope.com/*"], lambda m, p: tabs())
+        self.assertEqual(rc, 2)
+        self.assertIn("一个标签页都没有", flat(err))
+        self.assertIn("tab adopt", flat(err))
+
     def test_close_reports_partial_failure(self):
         def handler(method, params):
             if method == "browsingContext.close":
