@@ -14,3 +14,11 @@
   peerPort，两侧都解析会把 bridge pid 贴到所有连接上——只解析箭头左侧（本仓
   `lib/cli/browse.py::_conn_pids`，commit f510da5）。判据一句话：**标识符匹配
   要么精确（pid、instanceId），要么锚定唯一侧；两侧都可能含目标值就别取两侧。**
+- **zsh glob 无匹配时整条命令不执行，`2>/dev/null` 挡不住**：`cat …/scripts.log.[123]`
+  在轮转文件不存在时直接报 `zsh: no matches found`、rc=1——glob 展开发生在命令
+  执行前，同条命令里存在的文件（`scripts.log` 本体）也不读。读统一日志用 `(N)`
+  qualifier：`cat /tmp/lazygophers/scripts.log.[123](N)`；2026-10-25 读错误日志
+  任务实测 `2>/dev/null` 无效、`(N)` rc=0。
+- **ctx_* 沙箱的 `$TEMP` 不是宿主的**：沙箱进程里 `$TEMP/lazygophers/scripts.log`
+  指向沙箱自己的空目录，静默读不到宿主日志。读宿主统一日志先在宿主解析出绝对
+  路径再写死（macOS 是 `/var/folders/<hash>/T/...`），沙箱命令里不用 `$TEMP`。
