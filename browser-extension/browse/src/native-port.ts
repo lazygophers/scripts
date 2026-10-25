@@ -1,5 +1,6 @@
 import { nextDelay } from "./backoff.ts";
 import { dispatch } from "./handlers/index.ts";
+import { flush, log } from "./telemetry.ts";
 import {
   CommandError,
   isCommand,
@@ -100,8 +101,8 @@ export async function saveProfileName(name: string): Promise<void> {
   cachedProfileName = name;
 }
 
-/** hello 里报的浏览器名。展示用 —— 路由不靠它猜，靠 bridge 的 connectionId + instanceId。 */
-function browserName(): string {
+/** hello 里报的浏览器名；遥测帧也带它（lg:extension.log 的 browser 字段）。展示用 —— 路由不靠它猜，靠 bridge 的 connectionId + instanceId。 */
+export function browserName(): string {
   const brands = (navigator as { userAgentData?: { brands?: { brand: string }[] } })
     .userAgentData?.brands ?? [];
   for (const { brand } of brands) {
@@ -270,7 +271,9 @@ export class NativeConnection {
           instanceId: id,
           profile,
         }));
+        flush(); // hello 出去后补发断联期积压（队列在 storage，SW 重启也不丢）
       });
+      log("ws.connected", "info", { attempt: this.attempt });
       this.connectedAt = Date.now();
       this.lastReason = "";
       this.onState("connected");
@@ -422,6 +425,7 @@ export class NativeConnection {
     console.info(
       `[browse] bridge unavailable (${reason}); retry #${this.attempt} in ${delay}ms`,
     );
+    log("ws.reconnect.scheduled", "warning", { reason, attempt: this.attempt, delayMs: delay });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();

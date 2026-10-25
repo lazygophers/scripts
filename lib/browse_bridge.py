@@ -58,7 +58,18 @@ CONNECTIONS_METHOD = "lg:bridge.connections"
 INFO_METHOD = "lg:bridge.info"
 LOG_METHOD = "lg:bridge.log"
 
-# 扩展这个方向只放行上面那两条只读方法，别的一律照旧拒掉。
+# 扩展侧遥测出站通道：批量日志逐条落统一 JSONL（logger=browse-extension），
+# 不转发 daemon。落盘必须直呼 lib.log.record——browse_log.record 的签名把
+# logger 塞进 **fields，再传 logger= 会撞它内部的 LOGGER 参数直接 TypeError。
+EXTENSION_LOG_METHOD = "lg:extension.log"
+EXTENSION_LOG_LOGGER = "browse-extension"
+
+# 逐条落盘时从 entry 里剔除的键：event/level/t/browser/instanceId 单独传，
+# logger/target/exc_info 是 lib.log.record 自己的参数（透传会 TypeError）。
+_LOG_FIELD_STRIP = frozenset({"event", "level", "t", "logger", "target",
+                              "exc_info", "browser", "instanceId"})
+
+# 扩展这个方向放行上面两条只读方法和遥测出站，别的照旧拒掉。
 EXTENSION_READABLE = (INFO_METHOD, LOG_METHOD)
 
 # bridge 每 30 秒没收到扩展任何消息（心跳是每 10-20 秒一条）就认为它死了，断开。
@@ -83,6 +94,30 @@ def _origin_allowed(origin: str | None) -> bool:
     if origin is None:
         return True
     return origin in {f"chrome-extension://{i}" for i in EXTENSION_IDS}
+
+
+def _extension_log(params: dict) -> dict:
+    """lg:extension.log：entries 逐条落统一 JSONL，回 {"accepted", "dropped"}。
+
+    坏条目（非 dict / event 缺失或空字符串）静默丢只计数；record() 本身
+    不抛（lib/log.py 包死），分支无需再兜。
+    """
+    from lib import log as _log
+
+    accepted = dropped = 0
+    for entry in params.get("entries") or []:
+        if (not isinstance(entry, dict) or not isinstance(entry.get("event"), str)
+                or not entry["event"]):
+            dropped += 1
+            continue
+        level = entry.get("level")
+        _log.record(entry["event"], logger=EXTENSION_LOG_LOGGER,
+                    level=level if isinstance(level, str) and level else "info",
+                    t=entry.get("t"), browser=params.get("browser"),
+                    instanceId=params.get("instanceId"),
+                    **{k: v for k, v in entry.items() if k not in _LOG_FIELD_STRIP})
+        accepted += 1
+    return {"accepted": accepted, "dropped": dropped}
 
 
 @dataclass
@@ -221,11 +256,16 @@ class Bridge(Daemon):
         await super()._from_cli(cli, message)
 
     async def _from_browser(self, conn, message: dict) -> None:
-        """扩展这个方向只放行两条只读方法，别的照旧由 daemon 拒掉。
+        """扩展这个方向放行两条只读方法和遥测出站，别的照旧由 daemon 拒掉。
 
-        口子开得这么窄是有意的：裁决和审计仍然全在插件自己那儿，这两条只让它读
-        bridge 的运行状况，既不改任何状态，也不会被转发到别的浏览器。
+        口子开得这么窄是有意的：裁决和审计仍然全在插件自己那儿，只读的两条让它
+        看 bridge 的运行状况，遥测那条只往统一日志落盘——都不改任何状态，也不会
+        被转发到别的浏览器。
         """
+        if message.get("type") is None and message.get("method") == EXTENSION_LOG_METHOD:
+            await conn.send(success(message.get("id", 0),
+                                    _extension_log(message.get("params") or {})))
+            return
         if message.get("type") is None and message.get("method") in EXTENSION_READABLE:
             result = self._local(message["method"], message.get("params") or {})
             await conn.send(success(message.get("id", 0), result or {}))
@@ -358,6 +398,7 @@ async def run(path: Path | None = None, idle_timeout: float | None = None,
 __all__ = [
     "BROWSERS_METHOD",
     "CONNECTIONS_METHOD",
+    "EXTENSION_LOG_METHOD",
     "EXTENSION_READABLE",
     "INFO_METHOD",
     "LOG_METHOD",

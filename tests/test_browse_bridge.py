@@ -365,6 +365,94 @@ class BridgeIntrospectionCase(BridgeCase):
         self.assertEqual(events[-1], "bridge.stop")
 
 
+class ExtensionLogCase(BridgeCase):
+    """lg:extension.log：扩展遥测逐条落统一 JSONL（logger=browse-extension）。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.log_path = pathlib.Path(self._tmp.name) / "ext.log"
+        patch = unittest.mock.patch.dict(os.environ, {"SCRIPTS_LOG": str(self.log_path)})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def _ext_log_roundtrip(self, params: dict) -> dict:
+        """假扩展发一条 lg:extension.log，原连接收回包。"""
+        async def body(port: int) -> dict:
+            er, ew, _ = await _ext_connect(port, "chrome", instance="uuid-1")
+            await browse_ws.client_send(ew, json.dumps(
+                command(30, browse_bridge.EXTENSION_LOG_METHOD, params)))
+            reply = json.loads(await browse_ws.read_message(er, ew, 1 << 20))
+            ew.close()
+            return reply
+        return self.run_bridge(body)
+
+    def _rows(self) -> list[dict]:
+        from lib import log as slog
+        return slog.read_entries(self.log_path, logger="browse-extension")
+
+    def test_entries_land_in_the_unified_log_with_frame_context(self) -> None:
+        reply = self._ext_log_roundtrip({
+            "browser": "chrome", "instanceId": "uuid-1",
+            "entries": [
+                {"event": "ws.connected", "level": "info", "t": 123.5, "attempt": 2},
+                {"event": "ws.reconnect.scheduled", "level": "warning", "t": 124.0,
+                 "reason": "closed", "delayMs": 2000},
+            ]})
+        self.assertEqual(reply["type"], "success")
+        self.assertEqual(reply["result"], {"accepted": 2, "dropped": 0})
+        rows = self._rows()
+        self.assertEqual([r["event"] for r in rows],
+                         ["ws.connected", "ws.reconnect.scheduled"])
+        self.assertTrue(all(r["logger"] == "browse-extension" for r in rows))
+        # 帧级上下文（browser/instanceId）随每条落盘，扩展侧 t 和字段透传原样
+        self.assertTrue(all(r["browser"] == "chrome" and r["instanceId"] == "uuid-1"
+                            for r in rows))
+        self.assertEqual(rows[0]["t"], 123.5)
+        self.assertEqual(rows[0]["attempt"], 2)
+        self.assertEqual(rows[0]["level"], "info")
+        self.assertEqual(rows[1]["level"], "warning")
+        self.assertEqual(rows[1]["delayMs"], 2000)
+
+    def test_bad_entries_are_dropped_and_counted(self) -> None:
+        reply = self._ext_log_roundtrip({"browser": "chrome", "entries": [
+            "not-a-dict", {"no": "event"}, {"event": ""},
+            {"event": "sw-start", "level": "info", "t": 1.0},
+        ]})
+        self.assertEqual(reply["result"], {"accepted": 1, "dropped": 3})
+        self.assertEqual([r["event"] for r in self._rows()], ["sw-start"])
+
+    def test_reserved_keys_in_an_entry_neither_crash_nor_leak(self) -> None:
+        """条目里伪冒 record() 参数名 / 帧级上下文：不炸，也不覆盖真值。"""
+        reply = self._ext_log_roundtrip({
+            "browser": "chrome", "instanceId": "uuid-1",
+            "entries": [{"event": "ext.error", "level": "error", "t": 9.0,
+                         "logger": "fake", "target": "/x", "exc_info": "y",
+                         "browser": "spoof", "instanceId": "spoof"}]})
+        self.assertEqual(reply["result"], {"accepted": 1, "dropped": 0})
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["level"], "error")
+        self.assertEqual(rows[0]["browser"], "chrome")
+        self.assertEqual(rows[0]["instanceId"], "uuid-1")
+        self.assertEqual(rows[0]["logger"], "browse-extension")
+        self.assertNotIn("target", rows[0])
+        self.assertNotIn("exc_info", rows[0])
+
+    def test_unknown_lg_method_is_still_rejected(self) -> None:
+        """窄口子没开大：lg:unknown.x 照旧 unknown command，什么都不落。"""
+        async def body(port: int) -> dict:
+            er, ew, _ = await _ext_connect(port, "chrome")
+            await browse_ws.client_send(ew, json.dumps(command(31, "lg:unknown.x", {})))
+            reply = json.loads(await browse_ws.read_message(er, ew, 1 << 20))
+            ew.close()
+            return reply
+        reply = self.run_bridge(body)
+        self.assertEqual(reply["type"], "error")
+        self.assertEqual(reply["id"], 31)
+        self.assertEqual(reply["error"], "unknown command")
+        self.assertEqual(self._rows(), [])
+
+
 class TransportCase(BridgeCase):
     """传输层异常路径（静默超时 / 畸形 JSON / close 帧 / 握手前断开），端到端。"""
 

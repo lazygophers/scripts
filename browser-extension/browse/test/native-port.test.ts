@@ -363,3 +363,33 @@ test("the panel log keeps only the newest 20 commands", async () => {
   assert.equal(conn.recent().length, 20);
   conn.disconnect();
 });
+
+test("connect and reconnect queue telemetry entries", async () => {
+  boot();
+  const store = storageMock();
+  const conn = new NativeConnection(() => {}, () => {});
+  conn.connect();
+  await settle();
+  sockets[0]!.open();
+  await settle();
+  conn.disconnect();
+  await settle();
+  // disconnect 是用户刹车，不排重连；warning 要走真实断线路径。
+  // resume 解开同一份 storage 里持久化的刹车（同 browserName 用例）。
+  const conn2 = new NativeConnection(() => {}, () => {});
+  conn2.resume();
+  await settle();
+  const sock2 = sockets.at(-1)!;
+  sock2.open();
+  await settle();
+  sock2.onclose?.(); // 断线 → scheduleReconnect
+  await settle();
+  const q = (store.data["browse:logq"] as Any[]) ?? [];
+  assert.ok(q.some((e) => e.event === "ws.connected" && e.level === "info"));
+  const scheduled = q.find((e) => e.event === "ws.reconnect.scheduled") as Any;
+  assert.equal(scheduled?.level, "warning");
+  assert.equal(scheduled?.fields?.reason, "bridge 连接断开");
+  assert.equal(scheduled?.fields?.attempt, 1);
+  assert.ok((scheduled?.fields?.delayMs as number) >= 0);
+  conn2.disconnect(); // 停掉退避定时器，免得泄漏进别的用例
+});

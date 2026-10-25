@@ -11,7 +11,8 @@ import { listenPrinting } from "./handlers/printing.ts";
 import { userScriptsDisconnect } from "./handlers/scripts.ts";
 import { listenUi } from "./handlers/ui.ts";
 import { listenWauth } from "./handlers/wauth.ts";
-import { NativeConnection, instanceId, type ConnectionState } from "./native-port.ts";
+import { NativeConnection, browserName, instanceId, type ConnectionState } from "./native-port.ts";
+import { log, setTelemetrySink } from "./telemetry.ts";
 
 /** Badge, spec 4.5: connected shows a dot, running commands show their count. */
 let state: ConnectionState = "disconnected";
@@ -49,6 +50,16 @@ const connection = new NativeConnection(
 // `network.*` pushes events; handlers cannot import the connection without a
 // cycle, so it is handed in here.
 setEventSink((event) => connection.send(event));
+
+// 遥测走统一 JSONL：sink 在这里注入（native-port↔telemetry 不成环）。桥没连上时
+// request() 立刻拒绝，telemetry 保留队列，重连后 onopen 的 flush 补发。
+setTelemetrySink(async (entries) => {
+  await connection.request("lg:extension.log", {
+    browser: browserName(),
+    instanceId: await instanceId(),
+    entries,
+  });
+});
 
 // 2026-09-14 起策略（confirm_mode、免确认名单、拒绝名单、审计）全在插件自己这边，
 // 存在 chrome.storage.local 里。handlers 在动手那一行调 `confirm()`，它查完策略决定要
@@ -138,6 +149,7 @@ chrome.tabs?.onRemoved.addListener((tabId) => {
 // A service worker restart (install, browser start, idle eviction) re-runs this
 // file, so connecting at module scope is the whole lifecycle handling needed.
 paintBadge();
+log("sw-start", "info", { attempt: 0 }); // 全新 SW 还没有重试，attempt 恒 0；跨 SW 存活靠 storage 队列
 connection.connect();
 // 服务重启后把持久化的 net 路由重新武装（attach 不能跨重启存活）
 void netRuleArm();
