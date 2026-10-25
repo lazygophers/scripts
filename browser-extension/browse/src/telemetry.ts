@@ -27,7 +27,7 @@ const BATCH_MAX = 100;
 
 // info 全收会把 SW 每次唤醒都变成日志（alarm 半分钟叫一次），只留点名的事件；
 // warning / error 全收。
-const INFO_ALLOWLIST = new Set(["ws.connected", "sw-start"]);
+const INFO_ALLOWLIST = new Set(["ws.connected", "sw-start", "userscripts.reregistered"]);
 
 type TelemetrySink = (entries: TelemetryEntry[]) => Promise<unknown>;
 

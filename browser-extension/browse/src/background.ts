@@ -8,7 +8,7 @@ import { desktopSourcePicked, pickerClosed } from "./handlers/capture.ts";
 import { listenGcm } from "./handlers/gcm.ts";
 import { listenNotifications } from "./handlers/notify.ts";
 import { listenPrinting } from "./handlers/printing.ts";
-import { userScriptsDisconnect } from "./handlers/scripts.ts";
+import { userScriptsDisconnect, userScriptsReconnect } from "./handlers/scripts.ts";
 import { listenUi } from "./handlers/ui.ts";
 import { listenWauth } from "./handlers/wauth.ts";
 import { NativeConnection, browserName, instanceId, type ConnectionState } from "./native-port.ts";
@@ -37,7 +37,10 @@ const connection = new NativeConnection(
     if (next === "disconnected") { // bridge 断了，debugger 会话全摘
       consoleReset();
       netRuleReset();
-      userScriptsDisconnect(); // 本 SW 注册的 userScripts 一并撤销，重连不自动恢复
+      void userScriptsDisconnect(); // reset 清注册；重连由 userScriptsReconnect 按持久化表恢复
+    }
+    if (next === "connected") {
+      void userScriptsReconnect(); // 按持久化表恢复断连前注册的 userScripts
     }
     paintBadge();
   },

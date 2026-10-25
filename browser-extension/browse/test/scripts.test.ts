@@ -9,27 +9,38 @@ import {
   userScriptsReset,
   userScriptsUnregister,
   userScriptsDisconnect,
+  userScriptsReconnect,
   userScriptsWorld,
 } from "../src/handlers/scripts.ts";
-import { clearChrome, installChrome, rejectsWith } from "./mock.ts";
+import { clearChrome, installChrome, rejectsWith, storageMock } from "./mock.ts";
 
 type Any = Record<string, unknown>;
 
 afterEach(clearChrome);
 
-function usWorld(): { registered: Any[]; unregistered: unknown[]; reset: number; configured: Any[] } {
+function usWorld(): {
+  registered: Any[];
+  unregistered: unknown[];
+  reset: number;
+  configured: Any[];
+  store: Any;
+} {
   const state = { registered: [] as Any[], unregistered: [] as unknown[], reset: 0, configured: [] as Any[] };
   installChrome({
     userScripts: {
       register: async (scripts: Any[]) => void state.registered.push(...scripts),
       getScripts: async () => state.registered,
       unregister: async (id: unknown) => void state.unregistered.push(id),
-      reset: async () => void (state.reset += 1),
+      reset: async () => {
+        state.reset += 1;
+        state.registered.length = 0; // reset 是浏览器级的全清
+      },
       configureWorld: async (d: Any) => void state.configured.push(d),
     },
     policy: { confirm: async () => {} },
   });
-  return state;
+  const store = storageMock().data;
+  return Object.assign(state, { store });
 }
 
 function declWorld(): { removed: unknown[]; added: Any[] } {
@@ -102,14 +113,74 @@ describe("userScripts", () => {
     await rejectsWith(() => userScriptsUnregister({}), "invalid argument");
   });
 
-  it("userScriptsDisconnect resets what this SW registered, and nothing when idle", async () => {
+  it("userScriptsDisconnect resets what is in the persisted table, and nothing when idle", async () => {
     const s = usWorld();
     await userScriptsRegister({ name: "mine", js: "1", matches: ["https://a.example/*"] });
-    userScriptsDisconnect(); // bridge 断开：撤销（reset 是浏览器级的全清）
+    await userScriptsDisconnect(); // bridge 断开：撤销（reset 是浏览器级的全清）
     assert.equal(s.reset, 1);
     s.reset = 0;
-    userScriptsDisconnect(); // 没有本 SW 注册的脚本了：不碰 API
+    s.store["browse:userscripts"] = []; // 表也空了（或从未注册过）
+    await userScriptsDisconnect(); // 表为空：不碰 API
     assert.equal(s.reset, 0);
+  });
+
+  it("persists registrations and restores them on reconnect", async () => {
+    const s = usWorld();
+    await userScriptsRegister({ name: "mine", js: "1", matches: ["https://a.example/*"] });
+    assert.deepEqual(s.store["browse:userscripts"], [
+      { id: "mine", js: "1", matches: ["https://a.example/*"], world: "USER_SCRIPT" },
+    ]);
+    await userScriptsDisconnect();
+    assert.deepEqual(s.registered, []); // reset 清了浏览器侧
+    await userScriptsReconnect();
+    assert.deepEqual(s.registered, [
+      { id: "mine", js: [{ code: "1" }], matches: ["https://a.example/*"], world: "USER_SCRIPT" },
+    ]);
+    assert.deepEqual(s.store["browse:userscripts"], [
+      { id: "mine", js: "1", matches: ["https://a.example/*"], world: "USER_SCRIPT" },
+    ]);
+  });
+
+  it("unregister and reset keep the persisted table in sync", async () => {
+    const s = usWorld();
+    await userScriptsRegister({ name: "n1", js: "1", matches: ["https://a.example/*"] });
+    await userScriptsRegister({ name: "n2", js: "2", matches: ["https://b.example/*"], world: "MAIN", allFrames: true });
+    await userScriptsUnregister({ name: "n1" });
+    assert.deepEqual(s.store["browse:userscripts"], [
+      { id: "n2", js: "2", matches: ["https://b.example/*"], world: "MAIN", allFrames: true },
+    ]);
+    await userScriptsReset();
+    assert.deepEqual(s.store["browse:userscripts"], []); // 显式 reset：重连不恢复
+  });
+
+  it("restores a table left by a previous SW; disconnect cleans up its leftovers", async () => {
+    const s = usWorld();
+    s.store["browse:userscripts"] = [
+      { id: "old", js: "9", matches: ["https://x.example/*"], world: "MAIN" },
+    ]; // SW 重启：内存 registeredIds 空，表还在
+    await userScriptsDisconnect();
+    assert.equal(s.reset, 1); // 瑕疵修复：残留照样被清
+    await userScriptsReconnect();
+    assert.deepEqual(s.registered, [
+      { id: "old", js: [{ code: "9" }], matches: ["https://x.example/*"], world: "MAIN" },
+    ]);
+  });
+
+  it("a failed re-registration is logged and does not block the rest", async () => {
+    const s = usWorld();
+    s.store["browse:userscripts"] = [
+      { id: "bad", js: "1", matches: [], world: "USER_SCRIPT" }, // matches 空，mock 不校验，手动让它抛
+    ];
+    installChrome({
+      userScripts: {
+        register: async (scripts: Any[]) => {
+          if ((scripts[0] as Any).id === "bad") throw new Error("boom");
+          void s.registered.push(...scripts);
+        },
+      },
+    });
+    await userScriptsReconnect(); // 不抛
+    assert.deepEqual(s.registered, []);
   });
 
   it("configures the USER_SCRIPT world", async () => {
