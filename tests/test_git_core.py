@@ -564,3 +564,15 @@ class TestBranchSession(unittest.TestCase):
             with branch_session("canary", restore_on_error=False):
                 raise RuntimeError("boom")
         self.assertEqual(mock_run.call_count, 2)
+
+
+class TestIsPushRejected(unittest.TestCase):
+    def test_real_gitlab_ref_lock_rejection(self):
+        # 真实日志原文（tmtc_bg dev，2026-10-24）：GitLab 对 old-obj 不符的服务端拒绝
+        out = (
+            "remote: error: cannot lock ref 'refs/heads/dev': is at "
+            "2f6b8ce34805076ad19a1309bc9d4dd65a320a03 but expected "
+            "d4d8b2f117109972da1342729a7d70b70b70f8be6a8\n"
+            "! [remote rejected] dev -> dev (failed to update ref)"
+        )
+        self.assertTrue(git_mod.is_push_rejected(out))

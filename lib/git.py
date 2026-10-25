@@ -120,7 +120,7 @@ def branch_session(
     return _session()
 
 
-_PUSH_REJECTED_RE = re.compile(r"non-fast-forward|fetch first|\[rejected\]|stale info", re.IGNORECASE)
+_PUSH_REJECTED_RE = re.compile(r"non-fast-forward|fetch first|\[rejected\]|stale info|cannot lock ref|failed to update ref|remote rejected", re.IGNORECASE)
 
 
 def is_push_rejected(output: str) -> bool:
