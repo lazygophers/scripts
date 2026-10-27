@@ -2,10 +2,11 @@
 import csv
 import io
 import json
+import shutil
 import tempfile
 import time
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 from pathlib import Path
 
@@ -384,6 +385,27 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual(list_session_logs(root), [])
         finally:
             import shutil; shutil.rmtree(root)
+
+    def test_grep_ai_env_no_progress_output(self):
+        """grep 扫描挂进度条，但 AI 环境不得往 stderr 写任何过程输出。"""
+        import os
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u1", [
+                {"type": "user", "sessionId": "S1", "cwd": "/repo",
+                 "gitBranch": "feat/x",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "hello needle-xyz"}]}},
+            ])
+            err = io.StringIO()
+            with patch.dict(os.environ, {"CLAUDECODE": "1"}), \
+                 redirect_stderr(err):
+                rows = list_session_logs(root, grep="needle-xyz")
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["sessionId"], "S1")
+            self.assertEqual(err.getvalue(), "")
+        finally:
+            shutil.rmtree(root)
 
     def test_basic_session_fields(self):
         root = Path(tempfile.mkdtemp())

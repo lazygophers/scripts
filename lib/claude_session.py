@@ -163,14 +163,25 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
 
     grep 给定时只保留会话全文（每条记录的所有字符串值，含用户消息、
     助手回复、工具调用、gitBranch、cwd、标题等）包含该子串（不区分
-    大小写）的会话，读取上限放宽到 ``_GREP_MAX_JSONL_BYTES``。
+    大小写）的会话，读取上限放宽到 ``_GREP_MAX_JSONL_BYTES``，并在
+    人类环境的 stderr 上显示进度条（AI 环境自动禁用）。
     """
     out = []
     if not projects_root.exists():
         return out
     max_bytes = _GREP_MAX_JSONL_BYTES if grep else _MAX_JSONL_BYTES
     needle = grep.lower() if grep else None
-    for jsonl in sorted(projects_root.glob("*/*.jsonl")):
+    files = sorted(projects_root.glob("*/*.jsonl"))
+    prog = task_id = None
+    if grep:
+        # 函数内 import：进度条只有 grep 慢路径用，别进启动 import 图（test_perf 守）
+        from lib.ui import Reporter, progress
+        prog = progress(Reporter().console)
+        prog.start()
+        task_id = prog.add_task("搜索会话", total=len(files))
+    for jsonl in files:
+        if task_id is not None:
+            prog.advance(task_id)
         records = []
         try:
             if jsonl.stat().st_size > max_bytes:
@@ -246,6 +257,8 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
             "last_messages": user_texts[-tail:] if user_texts else [],
         }))
     # last desc, start desc, sessionId asc (ISO-8601 strings compare lexicographically)
+    if prog is not None:
+        prog.stop()
     out.sort(key=lambda t: t[2]["sessionId"])
     out.sort(key=lambda t: t[1], reverse=True)
     out.sort(key=lambda t: t[0], reverse=True)
