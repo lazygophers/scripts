@@ -153,7 +153,7 @@ def _collect_hay(obj, out: list) -> None:
 
 def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
                       tail: int = 3,
-                      grep: str | None = None) -> list[dict]:
+                      grep: str | list[str] | None = None) -> list[dict]:
     """Scan projects_root/<hash>/<uuid>.jsonl, return core fields per session.
 
     Each row: sessionId / start / last / cwd / git_branch / kind /
@@ -163,17 +163,19 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
 
     grep 给定时只保留会话全文（每条记录的所有字符串值，含用户消息、
     助手回复、工具调用、gitBranch、cwd、标题等）包含该子串（不区分
-    大小写）的会话，读取上限放宽到 ``_GREP_MAX_JSONL_BYTES``，并在
-    人类环境的 stderr 上显示进度条（AI 环境自动禁用）。
+    大小写）的会话；传列表时多条之间 AND——须全部命中才保留。
+    读取上限放宽到 ``_GREP_MAX_JSONL_BYTES``，并在人类环境的 stderr
+    上显示进度条（AI 环境自动禁用）。
     """
     out = []
     if not projects_root.exists():
         return out
-    max_bytes = _GREP_MAX_JSONL_BYTES if grep else _MAX_JSONL_BYTES
-    needle = grep.lower() if grep else None
+    greps = grep if isinstance(grep, list) else ([grep] if grep else [])
+    needles = [g.lower() for g in greps if g]
+    max_bytes = _GREP_MAX_JSONL_BYTES if needles else _MAX_JSONL_BYTES
     files = sorted(projects_root.glob("*/*.jsonl"))
     prog = task_id = None
-    if grep:
+    if needles:
         # 函数内 import：进度条只有 grep 慢路径用，别进启动 import 图（test_perf 守）
         from lib.ui import Reporter, progress
         prog = progress(Reporter().console)
@@ -216,7 +218,7 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
         for r in records:
             if not isinstance(r, dict):
                 continue
-            if needle:
+            if needles:
                 _collect_hay(r, hay_parts)
             if not start_ts and r.get("timestamp"):
                 start_ts = r["timestamp"]
@@ -242,8 +244,10 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
                     summary = r["aiTitle"]
                     break
 
-        if needle and needle not in "\n".join(hay_parts).lower():
-            continue
+        if needles:
+            hay = "\n".join(hay_parts).lower()
+            if not all(n in hay for n in needles):
+                continue
 
         out.append((last_ts, start_ts, {
             "sessionId": session_id,

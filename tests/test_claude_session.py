@@ -303,7 +303,7 @@ class MainGrepTailTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(buf.getvalue().count("sid1"), 1)
         # 全文过滤在 list_session_logs 里做，main 只转发 grep
-        self.assertEqual(mock_logs.call_args.kwargs.get("grep"), "alpha")
+        self.assertEqual(mock_logs.call_args.kwargs.get("grep"), ["alpha"])
 
     def test_grep_empty_string_means_no_filter(self):
         import lib.cli.claude_session as cli
@@ -365,8 +365,26 @@ class MainGrepTailTest(unittest.TestCase):
         # both forwarded to list_session_logs
         kwargs = mock_logs.call_args
         self.assertEqual(kwargs.kwargs.get("tail"), 5)
-        self.assertEqual(kwargs.kwargs.get("grep"), "alpha")
+        self.assertEqual(kwargs.kwargs.get("grep"), ["alpha"])
         self.assertEqual(buf.getvalue().count("sid1"), 1)
+
+    def test_grep_repeated_flags_forwarded_as_list(self):
+        """重复 --grep 经 argparse append 收成列表转发。"""
+        import lib.cli.claude_session as cli
+        rows = [self._row(summary="alpha")]
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=[]), \
+             patch("lib.claude_session.list_session_logs",
+                   return_value=rows) as mock_logs, \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session", "--all",
+                           "--grep", "alpha", "--grep", "beta"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_logs.call_args.kwargs.get("grep"),
+                         ["alpha", "beta"])
 
 
 class ListSessionLogsTest(unittest.TestCase):
@@ -694,6 +712,36 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual([r["sessionId"] for r in rows], ["G3"])
             rows = list_session_logs(root, grep="/repo")
             self.assertEqual([r["sessionId"] for r in rows], ["G3"])
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+    def test_grep_multiple_keywords_and(self):
+        """多条 --grep 之间 AND：全部命中才保留，只命中一条的排除。"""
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "g5", [
+                {"type": "user", "sessionId": "G5", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "fork the repo"}]}},
+                {"type": "user", "timestamp": "t1",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "邮箱地址是 me@example.com"}]}},
+            ])
+            self._seed(root, "g6", [
+                {"type": "user", "sessionId": "G6", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "fork only, no email"}]}},
+            ])
+            rows = list_session_logs(root, grep=["fork", "邮箱"])
+            self.assertEqual([r["sessionId"] for r in rows], ["G5"])
+            # 单条（str 或 list）行为一致
+            for kw in ("fork", ["fork"]):
+                rows = list_session_logs(root, grep=kw)
+                self.assertEqual([r["sessionId"] for r in rows], ["G5", "G6"])
+            # 空串关键词被丢弃，等同不过滤
+            rows = list_session_logs(root, grep=["", "fork"])
+            self.assertEqual([r["sessionId"] for r in rows], ["G5", "G6"])
         finally:
             import shutil
             shutil.rmtree(root)

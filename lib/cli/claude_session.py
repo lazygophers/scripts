@@ -10,6 +10,8 @@
   claude_session -s 1907          sessionId 模糊过滤
   claude_session -p               只看当前目录所属项目
   claude_session -p sexy          只看项目名为 sexy 的会话
+  claude_session --all --grep fork --grep 邮箱
+                                  全文搜索，多条 --grep 之间 AND
   claude_session --format json    输出 JSON（另可选 tsv / csv）
 """
 from __future__ import annotations
@@ -62,8 +64,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--all", action="store_true",
                    help="扫描 ~/.claude/projects/ 下的会话日志（jsonl 路径）")
     p.add_argument("--grep", metavar="关键词", default=None,
+                   action="append",
                    help="在整条会话内容（用户消息、助手回复、工具调用、"
-                        "git_branch、cwd、标题等）里按关键词过滤（不区分大小写子串）")
+                        "git_branch、cwd、标题等）里按关键词过滤（不区分"
+                        "大小写子串）；可重复传入，多条之间 AND"
+                        "（须全部命中才列出）")
     p.add_argument("--tail", type=int, default=3, metavar="N",
                    help="每条会话末尾取 N 条用户消息，默认 3")
     return p.parse_args(argv)
