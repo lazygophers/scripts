@@ -196,3 +196,65 @@ class TestCountMustBePositive(unittest.TestCase):
         with mock.patch.object(lc, "run_loop", return_value=0) as runner:
             c.run("ls")
         self.assertIsNone(runner.call_args.kwargs["count"])
+
+
+class TestPassthrough(unittest.TestCase):
+    """`--` 分隔：fire 会吞掉它后面的 token，入口摘出、子命令拼回。"""
+
+    def setUp(self):
+        lc._PASSTHROUGH.clear()
+        self.addCleanup(lc._PASSTHROUGH.clear)
+        self.run_loop = mock.patch.object(lc, "run_loop", return_value=0).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_consume_strips_separator_and_stashes_rest(self):
+        argv = lc._consume_passthrough(["loop", "--", "bit", "pull"])
+        self.assertEqual(argv, ["loop"])
+        self.assertEqual(lc._PASSTHROUGH, ["bit", "pull"])
+
+    def test_consume_without_separator_is_identity(self):
+        argv = lc._consume_passthrough(["loop", "run", "3", "ls"])
+        self.assertEqual(argv, ["loop", "run", "3", "ls"])
+        self.assertEqual(lc._PASSTHROUGH, [])
+
+    def test_consume_uses_first_separator_only(self):
+        argv = lc._consume_passthrough(["loop", "--", "echo", "--", "hi"])
+        self.assertEqual(argv, ["loop"])
+        self.assertEqual(lc._PASSTHROUGH, ["echo", "--", "hi"])
+
+    def test_run_appends_passthrough_to_empty_args(self):
+        """`loop -- bit pull`：fire 只见裸调用，命令全靠拼回。"""
+        lc._PASSTHROUGH[:] = ["bit", "pull"]
+        self.assertEqual(cli().run(), 0)
+        self.run_loop.assert_called_once_with(
+            ["bit", "pull"], count=None, force=False, timeout=None
+        )
+
+    def test_run_appends_after_subcommand_and_count(self):
+        """`loop run 3 -- grep -x foo`：count 在前、命令在后。"""
+        lc._PASSTHROUGH[:] = ["grep", "-x", "foo"]
+        cli().run("3")
+        self.run_loop.assert_called_once_with(
+            ["grep", "-x", "foo"], count=3, force=False, timeout=None
+        )
+
+    def test_infinite_appends_passthrough(self):
+        lc._PASSTHROUGH[:] = ["grep", "-r", "foo"]
+        self.assertEqual(cli().infinite(), 0)
+        self.run_loop.assert_called_once_with(
+            ["grep", "-r", "foo"], count=None, infinite=True, force=False
+        )
+
+    def test_force_appends_passthrough(self):
+        lc._PASSTHROUGH[:] = ["false"]
+        self.assertEqual(cli().force("2"), 0)
+        self.run_loop.assert_called_once_with(
+            ["false"], count=2, force=True, timeout=None
+        )
+
+    def test_separator_alone_still_means_missing_cmd(self):
+        lc._PASSTHROUGH[:] = []
+        c = cli()
+        self.assertEqual(c.run(), 1)
+        self.assertIn("loop: 缺少命令", [call.args[0] for call in c._r.err.call_args_list])
+        self.run_loop.assert_not_called()

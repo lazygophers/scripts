@@ -3,13 +3,20 @@
 - run [count] <cmd...>: 循环执行命令（成功即停；count 省略则无限）
 - infinite <cmd...>: 无限循环（成功即停）
 - force [count] <cmd...>: 强制跑满次数（失败也继续）
+
+命令前可加 `--` 分隔：`loop -- bit pull`。fire 把 `--` 后的 token 当它自己的
+flag 吞掉（fire/core.py:364），必须在进 fire 前摘出来、绕过 fire 的参数解析。
 """
 from __future__ import annotations
 
 import shlex
+import sys
 
 from lib.fire_base import BaseCli, run_cli, timed_cli
 from lib.loop import run_loop
+
+_PASSTHROUGH: list[str] = []
+"""`--` 后摘出的原始 token；入口摘、子命令拼回。"""
 
 
 def _split_count_cmd(args: tuple[str | int, ...]) -> tuple[int | None, list[str]]:
@@ -51,7 +58,7 @@ class LoopCli(BaseCli):
 
         用法: loop run [count] <cmd...> [--force] [--timeout N]
         """
-        count, cmd = _split_count_cmd(args)
+        count, cmd = _split_count_cmd(args + tuple(_PASSTHROUGH))
         if _bad_count(count):
             self._r.err(f"loop: 次数要是正整数，给的是 {count}")
             return 2
@@ -66,10 +73,11 @@ class LoopCli(BaseCli):
 
         用法: loop infinite <cmd...> [--force]
         """
+        cmd = list(cmd) + list(_PASSTHROUGH)
         if not cmd:
             self._r.err("loop: 缺少命令")
             return 1
-        return run_loop(_normalize_cmd(list(cmd)), count=None, infinite=True, force=force)
+        return run_loop(_normalize_cmd(cmd), count=None, infinite=True, force=force)
 
     @timed_cli
     def force(self, *args: str, timeout: int | None = None):
@@ -77,7 +85,7 @@ class LoopCli(BaseCli):
 
         用法: loop force [count] <cmd...> [--timeout N]
         """
-        count, cmd = _split_count_cmd(args)
+        count, cmd = _split_count_cmd(args + tuple(_PASSTHROUGH))
         if _bad_count(count):
             self._r.err(f"loop: 次数要是正整数，给的是 {count}")
             return 2
@@ -87,5 +95,15 @@ class LoopCli(BaseCli):
         return run_loop(_normalize_cmd(cmd), count=count, force=True, timeout=timeout)
 
 
+def _consume_passthrough(argv: list[str]) -> list[str]:
+    """摘出首个独立 `--` 及其后的 token，后续部分存进 _PASSTHROUGH。"""
+    if "--" in argv:
+        i = argv.index("--")
+        _PASSTHROUGH[:] = argv[i + 1 :]
+        return argv[:i]
+    return argv
+
+
 def main():
+    sys.argv = _consume_passthrough(sys.argv)
     run_cli(LoopCli())
