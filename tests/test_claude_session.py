@@ -490,6 +490,36 @@ class ListSessionLogsTest(unittest.TestCase):
         finally:
             import shutil; shutil.rmtree(root)
 
+    def test_first_skips_non_human_user_records(self):
+        """tool_result / isMeta / 命令包裹的 user 记录不算真实用户消息。"""
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u10", [
+                {"type": "user", "sessionId": "S10", "timestamp": "t0",
+                 "isMeta": True,
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "injected caveat"}]}},
+                {"type": "user", "timestamp": "t1",
+                 "message": {"role": "user", "content":
+                             "<bash-input>ls</bash-input>"}},
+                {"type": "user", "timestamp": "t2",
+                 "message": {"role": "user", "content": [
+                     {"type": "tool_result", "content": "ok"}]}},
+                {"type": "user", "timestamp": "t3", "isSidechain": True,
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "subagent"}]}},
+                {"type": "user", "timestamp": "t4",
+                 "message": {"role": "user", "content": "real first"}},
+                {"type": "user", "timestamp": "t5",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "real last"}]}},
+            ])
+            [row] = list_session_logs(root)
+            self.assertEqual(row["first_message"], "real first")
+            self.assertEqual(row["last_messages"], ["real first", "real last"])
+        finally:
+            import shutil; shutil.rmtree(root)
+
     def test_no_user_records(self):
         root = Path(tempfile.mkdtemp())
         try:

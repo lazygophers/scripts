@@ -103,10 +103,21 @@ _PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 _MAX_JSONL_BYTES = 5 * 1024 * 1024
 
 
+# 命令包裹 / hook 注入等非人类输入的前缀（真实 jsonl 里 content 为 str 的形态）
+_NON_HUMAN_PREFIXES = ("<command-name>", "<command-message>",
+                       "<local-command", "<bash-", "<system-reminder>",
+                       "<task-notification")
+
+
 def _user_text_blocks(record: dict) -> str:
-    """从 type=user 记录里拼接 text 块；跳过 tool_use/tool_result/image/thinking。"""
+    """从 type=user 记录里取真实用户文本；跳过 tool_use/tool_result/image/thinking、
+    isMeta/isSidechain（hook 注入、子代理）和命令包裹（<command-…>/<bash-…> 等）。"""
+    if record.get("isMeta") or record.get("isSidechain"):
+        return ""
     msg = record.get("message") or {}
     content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, str):
+        return "" if content.startswith(_NON_HUMAN_PREFIXES) else content
     if not isinstance(content, list):
         return ""
     parts = []
@@ -180,7 +191,9 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
             if not summary and r.get("type") == "custom-title" and r.get("customTitle"):
                 summary = r["customTitle"]
             if r.get("type") == "user":
-                user_texts.append(_user_text_blocks(r))
+                t = _user_text_blocks(r)
+                if t:
+                    user_texts.append(t)
 
         if not summary:
             for r in records:
