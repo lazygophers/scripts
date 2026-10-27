@@ -286,22 +286,22 @@ class MainGrepTailTest(unittest.TestCase):
         d.update(kw)
         return d
 
-    def test_grep_filters_by_summary(self):
+    def test_grep_forwarded_to_list_session_logs(self):
         import lib.cli.claude_session as cli
-        rows = [self._row(summary="alpha task"), self._row(summary="beta")]
+        rows = [self._row(summary="alpha task")]
         buf = io.StringIO()
         with patch("lib.claude_session.list_sessions", return_value=[]), \
-             patch("lib.claude_session.list_session_logs", return_value=rows), \
+             patch("lib.claude_session.list_session_logs",
+                   return_value=rows) as mock_logs, \
              patch("lib.cli.claude_session.timed",
                    side_effect=lambda fn, label=None: fn), \
              patch("lib.ai_env.is_ai_shell_env", return_value=True), \
              redirect_stdout(buf):
             rc = cli.main(["claude_session", "--all", "--grep", "alpha"])
         self.assertEqual(rc, 0)
-        out = buf.getvalue()
-        self.assertIn("sid1", out)
-        # only one row
-        self.assertEqual(out.count("sid1"), 1)
+        self.assertEqual(buf.getvalue().count("sid1"), 1)
+        # 全文过滤在 list_session_logs 里做，main 只转发 grep
+        self.assertEqual(mock_logs.call_args.kwargs.get("grep"), "alpha")
 
     def test_grep_empty_string_means_no_filter(self):
         import lib.cli.claude_session as cli
@@ -348,7 +348,7 @@ class MainGrepTailTest(unittest.TestCase):
 
     def test_grep_and_tail_combo(self):
         import lib.cli.claude_session as cli
-        rows = [self._row(summary="alpha"), self._row(summary="beta")]
+        rows = [self._row(summary="alpha")]
         buf = io.StringIO()
         with patch("lib.claude_session.list_sessions", return_value=[]), \
              patch("lib.claude_session.list_session_logs",
@@ -360,9 +360,10 @@ class MainGrepTailTest(unittest.TestCase):
             rc = cli.main(
                 ["claude_session", "--all", "--tail", "5", "--grep", "alpha"])
         self.assertEqual(rc, 0)
-        # tail forwarded
-        self.assertEqual(mock_logs.call_args.kwargs.get("tail"), 5)
-        # grep filtered: only alpha row
+        # both forwarded to list_session_logs
+        kwargs = mock_logs.call_args
+        self.assertEqual(kwargs.kwargs.get("tail"), 5)
+        self.assertEqual(kwargs.kwargs.get("grep"), "alpha")
         self.assertEqual(buf.getvalue().count("sid1"), 1)
 
 
@@ -617,6 +618,61 @@ class ListSessionLogsTest(unittest.TestCase):
                 "sid-earlier-start",
                 "sid-oldest-last",
             ])
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_grep_matches_mid_session_tool_call(self):
+        """grep 搜整条会话内容：命中藏在中段工具调用里的串。"""
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "g1", [
+                {"type": "user", "sessionId": "G1", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "review the pr"}]}},
+                {"type": "assistant", "timestamp": "t1",
+                 "message": {"role": "assistant", "content": [
+                     {"type": "tool_use", "name": "Bash",
+                      "input": {"command": "git log "
+                                "feature/nico/ipwl-review-timeout"}}]}},
+            ])
+            self._seed(root, "g2", [
+                {"type": "user", "sessionId": "G2", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "unrelated"}]}},
+            ])
+            rows = list_session_logs(root, grep="ipwl-review-timeout")
+            self.assertEqual([r["sessionId"] for r in rows], ["G1"])
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_grep_matches_git_branch_and_cwd_case_insensitive(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "g3", [
+                {"type": "user", "sessionId": "G3", "timestamp": "t0",
+                 "cwd": "/repo", "gitBranch": "feature/nico/ipwl-review-timeout",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "hi"}]}},
+            ])
+            rows = list_session_logs(root, grep="IPWL-REVIEW")
+            self.assertEqual([r["sessionId"] for r in rows], ["G3"])
+            rows = list_session_logs(root, grep="/repo")
+            self.assertEqual([r["sessionId"] for r in rows], ["G3"])
+        finally:
+            import shutil; shutil.rmtree(root)
+
+    def test_grep_skips_oversized_strings(self):
+        """超过 _MAX_HAYSTRING_LEN 的字符串（base64/倾倒）不进搜索文本。"""
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "g4", [
+                {"type": "user", "sessionId": "G4", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "x" * 200_000
+                      + "needle-in-huge"}]}},
+            ])
+            self.assertEqual(list_session_logs(root, grep="needle-in-huge"), [])
+            self.assertEqual(len(list_session_logs(root)), 1)
         finally:
             import shutil; shutil.rmtree(root)
 

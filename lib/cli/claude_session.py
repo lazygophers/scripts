@@ -62,7 +62,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--all", action="store_true",
                    help="扫描 ~/.claude/projects/ 下的会话日志（jsonl 路径）")
     p.add_argument("--grep", metavar="关键词", default=None,
-                   help="在 summary / 首条消息 / 末尾消息里按关键词过滤（不区分大小写）")
+                   help="在整条会话内容（用户消息、助手回复、工具调用、"
+                        "git_branch、cwd、标题等）里按关键词过滤（不区分大小写子串）")
     p.add_argument("--tail", type=int, default=3, metavar="N",
                    help="每条会话末尾取 N 条用户消息，默认 3")
     return p.parse_args(argv)
@@ -154,8 +155,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.all:
         rows = timed(list_session_logs, label="claude_session")(
-            tail=args.tail)
-        rows = filter_session_logs(rows, grep=args.grep)
+            tail=args.tail, grep=args.grep)
+        rows = filter_session_logs(rows)
         if args.project is not None:
             if args.project == "":
                 # --all -p (no value): restrict to cwd-hash subdir

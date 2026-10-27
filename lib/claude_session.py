@@ -102,6 +102,13 @@ _PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 # 5 MB covers even very long sessions while skipping the tail of gigabyte-scale logs.
 _MAX_JSONL_BYTES = 5 * 1024 * 1024
 
+# --grep 时读得更深：命中串可能藏在长会话中段（实测首偏移 0.7MB~5.1MB），
+# 默认 5MB 截断会漏；32MB 覆盖全部会话里除 7 个超大文件外的所有。
+_GREP_MAX_JSONL_BYTES = 32 * 1024 * 1024
+
+# 单条字符串超过这个长度不进搜索文本（base64 图片 / 大文件倾倒）
+_MAX_HAYSTRING_LEN = 100_000
+
 
 # 命令包裹 / hook 注入等非人类输入的前缀（真实 jsonl 里 content 为 str 的形态）
 _NON_HUMAN_PREFIXES = ("<command-name>", "<command-message>",
@@ -131,24 +138,44 @@ def _user_text_blocks(record: dict) -> str:
     return "".join(parts)
 
 
+def _collect_hay(obj, out: list) -> None:
+    """递归收集字符串值进 out；超长字符串（base64 / 文件倾倒）跳过。"""
+    if isinstance(obj, str):
+        if len(obj) <= _MAX_HAYSTRING_LEN:
+            out.append(obj)
+    elif isinstance(obj, list):
+        for x in obj:
+            _collect_hay(x, out)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _collect_hay(v, out)
+
+
 def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
-                      tail: int = 3) -> list[dict]:
+                      tail: int = 3,
+                      grep: str | None = None) -> list[dict]:
     """Scan projects_root/<hash>/<uuid>.jsonl, return core fields per session.
 
     Each row: sessionId / start / last / cwd / git_branch / kind /
     summary / first_message / last_messages. Corrupt files are skipped.
     Files larger than ``_MAX_JSONL_BYTES`` are truncated to the first N bytes
     so a multi-hundred-MB conversation log does not dominate wall-clock.
+
+    grep 给定时只保留会话全文（每条记录的所有字符串值，含用户消息、
+    助手回复、工具调用、gitBranch、cwd、标题等）包含该子串（不区分
+    大小写）的会话，读取上限放宽到 ``_GREP_MAX_JSONL_BYTES``。
     """
     out = []
     if not projects_root.exists():
         return out
+    max_bytes = _GREP_MAX_JSONL_BYTES if grep else _MAX_JSONL_BYTES
+    needle = grep.lower() if grep else None
     for jsonl in sorted(projects_root.glob("*/*.jsonl")):
         records = []
         try:
-            if jsonl.stat().st_size > _MAX_JSONL_BYTES:
+            if jsonl.stat().st_size > max_bytes:
                 with jsonl.open("rb") as fh:
-                    text = fh.read(_MAX_JSONL_BYTES).decode("utf-8", errors="replace")
+                    text = fh.read(max_bytes).decode("utf-8", errors="replace")
             else:
                 text = jsonl.read_text(encoding="utf-8")
             for line in text.splitlines():
@@ -173,10 +200,13 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
         kind = ""
         summary = ""
         user_texts: list[str] = []
+        hay_parts: list[str] = []
 
         for r in records:
             if not isinstance(r, dict):
                 continue
+            if needle:
+                _collect_hay(r, hay_parts)
             if not start_ts and r.get("timestamp"):
                 start_ts = r["timestamp"]
             last_ts = r.get("timestamp", last_ts)
@@ -200,6 +230,9 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
                 if isinstance(r, dict) and r.get("type") == "ai-title" and r.get("aiTitle"):
                     summary = r["aiTitle"]
                     break
+
+        if needle and needle not in "\n".join(hay_parts).lower():
+            continue
 
         out.append((last_ts, start_ts, {
             "sessionId": session_id,
@@ -225,7 +258,8 @@ def filter_session_logs(rows: list[dict], grep: str | None = None) -> list[dict]
     项目消歧复用 list_sessions() 规则：basename 组里出现过 >1 个不同 cwd
     才升级成 parent/name；消歧后给每条加 project 字段。
     grep 子串（不区分大小写）命中 summary / first_message / last_messages
-    任一元素即保留；grep 为空/None 不过滤。
+    任一元素即保留；grep 为空/None 不过滤。CLI 主路径的全文过滤在
+    list_session_logs(grep=)（搜整条会话内容），这里保留作兜底。
     """
     cwds_by_base: dict[str, set[str]] = defaultdict(set)
     for r in rows:
