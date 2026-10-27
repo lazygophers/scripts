@@ -643,7 +643,8 @@ class ListSessionLogsTest(unittest.TestCase):
             rows = list_session_logs(root, grep="ipwl-review-timeout")
             self.assertEqual([r["sessionId"] for r in rows], ["G1"])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_grep_matches_git_branch_and_cwd_case_insensitive(self):
         root = Path(tempfile.mkdtemp())
@@ -659,7 +660,8 @@ class ListSessionLogsTest(unittest.TestCase):
             rows = list_session_logs(root, grep="/repo")
             self.assertEqual([r["sessionId"] for r in rows], ["G3"])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_grep_skips_oversized_strings(self):
         """超过 _MAX_HAYSTRING_LEN 的字符串（base64/倾倒）不进搜索文本。"""
@@ -674,7 +676,8 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual(list_session_logs(root, grep="needle-in-huge"), [])
             self.assertEqual(len(list_session_logs(root)), 1)
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
 
 class FilterSessionLogsTest(unittest.TestCase):
