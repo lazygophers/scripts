@@ -11,7 +11,10 @@
   只提需求不改文件。人人都想「顺手加一行」的文件就是冲突源。
 - **完成以终态为准，不以汇报为准**：每个 agent 报「完成」不算完成；合并后必跑
   终态核对——`git diff` 里 grep 重复键 / 重复 import，测试全绿才算。两份各自
-  全绿的 diff 合在一起可以不绿。
+  全绿的 diff 合在一起可以不绿。Python 侧「测试全绿」指全仓
+  `python3 tests/run.py`（约 100s）：模块绿不等于全仓绿——2026-10-27
+  claude_session 两 agent 并发修复，各自只跑 tests/test_claude_session.py，
+  全仓回归靠主对话补跑兜住（3509 用例 0 失败）。
 - **接口漂移靠 typecheck 拦**：一方改函数签名、另一方按旧签名写测试，只有
   `npm --prefix browser-extension/browse run typecheck` 能拦住；并发改 TS 后
   必跑，不许只跑各自的测试文件（跑法见 testing.md「改完 TypeScript 文件先做
@@ -30,7 +33,9 @@
   没被要求跑 ruff 时，unused import / import 排序残留只有主对话评审才暴露
   （2026-10-18 /ponytail-audit，3 处）。修复 Python 的 agent 任务书写明交付 =
   `python3 tests/run.py` 相关模块绿 + `ruff check <改动文件>`；TS 是
-  typecheck，Kotlin 是 `gradlew test`（见 testing.md 各条）。
+  typecheck，Kotlin 是 `gradlew test`（见 testing.md 各条）。合并终态核对时
+  主对话侧再跑一遍 ruff：2026-10-27 claude_session 并发修复交付后
+  tests/test_claude_session.py 净增 6 处报错（28→34，I001/E702），没人跑就漏。
 - **审计→修复的交接用 file:line 任务书**：/ponytail-audit 报告的 file:line
   整条抄进 agent 任务书，一条一修，20 条零返工（2026-10-18 实测）。审计阶段
   把位置钉死，修复 agent 不再定位只改；比「agent 自己找问题自己修」少一层
