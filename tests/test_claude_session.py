@@ -7,14 +7,14 @@ import tempfile
 import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from unittest.mock import patch
 from pathlib import Path
+from unittest.mock import patch
 
 from lib.claude_session import filter_sessions, list_sessions
 from lib.cli.claude_session import COLUMNS, _emit, _emit_logs, _parse_args
 
 try:
-    from lib.claude_session import list_session_logs, filter_session_logs
+    from lib.claude_session import filter_session_logs, list_session_logs
 except ImportError:
     list_session_logs = None
     filter_session_logs = None
@@ -213,7 +213,8 @@ class MainAllFlagTest(unittest.TestCase):
             self.assertIn("sid1", output)
             self.assertIn(cwd.split("/")[-1], output)
         finally:
-            import shutil; shutil.rmtree(tmp_root)
+            import shutil
+            shutil.rmtree(tmp_root)
 
     def test_main_all_p_missing_hash_dir_returns_empty(self):
         import lib.cli.claude_session as cli
@@ -384,7 +385,8 @@ class ListSessionLogsTest(unittest.TestCase):
         try:
             self.assertEqual(list_session_logs(root), [])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_grep_ai_env_no_progress_output(self):
         """grep 扫描挂进度条，但 AI 环境不得往 stderr 写任何过程输出。"""
@@ -434,7 +436,8 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual(row["first_message"], "hello world")
             self.assertEqual(row["last_messages"], ["hello world"])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_summary_falls_back_to_ai_title(self):
         root = Path(tempfile.mkdtemp())
@@ -449,7 +452,8 @@ class ListSessionLogsTest(unittest.TestCase):
             [row] = list_session_logs(root)
             self.assertEqual(row["summary"], "AI Title")
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_summary_empty_when_no_titles(self):
         root = Path(tempfile.mkdtemp())
@@ -462,7 +466,8 @@ class ListSessionLogsTest(unittest.TestCase):
             [row] = list_session_logs(root)
             self.assertEqual(row["summary"], "")
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_user_block_filters_tools_and_images(self):
         root = Path(tempfile.mkdtemp())
@@ -481,7 +486,8 @@ class ListSessionLogsTest(unittest.TestCase):
             [row] = list_session_logs(root)
             self.assertEqual(row["first_message"], "first part")
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_last_messages_takes_tail(self):
         root = Path(tempfile.mkdtemp())
@@ -496,7 +502,8 @@ class ListSessionLogsTest(unittest.TestCase):
             [row] = list_session_logs(root, tail=3)
             self.assertEqual(row["last_messages"], ["msg2", "msg3", "msg4"])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_last_messages_default_three(self):
         root = Path(tempfile.mkdtemp())
@@ -511,7 +518,8 @@ class ListSessionLogsTest(unittest.TestCase):
             [row] = list_session_logs(root)
             self.assertEqual(row["last_messages"], ["m7", "m8", "m9"])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_first_skips_non_human_user_records(self):
         """tool_result / isMeta / 命令包裹的 user 记录不算真实用户消息。"""
@@ -541,7 +549,8 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual(row["first_message"], "real first")
             self.assertEqual(row["last_messages"], ["real first", "real last"])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_no_user_records(self):
         root = Path(tempfile.mkdtemp())
@@ -555,7 +564,8 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual(row["first_message"], "")
             self.assertEqual(row["last_messages"], [])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_bad_jsonl_skipped(self):
         root = Path(tempfile.mkdtemp())
@@ -572,7 +582,8 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["sessionId"], "S8")
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_corrupt_file_inside_dir_does_not_kill_others(self):
         root = Path(tempfile.mkdtemp())
@@ -593,7 +604,8 @@ class ListSessionLogsTest(unittest.TestCase):
             ids = sorted(r["sessionId"] for r in rows)
             self.assertEqual(ids, ["B"])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_sort_last_desc_start_desc_session_id_asc(self):
         root = Path(tempfile.mkdtemp())
@@ -641,7 +653,8 @@ class ListSessionLogsTest(unittest.TestCase):
                 "sid-oldest-last",
             ])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_grep_matches_mid_session_tool_call(self):
         """grep 搜整条会话内容：命中藏在中段工具调用里的串。"""
