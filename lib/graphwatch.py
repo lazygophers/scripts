@@ -12,6 +12,7 @@ import sys  # noqa: F401
 import time  # noqa: F401
 from pathlib import Path
 
+from lib import log as _log
 from lib.fire_base import BaseCli, timed_cli
 from lib.graphwatch_config import (  # noqa: F401
     BACKEND_CHOICES,
@@ -72,7 +73,7 @@ def _cmd(method):
 
 
 class GraphwatchCli(BaseCli):
-    """graphwatch CLI。子命令：add / remove / list / run / rebuild / config / install / start / stop / restart / uninstall / status。"""
+    """graphwatch CLI。子命令：add / remove / list / run / rebuild / clean / config / install / start / stop / restart / uninstall / status。"""
 
     @_cmd
     def add(self, directory: str) -> int:
@@ -202,6 +203,40 @@ class GraphwatchCli(BaseCli):
         if failed:
             self._r.err("有目录重建失败，详见上方日志")
         return 1 if failed else 0
+
+    @_cmd
+    def clean(self) -> int:
+        """清理各注册目录 graphify-out 下超过 7 天的日期备份。
+
+        用法: graphwatch clean
+        """
+        from lib.graphwatch_rebuild import prune_backups
+
+        folders = list_folders()
+        cleaned = skipped = 0
+        removed_all: list[str] = []
+        for folder in folders:
+            out = Path(folder).expanduser() / "graphify-out"
+            if not out.is_dir():
+                skipped += 1
+                continue
+            removed = prune_backups(out)
+            if removed:
+                cleaned += 1
+                removed_all.extend(f"{Path(folder).name}/{r}" for r in removed)
+            else:
+                skipped += 1
+        if cleaned:
+            for line in removed_all:
+                self._r.info(f"已删 {line}")
+            self._r.ok(f"已清理 {cleaned} 个目录的过期备份")
+        else:
+            self._r.info("没有过期备份，无需清理")
+        if skipped:
+            self._r.info(f"跳过 {skipped} 个目录（无产物或无过期备份）")
+        _log.record("graphwatch.clean", logger="graphwatch-daemon",
+                    folders=len(folders), cleaned=cleaned, removed=removed_all)
+        return 0
 
     @_cmd
     def install(self) -> int:

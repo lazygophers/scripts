@@ -4,6 +4,7 @@
   add <目录>      注册一个文件夹（daemon 自动热加载开始监听）
   remove <目录>   注销一个文件夹
   list           列出已注册的文件夹
+  clean           清理各注册目录超过 7 天的日期备份
   config         引导式配置向导（backend / api_key / debounce …）
   run            前台运行守护进程（全局单例）
   install        注册为系统服务（macOS launchd / Linux systemd --user / Windows 计划任务）

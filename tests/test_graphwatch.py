@@ -213,6 +213,22 @@ class TestCli(GraphwatchCase):
         self.assertEqual(self._cli().remove(str(repo)), 0)
         self.assertEqual(graphwatch.list_folders(), [])
 
+    def test_cli_clean_prunes_old_backups(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        out = repo / "graphify-out"
+        old = out / "2020-01-01"
+        old.mkdir(parents=True)
+        (out / "graph.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(self._cli().clean(), 0)
+        self.assertFalse(old.exists())
+        self.assertTrue((out / "graph.json").is_file())
+
+    def test_cli_clean_no_out_is_ok(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        self.assertEqual(self._cli().clean(), 0)
+
 
 class TestCliList(GraphwatchCase):
     def test_cli_list_empty(self):
