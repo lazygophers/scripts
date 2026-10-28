@@ -2154,7 +2154,7 @@ class TestPruneBackups(GraphwatchCase):
             (out / name / "graph.json").write_text("{}", encoding="utf-8")
         (out / "2026-09-01").write_text("不是目录，不动", encoding="utf-8")
         removed = prune_backups(out, today=datetime.date(2026, 9, 27))
-        self.assertEqual(removed, ["2026-09-20"])
+        self.assertEqual(removed, [("2026-09-20", 2)])  # graph.json 内容 "{}" = 2 字节
         self.assertEqual(sorted(p.name for p in out.iterdir()),
                          ["2026-09-01", "2026-09-21", "2026-09-27", "cache", "wiki"])
 

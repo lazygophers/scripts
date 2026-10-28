@@ -437,12 +437,14 @@ def run(stop_event=None, **kw) -> None:
                name=NAME, load=load_config, lock_file=lock_path(), stale=stale, **kw)
 
 
-def clean(console=None) -> tuple[int, int]:
-    """清理本地分支已不存在于远程的仓库索引。返回 (已清理数, 跳过数)。"""
+def clean(console=None) -> tuple[int, int, int]:
+    """清理本地分支已不存在于远程的仓库索引。返回 (已清理数, 跳过数, 释放字节)。"""
+    from lib.graphwatch_service import tree_size
     from lib.ui import progress
 
     repos = load_config()["folders"]
     cleaned = 0
+    freed = 0
     pbar = progress(console) if console else None
     ctx = pbar if pbar else _null_ctx()
     with ctx:
@@ -458,7 +460,9 @@ def clean(console=None) -> tuple[int, int]:
                         branch = current_branch(repo)
                         remote = _default_remote(repo)
                         if remote is not None and not _remote_has_branch(repo, remote, branch):
-                            shutil.rmtree(Path(repo) / ".gitnexus", ignore_errors=True)
+                            idx = Path(repo) / ".gitnexus"
+                            freed += tree_size(idx)
+                            shutil.rmtree(idx, ignore_errors=True)
                             cleaned += 1
                             skip = False
                 except subprocess.CalledProcessError:
@@ -467,7 +471,7 @@ def clean(console=None) -> tuple[int, int]:
                 pass  # skipped count = total - cleaned
             if pbar:
                 pbar.advance(task)
-    return cleaned, len(repos) - cleaned
+    return cleaned, len(repos) - cleaned, freed
 
 
 class _NullCtx:
@@ -508,9 +512,11 @@ class GitnexuswatchCli(BaseCli):
 
         用法: gitnexuswatch clean
         """
-        cleaned, skipped = clean(self._r.console)
+        from lib.cpd_core import fmt_size
+
+        cleaned, skipped, freed = clean(self._r.console)
         if cleaned:
-            self._r.ok(f"已清理 {cleaned} 个过期索引")
+            self._r.ok(f"已清理 {cleaned} 个过期索引，释放 {fmt_size(freed)}")
         else:
             self._r.info("所有索引的分支都在远程存在，无需清理")
         if skipped:
