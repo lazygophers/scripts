@@ -1720,12 +1720,16 @@ class TestResolveBrowserAlias(unittest.TestCase):
         self.assertIn("超时", outcome["message"])
 
     def test_open_silent_connection_returns_timeout(self):
-        async def silent(method, params):
+        # 不起真 daemon：负载下 Harness 的 daemon 会短暂拒连，connect 失败走
+        # EXIT_NOT_CONNECTED(3)，测的「已发无回复」路径变成环境彩票
+        async def never_reply(reader, cmd_id):
             await asyncio.Future()
-        with Harness(silent) as h, \
+        with mock.patch.object(browse, "ensure_daemon", return_value=True), \
+             mock.patch.object(browse, "connect", mock.AsyncMock(return_value=(mock.AsyncMock(), mock.Mock(drain=mock.AsyncMock()), 1))), \
+             mock.patch.object(browse, "_await_reply", side_effect=never_reply), \
              mock.patch.object(browse, "OPEN_REPLY_TIMEOUT", 0.01), \
              mock.patch("sys.stderr", io.StringIO()) as err:
-            self.assertEqual(h.cli("open", "about:blank"), 1)  # EXIT_FAILED，指令已发但结果未知
+            self.assertEqual(browse._main(["browse", "open", "about:blank"]), 1)  # EXIT_FAILED，指令已发但结果未知
             self.assertIn("browsingContext.create", err.getvalue())
             self.assertIn("结果未知", err.getvalue())
 

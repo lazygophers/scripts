@@ -2,18 +2,19 @@
 import csv
 import io
 import json
+import shutil
 import tempfile
 import time
 import unittest
-from contextlib import redirect_stdout
-from unittest.mock import patch
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from lib.claude_session import filter_sessions, list_sessions
 from lib.cli.claude_session import COLUMNS, _emit, _emit_logs, _parse_args
 
 try:
-    from lib.claude_session import list_session_logs, filter_session_logs
+    from lib.claude_session import filter_session_logs, list_session_logs
 except ImportError:
     list_session_logs = None
     filter_session_logs = None
@@ -212,7 +213,8 @@ class MainAllFlagTest(unittest.TestCase):
             self.assertIn("sid1", output)
             self.assertIn(cwd.split("/")[-1], output)
         finally:
-            import shutil; shutil.rmtree(tmp_root)
+            import shutil
+            shutil.rmtree(tmp_root)
 
     def test_main_all_p_missing_hash_dir_returns_empty(self):
         import lib.cli.claude_session as cli
@@ -286,22 +288,22 @@ class MainGrepTailTest(unittest.TestCase):
         d.update(kw)
         return d
 
-    def test_grep_filters_by_summary(self):
+    def test_grep_forwarded_to_list_session_logs(self):
         import lib.cli.claude_session as cli
-        rows = [self._row(summary="alpha task"), self._row(summary="beta")]
+        rows = [self._row(summary="alpha task")]
         buf = io.StringIO()
         with patch("lib.claude_session.list_sessions", return_value=[]), \
-             patch("lib.claude_session.list_session_logs", return_value=rows), \
+             patch("lib.claude_session.list_session_logs",
+                   return_value=rows) as mock_logs, \
              patch("lib.cli.claude_session.timed",
                    side_effect=lambda fn, label=None: fn), \
              patch("lib.ai_env.is_ai_shell_env", return_value=True), \
              redirect_stdout(buf):
             rc = cli.main(["claude_session", "--all", "--grep", "alpha"])
         self.assertEqual(rc, 0)
-        out = buf.getvalue()
-        self.assertIn("sid1", out)
-        # only one row
-        self.assertEqual(out.count("sid1"), 1)
+        self.assertEqual(buf.getvalue().count("sid1"), 1)
+        # 全文过滤在 list_session_logs 里做，main 只转发 grep
+        self.assertEqual(mock_logs.call_args.kwargs.get("grep"), ["alpha"])
 
     def test_grep_empty_string_means_no_filter(self):
         import lib.cli.claude_session as cli
@@ -348,7 +350,7 @@ class MainGrepTailTest(unittest.TestCase):
 
     def test_grep_and_tail_combo(self):
         import lib.cli.claude_session as cli
-        rows = [self._row(summary="alpha"), self._row(summary="beta")]
+        rows = [self._row(summary="alpha")]
         buf = io.StringIO()
         with patch("lib.claude_session.list_sessions", return_value=[]), \
              patch("lib.claude_session.list_session_logs",
@@ -360,10 +362,29 @@ class MainGrepTailTest(unittest.TestCase):
             rc = cli.main(
                 ["claude_session", "--all", "--tail", "5", "--grep", "alpha"])
         self.assertEqual(rc, 0)
-        # tail forwarded
-        self.assertEqual(mock_logs.call_args.kwargs.get("tail"), 5)
-        # grep filtered: only alpha row
+        # both forwarded to list_session_logs
+        kwargs = mock_logs.call_args
+        self.assertEqual(kwargs.kwargs.get("tail"), 5)
+        self.assertEqual(kwargs.kwargs.get("grep"), ["alpha"])
         self.assertEqual(buf.getvalue().count("sid1"), 1)
+
+    def test_grep_repeated_flags_forwarded_as_list(self):
+        """重复 --grep 经 argparse append 收成列表转发。"""
+        import lib.cli.claude_session as cli
+        rows = [self._row(summary="alpha")]
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions", return_value=[]), \
+             patch("lib.claude_session.list_session_logs",
+                   return_value=rows) as mock_logs, \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session", "--all",
+                           "--grep", "alpha", "--grep", "beta"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_logs.call_args.kwargs.get("grep"),
+                         ["alpha", "beta"])
 
 
 class ListSessionLogsTest(unittest.TestCase):
@@ -382,7 +403,29 @@ class ListSessionLogsTest(unittest.TestCase):
         try:
             self.assertEqual(list_session_logs(root), [])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
+
+    def test_grep_ai_env_no_progress_output(self):
+        """grep 扫描挂进度条，但 AI 环境不得往 stderr 写任何过程输出。"""
+        import os
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u1", [
+                {"type": "user", "sessionId": "S1", "cwd": "/repo",
+                 "gitBranch": "feat/x",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "hello needle-xyz"}]}},
+            ])
+            err = io.StringIO()
+            with patch.dict(os.environ, {"CLAUDECODE": "1"}), \
+                 redirect_stderr(err):
+                rows = list_session_logs(root, grep="needle-xyz")
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["sessionId"], "S1")
+            self.assertEqual(err.getvalue(), "")
+        finally:
+            shutil.rmtree(root)
 
     def test_basic_session_fields(self):
         root = Path(tempfile.mkdtemp())
@@ -411,7 +454,8 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual(row["first_message"], "hello world")
             self.assertEqual(row["last_messages"], ["hello world"])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_summary_falls_back_to_ai_title(self):
         root = Path(tempfile.mkdtemp())
@@ -426,7 +470,8 @@ class ListSessionLogsTest(unittest.TestCase):
             [row] = list_session_logs(root)
             self.assertEqual(row["summary"], "AI Title")
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_summary_empty_when_no_titles(self):
         root = Path(tempfile.mkdtemp())
@@ -439,7 +484,8 @@ class ListSessionLogsTest(unittest.TestCase):
             [row] = list_session_logs(root)
             self.assertEqual(row["summary"], "")
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_user_block_filters_tools_and_images(self):
         root = Path(tempfile.mkdtemp())
@@ -458,7 +504,8 @@ class ListSessionLogsTest(unittest.TestCase):
             [row] = list_session_logs(root)
             self.assertEqual(row["first_message"], "first part")
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_last_messages_takes_tail(self):
         root = Path(tempfile.mkdtemp())
@@ -473,7 +520,8 @@ class ListSessionLogsTest(unittest.TestCase):
             [row] = list_session_logs(root, tail=3)
             self.assertEqual(row["last_messages"], ["msg2", "msg3", "msg4"])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_last_messages_default_three(self):
         root = Path(tempfile.mkdtemp())
@@ -488,7 +536,39 @@ class ListSessionLogsTest(unittest.TestCase):
             [row] = list_session_logs(root)
             self.assertEqual(row["last_messages"], ["m7", "m8", "m9"])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
+
+    def test_first_skips_non_human_user_records(self):
+        """tool_result / isMeta / 命令包裹的 user 记录不算真实用户消息。"""
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u10", [
+                {"type": "user", "sessionId": "S10", "timestamp": "t0",
+                 "isMeta": True,
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "injected caveat"}]}},
+                {"type": "user", "timestamp": "t1",
+                 "message": {"role": "user", "content":
+                             "<bash-input>ls</bash-input>"}},
+                {"type": "user", "timestamp": "t2",
+                 "message": {"role": "user", "content": [
+                     {"type": "tool_result", "content": "ok"}]}},
+                {"type": "user", "timestamp": "t3", "isSidechain": True,
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "subagent"}]}},
+                {"type": "user", "timestamp": "t4",
+                 "message": {"role": "user", "content": "real first"}},
+                {"type": "user", "timestamp": "t5",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "real last"}]}},
+            ])
+            [row] = list_session_logs(root)
+            self.assertEqual(row["first_message"], "real first")
+            self.assertEqual(row["last_messages"], ["real first", "real last"])
+        finally:
+            import shutil
+            shutil.rmtree(root)
 
     def test_no_user_records(self):
         root = Path(tempfile.mkdtemp())
@@ -502,7 +582,8 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual(row["first_message"], "")
             self.assertEqual(row["last_messages"], [])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_bad_jsonl_skipped(self):
         root = Path(tempfile.mkdtemp())
@@ -519,7 +600,8 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["sessionId"], "S8")
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_corrupt_file_inside_dir_does_not_kill_others(self):
         root = Path(tempfile.mkdtemp())
@@ -540,7 +622,8 @@ class ListSessionLogsTest(unittest.TestCase):
             ids = sorted(r["sessionId"] for r in rows)
             self.assertEqual(ids, ["B"])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
 
     def test_sort_last_desc_start_desc_session_id_asc(self):
         root = Path(tempfile.mkdtemp())
@@ -588,7 +671,96 @@ class ListSessionLogsTest(unittest.TestCase):
                 "sid-oldest-last",
             ])
         finally:
-            import shutil; shutil.rmtree(root)
+            import shutil
+            shutil.rmtree(root)
+
+    def test_grep_matches_mid_session_tool_call(self):
+        """grep 搜整条会话内容：命中藏在中段工具调用里的串。"""
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "g1", [
+                {"type": "user", "sessionId": "G1", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "review the pr"}]}},
+                {"type": "assistant", "timestamp": "t1",
+                 "message": {"role": "assistant", "content": [
+                     {"type": "tool_use", "name": "Bash",
+                      "input": {"command": "git log "
+                                "feature/nico/ipwl-review-timeout"}}]}},
+            ])
+            self._seed(root, "g2", [
+                {"type": "user", "sessionId": "G2", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "unrelated"}]}},
+            ])
+            rows = list_session_logs(root, grep="ipwl-review-timeout")
+            self.assertEqual([r["sessionId"] for r in rows], ["G1"])
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+    def test_grep_matches_git_branch_and_cwd_case_insensitive(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "g3", [
+                {"type": "user", "sessionId": "G3", "timestamp": "t0",
+                 "cwd": "/repo", "gitBranch": "feature/nico/ipwl-review-timeout",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "hi"}]}},
+            ])
+            rows = list_session_logs(root, grep="IPWL-REVIEW")
+            self.assertEqual([r["sessionId"] for r in rows], ["G3"])
+            rows = list_session_logs(root, grep="/repo")
+            self.assertEqual([r["sessionId"] for r in rows], ["G3"])
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+    def test_grep_multiple_keywords_and(self):
+        """多条 --grep 之间 AND：全部命中才保留，只命中一条的排除。"""
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "g5", [
+                {"type": "user", "sessionId": "G5", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "fork the repo"}]}},
+                {"type": "user", "timestamp": "t1",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "邮箱地址是 me@example.com"}]}},
+            ])
+            self._seed(root, "g6", [
+                {"type": "user", "sessionId": "G6", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "fork only, no email"}]}},
+            ])
+            rows = list_session_logs(root, grep=["fork", "邮箱"])
+            self.assertEqual([r["sessionId"] for r in rows], ["G5"])
+            # 单条（str 或 list）行为一致
+            for kw in ("fork", ["fork"]):
+                rows = list_session_logs(root, grep=kw)
+                self.assertEqual([r["sessionId"] for r in rows], ["G5", "G6"])
+            # 空串关键词被丢弃，等同不过滤
+            rows = list_session_logs(root, grep=["", "fork"])
+            self.assertEqual([r["sessionId"] for r in rows], ["G5", "G6"])
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+    def test_grep_skips_oversized_strings(self):
+        """超过 _MAX_HAYSTRING_LEN 的字符串（base64/倾倒）不进搜索文本。"""
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "g4", [
+                {"type": "user", "sessionId": "G4", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "x" * 200_000
+                      + "needle-in-huge"}]}},
+            ])
+            self.assertEqual(list_session_logs(root, grep="needle-in-huge"), [])
+            self.assertEqual(len(list_session_logs(root)), 1)
+        finally:
+            import shutil
+            shutil.rmtree(root)
 
 
 class FilterSessionLogsTest(unittest.TestCase):

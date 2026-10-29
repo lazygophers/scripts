@@ -12,6 +12,7 @@ import sys  # noqa: F401
 import time  # noqa: F401
 from pathlib import Path
 
+from lib import log as _log
 from lib.fire_base import BaseCli, timed_cli
 from lib.graphwatch_config import (  # noqa: F401
     BACKEND_CHOICES,
@@ -72,7 +73,7 @@ def _cmd(method):
 
 
 class GraphwatchCli(BaseCli):
-    """graphwatch CLI。子命令：add / remove / list / run / rebuild / config / install / start / stop / restart / uninstall / status。"""
+    """graphwatch CLI。子命令：add / remove / list / run / rebuild / clean / config / install / start / stop / restart / uninstall / status。"""
 
     @_cmd
     def add(self, directory: str) -> int:
@@ -202,6 +203,47 @@ class GraphwatchCli(BaseCli):
         if failed:
             self._r.err("有目录重建失败，详见上方日志")
         return 1 if failed else 0
+
+    @_cmd
+    def clean(self) -> int:
+        """清理各注册目录 graphify-out 下超过 7 天的日期备份。
+
+        用法: graphwatch clean
+        """
+        from lib.cpd_core import fmt_size
+        from lib.graphwatch_rebuild import prune_backups
+        from lib.ui import progress
+
+        folders = list_folders()
+        cleaned = skipped = 0
+        removed_all: list[str] = []
+        freed = 0
+        pbar = progress(self._r.console)
+        with pbar:
+            task = pbar.add_task("扫描目录…", total=len(folders))
+            for folder in folders:
+                pbar.update(task, description=f"清理 {Path(folder).name}")
+                out = Path(folder).expanduser() / "graphify-out"
+                removed = prune_backups(out) if out.is_dir() else []
+                if removed:
+                    cleaned += 1
+                    removed_all.extend(f"{Path(folder).name}/{name}" for name, _ in removed)
+                    freed += sum(size for _, size in removed)
+                else:
+                    skipped += 1
+                pbar.advance(task)
+        if cleaned:
+            for line in removed_all:
+                self._r.info(f"已删 {line}")
+            self._r.ok(f"已清理 {cleaned} 个目录的 {len(removed_all)} 份过期备份，释放 {fmt_size(freed)}")
+        else:
+            self._r.info("没有过期备份，无需清理")
+        if skipped:
+            self._r.info(f"跳过 {skipped} 个目录（无产物或无过期备份）")
+        _log.record("graphwatch.clean", logger="graphwatch-daemon",
+                    folders=len(folders), cleaned=cleaned,
+                    removed=len(removed_all), freed_bytes=freed)
+        return 0
 
     @_cmd
     def install(self) -> int:

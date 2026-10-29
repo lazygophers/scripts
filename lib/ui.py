@@ -115,7 +115,7 @@ def progress(console_obj: Console | None):
         SpinnerColumn,
         TaskProgressColumn,
         TextColumn,
-        TimeElapsedColumn,
+        TimeRemainingColumn,
     )
 
     if console_obj is None:
@@ -125,7 +125,7 @@ def progress(console_obj: Console | None):
         TextColumn("[bold]{task.description}[/bold]"),
         BarColumn(bar_width=None),
         TaskProgressColumn(),
-        TimeElapsedColumn(),
+        TimeRemainingColumn(),
         console=console_obj,
         transient=True,  # 完成后自动清掉该行，不残留
         disable=is_ai_shell_env(),  # AI 环境：进度条纯耗 token，直接关

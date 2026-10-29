@@ -213,6 +213,22 @@ class TestCli(GraphwatchCase):
         self.assertEqual(self._cli().remove(str(repo)), 0)
         self.assertEqual(graphwatch.list_folders(), [])
 
+    def test_cli_clean_prunes_old_backups(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        out = repo / "graphify-out"
+        old = out / "2020-01-01"
+        old.mkdir(parents=True)
+        (out / "graph.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(self._cli().clean(), 0)
+        self.assertFalse(old.exists())
+        self.assertTrue((out / "graph.json").is_file())
+
+    def test_cli_clean_no_out_is_ok(self):
+        repo = self.mkdir()
+        graphwatch.add_folder(repo)
+        self.assertEqual(self._cli().clean(), 0)
+
 
 class TestCliList(GraphwatchCase):
     def test_cli_list_empty(self):
@@ -2138,7 +2154,7 @@ class TestPruneBackups(GraphwatchCase):
             (out / name / "graph.json").write_text("{}", encoding="utf-8")
         (out / "2026-09-01").write_text("不是目录，不动", encoding="utf-8")
         removed = prune_backups(out, today=datetime.date(2026, 9, 27))
-        self.assertEqual(removed, ["2026-09-20"])
+        self.assertEqual(removed, [("2026-09-20", 2)])  # graph.json 内容 "{}" = 2 字节
         self.assertEqual(sorted(p.name for p in out.iterdir()),
                          ["2026-09-01", "2026-09-21", "2026-09-27", "cache", "wiki"])
 

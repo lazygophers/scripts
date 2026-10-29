@@ -265,10 +265,12 @@ REGRAPH_STAMP = ".graphwatch-regraph"
 BACKUP_KEEP_DAYS = 7  # 用户 2026-09-27 选定；graphify 的日期备份自己从不清理（约 +127 MB/天）
 
 
-def prune_backups(out: Path, today=None) -> list[str]:
-    """删掉 graphify-out/ 下超过 BACKUP_KEEP_DAYS 天的日期备份目录（YYYY-MM-DD），返回删了哪些。"""
+def prune_backups(out: Path, today=None) -> list[tuple[str, int]]:
+    """删掉 graphify-out/ 下超过 BACKUP_KEEP_DAYS 天的日期备份目录（YYYY-MM-DD），返回 [(名字, 释放字节)]。"""
     import datetime
     import shutil
+
+    from lib.graphwatch_service import tree_size
 
     today = today or datetime.date.today()
     cutoff = today - datetime.timedelta(days=BACKUP_KEEP_DAYS - 1)
@@ -279,8 +281,9 @@ def prune_backups(out: Path, today=None) -> list[str]:
         except ValueError:
             continue
         if d.is_dir() and not d.is_symlink() and day < cutoff:
+            freed = tree_size(d)
             shutil.rmtree(d)
-            removed.append(d.name)
+            removed.append((d.name, freed))
     return removed
 
 
@@ -312,7 +315,8 @@ def _regraph_unlocked(root: Path) -> int:
     stamp = out / REGRAPH_STAMP
     removed = prune_backups(out)
     if removed:
-        _log.record("graphwatch.prune_backups", logger="graphwatch-daemon", folder=str(root), removed=removed)
+        _log.record("graphwatch.prune_backups", logger="graphwatch-daemon", folder=str(root),
+                    removed=[name for name, _ in removed])
     if stamp.is_file() and stamp.stat().st_mtime >= graph_path.stat().st_mtime:
         print(f"[graphwatch] {root}: 上次重算后图没变，跳过", file=sys.stderr)
         return 0

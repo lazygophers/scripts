@@ -324,6 +324,22 @@ def service_registered(runner=None, spec: ServiceSpec = GRAPHWATCH) -> bool:
     return backend(spec).registered(runner)
 
 
+def tree_size(path) -> int:
+    """目录树内全部常规文件的字节数（symlink 不计，读不到的按 0）。graphwatch / gitnexuswatch 的 clean 用它算释放空间。"""
+    import os
+
+    total = 0
+    for dirpath, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                fp = Path(dirpath) / f
+                if not fp.is_symlink():
+                    total += fp.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
 def service_state(runner=None, alive=None, spec: ServiceSpec = GRAPHWATCH) -> dict:
     """服务执行态：注册 / 运行 / PID / 上次退出码 / 运行时长。"""
     import subprocess
