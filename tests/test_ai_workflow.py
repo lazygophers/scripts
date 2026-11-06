@@ -300,6 +300,15 @@ class TestGenerateViaClaude(unittest.TestCase):
         self.assertIn("boom", r.err.call_args[0][0])
 
     @patch("lib.ai_workflow.run")
+    def test_failure_reports_stdout_when_stderr_empty(self, mock_run):
+        from lib.ai_workflow import generate_via_claude
+        mock_run.return_value = MagicMock(returncode=1, stdout="API Error: 529\n", stderr="")
+        r = MagicMock()
+        with patch("lib.ai_workflow.reporter", return_value=r):
+            self.assertEqual(generate_via_claude("p", system_prompt="s"), "")
+        self.assertIn("API Error: 529", r.err.call_args[0][0])
+
+    @patch("lib.ai_workflow.run")
     def test_timeout_passed_through(self, mock_run):
         from lib.ai_workflow import generate_via_claude
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")

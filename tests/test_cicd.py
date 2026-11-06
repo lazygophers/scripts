@@ -453,6 +453,32 @@ class TestActionGuards(unittest.TestCase):
 
     @patch("lib.cicd.run")
     @patch("lib.cicd.resolve_provider", return_value=_glab_info())
+    def test_play_unplayable_reports_job_state(self, _mock_provider, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stdout="",
+                      stderr="glab: 400 Bad request - Unplayable Job (HTTP 400)"),
+            MagicMock(returncode=0, stdout='{"status": "success"}'),
+        ]
+        self.assertEqual(play_cicd("99624"), 1)
+        msg = self.fake.err.call_args[0][0]
+        self.assertIn("99624", msg)
+        self.assertIn("success", msg)
+        self.assertIn("Unplayable", msg)
+
+    @patch("lib.cicd.run")
+    @patch("lib.cicd.resolve_provider", return_value=_glab_info())
+    def test_play_unplayable_without_state_fetch(self, _mock_provider, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stdout="",
+                      stderr="glab: 400 Bad request - Unplayable Job (HTTP 400)"),
+            MagicMock(returncode=1, stdout="", stderr="boom"),
+        ]
+        self.assertEqual(play_cicd("99624"), 1)
+        msg = self.fake.err.call_args[0][0]
+        self.assertIn("未知", msg)
+
+    @patch("lib.cicd.run")
+    @patch("lib.cicd.resolve_provider", return_value=_glab_info())
     def test_play_success_without_output(self, _mock_provider, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         self.assertEqual(play_cicd("90947"), 0)
