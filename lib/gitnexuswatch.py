@@ -355,8 +355,11 @@ def rebuild(repo: str, sleep=time.sleep, run=subprocess.run) -> int:
         _log.record("gitnexuswatch.skip", logger=LOGGER, folder=repo, reason="git 操作进行中")
         return 0
     started = time.monotonic()
+    # worker 5s 默认 ready 超时在高负载机器上不够（错误文案自证 "slow host?"），放宽到 30s
+    env = {**os.environ, "GITNEXUS_WORKER_READY_TIMEOUT_MS": "30000"}
     r = run([*low_priority(), gitnexus_bin(), "analyze", "--index-only", repo],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=ANALYZE_TIMEOUT)
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=ANALYZE_TIMEOUT,
+            env=env)
     fields = {"folder": repo, "rc": r.returncode, "secs": round(time.monotonic() - started, 1)}
     if r.returncode:
         fields["stderr"] = (r.stderr or "")[-2000:]
@@ -428,7 +431,9 @@ def service_spec() -> ServiceSpec:
     gitnexus 的 `#!/usr/bin/env node` 才找得到同目录的 node。"""
     bindir = str(Path(gitnexus_bin()).parent)
     return ServiceSpec(SPEC.name, SPEC.description,
-                       (("PATH", f"{bindir}:/usr/bin:/bin:/usr/sbin:/sbin"),))
+                       (("PATH", f"{bindir}:/usr/bin:/bin:/usr/sbin:/sbin"),
+                        # daemon 环境也带上，前台 gitnexuswatch run / 手跑 analyze 同样吃到
+                        ("GITNEXUS_WORKER_READY_TIMEOUT_MS", "30000")))
 
 
 def run(stop_event=None, **kw) -> None:
