@@ -18,14 +18,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path, PurePath
 
 from lib.ui import print_tsv, timed
-from pathlib import Path, PurePath
 
 _PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 
 # --all 路径的字段集
-_LOG_COLUMNS = ["sessionId", "project", "start", "last", "cwd",
+_LOG_COLUMNS = ["sessionId", "project", "name", "start", "last", "cwd",
                 "git_branch", "kind", "description"]
 
 # 渲染列 → lib/claude_session.py 里的字段名
@@ -143,8 +143,8 @@ def _render_rows(headers: list[str], prepared: list[list[str]],
 
 
 def main(argv: list[str] | None = None) -> int:
-    from lib.claude_session import filter_sessions, filter_session_logs, list_sessions, list_session_logs
-    from lib.notify import consume_debug, consume_no_say, consume_dry_run
+    from lib.claude_session import filter_session_logs, filter_sessions, list_session_logs, list_sessions
+    from lib.notify import consume_debug, consume_dry_run, consume_no_say
     from lib.skills_help import consume_skills
 
     argv = consume_dry_run(
