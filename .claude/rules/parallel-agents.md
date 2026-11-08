@@ -36,6 +36,10 @@
   typecheck，Kotlin 是 `gradlew test`（见 testing.md 各条）。合并终态核对时
   主对话侧再跑一遍 ruff：2026-10-27 claude_session 并发修复交付后
   tests/test_claude_session.py 净增 6 处报错（28→34，I001/E702），没人跑就漏。
+  改动文件上先有基线 ruff 报错时（I001 这类历史残留），就地修掉并入同一
+  commit，不留给终态核对兜（2026-11-07 claude_session 加 name 列，改动前
+  `lib/cli/claude_session.py` 基线 2 处 I001 均红，agent 并入同 commit 修掉，
+  `ruff check` 对改动文件归零）。
 - **审计→修复的交接用 file:line 任务书**：/ponytail-audit 报告的 file:line
   整条抄进 agent 任务书，一条一修，20 条零返工（2026-10-18 实测）。审计阶段
   把位置钉死，修复 agent 不再定位只改；比「agent 自己找问题自己修」少一层

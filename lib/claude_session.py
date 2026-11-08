@@ -156,7 +156,7 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
                       grep: str | list[str] | None = None) -> list[dict]:
     """Scan projects_root/<hash>/<uuid>.jsonl, return core fields per session.
 
-    Each row: sessionId / start / last / cwd / git_branch / kind /
+    Each row: sessionId / name / start / last / cwd / git_branch / kind /
     summary / first_message / last_messages. Corrupt files are skipped.
     Files larger than ``_MAX_JSONL_BYTES`` are truncated to the first N bytes
     so a multi-hundred-MB conversation log does not dominate wall-clock.
@@ -212,6 +212,7 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
         git_branch = ""
         kind = ""
         summary = ""
+        ai_title = ""
         user_texts: list[str] = []
         hay_parts: list[str] = []
 
@@ -231,18 +232,19 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
                 git_branch = r["gitBranch"]
             if not kind and r.get("kind"):
                 kind = r["kind"]
-            if not summary and r.get("type") == "custom-title" and r.get("customTitle"):
+            # 会话名：/rename 的 custom-title 为权威，系统 ai-title 兜底；
+            # 两者都可能多次出现（改名 / 标题再生），各取文件里最后一条
+            if r.get("type") == "custom-title" and r.get("customTitle"):
                 summary = r["customTitle"]
+            elif r.get("type") == "ai-title" and r.get("aiTitle"):
+                ai_title = r["aiTitle"]
             if r.get("type") == "user":
                 t = _user_text_blocks(r)
                 if t:
                     user_texts.append(t)
 
         if not summary:
-            for r in records:
-                if isinstance(r, dict) and r.get("type") == "ai-title" and r.get("aiTitle"):
-                    summary = r["aiTitle"]
-                    break
+            summary = ai_title
 
         if needles:
             hay = "\n".join(hay_parts).lower()
@@ -251,6 +253,7 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
 
         out.append((last_ts, start_ts, {
             "sessionId": session_id,
+            "name": summary,
             "start": start_ts,
             "last": last_ts,
             "cwd": cwd,

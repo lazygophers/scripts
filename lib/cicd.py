@@ -279,6 +279,21 @@ def status_cicd(ref: str | None = None, *, project: str = "") -> int:
     return 0 if status.state == "pass" else 1
 
 
+def _gitlab_job_state(info: ProviderInfo, job_id: str, *, project: str = "") -> str:
+    """查单个 job 的当前状态（best-effort，失败返回空串）。"""
+    from urllib.parse import quote
+
+    repo_path = project or info.repo
+    p = run(["glab", "api", f"projects/{quote(repo_path, safe='')}/jobs/{job_id}"],
+            check=False, capture_output=True, env=_glab_env(info))
+    if p.returncode != 0:
+        return ""
+    try:
+        return json.loads(p.stdout or "{}").get("status", "")
+    except ValueError:
+        return ""
+
+
 def play_cicd(job_id: str, *, project: str = "") -> int:
     """启用一个 manual job。流水线由 push 等事件自动创建，此处只点掉已有的手动任务，不新建流水线。"""
     info = _resolve_or_report(project)
@@ -296,7 +311,13 @@ def play_cicd(job_id: str, *, project: str = "") -> int:
         if detail:
             r.output(detail, max_lines=80, prefix="")
         return 0
-    r.err("启用失败")
+    if "unplayable" in detail.lower():
+        # job 已不在 manual/pending，重复 play 必然 400；报清状态，不留给调用方盲重试
+        state = _gitlab_job_state(info, job_id, project=project)
+        r.err(f"job {job_id} 不可启用（Unplayable，当前状态: {state or '未知'}）"
+              "——GitLab 只允许 play manual/pending 状态的 job，重复 play 不会成功")
+    else:
+        r.err("启用失败")
     if detail:
         r.output(detail, max_lines=80, prefix="", force=True)
     return p.returncode or 1

@@ -450,6 +450,7 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual(row["cwd"], "/repo")
             self.assertEqual(row["git_branch"], "feat/x")
             self.assertEqual(row["kind"], "user")
+            self.assertEqual(row["name"], "My Title")
             self.assertEqual(row["summary"], "My Title")
             self.assertEqual(row["first_message"], "hello world")
             self.assertEqual(row["last_messages"], ["hello world"])
@@ -468,6 +469,7 @@ class ListSessionLogsTest(unittest.TestCase):
                  "timestamp": "t1"},
             ])
             [row] = list_session_logs(root)
+            self.assertEqual(row["name"], "AI Title")
             self.assertEqual(row["summary"], "AI Title")
         finally:
             import shutil
@@ -482,7 +484,64 @@ class ListSessionLogsTest(unittest.TestCase):
                      {"type": "text", "text": "x"}]}},
             ])
             [row] = list_session_logs(root)
+            self.assertEqual(row["name"], "")
             self.assertEqual(row["summary"], "")
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+    def test_last_custom_title_wins(self):
+        """多次 /rename：最后一条 custom-title 为准（真实文件里按行序覆盖）。"""
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u3b", [
+                {"type": "user", "sessionId": "S3b", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "x"}]}},
+                {"type": "custom-title", "customTitle": "Old Name",
+                 "timestamp": "t1"},
+                {"type": "custom-title", "customTitle": "New Name",
+                 "timestamp": "t2"},
+            ])
+            [row] = list_session_logs(root)
+            self.assertEqual(row["name"], "New Name")
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+    def test_custom_title_beats_later_ai_title(self):
+        """ai-title 会话中途再生（实测单文件 212 条）；
+        custom-title 出现后仍以 custom-title 为权威。"""
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u3c", [
+                {"type": "ai-title", "aiTitle": "AI v1", "timestamp": "t0"},
+                {"type": "user", "sessionId": "S3c", "timestamp": "t1",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "x"}]}},
+                {"type": "custom-title", "customTitle": "Renamed",
+                 "timestamp": "t2"},
+                {"type": "ai-title", "aiTitle": "AI v2", "timestamp": "t3"},
+            ])
+            [row] = list_session_logs(root)
+            self.assertEqual(row["name"], "Renamed")
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+    def test_last_ai_title_wins(self):
+        """无改名时取最后一条 ai-title（标题再生，最新为准）。"""
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "u3d", [
+                {"type": "ai-title", "aiTitle": "AI v1", "timestamp": "t0"},
+                {"type": "ai-title", "aiTitle": "AI v2", "timestamp": "t1"},
+                {"type": "user", "sessionId": "S3d", "timestamp": "t2",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "x"}]}},
+            ])
+            [row] = list_session_logs(root)
+            self.assertEqual(row["name"], "AI v2")
         finally:
             import shutil
             shutil.rmtree(root)
@@ -842,6 +901,7 @@ class EmitLogsTest(unittest.TestCase):
     ROW = {
         "sessionId": "sid-1",
         "project": "myproj",
+        "name": "my name",
         "start": "2026-01-01T00:00:00Z",
         "last": "2026-01-01T01:00:00Z",
         "cwd": "/home/me/myproj",
@@ -871,10 +931,11 @@ class EmitLogsTest(unittest.TestCase):
         out = self._run("tsv")
         lines = out.strip().split("\n")
         self.assertEqual(lines[0],
-                         "sessionId\tproject\tstart\tlast\tcwd\tgit_branch\tkind\tdescription")
+                         "sessionId\tproject\tname\tstart\tlast\tcwd\tgit_branch\tkind\tdescription")
         row = lines[1]
         self.assertIn("sid-1", row)
         self.assertIn("myproj", row)
+        self.assertIn("my name", row)
         # description: 3 parts joined by \n within the tab cell
         parts = row.split("\t")
         desc = parts[-1]
@@ -887,14 +948,15 @@ class EmitLogsTest(unittest.TestCase):
         reader = csv.reader(io.StringIO(out))
         rows = list(reader)
         self.assertEqual(rows[0],
-                         ["sessionId", "project", "start", "last",
+                         ["sessionId", "project", "name", "start", "last",
                           "cwd", "git_branch", "kind", "description"])
         row = rows[1]
         self.assertEqual(row[0], "sid-1")
         self.assertEqual(row[1], "myproj")
-        self.assertIn("summary=my summary", row[7])
-        self.assertIn("first=first msg", row[7])
-        self.assertIn("last=last1 | last2 | last3", row[7])
+        self.assertEqual(row[2], "my name")
+        self.assertIn("summary=my summary", row[8])
+        self.assertIn("first=first msg", row[8])
+        self.assertIn("last=last1 | last2 | last3", row[8])
 
     def test_table_contains_session_id(self):
         out = self._run("table")

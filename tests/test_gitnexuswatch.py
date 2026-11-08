@@ -308,6 +308,7 @@ class RebuildTest(Case):
         self.assertEqual(cmd[-4:], ["/x/gitnexus", "analyze", "--index-only", str(repo)])
         self.assertEqual(cmd[:-4], gw.low_priority())
         self.assertEqual(kw["timeout"], gw.ANALYZE_TIMEOUT)
+        self.assertEqual(kw["env"]["GITNEXUS_WORKER_READY_TIMEOUT_MS"], "30000")
         self.assertEqual(rec.call_args.args[0], "gitnexuswatch.rebuild")
 
     def test_failure_logs_stderr_tail(self):
@@ -365,6 +366,7 @@ class ServiceTest(Case):
         self.assertIn(str(graphwatch_service.script_path(spec)), plist)
         self.assertTrue(str(graphwatch_service.script_path(spec)).endswith("bin/gitnexuswatch"))
         self.assertIn("<key>PATH</key><string>/n/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>", plist)
+        self.assertIn("<key>GITNEXUS_WORKER_READY_TIMEOUT_MS</key><string>30000</string>", plist)
         self.assertNotIn("GRAPHIFY", plist)
         self.assertEqual(graphwatch_service.launchd_plist_path(spec).name, "com.lazygophers.gitnexuswatch.plist")
         self.assertIn("Environment=PATH=/n/bin:", graphwatch_service.systemd_unit(spec))
@@ -456,7 +458,7 @@ class CliTest(Case):
             self.assertIn(self._cli("add", str(repo)), (0, None))
             self.assertIn(self._cli("list"), (0, None))
             self.assertIn(self._cli("remove", str(repo)), (0, None))
-        self.assertIn(f"r | master | 未构建 | 无索引（尚未构建）", buf.getvalue())
+        self.assertIn("r | master | 未构建 | 无索引（尚未构建）", buf.getvalue())
         self.assertEqual(gw.load_config()["folders"], [])
 
     def test_rebuild_rejects_non_repo(self):

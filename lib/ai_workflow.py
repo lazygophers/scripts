@@ -231,6 +231,8 @@ def generate_via_claude(
     args += [prompt]
     p = run(args, check=False, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
     if p.returncode != 0:
-        r.err(f"claude 生成失败（退出码 {p.returncode}）: {(p.stderr or '')[:200]}")
+        # claude 把 API 报错打到 stdout（stderr 常为空），两处都取
+        detail = ((p.stderr or "").strip() or (p.stdout or "").strip())[:200]
+        r.err(f"claude 生成失败（退出码 {p.returncode}）: {detail}")
         return ""
     return (p.stdout or "").strip()
