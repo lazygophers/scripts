@@ -1,7 +1,10 @@
 """claude_session — 列出本机 Claude Code 会话
 
 读 ~/.claude/sessions/*.json，输出表格：
-名称 / 会话ID / 项目 / 状态 / 开始时间 / 最后活跃。
+名称 / 会话ID / 项目 / 状态 / 开始时间 / 最后活跃 /
+cwd / git_branch / kind / description。
+--all 与非 --all 同构（同列、同序），某模式取不到的列输出 '-'；
+--all 的最后活跃取自日志里的 last 字段，状态列恒为 '-'（jsonl 无 status）。
 排序：当前目录的会话置顶，其余按项目分组，项目内按开始时间新→旧。
 项目 = cwd 的 basename；同 basename 但 cwd 不同时带上一级目录消歧。
 
@@ -24,11 +27,8 @@ from lib.ui import print_tsv, timed
 
 _PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 
-# --all 路径的字段集
-_LOG_COLUMNS = ["sessionId", "project", "name", "start", "last", "cwd",
-                "git_branch", "kind", "description"]
-
-# 渲染列 → lib/claude_session.py 里的字段名
+# 渲染列 → 字段名。两种模式同构：非 --all 行的 cwd/git_branch/kind/description
+# 和 --all 行的 status 各自取不到，输出 '-'（--all 的最后活跃由 last 映射）。
 COLUMNS = [
     ("名称", "name"),
     ("会话ID", "sessionId"),
@@ -36,19 +36,25 @@ COLUMNS = [
     ("状态", "status"),
     ("开始时间", "start"),
     ("最后活跃", "active"),
+    ("cwd", "cwd"),
+    ("git_branch", "git_branch"),
+    ("kind", "kind"),
+    ("description", "description"),
 ]
 
 
-def _print_table(sessions: list[dict]) -> None:
-    from rich.console import Console
-    from rich.table import Table
+def _cell(row: dict, key: str) -> str:
+    """单元格值：键缺失（该模式取不到）输出 '-'；--all 行的 last 映射 active。"""
+    if key == "description":
+        return _description(row)
+    if key == "active" and "active" not in row:
+        key = "last"
+    v = row.get(key)
+    return "-" if v is None else str(v)
 
-    table = Table(title="Claude Code 会话")
-    for label, _ in COLUMNS:
-        table.add_column(label)
-    for s in sessions:
-        table.add_row(*[str(s[key]) for _, key in COLUMNS])
-    Console().print(table)
+
+def _row_cells(row: dict) -> dict:
+    return {k: _cell(row, k) for _, k in COLUMNS}
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -82,20 +88,14 @@ def _check_grep_tail_gated(args: argparse.Namespace) -> None:
 
 
 def _emit(sessions: list[dict], fmt: str) -> None:
-    columns = COLUMNS
-    headers = [label for label, _ in columns]
-    keys = [key for _, key in columns]
-    if fmt == "json":
-        from lib.ai_env import json_dumps
-        print(json_dumps([dict(zip(keys, [str(s[k]) for k in keys]))
-                          for s in sessions]))
-        return
-    prepared = [[str(s[k]) for _, k in columns] for s in sessions]
-    _render_rows(headers, prepared, fmt, title="Claude Code 会话")
+    _emit_rows(sessions, fmt)
 
 
 def _description(row: dict) -> str:
-    """拼 description 单元：summary= / first= / last= 三段。"""
+    """拼 description 单元：summary= / first= / last= 三段；
+    非 --all 行（无 summary 等键）占位 '-'。"""
+    if not any(k in row for k in ("summary", "first_message", "last_messages")):
+        return "-"
     last_msgs = row.get("last_messages") or []
     last_str = " | ".join(last_msgs) if last_msgs else ""
     return "\n".join([
@@ -106,17 +106,18 @@ def _description(row: dict) -> str:
 
 
 def _emit_logs(rows: list[dict], fmt: str) -> None:
-    columns = _LOG_COLUMNS
-    headers = list(columns)
+    _emit_rows(rows, fmt)
+
+
+def _emit_rows(rows: list[dict], fmt: str,
+               title: str = "Claude Code 会话") -> None:
     if fmt == "json":
         from lib.ai_env import json_dumps
-        print(json_dumps(rows))
+        print(json_dumps([_row_cells(r) for r in rows]))
         return
-    prepared = []
-    for r in rows:
-        desc = _description(r)
-        prepared.append([str(r.get(k, "")) for k in columns[:-1]] + [desc])
-    _render_rows(headers, prepared, fmt)
+    headers = [label for label, _ in COLUMNS]
+    prepared = [[_cell(r, k) for _, k in COLUMNS] for r in rows]
+    _render_rows(headers, prepared, fmt, title=title)
 
 
 def _render_rows(headers: list[str], prepared: list[list[str]],

@@ -925,17 +925,21 @@ class EmitLogsTest(unittest.TestCase):
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["sessionId"], "sid-1")
         self.assertEqual(data[0]["project"], "myproj")
-        self.assertIn("summary", data[0])
+        # 列统一后 JSON 同构：raw summary 收进 description 列
+        self.assertIn("summary=my summary", data[0]["description"])
 
     def test_tsv_headers_and_description(self):
         out = self._run("tsv")
         lines = out.strip().split("\n")
         self.assertEqual(lines[0],
-                         "sessionId\tproject\tname\tstart\tlast\tcwd\tgit_branch\tkind\tdescription")
+                         "名称\t会话ID\t项目\t状态\t开始时间\t最后活跃"
+                         "\tcwd\tgit_branch\tkind\tdescription")
         row = lines[1]
         self.assertIn("sid-1", row)
         self.assertIn("myproj", row)
         self.assertIn("my name", row)
+        # status 在 --all 模式取不到，占位 '-'
+        self.assertIn("\t-\t", "\t" + row + "\t")
         # description: 3 parts joined by \n within the tab cell
         parts = row.split("\t")
         desc = parts[-1]
@@ -948,20 +952,22 @@ class EmitLogsTest(unittest.TestCase):
         reader = csv.reader(io.StringIO(out))
         rows = list(reader)
         self.assertEqual(rows[0],
-                         ["sessionId", "project", "name", "start", "last",
-                          "cwd", "git_branch", "kind", "description"])
+                         ["名称", "会话ID", "项目", "状态", "开始时间",
+                          "最后活跃", "cwd", "git_branch", "kind",
+                          "description"])
         row = rows[1]
-        self.assertEqual(row[0], "sid-1")
-        self.assertEqual(row[1], "myproj")
-        self.assertEqual(row[2], "my name")
-        self.assertIn("summary=my summary", row[8])
-        self.assertIn("first=first msg", row[8])
-        self.assertIn("last=last1 | last2 | last3", row[8])
+        self.assertEqual(row[1], "sid-1")
+        self.assertEqual(row[2], "myproj")
+        self.assertEqual(row[0], "my name")
+        self.assertIn("summary=my summary", row[9])
+        self.assertIn("first=first msg", row[9])
+        self.assertIn("last=last1 | last2 | last3", row[9])
 
     def test_table_contains_session_id(self):
         out = self._run("table")
         self.assertIn("sid-1", out)
-        self.assertIn("myproj", out)
+        # 10 列后 rich 表格会把项目名截断成「mypr…」，只断言前缀
+        self.assertIn("mypr", out)
 
     def test_default_fmt_ai_shell_uses_tsv(self):
         """main --all with is_ai_shell_env=True → tsv output."""
@@ -1005,6 +1011,47 @@ class EmitLogsTest(unittest.TestCase):
         self.assertIn("summary=", out)
         self.assertIn("first=", out)
         self.assertIn("last=", out)
+
+
+class ColumnUnifyTest(unittest.TestCase):
+    """两种模式列结构一致：同列数、同名表头同位置、占位 '-'。"""
+
+    def _headers(self, fn, rows):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            fn(rows, "tsv")
+        return buf.getvalue().split("\n")[0].split("\t")
+
+    def test_both_modes_share_column_structure(self):
+        # 非 --all 行：只有 sessions/*.json 的 6 个字段
+        non_all = {"name": "n1", "sessionId": "sid1", "project": "proj",
+                   "status": "busy", "start": "today", "active": "yday"}
+        # --all 行：jsonl 路径字段，无 status、最后活跃叫 last
+        all_row = {"sessionId": "sid2", "project": "proj", "name": "n2",
+                   "start": "2026-01-01T00:00:00Z", "last": "2026-01-01T01:00:00Z",
+                   "cwd": "/r", "git_branch": "main", "kind": "user",
+                   "summary": "s", "first_message": "f", "last_messages": ["l"]}
+        h1 = self._headers(_emit, [non_all])
+        h2 = self._headers(_emit_logs, [all_row])
+        self.assertEqual(h1, h2)
+        row1 = self._cells(_emit, [non_all])
+        row2 = self._cells(_emit_logs, [all_row])
+        self.assertEqual(len(row1), len(row2))
+        # 同名列同位置：sessionId / project / start
+        self.assertEqual(row1[1], "sid1")
+        self.assertEqual(row2[1], "sid2")
+        self.assertEqual(row1[2], row2[2])
+        # 各自取不到的列占位 '-'
+        self.assertEqual(row1[-4:], ["-", "-", "-", "-"])
+        self.assertEqual(row2[3], "-")  # status
+        # --all 的 last 映射进统一的「最后活跃」列
+        self.assertEqual(row2[5], "2026-01-01T01:00:00Z")
+
+    def _cells(self, fn, rows):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            fn(rows, "tsv")
+        return buf.getvalue().split("\n")[1].split("\t")
 
 
 if __name__ == "__main__":
