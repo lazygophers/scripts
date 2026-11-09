@@ -40,6 +40,12 @@
   commit，不留给终态核对兜（2026-11-07 claude_session 加 name 列，改动前
   `lib/cli/claude_session.py` 基线 2 处 I001 均红，agent 并入同 commit 修掉，
   `ruff check` 对改动文件归零）。
+- **长命令任务书写明「同步等完再交付」**（2026-11-09 实测）：agent 把全仓回归
+  转后台放置后结束回合，主对话多催了两轮；后续任务书改成写明长命令（全仓
+  `tests/run.py`、npm test）同步等完再提交，不再出这个问题。
+- **冻结的后台进程先查 elapsed 和 CPU 再信结果**：后台 agent 跑全仓回归时机器
+  休眠把进程冻住 10 小时（elapsed 10h、CPU 0%），不睡够别当在跑。看见
+  elapsed 异常长、CPU 0% 的后台任务，清掉重跑，别等它「跑完」。
 - **审计→修复的交接用 file:line 任务书**：/ponytail-audit 报告的 file:line
   整条抄进 agent 任务书，一条一修，20 条零返工（2026-10-18 实测）。审计阶段
   把位置钉死，修复 agent 不再定位只改；比「agent 自己找问题自己修」少一层
