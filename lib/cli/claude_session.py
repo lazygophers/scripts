@@ -4,8 +4,9 @@
 名称 / 标题 / 会话ID / 项目 / 状态 / 开始时间 / 最后活跃 /
 cwd / git_branch / kind / description。
 标题 = jsonl 里 custom-title（/rename）/ ai-title 事件的会话标题
-（custom-title 优先，各取最后一条），给人在终端看；名称是互通信用，
-非 --all 只有名称，--all 只有标题（对方模式该列输出 '-'）。
+（custom-title 优先，各取最后一条），给人在终端看；名称是互通信用。
+标题解析：--all 直接读会话日志；非 --all 按 sessionId 关联到
+~/.claude/projects/<hash>/<sessionId>.jsonl 取（lib 的 lookup_title）。
 --all 与非 --all 同构（同列、同序），某模式取不到的列输出 '-'；
 --all 的最后活跃取自日志里的 last 字段，状态列恒为 '-'（jsonl 无 status）。
 排序：当前目录的会话置顶，其余按项目分组，项目内按开始时间新→旧。
@@ -148,7 +149,7 @@ def _render_rows(headers: list[str], prepared: list[list[str]],
 
 
 def main(argv: list[str] | None = None) -> int:
-    from lib.claude_session import filter_session_logs, filter_sessions, list_session_logs, list_sessions
+    from lib.claude_session import filter_session_logs, filter_sessions, list_session_logs, list_sessions, lookup_title
     from lib.notify import consume_debug, consume_dry_run, consume_no_say
     from lib.skills_help import consume_skills
 
@@ -190,5 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     sessions = timed(list_sessions, label="claude_session")()
     sessions = filter_sessions(sessions, session_kw=args.session,
                                project=args.project)
+    for s in sessions:
+        s["title"] = lookup_title(s.get("sessionId") or "")
     _emit(sessions, fmt)
     return 0

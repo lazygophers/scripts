@@ -10,7 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from lib.claude_session import filter_sessions, list_sessions
+from lib.claude_session import filter_sessions, list_sessions, lookup_title
 from lib.cli.claude_session import COLUMNS, _emit, _emit_logs, _parse_args
 
 try:
@@ -927,6 +927,86 @@ class FilterSessionLogsTest(unittest.TestCase):
         before = json.dumps(rows, sort_keys=True)
         filter_session_logs(rows)
         self.assertEqual(json.dumps(rows, sort_keys=True), before)
+
+
+class LookupTitleTest(unittest.TestCase):
+    """lookup_title 按 sessionId 关联 projects/*/<sid>.jsonl 取标题。"""
+
+    def _seed(self, root: Path, sid: str, records):
+        d = root / "hash-dir"
+        d.mkdir(parents=True, exist_ok=True)
+        with (d / f"{sid}.jsonl").open("w", encoding="utf-8") as fh:
+            for r in records:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    def test_custom_title_beats_ai_title(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "SID-1", [
+                {"type": "ai-title", "aiTitle": "AI 名", "timestamp": "t0"},
+                {"type": "custom-title", "customTitle": "手动名",
+                 "timestamp": "t2"},
+            ])
+            self.assertEqual(lookup_title("SID-1", root), "手动名")
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+    def test_last_of_same_type_wins(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "SID-2", [
+                {"type": "ai-title", "aiTitle": "旧 AI 名", "timestamp": "t0"},
+                {"type": "ai-title", "aiTitle": "新 AI 名", "timestamp": "t1"},
+            ])
+            self.assertEqual(lookup_title("SID-2", root), "新 AI 名")
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+    def test_escaped_value_unescaped(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "SID-3", [
+                {"type": "custom-title", "customTitle": '说"hi"',
+                 "timestamp": "t0"},
+            ])
+            self.assertEqual(lookup_title("SID-3", root), '说"hi"')
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+    def test_missing_file_or_empty_sid_returns_empty(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            self.assertEqual(lookup_title("NOPE", root), "")
+            self.assertEqual(lookup_title("", root), "")
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+
+class MainTitleEnrichTest(unittest.TestCase):
+    """非 --all 路径按 sessionId 关联 jsonl 补标题列。"""
+
+    def test_main_enriches_title_without_all(self):
+        import lib.cli.claude_session as cli
+        rows = [dict(zip((k for _, k in COLUMNS),
+                         ["n1", "-", "sid1", "demo", "busy",
+                          "today", "yday"]))]
+        buf = io.StringIO()
+        with patch("lib.claude_session.list_sessions",
+                   return_value=rows), \
+             patch("lib.claude_session.lookup_title",
+                   return_value="终端标题") as mock_t, \
+             patch("lib.cli.claude_session.timed",
+                   side_effect=lambda fn, label=None: fn), \
+             patch("lib.ai_env.is_ai_shell_env", return_value=True), \
+             redirect_stdout(buf):
+            rc = cli.main(["claude_session"])
+        self.assertEqual(rc, 0)
+        mock_t.assert_called_once_with("sid1")
+        self.assertIn("终端标题", buf.getvalue())
 
 
 class EmitLogsTest(unittest.TestCase):

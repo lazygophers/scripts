@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from collections import defaultdict
 from pathlib import Path, PurePath
@@ -310,3 +311,42 @@ def filter_session_logs(rows: list[dict], grep: str | None = None) -> list[dict]
                        for m in r.get("last_messages") or [])):
             kept.append(r)
     return kept
+
+
+# 标题事件：type 与标题键相邻（分隔符容空格），值内允许转义引号
+_TITLE_RE = re.compile(
+    r'"type":\s*"(custom-title|ai-title)"[^{}]*?'
+    r'"(?:customTitle|aiTitle)":\s*"((?:[^"\\]|\\.)*)"')
+
+
+def lookup_title(session_id: str,
+                 projects_root: Path = _PROJECTS_ROOT) -> str:
+    """按 sessionId 关联 projects_root/*/<sessionId>.jsonl 找会话标题。
+
+    custom-title（/rename）优先于 ai-title，同类型取最后一条；
+    文件或事件不存在返回 ''。读上限与 list_session_logs 相同
+    （标题等元数据集中在文件头部）。
+    """
+    if not session_id or not projects_root.exists():
+        return ""
+    for jsonl in sorted(projects_root.glob(f"*/{session_id}.jsonl")):
+        try:
+            if jsonl.stat().st_size > _MAX_JSONL_BYTES:
+                with jsonl.open("rb") as fh:
+                    text = fh.read(_MAX_JSONL_BYTES).decode(
+                        "utf-8", errors="replace")
+            else:
+                text = jsonl.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        custom = ai = ""
+        for m in _TITLE_RE.finditer(text):
+            kind, raw = m.groups()
+            value = json.loads(f'"{raw}"')
+            if kind == "custom-title":
+                custom = value
+            else:
+                ai = value
+        if custom or ai:
+            return custom or ai
+    return ""
