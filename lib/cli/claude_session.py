@@ -1,8 +1,11 @@
 """claude_session — 列出本机 Claude Code 会话
 
 读 ~/.claude/sessions/*.json，输出表格：
-名称 / 会话ID / 项目 / 状态 / 开始时间 / 最后活跃 /
+名称 / 标题 / 会话ID / 项目 / 状态 / 开始时间 / 最后活跃 /
 cwd / git_branch / kind / description。
+标题 = jsonl 里 custom-title（/rename）/ ai-title 事件的会话标题
+（custom-title 优先，各取最后一条），给人在终端看；名称是互通信用，
+非 --all 只有名称，--all 只有标题（对方模式该列输出 '-'）。
 --all 与非 --all 同构（同列、同序），某模式取不到的列输出 '-'；
 --all 的最后活跃取自日志里的 last 字段，状态列恒为 '-'（jsonl 无 status）。
 排序：当前目录的会话置顶，其余按项目分组，项目内按开始时间新→旧。
@@ -31,6 +34,7 @@ _PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 # 和 --all 行的 status 各自取不到，输出 '-'（--all 的最后活跃由 last 映射）。
 COLUMNS = [
     ("名称", "name"),
+    ("标题", "title"),
     ("会话ID", "sessionId"),
     ("项目", "project"),
     ("状态", "status"),

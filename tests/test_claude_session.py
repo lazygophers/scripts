@@ -94,7 +94,7 @@ class ClaudeSessionTest(unittest.TestCase):
 class EmitFormatTest(unittest.TestCase):
     """cli._emit 三种显式格式 + 默认分流"""
 
-    ROW = ["n1", "sid1", "proj", "忙碌", "09-29 10:00", "09-29 11:00"]
+    ROW = ["n1", "-", "sid1", "proj", "忙碌", "09-29 10:00", "09-29 11:00"]
 
     def _run(self, fmt):
         row = dict(zip((k for _, k in COLUMNS), self.ROW))
@@ -106,7 +106,7 @@ class EmitFormatTest(unittest.TestCase):
 
     def test_json_tsv_csv(self):
         self.assertIn('"name":"n1"', self._run("json").replace(" ", ""))
-        self.assertIn("\nn1\tsid1\t", self._run("tsv"))
+        self.assertIn("\nn1\t-\tsid1\t", self._run("tsv"))
         out = self._run("csv")
         self.assertTrue(out.startswith("名称,"))
         self.assertIn("sid1", out)
@@ -115,7 +115,7 @@ class EmitFormatTest(unittest.TestCase):
 class TestCliEmitAndMain(unittest.TestCase):
     """CLI 层：表格输出、_parse_args、main 的过滤与格式分派。"""
 
-    ROW = ["n1", "sid1", "demo", "busy", "today", "yday"]
+    ROW = ["n1", "-", "sid1", "demo", "busy", "today", "yday"]
 
     def test_table_format_renders_rich_table(self):
         row = dict(zip((k for _, k in COLUMNS), self.ROW))
@@ -147,7 +147,7 @@ class TestCliEmitAndMain(unittest.TestCase):
 class MainAllFlagTest(unittest.TestCase):
     """main() 在 --all 下的分派与 -p 过滤。"""
 
-    ROW = ["n1", "sid1", "proj", "busy", "today", "yday"]
+    ROW = ["-", "t1", "sid1", "proj", "busy", "today", "yday"]
 
     def _row(self, **kw):
         d = dict(zip((k for _, k in COLUMNS), self.ROW))
@@ -281,7 +281,7 @@ class MainAllFlagTest(unittest.TestCase):
 class MainGrepTailTest(unittest.TestCase):
     """main() 在 --all 下 --grep / --tail 的过滤行为。"""
 
-    ROW = ["n1", "sid1", "proj", "busy", "today", "yday"]
+    ROW = ["-", "t1", "sid1", "proj", "busy", "today", "yday"]
 
     def _row(self, **kw):
         d = dict(zip((k for _, k in COLUMNS), self.ROW))
@@ -450,7 +450,7 @@ class ListSessionLogsTest(unittest.TestCase):
             self.assertEqual(row["cwd"], "/repo")
             self.assertEqual(row["git_branch"], "feat/x")
             self.assertEqual(row["kind"], "user")
-            self.assertEqual(row["name"], "My Title")
+            self.assertEqual(row["title"], "My Title")
             self.assertEqual(row["summary"], "My Title")
             self.assertEqual(row["first_message"], "hello world")
             self.assertEqual(row["last_messages"], ["hello world"])
@@ -469,7 +469,7 @@ class ListSessionLogsTest(unittest.TestCase):
                  "timestamp": "t1"},
             ])
             [row] = list_session_logs(root)
-            self.assertEqual(row["name"], "AI Title")
+            self.assertEqual(row["title"], "AI Title")
             self.assertEqual(row["summary"], "AI Title")
         finally:
             import shutil
@@ -484,7 +484,7 @@ class ListSessionLogsTest(unittest.TestCase):
                      {"type": "text", "text": "x"}]}},
             ])
             [row] = list_session_logs(root)
-            self.assertEqual(row["name"], "")
+            self.assertEqual(row["title"], "")
             self.assertEqual(row["summary"], "")
         finally:
             import shutil
@@ -504,7 +504,7 @@ class ListSessionLogsTest(unittest.TestCase):
                  "timestamp": "t2"},
             ])
             [row] = list_session_logs(root)
-            self.assertEqual(row["name"], "New Name")
+            self.assertEqual(row["title"], "New Name")
         finally:
             import shutil
             shutil.rmtree(root)
@@ -524,7 +524,7 @@ class ListSessionLogsTest(unittest.TestCase):
                 {"type": "ai-title", "aiTitle": "AI v2", "timestamp": "t3"},
             ])
             [row] = list_session_logs(root)
-            self.assertEqual(row["name"], "Renamed")
+            self.assertEqual(row["title"], "Renamed")
         finally:
             import shutil
             shutil.rmtree(root)
@@ -541,7 +541,7 @@ class ListSessionLogsTest(unittest.TestCase):
                      {"type": "text", "text": "x"}]}},
             ])
             [row] = list_session_logs(root)
-            self.assertEqual(row["name"], "AI v2")
+            self.assertEqual(row["title"], "AI v2")
         finally:
             import shutil
             shutil.rmtree(root)
@@ -821,6 +821,40 @@ class ListSessionLogsTest(unittest.TestCase):
             import shutil
             shutil.rmtree(root)
 
+    def test_grep_matches_title_events(self):
+        """--grep 命中标题：custom-title / ai-title 的标题串在搜索文本里。"""
+        root = Path(tempfile.mkdtemp())
+        try:
+            self._seed(root, "g7", [
+                {"type": "user", "sessionId": "G7", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "hello"}]}},
+                {"type": "custom-title", "customTitle": "重构登录模块",
+                 "timestamp": "t1"},
+            ])
+            self._seed(root, "g8", [
+                {"type": "user", "sessionId": "G8", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "hello"}]}},
+                {"type": "ai-title", "aiTitle": "fix vpn routing",
+                 "timestamp": "t1"},
+            ])
+            self._seed(root, "g9", [
+                {"type": "user", "sessionId": "G9", "timestamp": "t0",
+                 "message": {"role": "user", "content": [
+                     {"type": "text", "text": "hello"}]}},
+            ])
+            rows = list_session_logs(root, grep="登录模块")
+            self.assertEqual([r["sessionId"] for r in rows], ["G7"])
+            self.assertEqual(rows[0]["title"], "重构登录模块")
+            rows = list_session_logs(root, grep="VPN ROUTING")
+            self.assertEqual([r["sessionId"] for r in rows], ["G8"])
+            # 无标题的会话 title 为空串
+            self.assertEqual(list_session_logs(root)[2]["title"], "")
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
 
 class FilterSessionLogsTest(unittest.TestCase):
     """filter_session_logs(rows, grep) 消歧 + 子串过滤。"""
@@ -901,7 +935,7 @@ class EmitLogsTest(unittest.TestCase):
     ROW = {
         "sessionId": "sid-1",
         "project": "myproj",
-        "name": "my name",
+        "title": "my title",
         "start": "2026-01-01T00:00:00Z",
         "last": "2026-01-01T01:00:00Z",
         "cwd": "/home/me/myproj",
@@ -932,12 +966,12 @@ class EmitLogsTest(unittest.TestCase):
         out = self._run("tsv")
         lines = out.strip().split("\n")
         self.assertEqual(lines[0],
-                         "名称\t会话ID\t项目\t状态\t开始时间\t最后活跃"
+                         "名称\t标题\t会话ID\t项目\t状态\t开始时间\t最后活跃"
                          "\tcwd\tgit_branch\tkind\tdescription")
         row = lines[1]
         self.assertIn("sid-1", row)
         self.assertIn("myproj", row)
-        self.assertIn("my name", row)
+        self.assertIn("my title", row)
         # status 在 --all 模式取不到，占位 '-'
         self.assertIn("\t-\t", "\t" + row + "\t")
         # description: 3 parts joined by \n within the tab cell
@@ -952,22 +986,25 @@ class EmitLogsTest(unittest.TestCase):
         reader = csv.reader(io.StringIO(out))
         rows = list(reader)
         self.assertEqual(rows[0],
-                         ["名称", "会话ID", "项目", "状态", "开始时间",
-                          "最后活跃", "cwd", "git_branch", "kind",
-                          "description"])
+                         ["名称", "标题", "会话ID", "项目", "状态",
+                          "开始时间", "最后活跃", "cwd", "git_branch",
+                          "kind", "description"])
         row = rows[1]
-        self.assertEqual(row[1], "sid-1")
-        self.assertEqual(row[2], "myproj")
-        self.assertEqual(row[0], "my name")
-        self.assertIn("summary=my summary", row[9])
-        self.assertIn("first=first msg", row[9])
-        self.assertIn("last=last1 | last2 | last3", row[9])
+        # 名称(--all 取不到) / 标题 / 会话ID / 项目 / 状态(-) / … / description
+        self.assertEqual(row[0], "-")
+        self.assertEqual(row[1], "my title")
+        self.assertEqual(row[2], "sid-1")
+        self.assertEqual(row[3], "myproj")
+        self.assertEqual(row[4], "-")
+        self.assertIn("summary=my summary", row[10])
+        self.assertIn("first=first msg", row[10])
+        self.assertIn("last=last1 | last2 | last3", row[10])
 
     def test_table_contains_session_id(self):
         out = self._run("table")
-        self.assertIn("sid-1", out)
-        # 10 列后 rich 表格会把项目名截断成「mypr…」，只断言前缀
-        self.assertIn("mypr", out)
+        # 11 列后 rich 表格截断长单元格（sid-1 → sid…），断言未截断的列
+        self.assertIn("main", out)
+        self.assertIn("user", out)
 
     def test_default_fmt_ai_shell_uses_tsv(self):
         """main --all with is_ai_shell_env=True → tsv output."""
@@ -997,7 +1034,8 @@ class EmitLogsTest(unittest.TestCase):
              redirect_stdout(buf):
             rc = cli.main(["claude_session", "--all"])
         self.assertEqual(rc, 0)
-        self.assertIn("sid-1", buf.getvalue())
+        # rich 表格截断长单元格，断言未截断的 git_branch 列
+        self.assertIn("main", buf.getvalue())
 
     def test_description_empty_fields(self):
         """空字段不崩溃，description 仍有三段。"""
@@ -1023,11 +1061,11 @@ class ColumnUnifyTest(unittest.TestCase):
         return buf.getvalue().split("\n")[0].split("\t")
 
     def test_both_modes_share_column_structure(self):
-        # 非 --all 行：只有 sessions/*.json 的 6 个字段
+        # 非 --all 行：sessions/*.json 的字段，有 name 无 title
         non_all = {"name": "n1", "sessionId": "sid1", "project": "proj",
                    "status": "busy", "start": "today", "active": "yday"}
-        # --all 行：jsonl 路径字段，无 status、最后活跃叫 last
-        all_row = {"sessionId": "sid2", "project": "proj", "name": "n2",
+        # --all 行：jsonl 路径字段，有 title 无 name / status，最后活跃叫 last
+        all_row = {"sessionId": "sid2", "project": "proj", "title": "n2",
                    "start": "2026-01-01T00:00:00Z", "last": "2026-01-01T01:00:00Z",
                    "cwd": "/r", "git_branch": "main", "kind": "user",
                    "summary": "s", "first_message": "f", "last_messages": ["l"]}
@@ -1037,15 +1075,19 @@ class ColumnUnifyTest(unittest.TestCase):
         row1 = self._cells(_emit, [non_all])
         row2 = self._cells(_emit_logs, [all_row])
         self.assertEqual(len(row1), len(row2))
-        # 同名列同位置：sessionId / project / start
-        self.assertEqual(row1[1], "sid1")
-        self.assertEqual(row2[1], "sid2")
-        self.assertEqual(row1[2], row2[2])
+        # 同名列同位置：标题 / sessionId / project
+        self.assertEqual(row1[0], "n1")
+        self.assertEqual(row1[1], "-")   # 非 --all 无标题
+        self.assertEqual(row2[0], "-")   # --all 无互通名称
+        self.assertEqual(row2[1], "n2")
+        self.assertEqual(row1[2], "sid1")
+        self.assertEqual(row2[2], "sid2")
+        self.assertEqual(row1[3], row2[3])
         # 各自取不到的列占位 '-'
         self.assertEqual(row1[-4:], ["-", "-", "-", "-"])
-        self.assertEqual(row2[3], "-")  # status
+        self.assertEqual(row2[4], "-")  # status
         # --all 的 last 映射进统一的「最后活跃」列
-        self.assertEqual(row2[5], "2026-01-01T01:00:00Z")
+        self.assertEqual(row2[6], "2026-01-01T01:00:00Z")
 
     def _cells(self, fn, rows):
         buf = io.StringIO()

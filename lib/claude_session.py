@@ -156,8 +156,11 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
                       grep: str | list[str] | None = None) -> list[dict]:
     """Scan projects_root/<hash>/<uuid>.jsonl, return core fields per session.
 
-    Each row: sessionId / name / start / last / cwd / git_branch / kind /
-    summary / first_message / last_messages. Corrupt files are skipped.
+    Each row: sessionId / title / start / last / cwd / git_branch /
+    kind / summary / first_message / last_messages. ``title`` is the
+    human-visible session title from custom-title (/rename) / ai-title
+    events — custom-title wins, latest of each type wins. Corrupt files are
+    skipped.
     Files larger than ``_MAX_JSONL_BYTES`` are truncated to the first N bytes
     so a multi-hundred-MB conversation log does not dominate wall-clock.
 
@@ -253,7 +256,7 @@ def list_session_logs(projects_root: Path = _PROJECTS_ROOT,
 
         out.append((last_ts, start_ts, {
             "sessionId": session_id,
-            "name": summary,
+            "title": summary,
             "start": start_ts,
             "last": last_ts,
             "cwd": cwd,
