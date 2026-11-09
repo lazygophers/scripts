@@ -131,8 +131,11 @@ def _render_rows(headers: list[str], prepared: list[list[str]],
     if fmt == "csv":
         import csv
         import io
+
+        from lib.ui import esc
         buf = io.StringIO()
-        csv.writer(buf, lineterminator="\n").writerows([headers, *prepared])
+        csv.writer(buf, lineterminator="\n").writerows(
+            [[esc(c) for c in row] for row in [headers, *prepared]])
         print(buf.getvalue(), end="")
         return
     if fmt == "tsv":

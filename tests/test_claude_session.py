@@ -1117,6 +1117,17 @@ class EmitLogsTest(unittest.TestCase):
         # rich 表格截断长单元格，断言未截断的 git_branch 列
         self.assertIn("main", buf.getvalue())
 
+    def test_csv_newline_escaped_one_physical_line(self):
+        """单元格含换行：csv 一条记录占一行物理行，\n 转义保留。"""
+        out = self._run("csv")
+        self.assertEqual(len(out.strip().split("\n")), 2)
+        self.assertIn("summary=my summary\\nfirst=first msg", out)
+        rows = list(csv.reader(io.StringIO(out)))
+        self.assertEqual(len(rows), 2)
+        # 读回的 description 是转义形态（\n 为两个字符），不是原始换行
+        self.assertIn("\\n", rows[1][10])
+        self.assertNotIn("\n", rows[1][10])
+
     def test_description_empty_fields(self):
         """空字段不崩溃，description 仍有三段。"""
         row = {"sessionId": "x", "project": "", "start": "", "last": "",

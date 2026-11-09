@@ -92,13 +92,16 @@ def console(stderr: bool = False) -> Console:
     return Console(stderr=stderr)
 
 
-def print_tsv(headers: Sequence[str], rows, *, file=None) -> None:
-    """TSV 输出（AI 环境的表格降级形态）：首行列名，制表符分列，
-    单元格内 \\ \t \n 转义保证一行一条记录。人类环境不走这里。"""
-    def esc(v) -> str:
-        return (str(v).replace("\\", "\\\\").replace("\t", "\\t")
-                .replace("\n", "\\n").replace("\r", "\\r"))
+def esc(v) -> str:
+    r"""单元格转义：\ \t \n \r → \\ \\t \\n \\r，一行一条记录。
+    print_tsv 直接用；csv 路径借用其换行语义（逗号/引号仍归 csv.writer）。"""
+    return (str(v).replace("\\", "\\\\").replace("\t", "\\t")
+            .replace("\n", "\\n").replace("\r", "\\r"))
 
+
+def print_tsv(headers: Sequence[str], rows, *, file=None) -> None:
+    r"""TSV 输出（AI 环境的表格降级形态）：首行列名，制表符分列，
+    单元格内 \ \t \n \r 转义保证一行一条记录。人类环境不走这里。"""
     out = sys.stdout if file is None else file
     if headers:
         print("\t".join(esc(h) for h in headers), file=out)
