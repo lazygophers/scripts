@@ -320,6 +320,60 @@ class RebuildTest(Case):
         self.assertEqual(rec.call_args.kwargs["stderr"], "boom")
         self.assertEqual(rec.call_args.kwargs["level"], "error")
 
+    HINT = '{"recoveryHint":"local-embedding-stack-missing","msg":"stack not installed"}'
+
+    def _seq(self, results):
+        """按序返回 (rc, stderr)；记录每次调用的命令。"""
+        calls = []
+        it = iter(results)
+
+        def run(cmd, **kw):
+            calls.append((cmd, kw))
+            rc, err = next(it)
+            return subprocess.CompletedProcess(cmd, rc, None, err)
+        return calls, run
+
+    def setUp(self):
+        super().setUp()
+        gw._embedding_install_tried = False
+
+    def test_missing_embedding_stack_installs_then_retries_once(self):
+        repo = _git_init(self.tmp / "r")
+        calls, run = self._seq([(1, self.HINT), (0, "installed"), (0, "")])
+        with unittest.mock.patch.object(gw, "gitnexus_bin", return_value="/x/gitnexus"), \
+                unittest.mock.patch.object(gw._log, "record") as rec:
+            self.assertEqual(gw.rebuild(str(repo), run=run), 0)
+        self.assertEqual([c[0][-3:] for c in calls][1], ["/x/gitnexus", "embeddings", "install"])
+        self.assertEqual(calls[1][0][:-3], gw.low_priority())
+        self.assertEqual(calls[1][1]["timeout"], gw.EMBEDDING_INSTALL_TIMEOUT)
+        self.assertEqual(calls[2][0][-4:], ["/x/gitnexus", "analyze", "--index-only", str(repo)])
+        events = [c.args[0] for c in rec.call_args_list]
+        self.assertIn("gitnexuswatch.embedding_install", events)
+
+    def test_other_failure_does_not_install(self):
+        repo = _git_init(self.tmp / "r")
+        calls, run = self._seq([(1, "boom")])
+        with unittest.mock.patch.object(gw, "gitnexus_bin", return_value="g"), \
+                unittest.mock.patch.object(gw._log, "record"):
+            self.assertEqual(gw.rebuild(str(repo), run=run), 1)
+        self.assertEqual(len(calls), 1)
+
+    def test_install_failure_keeps_analyze_error_and_is_not_repeated(self):
+        repo = _git_init(self.tmp / "r")
+        calls, run = self._seq([(1, self.HINT), (2, "npm ERR! net"), (1, self.HINT)])
+        with unittest.mock.patch.object(gw, "gitnexus_bin", return_value="g"), \
+                unittest.mock.patch.object(gw._log, "record") as rec:
+            self.assertEqual(gw.rebuild(str(repo), run=run), 1)
+            self.assertEqual(len(calls), 2)  # analyze + install，失败后不重试 analyze
+            inst = [c for c in rec.call_args_list if c.args[0] == "gitnexuswatch.embedding_install"][0]
+            self.assertEqual(inst.kwargs["stderr"], "npm ERR! net")
+            self.assertEqual(inst.kwargs["rc"], 2)
+            fail = [c for c in rec.call_args_list if c.args[0] == "gitnexuswatch.rebuild"][-1]
+            self.assertIn("local-embedding-stack-missing", fail.kwargs["stderr"])
+            calls2, run2 = self._seq([(1, self.HINT)])
+            self.assertEqual(gw.rebuild(str(repo), run=run2), 1)
+            self.assertEqual(len(calls2), 1)  # 本进程已试过安装，不再装
+
     def test_waits_for_git_operation_to_finish(self):
         repo = _git_init(self.tmp / "r")
         lock = repo / ".git" / "index.lock"

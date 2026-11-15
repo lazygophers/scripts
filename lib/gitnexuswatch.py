@@ -55,6 +55,10 @@ GIT_SIGNALS = frozenset({("HEAD",), ("logs", "HEAD")})
 GIT_BUSY = ("index.lock", "rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD")
 GIT_WAIT_SECS = 60
 ANALYZE_TIMEOUT = 3600
+EMBEDDING_INSTALL_TIMEOUT = 900
+EMBEDDING_STACK_MISSING = "local-embedding-stack-missing"
+# 本进程只自动装一次：装失败不会每次重建都重试，原 analyze 失败照常记日志
+_embedding_install_tried = False
 
 
 def config_path() -> Path:
@@ -343,6 +347,23 @@ def low_priority() -> list[str]:
     return ["taskpolicy", "-b"] if sys.platform == "darwin" else ["nice", "-n", "19"]
 
 
+def _install_embedding_stack(env: dict, run) -> bool:
+    """索引里已有 embeddings 时 analyze 要本地 ONNX 栈；缺了就 `gitnexus embeddings install`。
+    每进程只试一次；返回 True 表示装成功、可以重试 analyze。"""
+    global _embedding_install_tried
+    if _embedding_install_tried:
+        return False
+    _embedding_install_tried = True
+    started = time.monotonic()
+    r = run([*low_priority(), gitnexus_bin(), "embeddings", "install"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            timeout=EMBEDDING_INSTALL_TIMEOUT, env=env)
+    _log.record("gitnexuswatch.embedding_install", logger=LOGGER,
+                level="error" if r.returncode else "info", rc=r.returncode,
+                secs=round(time.monotonic() - started, 1), stderr=(r.stdout or r.stderr or "")[-2000:])
+    return r.returncode == 0
+
+
 def rebuild(repo: str, sleep=time.sleep, run=subprocess.run) -> int:
     """跑一次增量 analyze。git 操作进行中先等它结束，等不到就跳过——
     rebase/merge 收尾时 HEAD 会再动一次，那时自然再触发。"""
@@ -360,6 +381,10 @@ def rebuild(repo: str, sleep=time.sleep, run=subprocess.run) -> int:
     r = run([*low_priority(), gitnexus_bin(), "analyze", "--index-only", repo],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=ANALYZE_TIMEOUT,
             env=env)
+    if r.returncode and EMBEDDING_STACK_MISSING in (r.stderr or "") and _install_embedding_stack(env, run):
+        r = run([*low_priority(), gitnexus_bin(), "analyze", "--index-only", repo],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=ANALYZE_TIMEOUT,
+                env=env)
     fields = {"folder": repo, "rc": r.returncode, "secs": round(time.monotonic() - started, 1)}
     if r.returncode:
         fields["stderr"] = (r.stderr or "")[-2000:]
