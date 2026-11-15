@@ -1,8 +1,7 @@
 """graphwatch 产出物：社区命名（参考项目根 GLOSSARY.md）+ 全套导出。
 
 daemon 每轮重建在 graph.json 落盘后调 `write_artifacts()`，把 graphify 的
-html / cluster-only（GRAPH_REPORT.md）/ graphml / tree / obsidian 一次刷新。
-wiki 留在 graphwatch_rebuild 里（它是 rebuild 的既有行为，且要跟 to_json 同批）。
+html / cluster-only（GRAPH_REPORT.md）/ graphml / tree 一次刷新。
 不做 svg——用户 2026-09-10 明确没选。
 
 命名策略（同一次决定）：**只给没名字的社区起名**，已有名字不管是 LLM 起的还是
@@ -278,23 +277,10 @@ def _write_html(G, communities, labels, out: Path) -> None:
             community_labels=labels or None, node_limit=limit)
 
 
-def _write_obsidian(G, communities, cohesion, labels, out: Path) -> None:
-    """obsidian vault + canvas，落在 graphify-out/obsidian/（同 graphify 默认）。"""
-    from graphify.export import to_canvas, to_obsidian
-
-    vault = out / "obsidian"
-    to_obsidian(G, communities, str(vault),
-                community_labels=labels or None, cohesion=cohesion or None)
-    to_canvas(G, communities, str(vault / "graph.canvas"), community_labels=labels or None)
-
-
 def write_artifacts(G, communities: dict, cohesion: dict, labels: dict[int, str],
                     gods: list, out: Path, root: Path, changed: int,
-                    tokens: dict, stage=None, *, obsidian: bool = True) -> list[str]:
+                    tokens: dict, stage=None) -> list[str]:
     """刷新 daemon 每轮要产的全部导出物，返回失败的产出物名。
-
-    obsidian=False 跳过 obsidian 导出：它是单轮最重的一步（aidog 5.4s CPU、2 万多个
-    文件），用户 2026-09-27 定为只在每日重算图时写。
 
     每个产出物独立 try：graph.json 已经落盘，一个导出挂掉不该带走其它的。
     `stage` 是 rebuild 的阶段打点函数，传进来就每步报一次耗时。
@@ -312,8 +298,6 @@ def write_artifacts(G, communities: dict, cohesion: dict, labels: dict[int, str]
         ("GRAPH_TREE.html", lambda: write_tree_html(out / "graph.json", out / "GRAPH_TREE.html",
                                                     project_label=root.name)),
     ]
-    if obsidian:
-        steps.append(("obsidian", lambda: _write_obsidian(G, communities, cohesion, labels, out)))
     failed: list[str] = []
     for name, fn in steps:
         try:

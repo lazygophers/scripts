@@ -160,7 +160,7 @@ class TestSemanticCache(unittest.TestCase):
 
 @unittest.skipUnless(HAS_GRAPHIFY, "graphifyy 未安装，集成缝跳过")
 class TestRebuild(unittest.TestCase):
-    """重建管线（lib/graphwatch_rebuild.py）：/graphify --mode deep --wiki --update 的源码调用等价物。"""
+    """重建管线（lib/graphwatch_rebuild.py）：/graphify --mode deep --update 的源码调用等价物。"""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -175,21 +175,31 @@ class TestRebuild(unittest.TestCase):
         else:
             self.addCleanup(os.environ.__setitem__, "GRAPHWATCH_HOME", self._env)
 
-    def test_rebuild_full_pipeline_with_wiki(self):
+    def test_rebuild_and_regraph_never_call_wiki_or_obsidian_export(self):
+        repo = self.home / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+        boom = AssertionError("graphwatch 不许调 wiki / obsidian 导出")
+        with unittest.mock.patch("graphify.wiki.to_wiki", side_effect=boom), \
+                unittest.mock.patch("graphify.export.to_obsidian", side_effect=boom), \
+                unittest.mock.patch("graphify.export.to_canvas", side_effect=boom):
+            self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0)
+            self.assertEqual(graphwatch_rebuild.regraph(str(repo)), 0)
+
+    def test_rebuild_full_pipeline(self):
         repo = self.home / "repo"
         repo.mkdir()
         (repo / "app.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
 
         self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0)
         graph = repo / "graphify-out" / "graph.json"
-        wiki_index = repo / "graphify-out" / "wiki" / "index.md"
         self.assertTrue(graph.is_file(), "首次重建应产出 graph.json")
-        self.assertTrue(wiki_index.is_file(), "重建应产出 wiki/index.md")
         # 用户 2026-09-10 选定的全套产出物（不含 svg）
         out = repo / "graphify-out"
         for name in ("GRAPH_REPORT.md", "graph.html", "graph.graphml", "GRAPH_TREE.html"):
             self.assertTrue((out / name).is_file(), f"重建应产出 {name}")
-        self.assertFalse((out / "obsidian").exists(), "obsidian 只在每日重算图时写（用户 2026-09-27 选定）")
+        self.assertFalse((out / "obsidian").exists(), "不产 obsidian")
+        self.assertFalse((out / "wiki").exists(), "不产 wiki")
         self.assertFalse((out / "graph.svg").exists(), "用户没选 svg，不该产出")
         self.assertTrue((out / ".graphify_labels.json").is_file(), "社区名应落盘，避免下轮重复花钱")
 
@@ -264,8 +274,8 @@ class TestRebuild(unittest.TestCase):
             self.assertEqual(graphwatch_rebuild.regraph(str(repo)), 0)
             stamp = repo / "graphify-out" / graphwatch_rebuild.REGRAPH_STAMP
             self.assertTrue(stamp.is_file())
-            self.assertTrue((repo / "graphify-out" / "obsidian" / "graph.canvas").is_file(),
-                            "每日重算图负责写 obsidian")
+            for d in ("obsidian", "wiki"):
+                self.assertFalse((repo / "graphify-out" / d).exists(), f"重算图不许产 {d}")
             mtime = graph.stat().st_mtime
             time.sleep(0.05)
             self.assertEqual(graphwatch_rebuild.regraph(str(repo)), 0)

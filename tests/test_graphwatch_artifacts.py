@@ -343,7 +343,8 @@ class TestWriteArtifacts(unittest.TestCase):
         self.assertEqual(self._run(), [])
         for name in ("GRAPH_REPORT.md", "graph.html", "graph.graphml", "GRAPH_TREE.html"):
             self.assertTrue((self.out / name).is_file(), f"{name} 未产出")
-        self.assertTrue((self.out / "obsidian" / "graph.canvas").is_file(), "canvas 未产出")
+        for d in ("obsidian", "wiki"):
+            self.assertFalse((self.out / d).exists(), f"不许产 {d}")
         self.assertFalse((self.out / "graph.svg").exists(), "用户没选 svg，不该产出")
 
     def test_one_failure_does_not_block_the_rest(self):
@@ -365,7 +366,7 @@ class TestWriteArtifacts(unittest.TestCase):
             self.out, self.root, changed=1, tokens={"input": 0, "output": 0},
             stage=seen.append,
         )
-        self.assertEqual(len(seen), 5, "五个产出物各报一次进度")
+        self.assertEqual(len(seen), 4, "四个产出物各报一次进度")
 
     def test_viz_limit_zero_removes_html(self):
         (self.out / "graph.html").write_text("stale", encoding="utf-8")

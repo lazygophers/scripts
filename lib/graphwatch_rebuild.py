@@ -1,16 +1,16 @@
-"""graphwatch 重建管线：进程内按 /graphify <path> --mode deep --wiki --update
+"""graphwatch 重建管线：进程内按 /graphify <path> --mode deep --update
 的 runbook 跑一次增量重建（graphify 库源码调用，不起 CLI 子进程）。
 
 runbook 出处：graphify skill（SKILL.md + references/update.md）；库函数
 签名以安装的 graphifyy 包为准（graphify.detect / extract / build / cluster /
-export / wiki / llm）。所有函数都收显式 root，不需要 chdir 到项目目录。
+export / llm）。所有函数都收显式 root，不需要 chdir 到项目目录。
 
 流程：detect_incremental（无变更直接返回）→ AST 抽取（code）+ 语义抽取
 （doc/paper/image，配置了 backend 才跑，deep 模式）→ build_merge 并入
 现有 graph.json（删除文件 prune）→ cluster → 社区命名（只补没名字的，见
-graphwatch_artifacts）→ to_json（force=True，绕开 #479 收缩护栏）→ to_wiki → 其余导出物
-（GRAPH_REPORT.md / graph.html / graph.graphml / GRAPH_TREE.html /
-obsidian，见 graphwatch_artifacts.write_artifacts）→ save_manifest。
+graphwatch_artifacts）→ to_json（force=True，绕开 #479 收缩护栏）→ 其余导出物
+（GRAPH_REPORT.md / graph.html / graph.graphml / GRAPH_TREE.html，
+见 graphwatch_artifacts.write_artifacts；不产 wiki / obsidian）→ save_manifest。
 """
 from __future__ import annotations
 
@@ -163,7 +163,7 @@ def rebuild(folder: str, force: bool = False) -> int:
 
 
 def _rebuild_unlocked(root: Path, force: bool = False) -> int:
-    """按 /graphify --update --mode deep --wiki 的 runbook 重建一个目录。"""
+    """按 /graphify --update --mode deep 的 runbook 重建一个目录。"""
     from graphify.build import build_merge
     from graphify.cluster import cluster
     from graphify.detect import detect_incremental, save_manifest
@@ -342,14 +342,13 @@ def _regraph_unlocked(root: Path) -> int:
 
 
 def _publish(G, communities: dict, root: Path, *, stage, daily: bool, changed: int, tokens: dict) -> None:
-    """聚类之后的共用尾段：社区命名 → 备份 → graph.json → wiki → 其余产出物。
+    """聚类之后的共用尾段：社区命名 → 备份 → graph.json → 其余产出物。
 
-    daily=True（每日重算图）：新社区只用 hub 名、整段 0 token，并写 obsidian；
-    daily=False（变更重建）：新社区可让 LLM 起名，不写 obsidian（太重，一天一次够了）。
+    daily=True（每日重算图）：新社区只用 hub 名、整段 0 token；
+    daily=False（变更重建）：新社区可让 LLM 起名。
     """
     from graphify.cluster import score_all
     from graphify.export import backup_if_protected, existing_graph_node_count, to_json
-    from graphify.wiki import to_wiki
 
     from lib.graphwatch_artifacts import resolve_labels, save_labels, write_artifacts
 
@@ -368,8 +367,8 @@ def _publish(G, communities: dict, root: Path, *, stage, daily: bool, changed: i
             saved = {}
     labels = resolve_labels(G, communities, saved, root, llm=not daily)
     # 覆盖任何产出物之前先快照（graphify 的日期备份，自带触发条件：花过 LLM token
-    # 或社区名被策展过；GRAPHIFY_NO_BACKUP=1 可关）。以前 rebuild 只写 graph.json
-    # 和 wiki 没调它，现在连 GRAPH_REPORT.md 和 labels 一起覆盖，必须补上。
+    # 或社区名被策展过；GRAPHIFY_NO_BACKUP=1 可关）。以前 rebuild 只写 graph.json，没调它；
+    # 现在连 GRAPH_REPORT.md 和 labels 一起覆盖，必须补上。
     backup_if_protected(out)
     if labels != saved:
         save_labels(out, communities, labels)
@@ -391,10 +390,8 @@ def _publish(G, communities: dict, root: Path, *, stage, daily: bool, changed: i
         gods = god_nodes(G)
     except Exception:  # noqa: BLE001
         gods = []
-    n = to_wiki(G, communities, out / "wiki", community_labels=labels or None,
-                cohesion=cohesion, god_nodes_data=gods)
-    stage(f"写 graph.json + wiki {n} 篇")
+    stage("写 graph.json")
 
-    # 其余产出物：报告 / 网页图 / graphml / 折叠树 / obsidian（用户 2026-09-10 选定，不含 svg）
+    # 其余产出物：报告 / 网页图 / graphml / 折叠树（用户 2026-09-10 选定，不含 svg）
     write_artifacts(G, communities, cohesion, labels, gods, out, root,
-                    changed=changed, tokens=tokens, stage=stage, obsidian=daily)
+                    changed=changed, tokens=tokens, stage=stage)
