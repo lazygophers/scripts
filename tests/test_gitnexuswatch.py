@@ -203,6 +203,8 @@ class ClassifyTest(unittest.TestCase):
             "/r/.git/index": None,
             "/r/.git/refs/heads/x": None,
             "/r/.gitnexus/lbug/x": None,
+            "/r/graphify-out/graph.json": None,  # graphwatch 的产出，不能反过来触发 gitnexus 重建
+            "/r/graphify-out/wiki/a.md": None,
             "/r/node_modules/x/a.js": None,
             "/r/web/dist/a.js": None,
             "/r/dist": "file",  # 文件名恰好叫 dist 不算目录

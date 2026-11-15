@@ -207,6 +207,15 @@ def _rebuild_unlocked(root: Path, force: bool = False) -> int:
     if sem_files:
         _stage(f"语义抽取 {len(sem_files)} 文件（deep）", t0)
 
+    if not code and not deleted and not force and not sem["nodes"] and not sem["edges"]:
+        # 只剩抽不出东西的文档（没配 backend / 配额用尽退避中）：合并结果和现图一样，
+        # 重写 graph.json / html / graphml 纯属空转（实测 410 次重建里 325 次，占 72% 耗时）。
+        # 只刷新 graph.json 的 mtime，新鲜度不再显示落后；文档仍未盖章，抽取恢复后照常重试。
+        print(f"[graphwatch] {root}: 仅有无法抽取的文档变更，跳过重写产出物", file=sys.stderr)
+        if graph_path.is_file():
+            os.utime(graph_path)
+        return 0
+
     # Part C 合并（SKILL.md：AST 节点在前，语义按 id 去重）
     seen = {n["id"] for n in ast["nodes"]}
     nodes = list(ast["nodes"])

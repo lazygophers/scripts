@@ -2214,6 +2214,30 @@ class TestCliAiEnv(GraphwatchCase):
 
 
 
+class TestHeavySlot(GraphwatchCase):
+    """graphwatch 与 gitnexuswatch 两个 daemon 各自串行，合起来仍会同时跑两个重活
+    （实测 223 对重叠）；重活共用一把跨进程锁。"""
+
+    def test_slot_is_exclusive_across_threads(self):
+        inside, peak, guard = [0], [0], threading.Lock()
+
+        def work():
+            with graphwatch_daemon.heavy_rebuild_slot():
+                with guard:
+                    inside[0] += 1
+                    peak[0] = max(peak[0], inside[0])
+                time.sleep(0.05)
+                with guard:
+                    inside[0] -= 1
+
+        ts = [threading.Thread(target=work) for _ in range(4)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(peak[0], 1)
+
+
 class TestRebuildEdges(GraphwatchCase):
     """rebuild 的门面分支：无图、锁占用、win32 锁、god_nodes 兜底。"""
 

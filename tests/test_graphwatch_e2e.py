@@ -303,6 +303,24 @@ class TestRebuild(unittest.TestCase):
         self.assertEqual(graphwatch_rebuild.regraph(str(repo)), 0)
         self.assertFalse((repo / "graphify-out").exists())
 
+    def test_rebuild_skips_publish_when_only_unextractable_docs(self):
+        """没配 backend：新文档抽不出任何节点，没有代码变更也没有删除，
+        重建不该重写整套产出物（实测 410 次重建里 325 次是这种空转，占 72% 耗时），
+        但要刷新 graph.json 的 mtime，新鲜度才不会一直显示落后。"""
+        repo = self.home / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+        graphwatch_daemon._run_update(str(repo))
+        graph = repo / "graphify-out" / "graph.json"
+        before = graph.read_bytes()
+        os.utime(graph, (1, 1))
+        (repo / "notes.md").write_text("# note\n\nhello\n", encoding="utf-8")
+        with unittest.mock.patch.object(graphwatch_rebuild, "_publish") as pub:
+            self.assertEqual(graphwatch_daemon._run_update(str(repo)), 0)
+        pub.assert_not_called()
+        self.assertEqual(graph.read_bytes(), before)
+        self.assertGreater(graph.stat().st_mtime, 1, "应刷新 mtime 清掉「落后」状态")
+
     def test_rebuild_no_change_is_noop(self):
         repo = self.home / "repo"
         repo.mkdir()

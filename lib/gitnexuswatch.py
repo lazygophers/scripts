@@ -32,6 +32,7 @@ from lib.graphwatch_daemon import (
     STALE_EXCLUDED_DIRS,
     daemon_alive,
     display_repos,
+    heavy_rebuild_slot,
     run_daemon,
 )
 from lib.graphwatch_service import (
@@ -278,7 +279,8 @@ def classify(repo_parts: tuple[str, ...], path: str) -> str | None:
         return None
     if rel[0] == ".git":
         return "git" if rel[1:] in GIT_SIGNALS else None
-    if rel[0] == ".gitnexus" or STALE_EXCLUDED_DIRS & set(rel[:-1]):
+    # graphify-out 是 graphwatch 的产出：不排除的话它每重建一次就把 gitnexus 也拖着建一次
+    if rel[0] == ".gitnexus" or (STALE_EXCLUDED_DIRS | {"graphify-out"}) & set(rel[:-1]):
         return None
     return "file"
 
@@ -375,16 +377,16 @@ def rebuild(repo: str, sleep=time.sleep, run=subprocess.run) -> int:
     else:
         _log.record("gitnexuswatch.skip", logger=LOGGER, folder=repo, reason="git 操作进行中")
         return 0
-    started = time.monotonic()
     # worker 5s 默认 ready 超时在高负载机器上不够（错误文案自证 "slow host?"），放宽到 30s
     env = {**os.environ, "GITNEXUS_WORKER_READY_TIMEOUT_MS": "30000"}
-    r = run([*low_priority(), gitnexus_bin(), "analyze", "--index-only", repo],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=ANALYZE_TIMEOUT,
-            env=env)
-    if r.returncode and EMBEDDING_STACK_MISSING in (r.stderr or "") and _install_embedding_stack(env, run):
-        r = run([*low_priority(), gitnexus_bin(), "analyze", "--index-only", repo],
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=ANALYZE_TIMEOUT,
-                env=env)
+    analyze = [*low_priority(), gitnexus_bin(), "analyze", "--index-only", repo]
+    with heavy_rebuild_slot():
+        started = time.monotonic()  # 计时从拿到锁之后算，secs 只含 analyze（含自动装栈重试）本身
+        r = run(analyze, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                timeout=ANALYZE_TIMEOUT, env=env)
+        if r.returncode and EMBEDDING_STACK_MISSING in (r.stderr or "") and _install_embedding_stack(env, run):
+            r = run(analyze, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                    timeout=ANALYZE_TIMEOUT, env=env)
     fields = {"folder": repo, "rc": r.returncode, "secs": round(time.monotonic() - started, 1)}
     if r.returncode:
         fields["stderr"] = (r.stderr or "")[-2000:]

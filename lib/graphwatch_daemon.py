@@ -5,13 +5,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
 import sys
-from collections import Counter
 import time
 import traceback
+from collections import Counter
 from pathlib import Path
 
 from lib import log as _log
@@ -164,6 +165,28 @@ def release_singleton_lock(fd) -> None:
         os.close(fd)
 
 
+@contextlib.contextmanager
+def heavy_rebuild_slot():
+    """跨 daemon 的重活互斥：graphwatch（进程内 graphify）和 gitnexuswatch（node analyze）
+    各自串行，合起来仍会同时跑两个重活——日志实测 223 对重叠。两边的重建都先拿这把
+    flock 再开工，内存和 CPU 峰值就是单个重活而不是两个叠加。
+
+    shortcut: 阻塞等锁，等锁期间 daemon 停不下来（stop 本来就等在跑的重建）；win32 不加锁。
+    """
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    config_home().mkdir(parents=True, exist_ok=True)
+    fd = os.open(config_home() / "rebuild-slot.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)  # 关 fd 即释放 flock
+
+
 NOTIFY_THROTTLE_SECS = 300
 
 
@@ -305,7 +328,8 @@ def _run_update(folder: str) -> int:
     """跑一次增量重建（进程内 graphify 库调用，deep 抽取 + 全套产出物，见 graphwatch_rebuild）。"""
     from lib.graphwatch_rebuild import rebuild
 
-    return rebuild(folder)
+    with heavy_rebuild_slot():
+        return rebuild(folder)
 
 
 def _run_regraph(folder: str) -> int:
@@ -318,7 +342,8 @@ def _run_regraph(folder: str) -> int:
         return 0
     from lib.graphwatch_rebuild import regraph
 
-    return regraph(folder)
+    with heavy_rebuild_slot():
+        return regraph(folder)
 
 
 def regraph_due(now, regraph_at: str, last_day) -> bool:
@@ -649,7 +674,8 @@ def stale_trigger(folder: str) -> Path | None:
         ignored = _ignore_matcher(root)
     except Exception:
         # graphwatch 未安装 graphify 时仍能显示基础新鲜度；固定目录排除照常生效。
-        ignored = lambda _path: False
+        def ignored(_path):
+            return False
     import stat as _stat
 
     newest: tuple[float, Path] | None = None
