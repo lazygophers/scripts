@@ -5,11 +5,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
 import stat
-import contextlib
-import io
 import sys
 import tempfile
 import threading
@@ -253,7 +253,7 @@ class TestCliRebuild(GraphwatchCase):
         graphwatch.add_folder(self.mkdir("registered-but-unused"))
         result, do = self._run()
         self.assertEqual(result, 0)
-        do.assert_called_once_with(str(self.home / "cwd-repo"), force=False)
+        do.assert_called_once_with(str(self.home / "cwd-repo"), force=False, busy_ok=True)
 
     def test_explicit_directory_skips_registry(self):
         repo = self.mkdir()
@@ -261,7 +261,7 @@ class TestCliRebuild(GraphwatchCase):
              unittest.mock.patch("lib.graphwatch_rebuild.rebuild", return_value=0) as do:
             result = self._cli().rebuild(str(repo))
         self.assertEqual(result, 0)
-        do.assert_called_once_with(str(repo), force=False)
+        do.assert_called_once_with(str(repo), force=False, busy_ok=True)
 
     def test_force_flag_passes_through(self):
         (self.home / "cwd-repo").mkdir()
@@ -270,7 +270,7 @@ class TestCliRebuild(GraphwatchCase):
              unittest.mock.patch("lib.graphwatch.Path.cwd", return_value=self.home / "cwd-repo"):
             result = self._cli().rebuild(force=True)
         self.assertEqual(result, 0)
-        do.assert_called_once_with(str(self.home / "cwd-repo"), force=True)
+        do.assert_called_once_with(str(self.home / "cwd-repo"), force=True, busy_ok=True)
 
     def test_missing_explicit_directory_fails_before_dependency_check(self):
         missing = self.home / "missing"
@@ -1236,6 +1236,7 @@ class TestServiceStateAndLog(GraphwatchCase):
         import io
         import unittest.mock
         from contextlib import redirect_stderr
+
         from lib import log as _log
         self._log_target()
         _log.record("daemon", logger="graphwatch-daemon", msg="开始监听 /tmp/x")
@@ -2197,7 +2198,7 @@ class TestCliAiEnv(GraphwatchCase):
         graphwatch.add_folder(repo1)
         graphwatch.add_folder(repo2)
 
-        def fake_rebuild(path, force=False):
+        def fake_rebuild(path, force=False, busy_ok=False):
             return 1 if path.endswith("a") else 0
 
         with unittest.mock.patch("lib.graphwatch.ensure_graphify"), \
@@ -2261,12 +2262,36 @@ class TestRebuildEdges(GraphwatchCase):
         out = io.StringIO()
         with unittest.mock.patch.object(rb, "_acquire_rebuild_lock", return_value=None), \
              contextlib.redirect_stderr(out):
-            self.assertEqual(rb.rebuild(str(repo)), 1)
+            self.assertEqual(rb.rebuild(str(repo)), 1)  # daemon 路径：仍按失败处理
         self.assertIn("已在构建，不排队等待", out.getvalue())
 
-    def test_windows_lock_and_release(self):
+    def test_rebuild_locked_busy_ok_is_skip_success(self):
         import lib.graphwatch_rebuild as rb
+        repo = self.mkdir()
+        out = io.StringIO()
+        with unittest.mock.patch.object(rb, "_acquire_rebuild_lock", return_value=None), \
+             unittest.mock.patch.object(rb._log, "record") as rec, \
+             contextlib.redirect_stderr(out):
+            self.assertEqual(rb.rebuild(str(repo), busy_ok=True), 0)
+        self.assertIn("正在构建，已跳过", out.getvalue())
+        self.assertEqual(rec.call_args.args[0], "graphwatch.rebuild_skip")
+
+    def test_cli_rebuild_busy_exits_zero_without_failure_line(self):
+        import lib.graphwatch_rebuild as rb
+        repo = self.mkdir()
+        out = io.StringIO()
+        with unittest.mock.patch.object(rb, "_acquire_rebuild_lock", return_value=None), \
+             unittest.mock.patch("lib.graphwatch.ensure_graphify"), \
+             contextlib.redirect_stderr(out), contextlib.redirect_stdout(out):
+            rc = graphwatch.GraphwatchCli().rebuild(str(repo))
+        self.assertEqual(rc, 0)
+        self.assertIn("正在构建，已跳过", out.getvalue())
+        self.assertNotIn("重建失败", out.getvalue())
+
+    def test_windows_lock_and_release(self):
         import types
+
+        import lib.graphwatch_rebuild as rb
         calls = []
         fake_msvcrt = types.ModuleType("msvcrt")
         fake_msvcrt.LK_NBLCK = 1
@@ -2274,7 +2299,6 @@ class TestRebuildEdges(GraphwatchCase):
         fake_msvcrt.locking = lambda fd, mode, n: calls.append((fd, mode, n))
         repo = self.mkdir()
         (repo / "graphify-out").mkdir()
-        import os as real_os
         with unittest.mock.patch("sys.platform", "win32"), \
              unittest.mock.patch.dict(sys.modules, {"msvcrt": fake_msvcrt}), \
              unittest.mock.patch("os.lseek", side_effect=lambda *a: calls.append(("seek",) + a)):
@@ -2284,7 +2308,6 @@ class TestRebuildEdges(GraphwatchCase):
             rb._release_rebuild_lock(got)
         self.assertTrue(any(c[0] != "seek" and c[1] == 1 for c in calls), calls)
         self.assertTrue(any(c[0] == "seek" for c in calls), calls)
-        void = real_os
 
 
 class TestRegraphEdges(GraphwatchCase):
@@ -2310,7 +2333,6 @@ class TestRegraphEdges(GraphwatchCase):
 
     def test_regraph_unchanged_graph_skips(self):
         import lib.graphwatch_rebuild as rb
-        import time as _time
         repo = self.mkdir()
         out_dir = repo / "graphify-out"
         out_dir.mkdir()

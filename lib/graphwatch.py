@@ -198,7 +198,7 @@ class GraphwatchCli(BaseCli):
             ensure_graphify()
         for folder in valid:
             self._r.rule(f"rebuild {folder}", style="blue")
-            if do_rebuild(str(folder), force=force):
+            if do_rebuild(str(folder), force=force, busy_ok=True):
                 failed = True
         if failed:
             self._r.err("有目录重建失败，详见上方日志")
@@ -303,8 +303,6 @@ class GraphwatchCli(BaseCli):
         用法: graphwatch status            # 服务态 + 新鲜度 + 最近 10 行日志
               graphwatch status --log 50   # 多看些日志；--log 0 关闭日志段
         """
-        from rich.table import Table
-
         rows: list[tuple] = []
         st = service_state()
         head = "已注册" if st["registered"] else "未注册"

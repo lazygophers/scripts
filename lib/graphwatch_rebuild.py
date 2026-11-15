@@ -147,11 +147,20 @@ def _oldest_first(files: list[Path]) -> list[Path]:
     return sorted(files, key=lambda f: (newest_in_dir[f.parent], own[f]))
 
 
-def rebuild(folder: str, force: bool = False) -> int:
-    """立即重建一个目录；已在构建则不等待，返回失败。force=True 跳过「无变更」短路。"""
+def rebuild(folder: str, force: bool = False, busy_ok: bool = False) -> int:
+    """立即重建一个目录；已在构建则不等待。force=True 跳过「无变更」短路。
+
+    已在构建：默认返回 1（daemon 靠它发失败通知，行为不变）；busy_ok=True（手动
+    `graphwatch rebuild`）视为跳过成功，返回 0，日志记 rebuild_skip 而非失败。
+    """
     root = Path(folder).expanduser().resolve()
     lock = _acquire_rebuild_lock(root)
     if lock is None:
+        if busy_ok:
+            print(f"[graphwatch] {root}: 正在构建，已跳过", file=sys.stderr)
+            _log.record("graphwatch.rebuild_skip", logger="graphwatch-daemon",
+                        folder=str(root), reason="busy")
+            return 0
         print(f"[graphwatch] {root}: 已在构建，不排队等待", file=sys.stderr)
         _log.record("graphwatch.rebuild_fail", logger="graphwatch-daemon", level="error",
                     folder=str(root), reason="已在构建，锁被占")
