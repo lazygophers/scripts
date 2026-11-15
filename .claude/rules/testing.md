@@ -46,6 +46,13 @@ python3 -m unittest discover -s tests -q   # 串行，调试单个用例时更�
   不报 skipped 数，先跑 `<同一解释器> -c "import graphify, watchdog"` 确认能导入。
   同理：`graphify query`（pipx 装的 `graphifyy` CLI）跑在 python3.14 下 jieba 报
   `NameError: xrange`（2026-10-08 实测），知识图谱查询改用 conda 解释器，或直接 grep。
+- **测试 worker 的 stdin 必须是 `/dev/null`。** 后台跑全套时 worker 继承了 harness 的 unix-socket
+  stdin，`tests/test_archery_cli.py` 的 TestLogin 6 个用例走到 `ask_confirm`
+  （`lib/cli/archery.py:746`）真读 stdin，整套无限挂起（2026-11-15）。`tests/run.py` 起子进程
+  用 `stdin=subprocess.DEVNULL`；手跑单模块也写 `< /dev/null`。新增会读 stdin 的 CLI 用例
+  patch 掉 `ask_confirm`，别指望 TTY 缺失会报错。
+- **`ruff` 不在 PATH**，用 `~/miniconda3/bin/ruff check <文件...>`。文件清单在 zsh 里存数组
+  （`FILES=(a b)`，引用 `"${FILES[@]}"`），存字符串会被当成一个路径报 E902。
 - **跑完就把临时目录收掉。** 678 个调度单元 = 678 个临时目录，不收就堆在 `/tmp` 里。
 - **browse 扩展：新 Chrome API 依赖先扩 `mock.ts`，再改调用方。** `resolveContext` 加入 `storage.session`/`tabGroups` 后 21 个测试文件需改——`ownWorld()`/`ownSession()` 助手是事后补的。正确顺序：先在 `browser-extension/browse/test/mock.ts` 扩好夹具，再逐一迁移用到这个函数的测试。
 - **扩展测试先看 `shared/test/mock.ts` 的助手签名和 dispatch 层，再写用例。**
