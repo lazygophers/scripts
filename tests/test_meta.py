@@ -67,3 +67,22 @@ class TestEveryBinIsInstallable(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRunnerIsolatesStdin(unittest.TestCase):
+    """tests/run.py 的 worker 不继承调度器的 stdin。
+
+    起因（2026-11-15）：stdin 是 unix socket 的后台进程跑全量，TestLogin 经
+    lib/cli/archery.py 的 ask_confirm 读真 stdin，永远挂住；`< /dev/null` 才过。
+    """
+
+    def test_worker_stdin_is_devnull(self):
+        import subprocess
+        from unittest import mock
+
+        from tests import run
+
+        done = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(run.subprocess, "run", return_value=done) as m:
+            run.run_module("test_meta")
+        self.assertIs(m.call_args.kwargs.get("stdin"), subprocess.DEVNULL)

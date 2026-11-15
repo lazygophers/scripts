@@ -98,6 +98,7 @@ def run_module(name: str) -> tuple[str, int, float, str]:
     proc = subprocess.run(
         [sys.executable, "-m", "unittest", "-q", f"tests.{name}"],
         cwd=ROOT, env=env, capture_output=True, text=True,
+        stdin=subprocess.DEVNULL,  # 不继承调度器的 stdin：读真 stdin 的用例会在 socket/管道上永远挂住
     )
     elapsed = time.perf_counter() - start
     shutil.rmtree(tmp, ignore_errors=True)  # 511 个单元 = 511 个临时目录，跑完就收
