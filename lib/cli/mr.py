@@ -1,4 +1,4 @@
-"""mr — 自动创建 PR/MR（调 claude 生成 title/body）（fire 重构）"""
+"""mr — 自动创建 PR/MR（LAZYGOPHERS API 生成 title/body）（fire 重构）"""
 from __future__ import annotations
 
 from lib.fire_base import BaseCli, run_cli, timed_cli
@@ -6,7 +6,7 @@ from lib.mr_wf import run_mr
 
 
 class MrCli(BaseCli):
-    """自动创建 PR/MR（调 claude 生成 title/body）"""
+    """自动创建 PR/MR（LAZYGOPHERS API 生成 title/body）"""
 
     def __call__(
         self,
@@ -16,13 +16,12 @@ class MrCli(BaseCli):
         reviews: str | None = None,
         labels: str | None = None,
         assignee: str | None = None,
-        settings: str | None = None,
     ):
         """裸调用 `mr [<base>]` 等同 `mr create [<base>]`"""
         base = args[0] if args else None
         return self.create(
             base, dry_run=dry_run, publish=publish,
-            reviews=reviews, labels=labels, assignee=assignee, settings=settings,
+            reviews=reviews, labels=labels, assignee=assignee,
         )
 
     @timed_cli
@@ -35,11 +34,10 @@ class MrCli(BaseCli):
         reviews: str | None = None,
         labels: str | None = None,
         assignee: str | None = None,
-        settings: str | None = None,
     ):
         """创建 PR/MR
 
-        用法: mr create [<base>] [--publish] [--reviews ...] [--labels ...] [--assignee ...] [--settings FILE]
+        用法: mr create [<base>] [--publish] [--reviews ...] [--labels ...] [--assignee ...]
         """
         return run_mr(
             base,
@@ -48,7 +46,6 @@ class MrCli(BaseCli):
             reviews=reviews,
             labels=labels,
             assignee=assignee,
-            settings_file=settings,
         )
 
 

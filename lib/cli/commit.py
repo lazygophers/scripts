@@ -13,20 +13,20 @@ from lib.fire_base import BaseCli, run_cli, timed_cli
 class CommitCli(BaseCli):
     """自动提交变更（单仓或批量扫描子目录）"""
 
-    def __call__(self, *args: str, dry_run: bool = False, settings: str | None = None):
+    def __call__(self, *args: str, dry_run: bool = False):
         """裸调用 `commit [message...]` 等同 `commit auto [message...]`（智能单仓/批量）
 
         message 由所有位置参数 join而成；fire 反射时直接传位置参数即可。"""
         message = " ".join(args) if args else None
-        return self.auto(message, dry_run=dry_run, settings=settings)
+        return self.auto(message, dry_run=dry_run)
 
     @timed_cli
-    def here(self, message: str | None = None, dry_run: bool = False, settings: str | None = None):
+    def here(self, message: str | None = None, dry_run: bool = False):
         """在当前 git 仓库提交
 
-        用法: commit here [message] [--dry-run] [--settings FILE]
+        用法: commit here [message] [--dry-run]
         """
-        return run_commit(message, dry_run=dry_run, settings_file=settings)
+        return run_commit(message, dry_run=dry_run)
 
     @timed_cli
     def all(self, message: str | None = None, dry_run: bool = False):
@@ -37,13 +37,13 @@ class CommitCli(BaseCli):
         return commit_all(pathlib.Path.cwd(), msg=message, dry_run=dry_run)
 
     @timed_cli
-    def auto(self, message: str | None = None, dry_run: bool = False, settings: str | None = None):
+    def auto(self, message: str | None = None, dry_run: bool = False):
         """智能判断：cwd 是 git 仓库 → here；否则 → all
 
-        用法: commit auto [message] [--dry-run] [--settings FILE]
+        用法: commit auto [message] [--dry-run]
         """
         if (pathlib.Path.cwd() / ".git").exists():
-            return run_commit(message, dry_run=dry_run, settings_file=settings)
+            return run_commit(message, dry_run=dry_run)
         return commit_all(pathlib.Path.cwd(), msg=message, dry_run=dry_run)
 
 

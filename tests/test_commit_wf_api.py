@@ -18,6 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from lib import ai_workflow as aw  # noqa: E402
 from lib import commit_wf as cw  # noqa: E402
 
 ENV = {"LAZYGOPHERS_SCRIPTS_BASE_URL": "https://api.example.com/v1",
@@ -39,12 +40,12 @@ def _p(returncode=0, stdout="", stderr=""):
 
 class TestLazygophersEnabled(unittest.TestCase):
     def test_needs_both_env_vars(self) -> None:
-        with mock.patch.dict(cw.os.environ, ENV):
-            self.assertTrue(cw._lazygophers_enabled())
-        with mock.patch.dict(cw.os.environ, {**ENV, "LAZYGOPHERS_SCRIPTS_TOKEN": ""}):
-            self.assertFalse(cw._lazygophers_enabled())
-        with mock.patch.dict(cw.os.environ, {**ENV, "LAZYGOPHERS_SCRIPTS_BASE_URL": ""}):
-            self.assertFalse(cw._lazygophers_enabled())
+        with mock.patch.dict(aw.os.environ, ENV):
+            self.assertTrue(aw._lazygophers_enabled())
+        with mock.patch.dict(aw.os.environ, {**ENV, "LAZYGOPHERS_SCRIPTS_TOKEN": ""}):
+            self.assertFalse(aw._lazygophers_enabled())
+        with mock.patch.dict(aw.os.environ, {**ENV, "LAZYGOPHERS_SCRIPTS_BASE_URL": ""}):
+            self.assertFalse(aw._lazygophers_enabled())
 
 
 class TestExtractMessage(unittest.TestCase):
@@ -72,13 +73,14 @@ class TestExtractMessage(unittest.TestCase):
 
 class TestGenerateViaLazygophers(unittest.TestCase):
     def setUp(self) -> None:
-        env = mock.patch.dict(cw.os.environ, ENV)
+        env = mock.patch.dict(aw.os.environ, ENV)
         env.start()
         self.addCleanup(env.stop)
 
-    def _call(self, urlopen, cwd=None):
-        with mock.patch.object(cw.urllib.request, "urlopen", urlopen):
-            return cw._generate_via_lazygophers("prompt", system_prompt="sys", cwd=cwd)
+    def _call(self, urlopen):
+        with mock.patch.object(aw.urllib.request, "urlopen", urlopen):
+            return aw.generate_via_lazygophers("prompt", system_prompt="sys",
+                                              extract=cw._extract_message)
 
     def test_happy_path_returns_the_message(self) -> None:
         payload = {"content": [{"type": "text", "text": "feat: 加功能\n"}]}
@@ -87,17 +89,16 @@ class TestGenerateViaLazygophers(unittest.TestCase):
 
     def test_request_uses_scripts_project_name_and_hash_for_user_agent(self) -> None:
         urlopen = mock.Mock(return_value=_resp({"content": []}))
-        cwd = "/workspace/customer-app"
         commit_hash = "0123456789abcdef0123456789abcdef01234567"
-        with mock.patch.object(cw, "run", return_value=_p(stdout=f"{commit_hash}\n")) as run:
-            self._call(urlopen, cwd=cwd)
+        with mock.patch.object(aw, "run", return_value=_p(stdout=f"{commit_hash}\n")) as run:
+            self._call(urlopen)
         req = urlopen.call_args[0][0]
         self.assertEqual(req.full_url, "https://api.example.com/v1/chat/compate")
         self.assertEqual(req.headers["Authorization"], "Bearer tok")
         self.assertEqual(req.headers["User-agent"], f"lazyscripts/{commit_hash}")
         self.assertEqual(run.call_count, 1)
         self.assertEqual(run.call_args.args[0], ["git", "rev-parse", "HEAD"])
-        self.assertEqual(run.call_args.kwargs["cwd"], cw.Path(cw.__file__).resolve().parent.parent)
+        self.assertEqual(run.call_args.kwargs["cwd"], aw.Path(aw.__file__).resolve().parent.parent)
         body = json.loads(req.data)
         self.assertNotIn("disable_thinking", body)
         self.assertEqual(body["system"], "sys")
@@ -153,14 +154,14 @@ class TestGenerateViaLazygophers(unittest.TestCase):
     def test_http_error_reports_the_status_code(self) -> None:
         err = urllib.error.HTTPError("u", 429, "Too Many Requests", {}, io.BytesIO(b""))
         r = mock.MagicMock()
-        with mock.patch.object(cw, "reporter", return_value=r):
+        with mock.patch.object(aw, "reporter", return_value=r):
             out = self._call(mock.Mock(side_effect=err))
         self.assertEqual(out, "")
         self.assertIn("429", r.err.call_args[0][0])
 
     def test_connection_refused_prints_readable_text(self) -> None:
         r = mock.MagicMock()
-        with mock.patch.object(cw, "reporter", return_value=r):
+        with mock.patch.object(aw, "reporter", return_value=r):
             out = self._call(mock.Mock(side_effect=ConnectionRefusedError(61, "Connection refused")))
         self.assertEqual(out, "")
         self.assertIn("Connection refused", r.err.call_args[0][0])
@@ -168,14 +169,14 @@ class TestGenerateViaLazygophers(unittest.TestCase):
 
     def test_urlerror_uses_its_reason(self) -> None:
         r = mock.MagicMock()
-        with mock.patch.object(cw, "reporter", return_value=r):
+        with mock.patch.object(aw, "reporter", return_value=r):
             out = self._call(mock.Mock(side_effect=urllib.error.URLError("DNS 查不到")))
         self.assertEqual(out, "")
         self.assertIn("DNS 查不到", r.err.call_args[0][0])
 
     def test_timeout(self) -> None:
         r = mock.MagicMock()
-        with mock.patch.object(cw, "reporter", return_value=r):
+        with mock.patch.object(aw, "reporter", return_value=r):
             self.assertEqual(self._call(mock.Mock(side_effect=TimeoutError())), "")
         self.assertIn("连接失败", r.err.call_args[0][0])
 
@@ -184,31 +185,41 @@ class TestGenerateViaLazygophers(unittest.TestCase):
         cm.__enter__.return_value = SimpleNamespace(read=lambda: b"not json")
         cm.__exit__.return_value = False
         r = mock.MagicMock()
-        with mock.patch.object(cw, "reporter", return_value=r):
+        with mock.patch.object(aw, "reporter", return_value=r):
             self.assertEqual(self._call(mock.Mock(return_value=cm)), "")
         self.assertEqual(r.err.call_args[0][0], "LAZYGOPHERS API 响应格式异常")
+
+    def test_missing_env_reports_both_vars_without_a_request(self) -> None:
+        urlopen = mock.Mock()
+        r = mock.MagicMock()
+        with mock.patch.dict(aw.os.environ, {"LAZYGOPHERS_SCRIPTS_TOKEN": ""}), \
+             mock.patch.object(aw, "reporter", return_value=r):
+            self.assertEqual(self._call(urlopen), "")
+        urlopen.assert_not_called()
+        self.assertIn("LAZYGOPHERS_SCRIPTS_BASE_URL", r.err.call_args[0][0])
+        self.assertIn("LAZYGOPHERS_SCRIPTS_TOKEN", r.err.call_args[0][0])
 
 
 class TestDebugDump(unittest.TestCase):
     def test_silent_without_debug(self) -> None:
         r = mock.MagicMock()
         with mock.patch("lib.notify.is_debug", return_value=False), \
-             mock.patch.object(cw, "reporter", return_value=r):
-            cw._debug_dump("u", {"a": 1}, b"{}")
+             mock.patch.object(aw, "reporter", return_value=r):
+            aw._debug_dump("u", {"a": 1}, b"{}")
         r.step.assert_not_called()
 
     def test_dumps_request_and_response(self) -> None:
         r = mock.MagicMock()
         with mock.patch("lib.notify.is_debug", return_value=True), \
-             mock.patch.object(cw, "reporter", return_value=r):
-            cw._debug_dump("u", {"a": 1}, b'{"ok":1}')
+             mock.patch.object(aw, "reporter", return_value=r):
+            aw._debug_dump("u", {"a": 1}, b'{"ok":1}')
         self.assertEqual(r.output.call_count, 2)
 
     def test_missing_response_body(self) -> None:
         r = mock.MagicMock()
         with mock.patch("lib.notify.is_debug", return_value=True), \
-             mock.patch.object(cw, "reporter", return_value=r):
-            cw._debug_dump("u", {}, None)
+             mock.patch.object(aw, "reporter", return_value=r):
+            aw._debug_dump("u", {}, None)
         self.assertEqual(r.output.call_args[0][0], "(无)")
 
 
@@ -319,12 +330,23 @@ class TestRunCommitBranches(unittest.TestCase):
     def test_api_path_is_used_when_the_env_is_set(self) -> None:
         with mock.patch.object(cw, "run", return_value=_p(stdout="f.py\n")), \
              mock.patch.dict(cw.os.environ, ENV), \
-             mock.patch.object(cw, "_generate_via_lazygophers",
-                               return_value="feat: 来自 API") as gen, \
-             mock.patch.object(cw, "generate_via_claude") as claude:
+             mock.patch.object(cw, "generate_via_lazygophers",
+                               return_value="feat: 来自 API") as gen:
             self.assertEqual(cw.run_commit(), 0)
         gen.assert_called_once()
-        claude.assert_not_called()
+
+    def test_missing_env_aborts_without_committing(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake(args, **_kw):
+            calls.append(list(args))
+            return _p(stdout="f.py\n")
+
+        env = {k: v for k, v in cw.os.environ.items() if not k.startswith("LAZYGOPHERS_")}
+        with mock.patch.object(cw, "run", fake), \
+             mock.patch.dict(cw.os.environ, env, clear=True):
+            self.assertEqual(cw.run_commit(), 1)
+        self.assertFalse([c for c in calls if c[:2] == ["bit", "commit"]])
 
     def test_commit_failure_cleans_the_lock_and_gives_up_after_three_tries(self) -> None:
         calls: list[list[str]] = []

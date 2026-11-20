@@ -1,6 +1,6 @@
 # mr
 
-自动创建 PR/MR（调 claude 生成 title/body，默认 draft）
+自动创建 PR/MR（LAZYGOPHERS API 生成 title/body，默认 draft）
 
 ## 用法
 
@@ -22,7 +22,6 @@
 | `-r, --reviews=REVIEWS` | Optional['str \| None'] | None |
 | `-l, --labels=LABELS` | Optional['str \| None'] | None |
 | `-a, --assignee=ASSIGNEE` | Optional['str \| None'] | None |
-| `-s, --settings=SETTINGS` | Optional['str \| None'] | None |
 
 ## 示例
 

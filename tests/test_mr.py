@@ -130,14 +130,14 @@ class TestFindExistingPrGlab(unittest.TestCase):
 
 
 class TestRunPrcSkipsExisting(unittest.TestCase):
-    """run_mr 已有 open PR 时跳过创建，不调 run_claude。"""
+    """run_mr 已有 open PR 时跳过创建，不生成也不调 gh create。"""
 
     @patch("lib.mr_wf.run")
-    @patch("lib.mr_wf.run_claude")
+    @patch("lib.mr_wf.create_with_generated_text")
     @patch("lib.mr_wf.detect_self_assignee", return_value="me")
     @patch("lib.mr_wf.detect_provider")
     def test_skips_when_pr_exists(self, mock_provider, _mock_assignee,
-                                  mock_claude, mock_run):
+                                  mock_create, mock_run):
         mock_provider.return_value = _gh_info()
         # 查重命中
         mock_run.return_value = MagicMock(
@@ -146,7 +146,7 @@ class TestRunPrcSkipsExisting(unittest.TestCase):
         import lib.mr_wf as mr
         rc = mr.run_mr(base="main")
         self.assertEqual(rc, 0)
-        mock_claude.assert_not_called()
+        mock_create.assert_not_called()
 
 
 if __name__ == "__main__":

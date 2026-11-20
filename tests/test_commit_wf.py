@@ -32,7 +32,7 @@ class TestRunCommit(unittest.TestCase):
         mock_has.return_value = (False, [])
         self.assertEqual(run_commit(), 0)
 
-    @patch("lib.commit_wf.generate_via_claude")
+    @patch("lib.commit_wf.generate_via_lazygophers")
     @patch("lib.commit_wf.run")
     @patch("lib.commit_wf._has_changes")
     def test_with_msg_skips_generate(self, mock_has, mock_run, mock_gen):
@@ -42,8 +42,7 @@ class TestRunCommit(unittest.TestCase):
         self.assertEqual(rc, 0)
         mock_gen.assert_not_called()
 
-    @patch.dict("lib.commit_wf.os.environ", {"LAZYGOPHERS_SCRIPTS_BASE_URL": "", "LAZYGOPHERS_SCRIPTS_TOKEN": ""})
-    @patch("lib.commit_wf.generate_via_claude")
+    @patch("lib.commit_wf.generate_via_lazygophers")
     @patch("lib.commit_wf.run")
     @patch("lib.commit_wf._has_changes")
     def test_no_msg_calls_generate(self, mock_has, mock_run, mock_gen):
@@ -54,8 +53,7 @@ class TestRunCommit(unittest.TestCase):
         self.assertEqual(rc, 0)
         mock_gen.assert_called_once()
 
-    @patch.dict("lib.commit_wf.os.environ", {"LAZYGOPHERS_SCRIPTS_BASE_URL": "", "LAZYGOPHERS_SCRIPTS_TOKEN": ""})
-    @patch("lib.commit_wf.generate_via_claude")
+    @patch("lib.commit_wf.generate_via_lazygophers")
     @patch("lib.commit_wf.run")
     @patch("lib.commit_wf._has_changes")
     def test_generate_empty_aborts(self, mock_has, mock_run, mock_gen):
@@ -65,45 +63,24 @@ class TestRunCommit(unittest.TestCase):
         rc = run_commit()
         self.assertEqual(rc, 1)
 
-    @patch.dict("lib.commit_wf.os.environ",
-                {"LAZYGOPHERS_SCRIPTS_BASE_URL": "http://x", "LAZYGOPHERS_SCRIPTS_TOKEN": "t"})
-    @patch("lib.commit_wf.generate_via_claude")
-    @patch("lib.commit_wf._generate_via_lazygophers")
+    @patch("lib.commit_wf.generate_via_lazygophers", return_value="")
     @patch("lib.commit_wf.run")
     @patch("lib.commit_wf._has_changes")
-    def test_lazygophers_empty_falls_back_to_claude(self, mock_has, mock_run, mock_lazy, mock_gen):
-        # API 400/网络失败时 _generate_via_lazygophers 返回空串，不能就此取消提交
+    def test_api_failure_aborts_without_commit(self, mock_has, mock_run, _mock_gen):
+        # API 400/网络失败 → 不再回退 claude，直接取消提交
         mock_has.return_value = (True, ["M  file.py"])
         mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-        mock_lazy.return_value = ""
-        mock_gen.return_value = "fix: 回退生成"
-        rc = run_commit()
-        self.assertEqual(rc, 0)
-        mock_gen.assert_called_once()
-
-    @patch.dict("lib.commit_wf.os.environ",
-                {"LAZYGOPHERS_SCRIPTS_BASE_URL": "http://x", "LAZYGOPHERS_SCRIPTS_TOKEN": "t"})
-    @patch("lib.commit_wf.generate_via_claude")
-    @patch("lib.commit_wf._generate_via_lazygophers")
-    @patch("lib.commit_wf.run")
-    @patch("lib.commit_wf._has_changes")
-    def test_lazygophers_ok_skips_claude(self, mock_has, mock_run, mock_lazy, mock_gen):
-        mock_has.return_value = (True, ["M  file.py"])
-        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-        mock_lazy.return_value = "fix: api 生成"
-        rc = run_commit()
-        self.assertEqual(rc, 0)
-        mock_gen.assert_not_called()
+        self.assertEqual(run_commit(), 1)
+        calls = [c.args[0] for c in mock_run.call_args_list]
+        self.assertFalse([c for c in calls if c[:2] == ["bit", "commit"]])
 
     @patch("lib.commit_wf.run")
     @patch("lib.commit_wf._has_changes")
     def test_empty_staged_calls_bit_add(self, mock_has, mock_run):
         mock_has.return_value = (True, ["?? new.py"])
         mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-        with patch.dict("lib.commit_wf.os.environ", {"LAZYGOPHERS_SCRIPTS_BASE_URL": "", "LAZYGOPHERS_SCRIPTS_TOKEN": ""}):
-            with patch("lib.commit_wf.generate_via_claude") as mock_gen:
-                mock_gen.return_value = "feat: 加文件"
-                run_commit()
+        with patch("lib.commit_wf.generate_via_lazygophers", return_value="feat: 加文件"):
+            run_commit()
         calls = [c.args[0] for c in mock_run.call_args_list]
         self.assertIn(["bit", "add", "."], calls)
 
@@ -112,7 +89,7 @@ class TestRunCommit(unittest.TestCase):
     def test_dry_run_no_generate(self, mock_has, mock_run):
         mock_has.return_value = (True, ["M  f"])
         mock_run.return_value = MagicMock(stdout="f\n", stderr="", returncode=0)
-        with patch("lib.commit_wf.generate_via_claude") as mock_gen:
+        with patch("lib.commit_wf.generate_via_lazygophers") as mock_gen:
             rc = run_commit(dry_run=True)
         self.assertEqual(rc, 0)
         mock_gen.assert_not_called()

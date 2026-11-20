@@ -63,9 +63,9 @@ Seven categories by purpose. Terminal index: `lazyhelp`; full usage: `<tool> --h
 
 | Script | Function | Example |
 | :--- | :--- | :--- |
-| `commit` | Auto-commit changes (calls claude for message) | `commit` |
-| `mr` | Auto-create PR/MR (calls claude for title/body, default draft) | `mr [base]` |
-| `issue` | Auto-create Issue (calls claude for title/body) | `issue` |
+| `commit` | Auto-commit changes (LAZYGOPHERS API generates message) | `commit` |
+| `mr` | Auto-create PR/MR (LAZYGOPHERS API generates title/body, default draft) | `mr [base]` |
+| `issue` | Auto-create Issue (LAZYGOPHERS API generates title/body) | `issue` |
 | `squash_pr` | Squash the current branch into a single commit → feeds into mr (2nd arg is the PR branch name, default `<current>_pr`) | `squash_pr <target> [pr_branch]` |
 | `fetch_all` | Batch fetch all Git repositories | `fetch_all` |
 | `list_branch` | List local branches (single-repo or scan all repos, cross-repo dup names marked ⟱) | `list_branch` |

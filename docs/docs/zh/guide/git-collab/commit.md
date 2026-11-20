@@ -1,6 +1,6 @@
 # commit
 
-自动提交变更（调 claude 生成 message；单仓或批量扫描子目录）
+自动提交变更（LAZYGOPHERS API 生成 message；单仓或批量扫描子目录）
 
 ## 用法
 
@@ -20,7 +20,6 @@
 | :--- | :--- | :--- |
 | `ARGS` | 'str' |  |
 | `-d, --dry_run=DRY_RUN` | 'bool' | False |
-| `-s, --settings=SETTINGS` | Optional['str \| None'] | None |
 
 ## 示例
 

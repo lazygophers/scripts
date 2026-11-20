@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import os
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
-from lib.ai_env import json_dumps
-from lib.ai_workflow import current_branch, generate_via_claude
+from lib.ai_workflow import current_branch, generate_via_lazygophers
 from lib.exec import run
 from lib.ui import reporter
 
@@ -22,90 +18,6 @@ _COMMIT_SYSTEM = (
     "subject 格式 type[(scope)]: description（中文，命令式，不超 50 字，不加句号）；"
     "body 用 - 列要点说明变更内容与动机，每行不超 72 字，可多行。"
 )
-
-
-def _lazygophers_enabled() -> bool:
-    """LAZYGOPHERS_SCRIPTS_BASE_URL + _TOKEN 均存在时启用 API 路径。"""
-    return bool(os.environ.get("LAZYGOPHERS_SCRIPTS_BASE_URL")
-                and os.environ.get("LAZYGOPHERS_SCRIPTS_TOKEN"))
-
-
-def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
-                              max_tokens: int = 300, timeout: float = 30.0,
-                              cwd: str | None = None) -> str:
-    """调 LAZYGOPHERS /chat/compate（Anthropic 风格式）生成 message。
-
-    请求：POST {BASE_URL}/chat/compate，body {model, max_tokens, system, messages}，
-    鉴权 Authorization: Bearer <token>，响应遵循 Anthropic Messages content/stop_reason。
-    对 thinking-only 或 max_tokens 响应最多续接两轮，保留完整 assistant content。
-    Returns: 生成文本（strip）。失败返回空串。
-    """
-    r = reporter(stderr=True)
-    base = os.environ["LAZYGOPHERS_SCRIPTS_BASE_URL"].rstrip("/")
-    token = os.environ["LAZYGOPHERS_SCRIPTS_TOKEN"]
-    url = f"{base}/chat/compate"
-    project_root = Path(__file__).resolve().parent.parent
-    version = run(["git", "rev-parse", "HEAD"], check=False,
-                  capture_output=True, cwd=project_root)
-    commit_hash = (version.stdout or "").strip()
-    if version.returncode != 0 or not commit_hash:
-        r.err("无法读取 scripts 工具的 commit hash")
-        return ""
-    project_name = "lazyscripts"
-
-    payload = {
-        "model": "haiku",
-        "max_tokens": max_tokens,
-        "system": system_prompt,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    texts = []
-    try:
-        for _ in range(3):
-            body = json.dumps(payload, ensure_ascii=False).encode()
-            req = urllib.request.Request(url, data=body, headers={
-                "authorization": f"Bearer {token}",
-                "content-type": "application/json",
-                "user-agent": f"{project_name}/{commit_hash}",
-            })
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
-                _debug_dump(url, payload, raw)
-                data = json.loads(raw)
-            parts = data.get("content") or []
-            texts.extend(p.get("text", "") for p in parts if p.get("type") == "text")
-            if data.get("stop_reason") != "max_tokens" and texts:
-                break
-            payload["messages"].extend([
-                {"role": "assistant", "content": parts},
-                {"role": "user", "content":
-                    "请从上次 assistant 响应停止处继续，直接续写，不要重复已有内容；只输出 commit message。"},
-            ])
-        if data.get("stop_reason") == "max_tokens":
-            r.err("LAZYGOPHERS API 连续 3 轮达到 max_tokens，未生成完整 message")
-            return ""
-        # text blocks may contain leaked thinking prose; select the actual message.
-        return _extract_message(texts).strip()
-    except urllib.error.HTTPError as e:
-        # HTTP 错误：打印状态码 + 原因（已 strip），不暴露 traceback/异常类名
-        r.err(f"LAZYGOPHERS API 返回 HTTP {e.code}（{e.reason}）")
-        return ""
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        # 网络层错误（连接拒绝/超时/DNS 等）：不打印异常 repr（含 errno/类名），
-        # 只输出可读中文，避免像堆栈
-        reason = getattr(e, "reason", None) or e
-        # OSError 子类（ConnectionRefusedError 等）优先取 strerror（纯文案，
-        # 无 errno 数字）；普通 OSError / TimeoutError 取 strerror；
-        # 其他（reason 为字符串等）直接 str()
-        text = getattr(reason, "strerror", None) or getattr(e, "strerror", None)
-        if not text:
-            text = str(reason)
-        r.err(f"LAZYGOPHERS API 连接失败：{text}")
-        return ""
-    except (ValueError, KeyError, IndexError):
-        # JSON 解析 / 字段缺失：不暴露异常类名
-        r.err("LAZYGOPHERS API 响应格式异常")
-        return ""
 
 
 # commit message subject 前缀 type 列表（与 _build_prompt 规范一致）
@@ -142,19 +54,6 @@ def _extract_message(texts: list[str]) -> str:
     return tail
 
 
-def _debug_dump(url: str, payload: dict, raw: bytes | None = None) -> None:
-    """--debug 打印 LAZYGOPHERS 原始请求 body + 响应 body 到 stderr。"""
-    from lib.notify import is_debug
-    if not is_debug():
-        return
-    rr = reporter(stderr=True)
-    rr.step(f"[debug] LAZYGOPHERS POST {url}")
-    rr.step("[debug] request body:")
-    rr.output(json_dumps(payload), force=True)
-    rr.step("[debug] response body:")
-    rr.output(raw.decode("utf-8", "replace") if raw else "(无)", force=True)
-
-
 _LOCK_STALE_SECS = 30
 
 
@@ -185,7 +84,6 @@ def run_commit(
     msg: str | None = None,
     *,
     dry_run: bool = False,
-    settings_file: str | None = None,
     cwd: str | None = None,
 ) -> int:
     """自动提交变更。cwd=None 当前目录；批量场景透传各 repo 路径。"""
@@ -231,18 +129,14 @@ def run_commit(
             run(["git", "add", "-A"], check=False, cwd=cwd)
 
     # message 已显式给出 → 直接提交（省 AI 往返）
-    # message 缺失 → LAZYGOPHERS env 存在走 /chat/compate API；否则回退 claude CLI
+    # message 缺失 → 走 LAZYGOPHERS /chat/compate API；env 缺失或 API 失败直接报错
     if msg:
         final_msg = msg
     else:
         prompt = _build_prompt(status_lines, cwd=cwd)
-        final_msg = ""
-        if _lazygophers_enabled():
-            r.step("LAZYGOPHERS /chat/compate 生成 message")
-            final_msg = _generate_via_lazygophers(prompt, system_prompt=_COMMIT_SYSTEM, cwd=cwd)
-        if not final_msg:
-            # API 400/网络失败返回空串，回退 claude CLI 而不是取消提交
-            final_msg = generate_via_claude(prompt, system_prompt=_COMMIT_SYSTEM)
+        r.step("LAZYGOPHERS /chat/compate 生成 message")
+        final_msg = generate_via_lazygophers(prompt, system_prompt=_COMMIT_SYSTEM,
+                                             extract=_extract_message)
         if not final_msg:
             r.err("生成 message 失败，已取消提交")
             return 1

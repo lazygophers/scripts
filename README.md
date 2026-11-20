@@ -67,9 +67,9 @@ inject 幂等: 重跑不会重复追加。完成后重启 shell 或 `source ~/.z
 
 | 脚本 | 功能 | 示例 |
 | :--- | :--- | :--- |
-| `commit` | 自动提交变更 (调 claude 生成 message) | `commit` |
-| `mr` | 自动创建 PR/MR (调 claude 生成 title/body, 默认 draft) | `mr [base]` |
-| `issue` | 自动创建 Issue (调 claude 生成 title/body) | `issue` |
+| `commit` | 自动提交变更 (LAZYGOPHERS API 生成 message) | `commit` |
+| `mr` | 自动创建 PR/MR (LAZYGOPHERS API 生成 title/body, 默认 draft) | `mr [base]` |
+| `issue` | 自动创建 Issue (LAZYGOPHERS API 生成 title/body) | `issue` |
 | `squash_pr` | 压缩当前分支为单 commit → 对接 mr 开 PR（第二参数是 PR 分支名，默认 `<当前分支>_pr`） | `squash_pr <target> [pr_branch]` |
 | `fetch_all` | 批量 fetch 所有 Git 仓库 | `fetch_all` |
 | `list_branch` | 列出本地分支(单仓或扫描所有 Git 仓库, 跨仓同名分支标 ⟱) | `list_branch` |

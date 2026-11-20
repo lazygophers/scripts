@@ -63,9 +63,9 @@ inject ذو طبيعة متطابقة : إعادة التشغيل لن تضيف 
 
 | السكربت | الوظيفة | مثال |
 | :--- | :--- | :--- |
-| `commit` | تنفيذ تلقائي (claude يولّد الرسالة) | `commit` |
-| `mr` | إنشاء PR/MR تلقائيًا (claude يولّد العنوان/المحتوى، draft افتراضيًا) | `mr [base]` |
-| `issue` | إنشاء Issue تلقائيًا (claude يولّد العنوان/المحتوى) | `issue` |
+| `commit` | تنفيذ تلقائي (واجهة LAZYGOPHERS API تولّد الرسالة) | `commit` |
+| `mr` | إنشاء PR/MR تلقائيًا (واجهة LAZYGOPHERS API تولّد العنوان/المحتوى، draft افتراضيًا) | `mr [base]` |
+| `issue` | إنشاء Issue تلقائيًا (واجهة LAZYGOPHERS API تولّد العنوان/المحتوى) | `issue` |
 | `squash_pr` | ضغط الفرع الحالي في commit واحد → فتح PR عبر mr (الوسيط الثاني اسم فرع الـ PR، افتراضيًا `<الحالي>_pr`) | `squash_pr <target> [pr_branch]` |
 | `fetch_all` | جلب جميع مستودعات Git دفعيًا | `fetch_all` |
 | `list_branch` | سرد الفروع المحلية (مستودع واحد أو مسح الكل، المكررة ⟱) | `list_branch` |

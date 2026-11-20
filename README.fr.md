@@ -63,9 +63,9 @@ Sept catégories par usage. Index terminal : `lazyhelp` ; usage complet : `<outi
 
 | Script | Fonction | Exemple |
 | :--- | :--- | :--- |
-| `commit` | Commit automatique (claude génère le message) | `commit` |
-| `mr` | Crée PR/MR automatiquement (claude génère titre/corps, draft par défaut) | `mr [base]` |
-| `issue` | Crée un Issue automatiquement (claude génère titre/corps) | `issue` |
+| `commit` | Commit automatique (l'API LAZYGOPHERS génère le message) | `commit` |
+| `mr` | Crée PR/MR automatiquement (l'API LAZYGOPHERS génère titre/corps, draft par défaut) | `mr [base]` |
+| `issue` | Crée un Issue automatiquement (l'API LAZYGOPHERS génère titre/corps) | `issue` |
 | `squash_pr` | Écrase la branche courante en un commit → ouvre PR via mr (2e argument : nom de la branche PR, défaut `<courante>_pr`) | `squash_pr <target> [pr_branch]` |
 | `fetch_all` | Fetch en lot de tous les dépôts Git | `fetch_all` |
 | `list_branch` | Liste les branches locales (dépôt seul ou scan global, doublons ⟱) | `list_branch` |

@@ -221,17 +221,6 @@ class TestProviderInfoDataclass(unittest.TestCase):
         self.assertEqual(info.repo, "r")
 
 
-class TestFmtOpt(unittest.TestCase):
-    def test_empty_value(self):
-        from lib.ai_workflow import fmt_opt
-        self.assertEqual(fmt_opt("--title", ""), "")
-        self.assertEqual(fmt_opt("--title", None), "")
-
-    def test_quotes_value(self):
-        from lib.ai_workflow import fmt_opt
-        self.assertEqual(fmt_opt("--title", "a b"), "--title 'a b'")
-
-
 class TestParseRemoteUrlEdgeCases(unittest.TestCase):
     def test_host_only_no_path(self):
         self.assertIsNone(parse_remote_url("git@github.com:"))
@@ -245,75 +234,67 @@ class TestDetectProviderEdgeCases(unittest.TestCase):
         self.assertIsNone(detect_provider())
 
 
-class TestRunClaude(unittest.TestCase):
-    @patch("lib.ai_workflow.run_no_capture", return_value=0)
-    def test_success_builds_args(self, mock_run):
-        from lib.ai_workflow import _SAFETY_SUFFIX, run_claude
-        self.assertEqual(run_claude("do it", system_prompt="SYS"), 0)
-        args = mock_run.call_args[0][0]
-        self.assertEqual(args[:2], ["claude", "-p"])
-        self.assertEqual(args[-1], "do it")
-        self.assertIn("SYS" + _SAFETY_SUFFIX, args)
-        self.assertIn("--model", args)
-        self.assertNotIn("--dangerously-skip-permissions", args)
+class TestSplitTitleBody(unittest.TestCase):
+    def test_first_line_title_rest_body(self):
+        from lib.ai_workflow import split_title_body
+        self.assertEqual(split_title_body("修登录\n\n## Summary\n- a"), ("修登录", "## Summary\n- a"))
 
-    @patch("lib.ai_workflow.run_no_capture", return_value=0)
-    def test_settings_file_appended(self, mock_run):
-        from lib.ai_workflow import run_claude
-        run_claude("p", system_prompt="s", settings_file="/tmp/s.json")
-        args = mock_run.call_args[0][0]
-        self.assertIn("/tmp/s.json", args)
+    def test_strips_fence_prefix_and_quotes(self):
+        from lib.ai_workflow import split_title_body
+        text = "```\n\nTitle: “修登录”\n\nbody\n```"
+        self.assertEqual(split_title_body(text), ("修登录", "body"))
 
-    @patch("lib.ai_workflow.run_no_capture", return_value=3)
-    def test_nonzero_reports_error(self, mock_run):
-        from lib.ai_workflow import run_claude
+    def test_markdown_heading_and_inner_fences_kept(self):
+        from lib.ai_workflow import split_title_body
+        text = "## 加缓存\n\n```py\nx = 1\n```"
+        self.assertEqual(split_title_body(text), ("加缓存", "```py\nx = 1\n```"))
+
+    def test_empty(self):
+        from lib.ai_workflow import split_title_body
+        self.assertEqual(split_title_body("  \n"), ("", ""))
+
+
+class TestCreateWithGeneratedText(unittest.TestCase):
+    def _call(self, text, retry=None):
+        from lib.ai_workflow import create_with_generated_text
+        from lib.exec import RetryResult
+        retry = retry or MagicMock(return_value=RetryResult(ok=True, attempts=1, last_output="https://x/1\n"))
         r = MagicMock()
-        with patch("lib.ai_workflow.reporter", return_value=r):
-            self.assertEqual(run_claude("p", system_prompt="s"), 3)
+        with patch("lib.ai_workflow.generate_via_lazygophers", return_value=text) as gen, \
+             patch("lib.ai_workflow.retry_command", retry), \
+             patch("lib.ai_workflow.reporter", return_value=r), \
+             patch("builtins.print") as out:
+            rc = create_with_generated_text(
+                "p", system_prompt="s", build_argv=lambda t, b: ["gh", "x", "create", t, b])
+        return rc, retry, r, out, gen
+
+    def test_runs_argv_built_from_title_and_body(self):
+        rc, retry, _, out, gen = self._call("标题\n\n正文")
+        self.assertEqual(rc, 0)
+        self.assertEqual(retry.call_args.args[0], ["gh", "x", "create", "标题", "正文"])
+        self.assertEqual(retry.call_args.kwargs["max_retries"], 1)
+        out.assert_called_once_with("https://x/1")
+        self.assertEqual(gen.call_args.kwargs["system_prompt"], "s")
+
+    def test_generation_failure_skips_the_command(self):
+        rc, retry, _, _, _ = self._call("")
+        self.assertEqual(rc, 1)
+        retry.assert_not_called()
+
+    def test_missing_title_skips_the_command(self):
+        rc, retry, r, _, _ = self._call("```\n```")
+        self.assertEqual(rc, 1)
+        retry.assert_not_called()
         r.err.assert_called_once()
 
-
-class TestGenerateViaClaude(unittest.TestCase):
-    @patch("lib.ai_workflow.run")
-    def test_returns_stripped_stdout(self, mock_run):
-        from lib.ai_workflow import generate_via_claude
-        mock_run.return_value = MagicMock(returncode=0, stdout="feat: x\n", stderr="")
-        self.assertEqual(generate_via_claude("p", system_prompt="s"), "feat: x")
-        args = mock_run.call_args[0][0]
-        self.assertIn("--bare", args)
-        self.assertEqual(args[-1], "p")
-
-    @patch("lib.ai_workflow.run")
-    def test_settings_file_appended(self, mock_run):
-        from lib.ai_workflow import generate_via_claude
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        generate_via_claude("p", system_prompt="s", settings_file="/tmp/x.json")
-        self.assertIn("/tmp/x.json", mock_run.call_args[0][0])
-
-    @patch("lib.ai_workflow.run")
-    def test_failure_returns_empty(self, mock_run):
-        from lib.ai_workflow import generate_via_claude
-        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="boom")
-        r = MagicMock()
-        with patch("lib.ai_workflow.reporter", return_value=r):
-            self.assertEqual(generate_via_claude("p", system_prompt="s"), "")
-        self.assertIn("boom", r.err.call_args[0][0])
-
-    @patch("lib.ai_workflow.run")
-    def test_failure_reports_stdout_when_stderr_empty(self, mock_run):
-        from lib.ai_workflow import generate_via_claude
-        mock_run.return_value = MagicMock(returncode=1, stdout="API Error: 529\n", stderr="")
-        r = MagicMock()
-        with patch("lib.ai_workflow.reporter", return_value=r):
-            self.assertEqual(generate_via_claude("p", system_prompt="s"), "")
-        self.assertIn("API Error: 529", r.err.call_args[0][0])
-
-    @patch("lib.ai_workflow.run")
-    def test_timeout_passed_through(self, mock_run):
-        from lib.ai_workflow import generate_via_claude
-        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-        generate_via_claude("p", system_prompt="s", timeout=30)
-        self.assertEqual(mock_run.call_args.kwargs["timeout"], 30)
+    def test_command_failure_surfaces_output_verbatim(self):
+        from lib.exec import RetryResult
+        retry = MagicMock(return_value=RetryResult(ok=False, attempts=1,
+                                                   last_output="GraphQL: No commits between main and feat\n"))
+        rc, _, r, out, _ = self._call("t\n\nb", retry=retry)
+        self.assertEqual(rc, 1)
+        self.assertIn("GraphQL: No commits between main and feat", r.err.call_args[0][0])
+        out.assert_not_called()
 
 
 if __name__ == "__main__":

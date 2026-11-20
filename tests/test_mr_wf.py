@@ -6,117 +6,110 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from lib.ai_workflow import ProviderInfo, fmt_opt
+import urllib.error
+from unittest.mock import MagicMock
+
+from lib.ai_workflow import ProviderInfo
+from lib.exec import RetryResult
 from lib.mr_wf import _build_prompt, run_mr
 
 _INFO = ProviderInfo(provider="gh", host="github.com", repo="o/r",
                      remote="origin", remote_url="git@github.com:o/r.git")
+_GLAB = ProviderInfo(provider="glab", host="gitlab.com", repo="g/p",
+                     remote="origin", remote_url="")
+_ENV = {"LAZYGOPHERS_SCRIPTS_BASE_URL": "http://api", "LAZYGOPHERS_SCRIPTS_TOKEN": "t"}
+_OK = RetryResult(ok=True, attempts=1, last_output="https://github.com/o/r/pull/1\n")
 
 
-class TestFmtOpt(unittest.TestCase):
-    def test_with_value(self):
-        self.assertEqual(fmt_opt("--reviewer", "alice"), "--reviewer alice")
-
-    def test_with_special_chars_quoted(self):
-        # 含特殊字符的 value 用 shlex.quote 包裹
-        out = fmt_opt("--reviewer", "a b")
-        self.assertIn("'a b'", out)
-
-    def test_none(self):
-        self.assertEqual(fmt_opt("--reviewer", None), "")
-
-    def test_empty(self):
-        self.assertEqual(fmt_opt("--reviewer", ""), "")
+def _git(*_a, **_kw):
+    return MagicMock(returncode=0, stdout="abc feat: x\n", stderr="")
 
 
 class TestBuildPrompt(unittest.TestCase):
-    def test_gh_command(self):
-        p = _build_prompt(_INFO, branch="feat", base="main", draft=True,
-                          reviews="bob", labels=None, assignee="me")
-        self.assertIn("gh pr create", p)
-        self.assertIn("--base main", p)
-        self.assertIn("--draft", p)
-        self.assertIn("--reviewer", p)
-        self.assertIn("bob", p)
-
-    def test_glab_command(self):
-        info = ProviderInfo(provider="glab", host="gitlab.com", repo="g/p",
-                            remote="origin", remote_url="")
-        p = _build_prompt(info, branch="x", base="main", draft=False,
-                          reviews=None, labels=None, assignee=None)
-        self.assertIn("glab mr create", p)
-        self.assertIn("--target-branch main", p)
-        self.assertNotIn("--draft", p)
-
-    def test_includes_specs(self):
-        p = _build_prompt(_INFO, branch="x", base="main", draft=True,
-                          reviews=None, labels=None, assignee=None)
-        self.assertIn("title", p)
+    @patch("lib.mr_wf.run", side_effect=_git)
+    def test_has_data_and_format_but_no_command(self, _run):
+        p = _build_prompt(_INFO, branch="feat", base="main")
+        self.assertIn("<<<DATA>>>", p)
+        self.assertIn("abc feat: x", p)
         self.assertIn("Summary", p)
+        self.assertIn("第一行 title", p)
+        self.assertNotIn("gh pr create", p)
+        self.assertNotIn("执行", p.replace("勿执行", ""))
 
 
-class TestRunPrc(unittest.TestCase):
-    @patch("lib.mr_wf.run_claude")
-    @patch("lib.mr_wf.detect_self_assignee", return_value="")
-    @patch("lib.mr_wf.remote_default_branch", return_value="main")
-    @patch("lib.mr_wf.current_branch", return_value="feat")
-    @patch("lib.mr_wf.detect_provider")
-    def test_success(self, mock_provider, _b, _a, _me, mock_claude):
-        mock_provider.return_value = _INFO
-        mock_claude.return_value = 0
-        rc = run_mr()
+@patch("lib.mr_wf._find_existing_pr", return_value=None)
+@patch("lib.mr_wf.run", side_effect=_git)
+@patch("lib.mr_wf.remote_default_branch", return_value="main")
+@patch("lib.mr_wf.current_branch", return_value="feat")
+class TestRunMr(unittest.TestCase):
+    def _run(self, info=_INFO, text="加缓存\n\n## Summary\n- x", me="", **kw):
+        with patch("lib.mr_wf.detect_provider", return_value=info), \
+             patch("lib.mr_wf.detect_self_assignee", return_value=me), \
+             patch("lib.ai_workflow.generate_via_lazygophers", return_value=text) as gen, \
+             patch("lib.ai_workflow.retry_command", return_value=_OK) as retry, \
+             patch("builtins.print"):
+            rc = run_mr(**kw)
+        return rc, retry, gen
+
+    def test_gh_argv_from_api_response(self, *_):
+        rc, retry, _ = self._run(me="myuser", reviews="bob", labels="bug")
         self.assertEqual(rc, 0)
-        mock_claude.assert_called_once()
+        self.assertEqual(retry.call_args.args[0], [
+            "gh", "pr", "create", "--base", "main", "--title", "加缓存",
+            "--body", "## Summary\n- x", "--draft",
+            "--reviewer", "bob", "--label", "bug", "--assignee", "myuser"])
+
+    def test_glab_argv_explicit_base_no_draft(self, *_):
+        rc, retry, _ = self._run(info=_GLAB, base="develop", draft=False)
+        self.assertEqual(rc, 0)
+        self.assertEqual(retry.call_args.args[0], [
+            "glab", "mr", "create", "--target-branch", "develop", "--title", "加缓存",
+            "--description", "## Summary\n- x"])
+
+    def test_api_failure_exits_1_without_gh(self, *_):
+        rc, retry, _ = self._run(text="")
+        self.assertEqual(rc, 1)
+        retry.assert_not_called()
+
+    def test_dry_run_generates_nothing(self, *_):
+        rc, retry, gen = self._run(dry_run=True)
+        self.assertEqual(rc, 0)
+        gen.assert_not_called()
+        retry.assert_not_called()
 
     @patch("lib.mr_wf.detect_provider", return_value=None)
-    def test_no_provider(self, _):
+    def test_no_provider(self, *_):
         self.assertEqual(run_mr(), 1)
 
-    @patch("lib.mr_wf.run_claude")
-    @patch("lib.mr_wf.detect_self_assignee", return_value="myuser")
-    @patch("lib.mr_wf.remote_default_branch", return_value="main")
-    @patch("lib.mr_wf.current_branch", return_value="feat")
-    @patch("lib.mr_wf.detect_provider")
-    def test_default_assignee_self(self, mock_provider, _b, _a, _me, mock_claude):
-        mock_provider.return_value = _INFO
-        mock_claude.return_value = 0
-        run_mr()
-        kwargs = mock_claude.call_args[0][0]
-        self.assertIn("myuser", kwargs)
 
-    @patch("lib.mr_wf.detect_self_assignee", return_value="")
-    @patch("lib.mr_wf.remote_default_branch", return_value="main")
-    @patch("lib.mr_wf.current_branch", return_value="feat")
-    @patch("lib.mr_wf.detect_provider")
-    def test_dry_run_no_claude(self, mock_provider, _b, _a, _me):
-        mock_provider.return_value = _INFO
-        with patch("lib.mr_wf.run_claude") as mock_claude:
-            rc = run_mr(dry_run=True)
-        self.assertEqual(rc, 0)
-        mock_claude.assert_not_called()
+@patch("lib.mr_wf._find_existing_pr", return_value=None)
+@patch("lib.mr_wf.run", side_effect=_git)
+@patch("lib.mr_wf.remote_default_branch", return_value="main")
+@patch("lib.mr_wf.current_branch", return_value="feat")
+@patch("lib.mr_wf.detect_self_assignee", return_value="")
+@patch("lib.mr_wf.detect_provider", return_value=_INFO)
+class TestRunMrRealApiPath(unittest.TestCase):
+    """不 mock generate_via_lazygophers：env 缺失 / HTTP 失败都要 exit 1 且不跑 gh。"""
 
-    @patch("lib.mr_wf.detect_self_assignee", return_value="")
-    @patch("lib.mr_wf.remote_default_branch", return_value="main")
-    @patch("lib.mr_wf.current_branch", return_value="feat")
-    @patch("lib.mr_wf.detect_provider")
-    def test_explicit_base_overrides(self, mock_provider, _b, _a, _me):
-        mock_provider.return_value = _INFO
-        with patch("lib.mr_wf.run_claude", return_value=0) as mock_claude:
-            run_mr(base="develop")
-        prompt = mock_claude.call_args[0][0]
-        self.assertIn("develop", prompt)
-        self.assertNotIn("--base main", prompt)
+    def test_missing_env_exits_1_without_gh(self, *_):
+        import os
+        env = {k: v for k, v in os.environ.items() if not k.startswith("LAZYGOPHERS_")}
+        with patch.dict(os.environ, env, clear=True), \
+             patch("lib.ai_workflow.urllib.request.urlopen") as urlopen, \
+             patch("lib.ai_workflow.retry_command") as retry:
+            self.assertEqual(run_mr(), 1)
+        urlopen.assert_not_called()
+        retry.assert_not_called()
 
-    @patch("lib.mr_wf.detect_self_assignee", return_value="")
-    @patch("lib.mr_wf.remote_default_branch", return_value="main")
-    @patch("lib.mr_wf.current_branch", return_value="feat")
-    @patch("lib.mr_wf.detect_provider")
-    def test_no_draft(self, mock_provider, _b, _a, _me):
-        mock_provider.return_value = _INFO
-        with patch("lib.mr_wf.run_claude", return_value=0) as mock_claude:
-            run_mr(draft=False)
-        prompt = mock_claude.call_args[0][0]
-        self.assertNotIn("--draft", prompt)
+    def test_api_error_exits_1_without_gh(self, *_):
+        import os
+        with patch.dict(os.environ, _ENV), \
+             patch("lib.ai_workflow.run", return_value=MagicMock(returncode=0, stdout="abc\n")), \
+             patch("lib.ai_workflow.urllib.request.urlopen",
+                   side_effect=urllib.error.URLError("refused")), \
+             patch("lib.ai_workflow.retry_command") as retry:
+            self.assertEqual(run_mr(), 1)
+        retry.assert_not_called()
 
 
 if __name__ == "__main__":

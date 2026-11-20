@@ -116,12 +116,6 @@ class TestCommitCli(unittest.TestCase):
             batch.assert_called_once()
             single.assert_not_called()
 
-    def test_settings_file_only_reaches_the_single_repo_path(self):
-        with patch("lib.cli.commit.run_commit", return_value=0) as single, \
-                patch("pathlib.Path.exists", return_value=True):
-            CommitCli()("msg", settings="/tmp/settings.yaml")
-        self.assertEqual(single.call_args.kwargs["settings_file"], "/tmp/settings.yaml")
-
 
 class TestBatchGitShells(unittest.TestCase):
     """扫全目录的批量 Git 薄壳：裸调用等价于哪个子命令、--force 传没传。"""
@@ -176,12 +170,12 @@ class TestIssueCli(unittest.TestCase):
     def test_every_flag_reaches_the_workflow(self):
         with patch("lib.cli.issue.run_issue", return_value=0) as runner:
             IssueCli()("t", dry_run=True, labels="bug", assignee="me",
-                       milestone="v1", settings="/tmp/s.yaml")
+                       milestone="v1")
         kwargs = runner.call_args.kwargs
         self.assertEqual(
             (kwargs["dry_run"], kwargs["labels"], kwargs["assignee"],
-             kwargs["milestone"], kwargs["settings_file"]),
-            (True, "bug", "me", "v1", "/tmp/s.yaml"),
+             kwargs["milestone"]),
+            (True, "bug", "me", "v1"),
         )
 
 

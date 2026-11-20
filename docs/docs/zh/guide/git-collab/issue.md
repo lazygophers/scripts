@@ -1,6 +1,6 @@
 # issue
 
-自动创建 Issue（调 claude 生成 title/body）
+自动创建 Issue（LAZYGOPHERS API 生成 title/body）
 
 ## 用法
 
@@ -21,7 +21,6 @@
 | `-l, --labels=LABELS` | Optional['str \| None'] | None |
 | `-a, --assignee=ASSIGNEE` | Optional['str \| None'] | None |
 | `-m, --milestone=MILESTONE` | Optional['str \| None'] | None |
-| `-s, --settings=SETTINGS` | Optional['str \| None'] | None |
 
 ## 示例
 

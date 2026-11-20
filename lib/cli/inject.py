@@ -68,7 +68,7 @@ def _read_existing_ai_config() -> tuple[str, str]:
 def _prompt_ai_config(r) -> tuple[str | None, str | None]:
     from lib.ui import ask_confirm, ask_text
     cur_url, cur_tok = _read_existing_ai_config()
-    summary = "启用后 bin/commit 自动生成 message 时优先走 /chat/compate API\n（比 claude CLI 快，实测 ~3s）。env 缺失则回退 claude CLI。"
+    summary = "commit / mr / issue 自动生成文本走 /chat/compate API。\nenv 缺失时这三个命令的自动生成会报错退出。"
     if cur_url or cur_tok:
         summary += "\n检测到现有配置（回车保留）:"
         if cur_url:
