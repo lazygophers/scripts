@@ -7,6 +7,7 @@ requires-python = ">=3.11.5"
 # pyyaml=配置读写(archery/graphwatch), requests=HTTP(archery/grafana)
 # 下界跟到 2026-11-20 的最新版。3.10 底线 2026-11-20 抬到 3.11.5: extras 的
 # graphifyy>=0.9.113 只要 3.11.5+, 3.10 底线下 uv lock 永远解析失败, 锁文件刷不动。
+# graphifyy 条目带 <3.15 环境标记: 包自身封顶 <3.15, 3.15 上装 scripts 不带 graphify。
 dependencies = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.34.2"]
 
 # 每个命令一个 console_scripts 入口, 指向 lib/cli/<name>.py 里的函数。
@@ -74,11 +75,11 @@ websearch = "lib.cli.websearch:main"
 
 [project.optional-dependencies]
 # graphwatch 监听需要 graphify（PyPI 包名 graphifyy）+ 其硬依赖 watchdog，默认不装
-graphify = ["graphifyy[all]>=0.9.113", "watchdog>=7.1"]
+graphify = ["graphifyy[all]>=0.9.113; python_version < \"3.15\"", "watchdog>=7.1"]
 # webgrab / websearch 抓网页要的四件套，默认不装；playwright 装完还要 `playwright install chromium`
 web = ["curl-cffi>=0.17.0", "beautifulsoup4>=4.15.0", "markdownify>=1.2.4", "playwright>=1.65"]
 all = [
-    "graphifyy[all]>=0.9.113", "watchdog>=7.1",
+    "graphifyy[all]>=0.9.113; python_version < \"3.15\"", "watchdog>=7.1",
     "curl-cffi>=0.17.0", "beautifulsoup4>=4.15.0", "markdownify>=1.2.4", "playwright>=1.65",
 ]
 dev = ["fire>=0.7.1", "rich>=15.0.0", "pyyaml>=6.0.3", "requests>=2.34.2"]
