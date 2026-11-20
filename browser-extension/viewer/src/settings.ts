@@ -133,7 +133,7 @@ export async function renderSettings(doc: Document): Promise<void> {
 }
 
 /**
- * 主题那一节：配色八张卡 + 风格四张卡 + 自定义 + 规格栏。
+ * 主题那一节：配色卡 + 风格四张卡 + 自定义 + 规格栏。
  *
  * 设置页自己也应用当前主题，所以页面上那块预览就是真实效果，不是另画一份模拟。
  */
@@ -194,11 +194,13 @@ function fillCards(
       chip.textContent = "文";
       if (card.palette) {
         // 小样按那套配色自己的公式画，不受当前主题影响——否则八张卡长得一模一样。
-        const { h, c, polarity } = card.palette;
-        const [bg, fg] = polarity === "light" ? [97.5, 27] : [21, 89];
+        const { h, c, polarity, tokens } = card.palette;
+        const [bg, fg, bgC, fgC] = polarity === "light" ? [98, 24, 0.018, 0.028] : [19, 93, 0.03, 0.018];
         chip.setAttribute(
           "style",
-          `background: oklch(${bg}% ${0.018 * c} ${h}); color: oklch(${fg}% ${0.022 * c} ${h})`,
+          tokens
+            ? `background:${tokens.background};color:${tokens.foreground}`
+            : `background: oklch(${bg}% ${bgC * c} ${h}); color: oklch(${fg}% ${fgC * c} ${h})`,
         );
       }
 
@@ -213,7 +215,17 @@ function fillCards(
 
       node.append(chip, text);
       node.addEventListener("click", () => pick(card.id));
-      return node;
+      if (!card.palette?.source) return node;
+
+      const wrapper = doc.createElement("div");
+      wrapper.className = "lfv-theme-card";
+      const source = doc.createElement("a");
+      source.href = card.palette.source.url;
+      source.target = "_blank";
+      source.rel = "noreferrer";
+      source.textContent = `${card.palette.source.label} · ${card.palette.source.license}`;
+      wrapper.append(node, source);
+      return wrapper;
     }),
   );
 }

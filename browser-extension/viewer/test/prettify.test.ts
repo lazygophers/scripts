@@ -1659,7 +1659,7 @@ test("别处改了主题，这一页跟着换——不用刷新", async () => {
   assert.equal(doc.documentElement.dataset["lfvStyle"], "brief");
 });
 
-test("主题按钮点开是两段：八套配色加自定义、四种风格", async () => {
+test("主题按钮列出全部配色并支持新系列持久化与实时预览", async () => {
   const { dom, doc, store } = await themedPage();
 
   const button = doc.querySelector(".lfv-theme-toggle") as HTMLElement;
@@ -1674,7 +1674,7 @@ test("主题按钮点开是两段：八套配色加自定义、四种风格", as
   const styles = [...menu.querySelectorAll("button[data-style]")] as HTMLElement[];
   assert.deepEqual(
     palettes.map((item) => item.dataset["palette"]),
-    ["brass", "ochre", "mauve", "eink", "pool", "soot", "night", "einkd", "custom"],
+    ["brass", "ochre", "mauve", "eink", "pool", "soot", "night", "einkd", "one-dark", "one-light", "gruvbox-dark-hard", "gruvbox-dark", "gruvbox-dark-soft", "gruvbox-light-hard", "gruvbox-light", "gruvbox-light-soft", "ayu-dark", "ayu-mirage", "ayu-light", "custom"],
   );
   assert.deepEqual(
     styles.map((item) => item.dataset["style"]),
@@ -1688,6 +1688,14 @@ test("主题按钮点开是两段：八套配色加自定义、四种风格", as
 
   assert.equal((store.data["viewer-settings"] as { style: string }).style, "press");
   assert.equal(doc.getElementById("lfv-theme-menu"), null);
+
+  button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  (doc.querySelector('[data-palette="ayu-dark"]') as HTMLElement).click();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal((store.data["viewer-settings"] as { theme: string }).theme, "ayu-dark");
+  assert.equal(doc.documentElement.style.getPropertyValue("--background"), "#0F1419");
+  assert.equal(doc.documentElement.dataset["lfvPalette"], "ayu-dark");
 });
 
 test("切回原始时主题按钮收起来，切回美化又回来", async () => {

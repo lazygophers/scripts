@@ -25,12 +25,12 @@ test("默认配色和默认风格都真的存在于表里", () => {
   assert.ok(STYLES.some((s) => s.id === DEFAULT_STYLE));
 });
 
-test("配色表里没有重复 id，亮面四套在前暗面四套在后", () => {
+test("配色表里没有重复 id，保留八套原主题并含 11 个上游色板", () => {
   const ids = PALETTES.map((p) => p.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.deepEqual(PALETTES.map((p) => p.polarity), [
-    "light", "light", "light", "light", "dark", "dark", "dark", "dark",
-  ]);
+  assert.equal(PALETTES.length, 19);
+  assert.equal(PALETTES.filter((p) => p.tokens === undefined).length, 8);
+  assert.equal(PALETTES.filter((p) => p.tokens !== undefined).length, 11);
 });
 
 test("设置页可调项都是真实的 token 名", () => {
@@ -51,6 +51,45 @@ test("选中的配色写成色相、彩度和 data 属性", () => {
   assert.equal(root.dataset["lfvPolarity"], "light");
   assert.equal(root.dataset["lfvStyle"], "press");
   assert.equal(root.style.colorScheme, "light");
+});
+
+test("11 个上游变体保留来源许可和指定原色", () => {
+  const expected = [
+    ["one-dark", "hsl(220 13% 18%)", "MIT"],
+    ["one-light", "hsl(230 1% 98%)", "MIT"],
+    ["gruvbox-dark-hard", "#1d2021", "MIT/X11"],
+    ["gruvbox-dark", "#282828", "MIT/X11"],
+    ["gruvbox-dark-soft", "#32302f", "MIT/X11"],
+    ["gruvbox-light-hard", "#f9f5d7", "MIT/X11"],
+    ["gruvbox-light", "#fbf1c7", "MIT/X11"],
+    ["gruvbox-light-soft", "#f2e5bc", "MIT/X11"],
+    ["ayu-dark", "#0F1419", "Apache-2.0"],
+    ["ayu-mirage", "#212733", "Apache-2.0"],
+    ["ayu-light", "#FAFAFA", "Apache-2.0"],
+  ] as const;
+  for (const [id, background, license] of expected) {
+    const palette = PALETTES.find((p) => p.id === id)!;
+    assert.equal(palette.tokens?.background, background, id);
+    assert.equal(palette.source?.license, license, id);
+    assert.match(palette.hint, /AA 未保证/);
+  }
+});
+
+test("应用原色并切换主题时精确 token 生效且无残留", () => {
+  const doc = page("").window.document;
+  applyTheme(doc, "gruvbox-dark");
+  assert.equal(doc.documentElement.style.getPropertyValue("--background"), "#282828");
+  assert.equal(doc.documentElement.style.getPropertyValue("--syn-keyword"), "#fb4934");
+  applyTheme(doc, "pool");
+  assert.equal(doc.documentElement.style.getPropertyValue("--background"), "");
+  assert.equal(doc.documentElement.style.getPropertyValue("--syn-keyword"), "");
+});
+
+test("自定义主题可以继承原色底板", () => {
+  const doc = page("").window.document;
+  applyTheme(doc, "custom", DEFAULT_STYLE, { base: "ayu-dark", patch: { accent: "#123456" } });
+  assert.equal(doc.documentElement.style.getPropertyValue("--background"), "#0F1419");
+  assert.equal(doc.documentElement.style.getPropertyValue("--accent"), "#123456");
 });
 
 test("纯灰阶那两套彩度为 0", () => {

@@ -276,7 +276,7 @@ test("不是本地文件、不是这条消息、没有标签页，后台一律�
   assert.equal(openLocal(null, 7), false);
 });
 
-test("配色八张卡加自定义、风格四张卡，点一下就存下来", async () => {
+test("现有与新增配色卡、原色许可出处和主题持久化", async () => {
   const store = setup();
   const doc = settingsPage().window.document;
   await renderSettings(doc);
@@ -285,7 +285,7 @@ test("配色八张卡加自定义、风格四张卡，点一下就存下来", as
   const styles = [...doc.querySelectorAll("#lfv-styles .lfv-theme")] as HTMLElement[];
   assert.deepEqual(
     palettes.map((card) => card.dataset["theme"]),
-    ["brass", "ochre", "mauve", "eink", "pool", "soot", "night", "einkd", "custom"],
+    ["brass", "ochre", "mauve", "eink", "pool", "soot", "night", "einkd", "one-dark", "one-light", "gruvbox-dark-hard", "gruvbox-dark", "gruvbox-dark-soft", "gruvbox-light-hard", "gruvbox-light", "gruvbox-light-soft", "ayu-dark", "ayu-mirage", "ayu-light", "custom"],
   );
   assert.deepEqual(
     styles.map((card) => card.dataset["theme"]),
@@ -295,28 +295,36 @@ test("配色八张卡加自定义、风格四张卡，点一下就存下来", as
   assert.equal(palettes[4]?.getAttribute("aria-pressed"), "true");
   assert.equal(styles[0]?.getAttribute("aria-pressed"), "true");
 
-  // 配色小样按各自的公式画，不是清一色。
+  // 原有色板继续使用公式，新色板小样显示来源定义的背景与正文色。
   const chips = palettes.slice(0, 8).map((card) => card.querySelector(".lfv-chip")?.getAttribute("style") ?? "");
   assert.equal(new Set(chips).size, 8);
+  assert.equal(chips[0], "background: oklch(98% 0.018 85); color: oklch(24% 0.028 85)");
+  assert.equal(chips[3], "background: oklch(98% 0 0); color: oklch(24% 0 0)");
+  assert.equal(chips[4], "background: oklch(19% 0.03 200); color: oklch(93% 0.018 200)");
+  assert.equal(chips[7], "background: oklch(19% 0 0); color: oklch(93% 0 0)");
+  assert.equal(palettes[8]?.querySelector(".lfv-chip")?.getAttribute("style"), "background:hsl(220 13% 18%);color:hsl(220 14% 71%)");
+  assert.equal(palettes[10]?.querySelector(".lfv-chip")?.getAttribute("style"), "background:#1d2021;color:#ebdbb2");
+  assert.equal(doc.querySelectorAll("#lfv-palettes a").length, 11);
+  assert.ok(doc.querySelector("#lfv-palettes a[href*='LICENSE']"));
 
-  palettes[0]?.click();
+  palettes[18]?.click();
   styles[2]?.click();
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   const saved = store.data["viewer-settings"] as { theme: string; style: string };
-  assert.equal(saved.theme, "brass");
+  assert.equal(saved.theme, "ayu-light");
   assert.equal(saved.style, "console");
 });
 
-test("选中的配色和风格写到页面上，颜色交给 CSS 公式算", async () => {
-  setup({ stored: { "viewer-settings": { theme: "brass", style: "press" } } });
+test("选中的配色和风格应用到设置预览", async () => {
+  setup({ stored: { "viewer-settings": { theme: "ayu-light", style: "press" } } });
   const doc = settingsPage().window.document;
   await renderSettings(doc);
 
   const root = doc.documentElement;
-  assert.equal(root.style.getPropertyValue("--lfv-h"), "85");
-  assert.equal(root.style.getPropertyValue("--lfv-c"), "1");
-  assert.equal(root.dataset["lfvPalette"], "brass");
+  assert.equal(root.style.getPropertyValue("--background"), "#FAFAFA");
+  assert.equal(root.style.getPropertyValue("--syn-keyword"), "#FF7733");
+  assert.equal(root.dataset["lfvPalette"], "ayu-light");
   assert.equal(root.dataset["lfvPolarity"], "light");
   assert.equal(root.dataset["lfvStyle"], "press");
   assert.equal(root.style.colorScheme, "light");

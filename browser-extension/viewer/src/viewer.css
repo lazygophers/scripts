@@ -3,9 +3,8 @@
  *
  * 主题是**配色 × 风格**两层（设计与出处见 `themes.ts` 的文件头）：
  *
- * - 配色：`themes.ts` 只写两个数到 `<html>` 上——色相角 `--lfv-h` 和彩度系数 `--lfv-c`，
- *   十几个颜色由下面「明度阶梯」那两段的 `oklch()` 公式算出来。明度档位八套锁死，
- *   只让色相转，所以换配色不会把对比度换没了。
+ * - 配色：原有八套由 `--lfv-h` / `--lfv-c` 经 OKLCH 公式生成；11 套上游主题用行内 token
+ *   覆盖保留原色，低对比度不保证符合 AA。
  * - 风格：下面「四种风格」那几段，换的是版面本身（字体、字号、行距、行宽、圆角、
  *   规则线、章节编号），不碰颜色。
  *
@@ -18,45 +17,44 @@
 @import "palette.css";
 
 /* ── 明度阶梯 · 亮面 ─────────────────────────────────────────────
- * 八套配色共用这一条阶梯，一个明度都不许改；变的只有色相 `--lfv-h` 和彩度 `--lfv-c`。
- * 代码六档的色相是固定的语义位（抄 Solarized 的语义分配：关键字绿、字符串青、数字品红、
- * 函数蓝、类型黄），只有注释跟着底色的色相走，好让它沉进背景里。
+ * 八套配色共用这一条阶梯，一个明度都不许改；色相 `--lfv-h` 同时驱动表面和代码色。
+ * 代码六档从主题色相按固定间隔派生，保留语义分色；灰阶主题仍由专用规则退化到字形区分。
  */
 html.lfv-on[data-lfv-polarity="light"] {
-  --background: oklch(97.5% calc(var(--lfv-c) * 0.018) var(--lfv-h));
-  --card: oklch(94.5% calc(var(--lfv-c) * 0.022) var(--lfv-h));
-  --muted: oklch(92% calc(var(--lfv-c) * 0.026) var(--lfv-h));
-  --border: oklch(86% calc(var(--lfv-c) * 0.03) var(--lfv-h));
-  --muted-foreground: oklch(50% calc(var(--lfv-c) * 0.028) var(--lfv-h));
-  --foreground: oklch(27% calc(var(--lfv-c) * 0.022) var(--lfv-h));
-  --accent: oklch(45% calc(var(--lfv-c) * 0.14) 255);
-  --warning: oklch(50% calc(var(--lfv-c) * 0.15) 70);
-  --destructive: oklch(48% calc(var(--lfv-c) * 0.16) 25);
-  --syn-comment: oklch(52% calc(var(--lfv-c) * 0.035) var(--lfv-h));
-  --syn-keyword: oklch(44% calc(var(--lfv-c) * 0.135) 145);
-  --syn-string: oklch(45% calc(var(--lfv-c) * 0.11) 195);
-  --syn-number: oklch(44% calc(var(--lfv-c) * 0.16) 350);
-  --syn-function: oklch(44% calc(var(--lfv-c) * 0.14) 255);
-  --syn-type: oklch(46% calc(var(--lfv-c) * 0.115) 75);
+  --background: oklch(98% calc(var(--lfv-c) * 0.018) var(--lfv-h));
+  --card: oklch(95% calc(var(--lfv-c) * 0.024) var(--lfv-h));
+  --muted: oklch(91% calc(var(--lfv-c) * 0.03) var(--lfv-h));
+  --border: oklch(80% calc(var(--lfv-c) * 0.04) var(--lfv-h));
+  --muted-foreground: oklch(43% calc(var(--lfv-c) * 0.035) var(--lfv-h));
+  --foreground: oklch(24% calc(var(--lfv-c) * 0.028) var(--lfv-h));
+  --accent: oklch(42% calc(var(--lfv-c) * 0.16) calc(var(--lfv-h) + 180));
+  --warning: oklch(44% calc(var(--lfv-c) * 0.17) 65);
+  --destructive: oklch(43% calc(var(--lfv-c) * 0.17) 25);
+  --syn-comment: oklch(43% calc(var(--lfv-c) * 0.045) var(--lfv-h));
+  --syn-keyword: oklch(42% calc(var(--lfv-c) * 0.15) calc(var(--lfv-h) + 60));
+  --syn-string: oklch(42% calc(var(--lfv-c) * 0.15) calc(var(--lfv-h) + 120));
+  --syn-number: oklch(42% calc(var(--lfv-c) * 0.16) calc(var(--lfv-h) + 240));
+  --syn-function: oklch(42% calc(var(--lfv-c) * 0.16) calc(var(--lfv-h) + 180));
+  --syn-type: oklch(42% calc(var(--lfv-c) * 0.15) calc(var(--lfv-h) + 300));
 }
 
 /* ── 明度阶梯 · 暗面 ───────────────────────────────────────────── */
 html.lfv-on[data-lfv-polarity="dark"] {
-  --background: oklch(21% calc(var(--lfv-c) * 0.026) var(--lfv-h));
-  --card: oklch(25% calc(var(--lfv-c) * 0.028) var(--lfv-h));
-  --muted: oklch(27.5% calc(var(--lfv-c) * 0.03) var(--lfv-h));
-  --border: oklch(33% calc(var(--lfv-c) * 0.032) var(--lfv-h));
-  --muted-foreground: oklch(64% calc(var(--lfv-c) * 0.022) var(--lfv-h));
-  --foreground: oklch(89% calc(var(--lfv-c) * 0.016) var(--lfv-h));
-  --accent: oklch(74% calc(var(--lfv-c) * 0.12) 235);
-  --warning: oklch(75% calc(var(--lfv-c) * 0.13) 75);
-  --destructive: oklch(70% calc(var(--lfv-c) * 0.15) 25);
-  --syn-comment: oklch(63% calc(var(--lfv-c) * 0.03) var(--lfv-h));
-  --syn-keyword: oklch(74% calc(var(--lfv-c) * 0.14) 145);
-  --syn-string: oklch(78% calc(var(--lfv-c) * 0.11) 195);
-  --syn-number: oklch(73% calc(var(--lfv-c) * 0.14) 350);
-  --syn-function: oklch(73% calc(var(--lfv-c) * 0.13) 255);
-  --syn-type: oklch(81% calc(var(--lfv-c) * 0.13) 90);
+  --background: oklch(19% calc(var(--lfv-c) * 0.03) var(--lfv-h));
+  --card: oklch(25% calc(var(--lfv-c) * 0.035) var(--lfv-h));
+  --muted: oklch(31% calc(var(--lfv-c) * 0.04) var(--lfv-h));
+  --border: oklch(40% calc(var(--lfv-c) * 0.045) var(--lfv-h));
+  --muted-foreground: oklch(70% calc(var(--lfv-c) * 0.028) var(--lfv-h));
+  --foreground: oklch(93% calc(var(--lfv-c) * 0.018) var(--lfv-h));
+  --accent: oklch(80% calc(var(--lfv-c) * 0.14) calc(var(--lfv-h) + 180));
+  --warning: oklch(80% calc(var(--lfv-c) * 0.15) 75);
+  --destructive: oklch(75% calc(var(--lfv-c) * 0.16) 25);
+  --syn-comment: oklch(70% calc(var(--lfv-c) * 0.04) var(--lfv-h));
+  --syn-keyword: oklch(80% calc(var(--lfv-c) * 0.15) calc(var(--lfv-h) + 60));
+  --syn-string: oklch(82% calc(var(--lfv-c) * 0.14) calc(var(--lfv-h) + 120));
+  --syn-number: oklch(79% calc(var(--lfv-c) * 0.15) calc(var(--lfv-h) + 240));
+  --syn-function: oklch(80% calc(var(--lfv-c) * 0.14) calc(var(--lfv-h) + 180));
+  --syn-type: oklch(83% calc(var(--lfv-c) * 0.14) calc(var(--lfv-h) + 300));
 }
 
 /* 墨水屏：彩度是 0，六档没有颜色可用，改用明度 + 字形分开。这是诚实降级，不是假装有色。 */
@@ -68,6 +66,40 @@ html.lfv-on[data-lfv-palette="eink"] {
 html.lfv-on[data-lfv-palette="einkd"] {
   --syn-comment: #8a8a8a; --syn-keyword: #fff; --syn-string: #c9c9c9;
   --syn-number: #e6e6e6; --syn-function: #fff; --syn-type: #b0b0b0;
+}
+
+html.lfv-on[data-lfv-palette="eink"] .hljs-addition,
+html.lfv-on[data-lfv-palette="eink"] .hljs-addition-emphasis {
+  background-color: #e1e1e1;
+  border-color: #404040;
+}
+
+html.lfv-on[data-lfv-palette="eink"] .hljs-deletion {
+  background-color: #c1c1c1;
+  border-color: #404040;
+}
+
+html.lfv-on[data-lfv-palette="eink"] .hljs-deletion-emphasis {
+  background-color: #aaaaaa;
+}
+
+html.lfv-on[data-lfv-palette="einkd"] .hljs-addition {
+  background-color: #454545;
+  border-color: #dedede;
+}
+
+html.lfv-on[data-lfv-palette="einkd"] .hljs-addition-emphasis {
+  background-color: #555555;
+  border-color: #dedede;
+}
+
+html.lfv-on[data-lfv-palette="einkd"] .hljs-deletion {
+  background-color: #292929;
+  border-color: #dedede;
+}
+
+html.lfv-on[data-lfv-palette="einkd"] .hljs-deletion-emphasis {
+  background-color: #383838;
 }
 
 html.lfv-on[data-lfv-palette="eink"] .hljs-keyword,
@@ -127,6 +159,18 @@ html.lfv-on body {
   margin: 0;
   background: var(--background);
   color: var(--foreground);
+}
+
+html.lfv-on :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+html.lfv-on button,
+html.lfv-on input:not([type="color"]),
+html.lfv-on select {
+  color: var(--foreground);
+  accent-color: var(--accent);
 }
 
 html.lfv-on .lfv-text {
@@ -190,7 +234,7 @@ html.lfv-on .lfv-copy {
 
 /*
  * highlight.js 的 token 类名映射到公共层的调色板。
- * 只挑几组语义相近的 token 上色，其余继承正文色——配色少几档反而更像编辑器。
+ * 代码语义色按配色基准色相错开，保持角色可分；灰阶主题改靠明度与字形区分。
  */
 html.lfv-on .hljs-comment,
 html.lfv-on .hljs-quote {
@@ -206,9 +250,25 @@ html.lfv-on .hljs-doctag {
 }
 
 html.lfv-on .hljs-string,
-html.lfv-on .hljs-regexp,
-html.lfv-on .hljs-addition {
+html.lfv-on .hljs-regexp {
   color: var(--syn-string);
+}
+
+html.lfv-on .hljs-addition {
+  color: var(--foreground);
+  background-color: color-mix(in oklab, var(--syn-string) 20%, transparent);
+  border-left: 3px solid var(--syn-string);
+  text-decoration: underline solid;
+  text-underline-offset: 0.18em;
+}
+
+html.lfv-on .hljs-addition-emphasis {
+  color: var(--foreground);
+  background-color: color-mix(in oklab, var(--syn-string) 42%, transparent);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.12em;
 }
 
 html.lfv-on .hljs-number,
@@ -235,6 +295,21 @@ html.lfv-on .hljs-built_in {
 html.lfv-on .hljs-deletion,
 html.lfv-on .hljs-meta {
   color: var(--destructive);
+}
+
+html.lfv-on .hljs-deletion {
+  color: var(--foreground);
+  background-color: color-mix(in oklab, var(--destructive) 20%, transparent);
+  border-left: 3px dashed var(--destructive);
+  text-decoration: line-through dashed;
+}
+
+html.lfv-on .hljs-deletion-emphasis {
+  color: var(--foreground);
+  background-color: color-mix(in oklab, var(--destructive) 42%, transparent);
+  font-weight: 700;
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
 }
 
 /* 文档视图：宽屏时目录一列、正文一列；没有目录时正文自己占满。 */
@@ -1116,6 +1191,17 @@ html.lfv-on .lfv-hit-current {
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.lfv-theme-card {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.lfv-theme-card > a {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
 }
 
 .lfv-theme[aria-pressed="true"] {

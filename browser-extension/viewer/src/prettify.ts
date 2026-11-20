@@ -19,7 +19,7 @@ const WEBPAGE_EXTS = new Set(["html", "htm", "xhtml", "svg", "xml"]);
 
 /** 白名单：这些直接接管。 */
 const WHITELIST_EXTS = new Set([
-  "md", "markdown", "mdx", "txt", "log", "json", "yaml", "yml", "csv",
+  "md", "markdown", "mdx", "txt", "log", "json", "yaml", "yml", "csv", "diff", "patch",
   "toml", "ini", "conf", "go", "py", "ts", "tsx", "js", "jsx", "rs",
   "java", "c", "h", "cpp", "hpp", "cs", "rb", "php", "sh", "bash", "zsh",
   "sql", "css", "scss",
@@ -37,7 +37,7 @@ const LANGS: Record<string, string> = {
   c: "c", h: "c", cpp: "cpp", hpp: "cpp", cs: "csharp", rb: "ruby",
   php: "php", sh: "bash", bash: "bash", zsh: "bash", sql: "sql",
   css: "css", scss: "scss", ini: "ini", toml: "ini",
-  json: "json", yaml: "yaml", yml: "yaml",
+  json: "json", yaml: "yaml", yml: "yaml", diff: "diff", patch: "diff",
 };
 
 export type Kind = "webpage" | "whitelist" | "unknown";
@@ -522,12 +522,239 @@ function renderCode(doc: Document, text: string, language: string): HTMLElement 
   const view = doc.createElement("pre");
   view.className = "lfv-text";
   const code = doc.createElement("code");
-  code.textContent = text;
+  if (language === "diff") {
+    renderDiff(doc, code, text);
+    code.classList.add("lfv-colored");
+  } else {
+    code.textContent = text;
+    void colorize(code, language);
+  }
   view.append(code);
 
   wrap.append(makeCopyButton(doc, text), gutter, view);
-  void colorize(code, language);
   return wrap;
+}
+
+type CharacterEdit = "equal" | "delete" | "insert";
+
+/** Myers edit path with a bounded edit distance and character-comparison budget. */
+function characterEdits(oldText: string[], newText: string[]): CharacterEdit[] | null {
+  const maxDistance = Math.min(oldText.length + newText.length, 256);
+  const width = maxDistance * 2 + 3;
+  const offset = maxDistance + 1;
+  let vector = new Int32Array(width);
+  vector[offset + 1] = 0;
+  const trace: Int32Array[] = [];
+  let work = 0;
+
+  for (let distance = 0; distance <= maxDistance; distance += 1) {
+    trace.push(vector.slice());
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      work += 1;
+      if (work > 4_000_000) return null;
+      const index = offset + diagonal;
+      let x = diagonal === -distance ||
+        (diagonal !== distance && vector[index - 1]! < vector[index + 1]!)
+        ? vector[index + 1]!
+        : vector[index - 1]! + 1;
+      let y = x - diagonal;
+      while (x < oldText.length && y < newText.length && oldText[x] === newText[y]) {
+        x += 1;
+        y += 1;
+        work += 1;
+        if (work > 4_000_000) return null;
+      }
+      vector[index] = x;
+      if (x >= oldText.length && y >= newText.length) {
+        return recoverCharacterEdits(trace, distance, oldText, newText, offset);
+      }
+    }
+  }
+  return null;
+}
+
+function recoverCharacterEdits(
+  trace: Int32Array[],
+  distance: number,
+  oldText: string[],
+  newText: string[],
+  offset: number,
+): CharacterEdit[] {
+  const edits: CharacterEdit[] = [];
+  let x = oldText.length;
+  let y = newText.length;
+  for (let d = distance; d > 0; d -= 1) {
+    const vector = trace[d]!;
+    const diagonal = x - y;
+    const previousDiagonal = diagonal === -d ||
+      (diagonal !== d && vector[offset + diagonal - 1]! < vector[offset + diagonal + 1]!)
+      ? diagonal + 1
+      : diagonal - 1;
+    const previousX = vector[offset + previousDiagonal]!;
+    const previousY = previousX - previousDiagonal;
+    while (x > previousX && y > previousY) {
+      edits.push("equal");
+      x -= 1;
+      y -= 1;
+    }
+    if (x === previousX) {
+      edits.push("insert");
+      y -= 1;
+    } else {
+      edits.push("delete");
+      x -= 1;
+    }
+  }
+  while (x > 0 && y > 0) {
+    edits.push("equal");
+    x -= 1;
+    y -= 1;
+  }
+  while (x > 0) {
+    edits.push("delete");
+    x -= 1;
+  }
+  while (y > 0) {
+    edits.push("insert");
+    y -= 1;
+  }
+  return edits.reverse();
+}
+
+function renderDiff(doc: Document, code: HTMLElement, text: string): void {
+  const lines = text.match(/[^\r\n]*(?:\r\n|\r|\n|$)/g)?.filter((line) => line !== "") ?? [];
+  const rows = lines.map((raw) => ({
+    text: raw.replace(/(?:\r\n|\r|\n)$/, ""),
+    ending: raw.match(/(?:\r\n|\r|\n)$/)?.[0] ?? "",
+  }));
+  let inHunk = false;
+  let oldRemaining = 0;
+  let newRemaining = 0;
+  const finishLine = (oldCount: number, newCount: number) => {
+    oldRemaining -= oldCount;
+    newRemaining -= newCount;
+    if (oldRemaining <= 0 && newRemaining <= 0) inHunk = false;
+  };
+  const appendLine = (row: typeof rows[number], type?: "addition" | "deletion" | "meta") => {
+    if (type === undefined) {
+      code.append(doc.createTextNode(row.text));
+    } else {
+      const span = doc.createElement("span");
+      span.className = `hljs-${type}`;
+      span.textContent = row.text;
+      code.append(span);
+    }
+    if (row.ending) code.append(doc.createTextNode(row.ending));
+  };
+  const emphasize = (removed: typeof rows[number], added: typeof rows[number]) => {
+    const oldText = Array.from(removed.text.slice(1));
+    const newText = Array.from(added.text.slice(1));
+    const edits = characterEdits(oldText, newText);
+    const oldChanged = Array<boolean>(oldText.length).fill(true);
+    const newChanged = Array<boolean>(newText.length).fill(true);
+    let oldIndex = 0;
+    let newIndex = 0;
+    if (edits !== null) {
+      for (const edit of edits) {
+        if (edit === "equal") {
+          oldChanged[oldIndex++] = false;
+          newChanged[newIndex++] = false;
+        } else if (edit === "delete") {
+          oldIndex += 1;
+        } else {
+          newIndex += 1;
+        }
+      }
+    } else {
+      // shortcut: beyond bounded edit distance/work, retain common edges; raise limits for finer highlighting of heavily changed long lines.
+      let prefix = 0;
+      while (prefix < oldText.length && prefix < newText.length && oldText[prefix] === newText[prefix]) prefix += 1;
+      let suffix = 0;
+      while (
+        suffix < oldText.length - prefix &&
+        suffix < newText.length - prefix &&
+        oldText[oldText.length - suffix - 1] === newText[newText.length - suffix - 1]
+      ) suffix += 1;
+      oldChanged.fill(false, 0, prefix);
+      newChanged.fill(false, 0, prefix);
+      if (suffix) {
+        oldChanged.fill(false, oldText.length - suffix);
+        newChanged.fill(false, newText.length - suffix);
+      }
+    }
+    const appendChanged = (
+      row: typeof rows[number],
+      chars: string[],
+      changedChars: boolean[],
+      type: "addition" | "deletion",
+    ) => {
+      const line = doc.createElement("span");
+      line.className = `hljs-${type}`;
+      line.append(doc.createTextNode(row.text[0]!));
+      for (let i = 0; i < chars.length;) {
+        const changed = changedChars[i]!;
+        let end = i + 1;
+        while (end < chars.length && changedChars[end] === changed) end += 1;
+        const value = chars.slice(i, end).join("");
+        if (changed) {
+          const span = doc.createElement("span");
+          span.className = `hljs-${type}-emphasis lfv-diff-char`;
+          span.textContent = value;
+          line.append(span);
+        } else {
+          line.append(doc.createTextNode(value));
+        }
+        i = end;
+      }
+      code.append(line);
+      if (row.ending) code.append(doc.createTextNode(row.ending));
+    };
+    appendChanged(removed, oldText, oldChanged, "deletion");
+    appendChanged(added, newText, newChanged, "addition");
+  };
+
+  for (let i = 0; i < rows.length;) {
+    const row = rows[i]!;
+    if (row.text.startsWith("@@ ") || row.text.startsWith("@@@ ")) inHunk = true;
+    if (row.text.startsWith("diff --git ") || row.text.startsWith("--- ") || row.text.startsWith("+++ ")) {
+      inHunk = false;
+    }
+    if (inHunk && row.text.startsWith("-")) {
+      const removed: typeof rows = [];
+      const added: typeof rows = [];
+      while (i < rows.length && rows[i]!.text.startsWith("-")) removed.push(rows[i++]!);
+      while (i < rows.length && rows[i]!.text.startsWith("+")) added.push(rows[i++]!);
+      if (removed.length === added.length) {
+        removed.forEach((oldRow, index) => emphasize(oldRow, added[index]!));
+      } else {
+        removed.forEach((oldRow) => appendLine(oldRow, "deletion"));
+        added.forEach((newRow) => appendLine(newRow, "addition"));
+      }
+      finishLine(removed.length, added.length);
+      continue;
+    }
+    const hunk = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(row.text);
+    if (hunk) {
+      inHunk = true;
+      oldRemaining = Number(hunk[1] ?? 1);
+      newRemaining = Number(hunk[3] ?? 1);
+    }
+    if (row.text.startsWith("diff --git ")) inHunk = false;
+    const fileHeader = !inHunk && /^(?:--- |\+\+\+ )/.test(row.text);
+    const type = row.text.startsWith("@@") || row.text.startsWith("\\ No newline at end of file") ||
+      (!inHunk && /^(?:diff --git |index |new file mode |deleted file mode |old mode |new mode |similarity index |rename (?:from|to) |copy (?:from|to) )/.test(row.text)) || fileHeader
+      ? "meta"
+      : inHunk && row.text.startsWith("+") ? "addition"
+      : inHunk && row.text.startsWith("-") ? "deletion"
+      : undefined;
+    appendLine(row, type);
+    if (inHunk) {
+      if (row.text.startsWith(" ")) finishLine(1, 1);
+      else if (row.text.startsWith("+")) finishLine(0, 1);
+      else if (row.text.startsWith("-")) finishLine(1, 0);
+    }
+    i += 1;
+  }
 }
 
 /**

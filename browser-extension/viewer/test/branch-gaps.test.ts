@@ -16,8 +16,90 @@ import { page } from "./mock.ts";
 
 /* ---------- csv / prettify 的补充 ---------- */
 
-import { show } from "../src/prettify.ts";
+import { LAZY, show } from "../src/prettify.ts";
 import { installChrome, storageMock, clearChrome } from "./mock.ts";
+
+test("diff/patch 文件自动进入 diff 代码视图", async () => {
+  installChrome({ runtime: { getURL: (path: string) => path } });
+  storageMock();
+  try {
+    for (const ext of ["diff", "patch"]) {
+      const dom = page("");
+      show(dom.window.document, `file:///tmp/change.${ext}`, "@@ -1 +1 @@\n-old\n+new\n");
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.ok(dom.window.document.querySelector(".lfv-code"), `${ext} 应自动显示为代码`);
+      assert.ok(dom.window.document.querySelector(".hljs-deletion"));
+      assert.ok(dom.window.document.querySelector(".hljs-addition"));
+    }
+  } finally {
+    clearChrome();
+  }
+});
+
+test("unified diff 配对删增行并突出字符差异，保留元数据与不匹配行", async () => {
+  installChrome({ runtime: { getURL: (path: string) => path } });
+  storageMock();
+  const highlight = LAZY.highlight;
+  LAZY.highlight = async () => ({ colorize: () => null });
+  const longOld = `${"a".repeat(3000)}X${"b".repeat(3000)}Y${"c".repeat(3000)}`;
+  const longNew = `${"a".repeat(3000)}1${"b".repeat(3000)}2${"c".repeat(3000)}`;
+  const highDistanceOld = "x".repeat(300);
+  const highDistanceNew = "y".repeat(300);
+  const text = [
+    "diff --git a/a.txt b/a.txt",
+    "index 123..456",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1,6 +1,5 @@",
+    "-color: old;",
+    "+color: new;",
+    "-前值中间旧值",
+    "+新值中间新值",
+    "-unchanged",
+    "+unchanged",
+    `-${longOld}`,
+    `+${longNew}`,
+    " same",
+    "-old unmatched",
+    "\\ No newline at end of file",
+    "@@ -10 +10 @@",
+    `-${highDistanceOld}`,
+    `+${highDistanceNew}`,
+  ].join("\n");
+
+  try {
+    const dom = page("");
+    show(dom.window.document, "file:///tmp/change.patch", text);
+    await new Promise((resolve) => setImmediate(resolve));
+    const doc = dom.window.document;
+    const findDeleted = (text: string) => Array.from(doc.querySelectorAll<HTMLElement>(".hljs-deletion"))
+      .find((line) => line.textContent === text);
+    const emphasis = (line: HTMLElement | undefined) => Array.from(
+      line?.querySelectorAll(".hljs-deletion-emphasis") ?? [],
+      (span) => span.textContent,
+    );
+    const colorChange = findDeleted("-color: old;");
+    assert.deepEqual(emphasis(colorChange), ["old"]);
+    const chineseChange = findDeleted("-前值中间旧值");
+    assert.deepEqual(emphasis(chineseChange), ["前", "旧"]);
+    assert.equal(findDeleted("-unchanged")?.querySelector(".hljs-deletion-emphasis"), null);
+    const longChange = findDeleted(`-${longOld}`);
+    assert.deepEqual(emphasis(longChange), ["X", "Y"]);
+    assert.deepEqual(emphasis(findDeleted(`-${highDistanceOld}`)), [highDistanceOld]);
+    assert.ok(doc.querySelector(".hljs-meta")?.textContent?.includes("diff --git"));
+    const unmatched = Array.from(doc.querySelectorAll<HTMLElement>(".hljs-deletion"))
+      .find((line) => line.textContent === "-old unmatched");
+    assert.ok(unmatched);
+    assert.equal(unmatched.querySelector(".lfv-diff-char"), null);
+    assert.ok(Array.from(doc.querySelectorAll(".hljs-meta")).some((line) =>
+      line.textContent?.includes("No newline at end of file"),
+    ));
+    assert.equal(doc.querySelector(".lfv-text")?.textContent, text);
+  } finally {
+    LAZY.highlight = highlight;
+    clearChrome();
+  }
+});
 
 test("整列全空的列排序：空格之间持平", () => {
   const dom = page("");
@@ -528,13 +610,15 @@ test("applyTheme：自定义模式盖指定的变量", () => {
   const dom = page("");
   const applied = applyTheme(dom.window.document, "custom", "manuscript", {
     base: "pool",
-    patch: { background: "#101010" },
+    patch: { background: "#101010", "syn-string": "#777777", destructive: "#777777" },
   });
   assert.equal(applied.custom, true);
   assert.equal(
     dom.window.document.documentElement.style.getPropertyValue("--background"),
     "#101010",
   );
+  assert.equal(dom.window.document.documentElement.style.getPropertyValue("--syn-string"), "#777777");
+  assert.equal(dom.window.document.documentElement.style.getPropertyValue("--destructive"), "#777777");
   // 没盖到的变量要被摘掉，让公式算。
   assert.equal(dom.window.document.documentElement.style.getPropertyValue("--accent"), "");
 });

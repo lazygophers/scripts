@@ -4,20 +4,15 @@
  * 第一轮把主题做成「一套颜色 + 一套排版」捆在一起，用户否掉了全部六项。第二轮重做，
  * 拆成互相独立的两层：
  *
- * - **配色（palette）**：八套。底色不是灰，是「朝某个色相偏一点点的中性」——这条抄
- *   Solarized（<https://ethanschoonover.com/solarized/>，用 CIELAB 算出来的十六色），
- *   它只做过一次色相选择，我们做八次。**明度阶梯八套锁死**，只让色相转：换配色换心情，
- *   不换可读性。阶梯的档位数照 Radix 的语义色阶（<https://www.radix-ui.com/colors>）。
- *   所以每套配色在这里只有两个数：色相角 `h` 和彩度系数 `c`。真正的颜色由 CSS 里那条
- *   `oklch()` 公式算出来（`viewer.css` 的「明度阶梯」一节）。
- *   墨水屏就是 `c: 0` 的那两套——纯灰阶不是另写一张表，是同一条公式的边界值。
+ * - **配色（palette）**：原有八套使用统一的 OKLCH 公式；新增 11 套 Atom One、Gruvbox、Ayu
+ *   主题逐项覆盖来源色值。墨水屏仍是原有 `c: 0` 公式色板。
  *
  * - **风格（style）**：四套。它换的不是颜色，是**版面本身**：字体、字号、行距、每行字数、
  *   标题的大小关系、有没有规则线、圆角有没有、代码块怎么摆。用户原话：「主题不是单纯
  *   颜色的变化」。风格的实现全在 CSS（`html[data-lfv-style="…"]` 那几段），这里只记
  *   名字和说明。
  *
- * 八套配色 × 四种风格 = 32 种成品，要维护的只有 8 个 (h, c) 对 + 4 段 CSS。
+ * 19 套配色 × 四种风格 = 76 种组合；新主题只维护来源语义 token 覆盖。
  */
 
 /** 一套配色。`h` 是色相角（0-360），`c` 是彩度系数（0 = 纯灰阶）。 */
@@ -30,9 +25,12 @@ export type Palette = {
   polarity: "light" | "dark";
   h: number;
   c: number;
+  /** Exact source colors; absent for the formula-based built-in palettes. */
+  tokens?: Partial<Record<TokenName, string>>;
+  source?: { label: string; url: string; license: string };
 };
 
-/** 亮面四套在前、暗面四套在后；这个顺序就是菜单和设置页里的顺序。 */
+/** 原有八套后追加上游变体；数组顺序就是菜单和设置页里的顺序。 */
 export const PALETTES: readonly Palette[] = [
   { id: "brass", name: "黄铜", hint: "暖纸调，白天读长文最耐看", polarity: "light", h: 85, c: 1 },
   { id: "ochre", name: "赭石", hint: "陶土色，亮面里带彩最重的一套", polarity: "light", h: 40, c: 1.15 },
@@ -42,6 +40,19 @@ export const PALETTES: readonly Palette[] = [
   { id: "soot", name: "松烟", hint: "墨锭那种绿黑，比青黑暖", polarity: "dark", h: 155, c: 1 },
   { id: "night", name: "夜航", hint: "紫黑，暗面里最冷的一套", polarity: "dark", h: 275, c: 1.1 },
   { id: "einkd", name: "墨水屏·暗", hint: "纯黑底白字，暗面对比最高", polarity: "dark", h: 0, c: 0 },
+  ...[
+    { id: "one-dark", name: "One Dark", polarity: "dark", tokens: { background: "hsl(220 13% 18%)", card: "hsl(220 13% 21%)", foreground: "hsl(220 14% 71%)", muted: "hsl(220 13% 24%)", border: "hsl(220 9% 55%)", "muted-foreground": "hsl(220 10% 40%)", accent: "hsl(220 100% 66%)", warning: "hsl(39 67% 69%)", destructive: "hsl(0 70% 60%)", "syn-comment": "hsl(220 10% 40%)", "syn-keyword": "hsl(286 60% 67%)", "syn-string": "hsl(95 38% 62%)", "syn-number": "hsl(29 54% 61%)", "syn-function": "hsl(207 82% 66%)", "syn-type": "hsl(39 67% 69%)" } },
+    { id: "one-light", name: "One Light", polarity: "light", tokens: { background: "hsl(230 1% 98%)", card: "hsl(230 1% 95%)", foreground: "hsl(230 8% 24%)", muted: "hsl(230 1% 91%)", border: "hsl(230 6% 44%)", "muted-foreground": "hsl(230 4% 64%)", accent: "hsl(230 100% 66%)", warning: "hsl(41 99% 38%)", destructive: "hsl(0 100% 54%)", "syn-comment": "hsl(230 4% 64%)", "syn-keyword": "hsl(301 63% 40%)", "syn-string": "hsl(119 34% 47%)", "syn-number": "hsl(41 99% 30%)", "syn-function": "hsl(221 87% 60%)", "syn-type": "hsl(41 99% 38%)" } },
+    { id: "gruvbox-dark-hard", name: "Gruvbox Dark · hard", polarity: "dark", tokens: { background: "#1d2021", card: "#32302f", foreground: "#ebdbb2", muted: "#3c3836", border: "#8ec07c", "muted-foreground": "#928374", accent: "#8ec07c", warning: "#fabd2f", destructive: "#fb4934", "syn-comment": "#928374", "syn-keyword": "#fb4934", "syn-string": "#b8bb26", "syn-number": "#d3869b", "syn-function": "#b8bb26", "syn-type": "#fabd2f" } },
+    { id: "gruvbox-dark", name: "Gruvbox Dark", polarity: "dark", tokens: { background: "#282828", card: "#32302f", foreground: "#ebdbb2", muted: "#3c3836", border: "#8ec07c", "muted-foreground": "#928374", accent: "#8ec07c", warning: "#fabd2f", destructive: "#fb4934", "syn-comment": "#928374", "syn-keyword": "#fb4934", "syn-string": "#b8bb26", "syn-number": "#d3869b", "syn-function": "#b8bb26", "syn-type": "#fabd2f" } },
+    { id: "gruvbox-dark-soft", name: "Gruvbox Dark · soft", polarity: "dark", tokens: { background: "#32302f", card: "#3c3836", foreground: "#ebdbb2", muted: "#504945", border: "#8ec07c", "muted-foreground": "#928374", accent: "#8ec07c", warning: "#fabd2f", destructive: "#fb4934", "syn-comment": "#928374", "syn-keyword": "#fb4934", "syn-string": "#b8bb26", "syn-number": "#d3869b", "syn-function": "#b8bb26", "syn-type": "#fabd2f" } },
+    { id: "gruvbox-light-hard", name: "Gruvbox Light · hard", polarity: "light", tokens: { background: "#f9f5d7", card: "#f2e5bc", foreground: "#3c3836", muted: "#ebdbb2", border: "#427b58", "muted-foreground": "#928374", accent: "#427b58", warning: "#b57614", destructive: "#9d0006", "syn-comment": "#928374", "syn-keyword": "#9d0006", "syn-string": "#79740e", "syn-number": "#8f3f71", "syn-function": "#79740e", "syn-type": "#b57614" } },
+    { id: "gruvbox-light", name: "Gruvbox Light", polarity: "light", tokens: { background: "#fbf1c7", card: "#f2e5bc", foreground: "#3c3836", muted: "#ebdbb2", border: "#427b58", "muted-foreground": "#928374", accent: "#427b58", warning: "#b57614", destructive: "#9d0006", "syn-comment": "#928374", "syn-keyword": "#9d0006", "syn-string": "#79740e", "syn-number": "#8f3f71", "syn-function": "#79740e", "syn-type": "#b57614" } },
+    { id: "gruvbox-light-soft", name: "Gruvbox Light · soft", polarity: "light", tokens: { background: "#f2e5bc", card: "#ebdbb2", foreground: "#3c3836", muted: "#d5c4a1", border: "#427b58", "muted-foreground": "#928374", accent: "#427b58", warning: "#b57614", destructive: "#9d0006", "syn-comment": "#928374", "syn-keyword": "#9d0006", "syn-string": "#79740e", "syn-number": "#8f3f71", "syn-function": "#79740e", "syn-type": "#b57614" } },
+    { id: "ayu-dark", name: "Ayu Dark", polarity: "dark", tokens: { background: "#0F1419", card: "#14191F", foreground: "#E6E1CF", muted: "#1B2026", border: "#36A3D9", "muted-foreground": "#5C6773", accent: "#36A3D9", warning: "#E7C547", destructive: "#F07178", "syn-comment": "#5C6773", "syn-keyword": "#FF7733", "syn-string": "#B8CC52", "syn-number": "#FFEE99", "syn-function": "#FFB454", "syn-type": "#E6B673" } },
+    { id: "ayu-mirage", name: "Ayu Mirage", polarity: "dark", tokens: { background: "#212733", card: "#272D38", foreground: "#D9D7CE", muted: "#2D3440", border: "#5CCFE6", "muted-foreground": "#5C6773", accent: "#5CCFE6", warning: "#E7C547", destructive: "#F07178", "syn-comment": "#5C6773", "syn-keyword": "#FFAE57", "syn-string": "#BBE67E", "syn-number": "#D4BFFF", "syn-function": "#FFD57F", "syn-type": "#FFC44C" } },
+    { id: "ayu-light", name: "Ayu Light", polarity: "light", tokens: { background: "#FAFAFA", card: "#FFFFFF", foreground: "#5C6773", muted: "#F3F4F5", border: "#36A3D9", "muted-foreground": "#ABB0B6", accent: "#36A3D9", warning: "#E6B673", destructive: "#F07178", "syn-comment": "#ABB0B6", "syn-keyword": "#FF7733", "syn-string": "#86B300", "syn-number": "#A37ACC", "syn-function": "#F29718", "syn-type": "#E6B673" } },
+  ].map((p) => ({ ...p, hint: "原作色值；界面补色复用邻近色，AA 未保证", h: 0, c: 0, source: { label: p.id.startsWith("one-") ? "Atom" : p.id.startsWith("gruvbox-") ? "Gruvbox" : "Ayu Vim", url: p.id.startsWith("one-") ? `https://github.com/atom/one-${p.id.slice(4)}-syntax/blob/master/LICENSE.md` : p.id.startsWith("gruvbox-") ? "https://github.com/morhetz/gruvbox/blob/master/README.md#license" : "https://github.com/ayu-theme/ayu-vim/blob/master/LICENSE", license: p.id.startsWith("one-") ? "MIT" : p.id.startsWith("gruvbox-") ? "MIT/X11" : "Apache-2.0" } } as Palette)),
 ];
 
 /** 一种风格。换的是版面不是颜色，所以这里只有名字——实现全在 `viewer.css`。 */
@@ -152,11 +163,15 @@ export function applyTheme(
   root.dataset["lfvStyle"] = style.id;
   root.style.colorScheme = palette.polarity;
 
-  // 自定义改过的那几个值直接盖在最上面；没改过的仍由公式算，底子调色时跟着更新。
-  for (const name of TOKEN_NAMES) {
-    const value = isCustom ? custom.patch[name] : undefined;
-    if (value === undefined) root.style.removeProperty(`--${name}`);
-    else root.style.setProperty(`--${name}`, value);
+  for (const name of TOKEN_NAMES) root.style.removeProperty(`--${name}`);
+  for (const [name, value] of Object.entries(palette.tokens ?? {})) {
+    root.style.setProperty(`--${name}`, value);
+  }
+  // 自定义改过的 token 覆盖底色板；未修改项继续沿用底板原色或公式。
+  if (isCustom) {
+    for (const [name, value] of Object.entries(custom.patch)) {
+      if (value !== undefined) root.style.setProperty(`--${name}`, value);
+    }
   }
   return { palette, style, custom: isCustom };
 }
