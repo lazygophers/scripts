@@ -133,20 +133,37 @@ class CallbackBatchOperation(BatchOperation, GitDetectAdapter, ShellExecuteAdapt
         return RepoOutcome(status, detail)
 
 
-def scan_repos(root: Path, *, max_depth: int = 3) -> list[Path]:
-    """扫描目录下所有 Git 仓库（含 .git 的目录，不限 remote 提供商）。"""
+def scan_repos(root: Path, *, max_depth: int | None = None) -> list[Path]:
+    """扫描目录下所有 Git 仓库（含 .git 的目录，不限 remote 提供商）。
+
+    默认不限制深度。跟随目录软链并按 realpath 去重；更浅路径可重访被深度限制截断的目录，
+    同一仓库优先保留最浅路径。
+    """
     repos: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+    seen_dirs: dict[str, int] = {}
+    seen_repos: dict[str, tuple[int, int]] = {}
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=True):
+        real_dir = os.path.realpath(dirpath)
         # relative_to(root) 在 root 本身为 '.', 子目录为 'a', 'a/b'...
         # 路径组件数 = sep 数 + 1; max_depth 按组件数计 (root 下第 N 层 = N 个组件)
         rel = Path(dirpath).relative_to(root)
         depth = 0 if str(rel) == "." else len(rel.parts)
-        if depth >= max_depth:
+        if seen_dirs.get(real_dir, depth + 1) <= depth:
+            dirnames.clear()
+            continue
+        seen_dirs[real_dir] = depth
+        if max_depth is not None and depth >= max_depth:
             dirnames.clear()
             continue
         # .git 可能是目录（普通仓库）或文件（submodule / worktree 的 gitdir 指针）
         if ".git" in dirnames or ".git" in filenames:
-            repos.append(Path(dirpath))
+            previous = seen_repos.get(real_dir)
+            if previous is None:
+                seen_repos[real_dir] = (depth, len(repos))
+                repos.append(Path(dirpath))
+            elif depth < previous[0]:
+                repos[previous[1]] = Path(dirpath)
+                seen_repos[real_dir] = (depth, previous[1])
         if ".git" in dirnames:
             # 避免 os.walk 误入 .git 目录内部
             dirnames.remove(".git")

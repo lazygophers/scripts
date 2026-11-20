@@ -76,24 +76,74 @@ class TestGenerateViaLazygophers(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
-    def _call(self, urlopen):
+    def _call(self, urlopen, cwd=None):
         with mock.patch.object(cw.urllib.request, "urlopen", urlopen):
-            return cw._generate_via_lazygophers("prompt", system_prompt="sys")
+            return cw._generate_via_lazygophers("prompt", system_prompt="sys", cwd=cwd)
 
     def test_happy_path_returns_the_message(self) -> None:
         payload = {"content": [{"type": "text", "text": "feat: 加功能\n"}]}
         self.assertEqual(self._call(mock.Mock(return_value=_resp(payload))),
                          "feat: 加功能")
 
-    def test_request_carries_the_bearer_token_and_url(self) -> None:
+    def test_request_uses_scripts_project_name_and_hash_for_user_agent(self) -> None:
         urlopen = mock.Mock(return_value=_resp({"content": []}))
-        self._call(urlopen)
+        cwd = "/workspace/customer-app"
+        commit_hash = "0123456789abcdef0123456789abcdef01234567"
+        with mock.patch.object(cw, "run", return_value=_p(stdout=f"{commit_hash}\n")) as run:
+            self._call(urlopen, cwd=cwd)
         req = urlopen.call_args[0][0]
         self.assertEqual(req.full_url, "https://api.example.com/v1/chat/compate")
         self.assertEqual(req.headers["Authorization"], "Bearer tok")
+        self.assertEqual(req.headers["User-agent"], f"lazyscripts/{commit_hash}")
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], ["git", "rev-parse", "HEAD"])
+        self.assertEqual(run.call_args.kwargs["cwd"], cw.Path(cw.__file__).resolve().parent.parent)
         body = json.loads(req.data)
-        self.assertTrue(body["disable_thinking"])
+        self.assertNotIn("disable_thinking", body)
         self.assertEqual(body["system"], "sys")
+
+    def test_thinking_only_response_is_continued_with_protocol_history(self) -> None:
+        urlopen = mock.Mock(side_effect=[
+            _resp({"content": [{"type": "thinking", "thinking": "reasoning"}],
+                   "stop_reason": "max_tokens"}),
+            _resp({"content": [{"type": "thinking", "thinking": "more reasoning"}],
+                   "stop_reason": "max_tokens"}),
+            _resp({"content": [{"type": "text", "text": "feat: 完成提交消息"}],
+                   "stop_reason": "end_turn"}),
+        ])
+        self.assertEqual(self._call(urlopen), "feat: 完成提交消息")
+        self.assertEqual(urlopen.call_count, 3)
+        first = json.loads(urlopen.call_args_list[0].args[0].data)
+        second = json.loads(urlopen.call_args_list[1].args[0].data)
+        third = json.loads(urlopen.call_args_list[2].args[0].data)
+        self.assertEqual(second["messages"][:2], first["messages"] + [
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "reasoning"}]},
+        ])
+        self.assertEqual(second["messages"][-1]["role"], "user")
+        self.assertEqual(third["messages"][-2:], [
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "more reasoning"}]},
+            second["messages"][-1],
+        ])
+
+    def test_truncated_text_is_continued_and_combined(self) -> None:
+        urlopen = mock.Mock(side_effect=[
+            _resp({"content": [{"type": "text", "text": "feat: 完成"}],
+                   "stop_reason": "max_tokens"}),
+            _resp({"content": [{"type": "text", "text": "提交消息"}],
+                   "stop_reason": "end_turn"}),
+        ])
+        self.assertEqual(self._call(urlopen), "feat: 完成\n提交消息")
+        self.assertEqual(urlopen.call_count, 2)
+
+    def test_repeated_truncation_returns_empty_after_three_turns(self) -> None:
+        urlopen = mock.Mock(return_value=_resp({
+            "content": [{"type": "text", "text": "feat: 不完整"}],
+            "stop_reason": "max_tokens",
+        }))
+        self.assertEqual(self._call(urlopen), "")
+        self.assertEqual(urlopen.call_count, 3)
 
     def test_non_text_blocks_are_ignored(self) -> None:
         payload = {"content": [{"type": "thinking", "text": "内心戏"},

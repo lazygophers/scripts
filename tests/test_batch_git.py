@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Tests for lib.batch_git."""
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -23,6 +25,7 @@ from lib.batch_git import (
     scan_gitlab_repos,
     scan_repos,
 )
+from lib.ignore import find_ignore
 from lib.ui import reporter
 
 
@@ -105,6 +108,88 @@ class TestScanRepos(unittest.TestCase):
         """旧名 scan_gitlab_repos 应仍可调用（向后兼容别名）。"""
         self.assertTrue(callable(scan_gitlab_repos))
         self.assertIs(scan_gitlab_repos, scan_repos)
+
+    def test_finds_nested_repositories(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            outer = root / "outer"
+            inner = outer / "nested"
+            inner.mkdir(parents=True)
+            (outer / ".git").mkdir()
+            (inner / ".git").mkdir()
+
+            self.assertEqual(scan_repos(root), [outer, inner])
+
+    def test_default_depth_finds_deep_repo_and_keeps_ignore_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = root / "team" / "group" / "project" / "nested" / "repo"
+            repo.mkdir(parents=True)
+            (repo / ".git").mkdir()
+            ignore_file = root / ".lazyscriptsignore"
+            ignore_file.write_text("delete:\n  - team\n")
+
+            repos = scan_repos(root)
+
+            self.assertEqual(repos, [repo])
+            self.assertEqual(find_ignore(repos[0], "delete", root), ignore_file.resolve())
+
+    def test_follows_symlinked_directory_to_repos(self):
+        """软链目录下的仓库应被扫到（此前 os.walk 不跟软链，整棵漏扫）。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "scan"
+            root.mkdir()
+            real = base / "real" / "myrepo"
+            real.mkdir(parents=True)
+            (real / ".git").mkdir()
+            os.symlink(base / "real", root / "link")
+
+            repos = scan_repos(root)
+
+            self.assertEqual(len(repos), 1)
+            # 保留扫描根下用户可见的软链路径（相对路径报告依赖它），去重按 realpath
+            self.assertEqual(repos[0], root / "link" / "myrepo")
+            self.assertEqual(repos[0].resolve(), real.resolve())
+
+    def test_follows_symlinked_repo_once_and_stops_cycles(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = root / "real-repo"
+            repo.mkdir()
+            (repo / ".git").mkdir()
+            os.symlink(repo, root / "linked-repo")
+            os.symlink(root, repo / "cycle")
+
+            repos = scan_repos(root)
+
+            self.assertEqual(len(repos), 1)
+            self.assertEqual(repos[0].resolve(), repo.resolve())
+
+    def test_shallow_symlink_retries_real_directory_cut_off_by_depth(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            deep_parent = root / "a-deep" / "nested" / "child"
+            repo = deep_parent / "repo"
+            repo.mkdir(parents=True)
+            (repo / ".git").mkdir()
+            alias_parent = root / "z-parent"
+            alias_parent.mkdir()
+            os.symlink(deep_parent, alias_parent / "alias")
+
+            real_walk = os.walk
+
+            def ordered_walk(path, **kwargs):
+                for dirpath, dirnames, filenames in real_walk(path, **kwargs):
+                    dirnames.sort()
+                    yield dirpath, dirnames, filenames
+
+            with patch("lib.batch_git.os.walk", ordered_walk):
+                repos = scan_repos(root, max_depth=4)
+                repos_with_both_paths_in_depth = scan_repos(root, max_depth=5)
+
+            self.assertEqual(repos, [alias_parent / "alias" / "repo"])
+            self.assertEqual(repos_with_both_paths_in_depth, [alias_parent / "alias" / "repo"])
 
 
 class TestPrintRepoList(unittest.TestCase):

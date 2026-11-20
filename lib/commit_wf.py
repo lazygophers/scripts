@@ -31,41 +31,60 @@ def _lazygophers_enabled() -> bool:
 
 
 def _generate_via_lazygophers(prompt: str, *, system_prompt: str,
-                              max_tokens: int = 300, timeout: float = 30.0) -> str:
+                              max_tokens: int = 300, timeout: float = 30.0,
+                              cwd: str | None = None) -> str:
     """调 LAZYGOPHERS /chat/compate（Anthropic 风格式）生成 message。
 
     请求：POST {BASE_URL}/chat/compate，body {model, max_tokens, system, messages}，
-    鉴权 Authorization: Bearer <token>，响应 content[].text（Anthropic 风）。
-    默认禁 thinking（commit 生成无需 extended thinking）。
+    鉴权 Authorization: Bearer <token>，响应遵循 Anthropic Messages content/stop_reason。
+    对 thinking-only 或 max_tokens 响应最多续接两轮，保留完整 assistant content。
     Returns: 生成文本（strip）。失败返回空串。
     """
     r = reporter(stderr=True)
     base = os.environ["LAZYGOPHERS_SCRIPTS_BASE_URL"].rstrip("/")
     token = os.environ["LAZYGOPHERS_SCRIPTS_TOKEN"]
     url = f"{base}/chat/compate"
+    project_root = Path(__file__).resolve().parent.parent
+    version = run(["git", "rev-parse", "HEAD"], check=False,
+                  capture_output=True, cwd=project_root)
+    commit_hash = (version.stdout or "").strip()
+    if version.returncode != 0 or not commit_hash:
+        r.err("无法读取 scripts 工具的 commit hash")
+        return ""
+    project_name = "lazyscripts"
+
     payload = {
         "model": "haiku",
         "max_tokens": max_tokens,
         "system": system_prompt,
-        "disable_thinking": True,
         "messages": [{"role": "user", "content": prompt}],
     }
-    body = json.dumps(payload, ensure_ascii=False).encode()
-    req = urllib.request.Request(url, data=body, headers={
-        "authorization": f"Bearer {token}",
-        "content-type": "application/json",
-    })
+    texts = []
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-            _debug_dump(url, payload, raw)
-            data = json.loads(raw)
-        # Anthropic 风响应：content[].text。haiku 经 proxy 会把思考过程混进
-        # text block（disable_thinking 字段对 proxy 无效）——多个 text block 时，
-        # 第一块常是散文思考，最后一块才是真正的 message。识别策略：取首个
-        # 以 commit type 前缀（feat/fix/...:）开头的块；都没有则回退最后一块。
-        parts = data.get("content") or []
-        texts = [p.get("text", "") for p in parts if p.get("type") == "text"]
+        for _ in range(3):
+            body = json.dumps(payload, ensure_ascii=False).encode()
+            req = urllib.request.Request(url, data=body, headers={
+                "authorization": f"Bearer {token}",
+                "content-type": "application/json",
+                "user-agent": f"{project_name}/{commit_hash}",
+            })
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+                _debug_dump(url, payload, raw)
+                data = json.loads(raw)
+            parts = data.get("content") or []
+            texts.extend(p.get("text", "") for p in parts if p.get("type") == "text")
+            if data.get("stop_reason") != "max_tokens" and texts:
+                break
+            payload["messages"].extend([
+                {"role": "assistant", "content": parts},
+                {"role": "user", "content":
+                    "请从上次 assistant 响应停止处继续，直接续写，不要重复已有内容；只输出 commit message。"},
+            ])
+        if data.get("stop_reason") == "max_tokens":
+            r.err("LAZYGOPHERS API 连续 3 轮达到 max_tokens，未生成完整 message")
+            return ""
+        # text blocks may contain leaked thinking prose; select the actual message.
         return _extract_message(texts).strip()
     except urllib.error.HTTPError as e:
         # HTTP 错误：打印状态码 + 原因（已 strip），不暴露 traceback/异常类名
@@ -219,8 +238,8 @@ def run_commit(
         prompt = _build_prompt(status_lines, cwd=cwd)
         final_msg = ""
         if _lazygophers_enabled():
-            r.step("LAZYGOPHERS /chat/compate 生成 message（禁 thinking）")
-            final_msg = _generate_via_lazygophers(prompt, system_prompt=_COMMIT_SYSTEM)
+            r.step("LAZYGOPHERS /chat/compate 生成 message")
+            final_msg = _generate_via_lazygophers(prompt, system_prompt=_COMMIT_SYSTEM, cwd=cwd)
         if not final_msg:
             # API 400/网络失败返回空串，回退 claude CLI 而不是取消提交
             final_msg = generate_via_claude(prompt, system_prompt=_COMMIT_SYSTEM)
