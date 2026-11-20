@@ -41,17 +41,17 @@ python3 -m unittest discover -s tests -q   # 串行，调试单个用例时更�
 - **扩展产物是打包单文件，别按源文件名找。** `dist/` 里没有 `native-port.js`——所有 `src/*.ts` 都打进 `dist/background.js`。核对改动是否进了构建：先 `git status` 看 `dist/` 是否被重建，再 grep 关键字符串到 `dist/background.js`（正则里的 `/` 被转义成 `\/`，用 `grep -c 'Arc\\/'` 这类转义写法）。
 - **graphwatch 的集成/e2e 测试要用装了 graphify 的解释器跑。** `tests/test_graphwatch_e2e.py`、
   `tests/test_graphwatch_artifacts.py` 在 `import graphify, watchdog` 失败时整类 `skipUnless` 跳过，
-  结果照样是 OK。`python3` 不指向 conda 时（子 agent、干净 shell）就会静默跳过，改用
-  `/Users/luoxin/miniconda3/bin/python tests/run.py test_graphwatch_e2e`（实测 15 用例 24s）。`tests/run.py`
+  结果照样是 OK。`python3` 缺少 graphify 时（子 agent、干净 shell）就会静默跳过，改用
+  `/Users/luoxin/.local/share/lazygophers/daemon-python/bin/python tests/run.py test_graphwatch_e2e`。`tests/run.py`
   不报 skipped 数，先跑 `<同一解释器> -c "import graphify, watchdog"` 确认能导入。
-  同理：`graphify query`（pipx 装的 `graphifyy` CLI）跑在 python3.14 下 jieba 报
-  `NameError: xrange`（2026-10-08 实测），知识图谱查询改用 conda 解释器，或直接 grep。
+  同理：`graphify query`（pipx 装的 `graphifyy` CLI）使用 pipx 命令；需要 Python 时用
+  `/Users/luoxin/.local/share/lazygophers/daemon-python/bin/python`，Python 3.14 已验证 jieba 可用。
 - **测试 worker 的 stdin 必须是 `/dev/null`。** 后台跑全套时 worker 继承了 harness 的 unix-socket
   stdin，`tests/test_archery_cli.py` 的 TestLogin 6 个用例走到 `ask_confirm`
   （`lib/cli/archery.py:746`）真读 stdin，整套无限挂起（2026-11-15）。`tests/run.py` 起子进程
   用 `stdin=subprocess.DEVNULL`；手跑单模块也写 `< /dev/null`。新增会读 stdin 的 CLI 用例
   patch 掉 `ask_confirm`，别指望 TTY 缺失会报错。
-- **`ruff` 不在 PATH**，用 `~/miniconda3/bin/ruff check <文件...>`。文件清单在 zsh 里存数组
+- **`ruff` 不在 PATH**，用 `~/.local/bin/ruff check <文件...>`。文件清单在 zsh 里存数组
   （`FILES=(a b)`，引用 `"${FILES[@]}"`），存字符串会被当成一个路径报 E902。
 - **跑完就把临时目录收掉。** 678 个调度单元 = 678 个临时目录，不收就堆在 `/tmp` 里。
 - **browse 扩展：新 Chrome API 依赖先扩 `mock.ts`，再改调用方。** `resolveContext` 加入 `storage.session`/`tabGroups` 后 21 个测试文件需改——`ownWorld()`/`ownSession()` 助手是事后补的。正确顺序：先在 `browser-extension/browse/test/mock.ts` 扩好夹具，再逐一迁移用到这个函数的测试。
@@ -126,7 +126,7 @@ python3 -m unittest discover -s tests -q   # 串行，调试单个用例时更�
   本身（TOTAL 1%）。正确做法：`COVERAGE_PROCESS_START` + sitecustomize
   （`coverage.process_startup()`）+ `--parallel-mode` + `combine`，`--source=<repo>/lib`
   才能把未被 import 的源码（如 lib/cli/live_server.py 曾 0% 漏出）纳入分母。跑完记得
-  `--keep`。mise python 3.14 缺 bs4/curl_cffi/graphify/watchdog，用 conda 3.13。
+  `--keep`。mise Python 3.14 缺 bs4/curl_cffi/graphify/watchdog 时，用 `/Users/luoxin/.local/share/lazygophers/daemon-python/bin/python`。
 - **IntelliJ 插件的 JaCoCo 恒 0% 是机制问题**：插件类经 IDE 类加载体系加载，绕过
   javaagent transformer。offline instrumentation（构建期插桩 sandbox 测试 jar）是唯一
   可行路径，见 idea-plugins/lazy-git 的 `instrumentTestSandboxJar`；发布产物必须验证无
